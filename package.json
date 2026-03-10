@@ -1,0 +1,218 @@
+{
+  "name": "chatwizard",
+  "displayName": "ChatWizard",
+  "description": "Unified search and analytics for AI chat history (GitHub Copilot Chat, Claude Code)",
+  "version": "0.0.1",
+  "publisher": "avrei",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/src/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "chatwizard",
+          "title": "ChatWizard",
+          "icon": "$(comment-discussion)"
+        }
+      ]
+    },
+    "views": {
+      "chatwizard": [
+        {
+          "id": "chatwizardSessions",
+          "name": "Sessions"
+        },
+        {
+          "id": "chatwizardCodeBlocks",
+          "name": "Code Blocks"
+        }
+      ]
+    },
+    "commands": [
+      { "command": "chatwizard.openSession",  "title": "Open Session",          "category": "ChatWizard" },
+      { "command": "chatwizard.openSessionFromCodeBlock", "title": "Open Session from Code Block", "category": "ChatWizard" },
+      { "command": "chatwizard.search",        "title": "Search",               "category": "ChatWizard", "icon": "$(search)" },
+      { "command": "chatwizard.filterSessions", "title": "Filter Sessions…",    "category": "ChatWizard", "icon": "$(filter)" },
+      { "command": "chatwizard.filterCodeBlocks", "title": "Filter Code Blocks…", "category": "ChatWizard", "icon": "$(filter)" },
+      { "command": "chatwizard.configureSortOrder", "title": "Configure Sort Order…", "category": "ChatWizard", "icon": "$(settings-gear)" },
+
+      { "command": "chatwizard.sortByDate",          "title": "Sort by Date",          "category": "ChatWizard", "icon": "$(calendar)" },
+      { "command": "chatwizard.sortByDate.asc",       "title": "Sort by Date ↑",        "category": "ChatWizard", "icon": "$(arrow-up)" },
+      { "command": "chatwizard.sortByDate.desc",      "title": "Sort by Date ↓",        "category": "ChatWizard", "icon": "$(arrow-down)" },
+
+      { "command": "chatwizard.sortByWorkspace",      "title": "Sort by Workspace",     "category": "ChatWizard", "icon": "$(folder)" },
+      { "command": "chatwizard.sortByWorkspace.asc",  "title": "Sort by Workspace ↑",   "category": "ChatWizard", "icon": "$(arrow-up)" },
+      { "command": "chatwizard.sortByWorkspace.desc", "title": "Sort by Workspace ↓",   "category": "ChatWizard", "icon": "$(arrow-down)" },
+
+      { "command": "chatwizard.sortByLength",         "title": "Sort by Length",        "category": "ChatWizard", "icon": "$(list-ordered)" },
+      { "command": "chatwizard.sortByLength.asc",     "title": "Sort by Length ↑",      "category": "ChatWizard", "icon": "$(arrow-up)" },
+      { "command": "chatwizard.sortByLength.desc",    "title": "Sort by Length ↓",      "category": "ChatWizard", "icon": "$(arrow-down)" },
+
+      { "command": "chatwizard.sortByTitle",          "title": "Sort Alphabetically",   "category": "ChatWizard", "icon": "$(case-sensitive)" },
+      { "command": "chatwizard.sortByTitle.asc",      "title": "Sort Alphabetically ↑", "category": "ChatWizard", "icon": "$(arrow-up)" },
+      { "command": "chatwizard.sortByTitle.desc",     "title": "Sort Alphabetically ↓", "category": "ChatWizard", "icon": "$(arrow-down)" },
+
+      { "command": "chatwizard.sortByModel",          "title": "Sort by Model",         "category": "ChatWizard", "icon": "$(symbol-event)" },
+      { "command": "chatwizard.sortByModel.asc",      "title": "Sort by Model ↑",       "category": "ChatWizard", "icon": "$(arrow-up)" },
+      { "command": "chatwizard.sortByModel.desc",     "title": "Sort by Model ↓",       "category": "ChatWizard", "icon": "$(arrow-down)" },
+
+      { "command": "chatwizard.pinSession",      "title": "Pin Session",              "category": "ChatWizard", "icon": "$(pin)" },
+      { "command": "chatwizard.unpinSession",    "title": "Unpin Session",            "category": "ChatWizard", "icon": "$(pinned)" },
+
+      { "command": "chatwizard.exportSession",   "title": "Export Session to Markdown", "category": "ChatWizard", "icon": "$(export)" },
+      { "command": "chatwizard.exportAll",       "title": "Export All Sessions…",       "category": "ChatWizard", "icon": "$(files)" },
+      { "command": "chatwizard.exportSelected",  "title": "Export Selected Sessions…",  "category": "ChatWizard", "icon": "$(checklist)" },
+      { "command": "chatwizard.exportExcerpt",   "title": "Export Session Excerpt…",    "category": "ChatWizard" },
+      { "command": "chatwizard.exportFromTreeSelection", "title": "Export Selected…", "category": "ChatWizard", "icon": "$(export)" },
+
+      { "command": "chatwizard.showCodeBlocks",  "title": "Show Code Blocks",           "category": "ChatWizard", "icon": "$(code)" },
+      { "command": "chatwizard.showPromptLibrary", "title": "Show Prompt Library",        "category": "ChatWizard", "icon": "$(book)" },
+
+      { "command": "chatwizard.cbSortByDate",          "title": "Sort by Date",          "category": "ChatWizard", "icon": "$(calendar)" },
+      { "command": "chatwizard.cbSortByDate.asc",       "title": "Sort by Date ↑",        "category": "ChatWizard", "icon": "$(arrow-up)" },
+      { "command": "chatwizard.cbSortByDate.desc",      "title": "Sort by Date ↓",        "category": "ChatWizard", "icon": "$(arrow-down)" },
+
+      { "command": "chatwizard.cbSortByWorkspace",      "title": "Sort by Workspace",     "category": "ChatWizard", "icon": "$(folder)" },
+      { "command": "chatwizard.cbSortByWorkspace.asc",  "title": "Sort by Workspace ↑",   "category": "ChatWizard", "icon": "$(arrow-up)" },
+      { "command": "chatwizard.cbSortByWorkspace.desc", "title": "Sort by Workspace ↓",   "category": "ChatWizard", "icon": "$(arrow-down)" },
+
+      { "command": "chatwizard.cbSortByLength",         "title": "Sort by Length",        "category": "ChatWizard", "icon": "$(list-ordered)" },
+      { "command": "chatwizard.cbSortByLength.asc",     "title": "Sort by Length ↑",      "category": "ChatWizard", "icon": "$(arrow-up)" },
+      { "command": "chatwizard.cbSortByLength.desc",    "title": "Sort by Length ↓",      "category": "ChatWizard", "icon": "$(arrow-down)" },
+
+      { "command": "chatwizard.cbSortByTitle",          "title": "Sort by Session Title", "category": "ChatWizard", "icon": "$(case-sensitive)" },
+      { "command": "chatwizard.cbSortByTitle.asc",      "title": "Sort by Session Title ↑","category": "ChatWizard", "icon": "$(arrow-up)" },
+      { "command": "chatwizard.cbSortByTitle.desc",     "title": "Sort by Session Title ↓","category": "ChatWizard", "icon": "$(arrow-down)" },
+
+      { "command": "chatwizard.cbSortByLanguage",       "title": "Sort by Language",      "category": "ChatWizard", "icon": "$(symbol-event)" },
+      { "command": "chatwizard.cbSortByLanguage.asc",   "title": "Sort by Language ↑",    "category": "ChatWizard", "icon": "$(arrow-up)" },
+      { "command": "chatwizard.cbSortByLanguage.desc",  "title": "Sort by Language ↓",    "category": "ChatWizard", "icon": "$(arrow-down)" }
+    ],
+    "keybindings": [
+      {
+        "command": "chatwizard.search",
+        "key": "ctrl+shift+h",
+        "mac": "cmd+shift+h",
+        "when": "!inputFocus"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        { "command": "chatwizard.filterSessions",     "when": "view == chatwizardSessions", "group": "navigation@0" },
+        { "command": "chatwizard.configureSortOrder", "when": "view == chatwizardSessions", "group": "navigation@0" },
+
+        { "command": "chatwizard.sortByDate",          "when": "view == chatwizardSessions && chatwizard.sortKey != 'date'",                                        "group": "navigation@1" },
+        { "command": "chatwizard.sortByDate.asc",      "when": "view == chatwizardSessions && chatwizard.sortKey == 'date' && chatwizard.sortDir == 'asc'",         "group": "navigation@1" },
+        { "command": "chatwizard.sortByDate.desc",     "when": "view == chatwizardSessions && chatwizard.sortKey == 'date' && chatwizard.sortDir == 'desc'",        "group": "navigation@1" },
+
+        { "command": "chatwizard.sortByWorkspace",      "when": "view == chatwizardSessions && chatwizard.sortKey != 'workspace'",                                   "group": "navigation@2" },
+        { "command": "chatwizard.sortByWorkspace.asc",  "when": "view == chatwizardSessions && chatwizard.sortKey == 'workspace' && chatwizard.sortDir == 'asc'",    "group": "navigation@2" },
+        { "command": "chatwizard.sortByWorkspace.desc", "when": "view == chatwizardSessions && chatwizard.sortKey == 'workspace' && chatwizard.sortDir == 'desc'",   "group": "navigation@2" },
+
+        { "command": "chatwizard.sortByLength",         "when": "view == chatwizardSessions && chatwizard.sortKey != 'length'",                                      "group": "navigation@3" },
+        { "command": "chatwizard.sortByLength.asc",     "when": "view == chatwizardSessions && chatwizard.sortKey == 'length' && chatwizard.sortDir == 'asc'",       "group": "navigation@3" },
+        { "command": "chatwizard.sortByLength.desc",    "when": "view == chatwizardSessions && chatwizard.sortKey == 'length' && chatwizard.sortDir == 'desc'",      "group": "navigation@3" },
+
+        { "command": "chatwizard.sortByTitle",          "when": "view == chatwizardSessions && chatwizard.sortKey != 'title'",                                       "group": "navigation@4" },
+        { "command": "chatwizard.sortByTitle.asc",      "when": "view == chatwizardSessions && chatwizard.sortKey == 'title' && chatwizard.sortDir == 'asc'",        "group": "navigation@4" },
+        { "command": "chatwizard.sortByTitle.desc",     "when": "view == chatwizardSessions && chatwizard.sortKey == 'title' && chatwizard.sortDir == 'desc'",       "group": "navigation@4" },
+
+        { "command": "chatwizard.sortByModel",          "when": "view == chatwizardSessions && chatwizard.sortKey != 'model'",                                       "group": "navigation@5" },
+        { "command": "chatwizard.sortByModel.asc",      "when": "view == chatwizardSessions && chatwizard.sortKey == 'model' && chatwizard.sortDir == 'asc'",        "group": "navigation@5" },
+        { "command": "chatwizard.sortByModel.desc",     "when": "view == chatwizardSessions && chatwizard.sortKey == 'model' && chatwizard.sortDir == 'desc'",       "group": "navigation@5" },
+
+        { "command": "chatwizard.exportAll",       "when": "view == chatwizardSessions", "group": "export@1" },
+        { "command": "chatwizard.exportSelected",  "when": "view == chatwizardSessions", "group": "export@2" },
+        { "command": "chatwizard.showCodeBlocks",  "when": "view == chatwizardSessions", "group": "navigation@6" },
+        { "command": "chatwizard.showPromptLibrary", "when": "view == chatwizardSessions", "group": "navigation@7" },
+
+        { "command": "chatwizard.filterCodeBlocks", "when": "view == chatwizardCodeBlocks", "group": "navigation@0" },
+
+        { "command": "chatwizard.cbSortByDate",          "when": "view == chatwizardCodeBlocks && chatwizard.cbSortKey != 'date'",                                          "group": "navigation@1" },
+        { "command": "chatwizard.cbSortByDate.asc",      "when": "view == chatwizardCodeBlocks && chatwizard.cbSortKey == 'date' && chatwizard.cbSortDir == 'asc'",         "group": "navigation@1" },
+        { "command": "chatwizard.cbSortByDate.desc",     "when": "view == chatwizardCodeBlocks && chatwizard.cbSortKey == 'date' && chatwizard.cbSortDir == 'desc'",        "group": "navigation@1" },
+
+        { "command": "chatwizard.cbSortByWorkspace",      "when": "view == chatwizardCodeBlocks && chatwizard.cbSortKey != 'workspace'",                                     "group": "navigation@2" },
+        { "command": "chatwizard.cbSortByWorkspace.asc",  "when": "view == chatwizardCodeBlocks && chatwizard.cbSortKey == 'workspace' && chatwizard.cbSortDir == 'asc'",    "group": "navigation@2" },
+        { "command": "chatwizard.cbSortByWorkspace.desc", "when": "view == chatwizardCodeBlocks && chatwizard.cbSortKey == 'workspace' && chatwizard.cbSortDir == 'desc'",   "group": "navigation@2" },
+
+        { "command": "chatwizard.cbSortByLength",         "when": "view == chatwizardCodeBlocks && chatwizard.cbSortKey != 'length'",                                        "group": "navigation@3" },
+        { "command": "chatwizard.cbSortByLength.asc",     "when": "view == chatwizardCodeBlocks && chatwizard.cbSortKey == 'length' && chatwizard.cbSortDir == 'asc'",       "group": "navigation@3" },
+        { "command": "chatwizard.cbSortByLength.desc",    "when": "view == chatwizardCodeBlocks && chatwizard.cbSortKey == 'length' && chatwizard.cbSortDir == 'desc'",      "group": "navigation@3" },
+
+        { "command": "chatwizard.cbSortByTitle",          "when": "view == chatwizardCodeBlocks && chatwizard.cbSortKey != 'title'",                                         "group": "navigation@4" },
+        { "command": "chatwizard.cbSortByTitle.asc",      "when": "view == chatwizardCodeBlocks && chatwizard.cbSortKey == 'title' && chatwizard.cbSortDir == 'asc'",        "group": "navigation@4" },
+        { "command": "chatwizard.cbSortByTitle.desc",     "when": "view == chatwizardCodeBlocks && chatwizard.cbSortKey == 'title' && chatwizard.cbSortDir == 'desc'",       "group": "navigation@4" },
+
+        { "command": "chatwizard.cbSortByLanguage",       "when": "view == chatwizardCodeBlocks && chatwizard.cbSortKey != 'language'",                                      "group": "navigation@5" },
+        { "command": "chatwizard.cbSortByLanguage.asc",   "when": "view == chatwizardCodeBlocks && chatwizard.cbSortKey == 'language' && chatwizard.cbSortDir == 'asc'",     "group": "navigation@5" },
+        { "command": "chatwizard.cbSortByLanguage.desc",  "when": "view == chatwizardCodeBlocks && chatwizard.cbSortKey == 'language' && chatwizard.cbSortDir == 'desc'",    "group": "navigation@5" }
+      ],
+      "view/item/context": [
+        { "command": "chatwizard.pinSession",     "when": "viewItem == session",        "group": "1_pin@1" },
+        { "command": "chatwizard.unpinSession",   "when": "viewItem == session.pinned", "group": "1_pin@1" },
+        { "command": "chatwizard.exportSession",  "when": "viewItem == session || viewItem == session.pinned", "group": "2_export@1" },
+        { "command": "chatwizard.exportFromTreeSelection", "when": "viewItem == session || viewItem == session.pinned", "group": "2_export@2" }
+      ]
+    },
+    "configuration": {
+      "title": "ChatWizard",
+      "properties": {
+        "chatwizard.userMessageColor": {
+          "type": "string",
+          "default": "#007acc",
+          "description": "Accent color for user message border and label (hex, e.g. #ff6600, or CSS color name).",
+          "format": "color-hex"
+        },
+        "chatwizard.tooltipLabelColor": {
+          "type": "string",
+          "default": "",
+          "description": "Color for field label text in session hover tooltips (hex or CSS name). Leave blank for default theme color.",
+          "format": "color-hex"
+        },
+        "chatwizard.codeBlockHighlightColor": {
+          "type": "string",
+          "default": "#EA5C00",
+          "description": "Box-shadow color applied to code blocks when opening a session from the Code Blocks view. Leave blank to disable highlighting.",
+          "format": "color-hex"
+        },
+        "chatwizard.scrollToFirstCodeBlock": {
+          "type": "boolean",
+          "default": true,
+          "description": "When opening a session from the Code Blocks view, automatically scroll to the first code block."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src",
+    "test": "vscode-test"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@types/mocha": "^10.0.6",
+    "@types/node": "18.x",
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "@vscode/test-cli": "^0.0.6",
+    "@vscode/test-electron": "^2.3.8",
+    "eslint": "^8.56.0",
+    "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "better-sqlite3": "^9.4.3",
+    "@types/better-sqlite3": "^7.6.8"
+  }
+}

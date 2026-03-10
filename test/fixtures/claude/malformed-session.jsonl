@@ -1,0 +1,3 @@
+{"type":"human","message":{"role":"user","content":[{"type":"text","text":"Hello"}]},"timestamp":"2024-01-15T09:00:00.000Z","uuid":"uuid-h-001","sessionId":"session-malformed"}
+{"type":"assistant","message":{"role
+{"type":"human","message":{"role":"user","content":[{"type":"text","text":"What is 2+2?"}]},"uuid":"uuid-h-002","sessionId":"session-malformed"}

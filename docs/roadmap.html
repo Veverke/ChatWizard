@@ -1,0 +1,903 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ChatWizard — Development Roadmap</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --surface: #161b22;
+      --border: #30363d;
+      --accent: #58a6ff;
+      --accent2: #3fb950;
+      --accent3: #d29922;
+      --accent4: #f78166;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --done-bg: #1c2b1c;
+      --done-border: #3fb950;
+      --progress-bg: #1c2535;
+      --progress-border: #58a6ff;
+      --todo-bg: #1c1c1c;
+      --todo-border: #30363d;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+      padding: 2rem;
+    }
+
+    header {
+      margin-bottom: 2.5rem;
+    }
+
+    header h1 {
+      font-size: 2rem;
+      font-weight: 700;
+      color: var(--accent);
+      margin-bottom: 0.25rem;
+    }
+
+    header p {
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    /* Legend */
+    .legend {
+      display: flex;
+      gap: 1.5rem;
+      flex-wrap: wrap;
+      margin-bottom: 2rem;
+      padding: 0.75rem 1rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+
+    .legend-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    /* Summary cards */
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 1rem;
+      margin-bottom: 2.5rem;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem 1.25rem;
+    }
+
+    .card .label {
+      font-size: 0.78rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 0.35rem;
+    }
+
+    .card .value {
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: var(--text);
+    }
+
+    .card .sub {
+      font-size: 0.78rem;
+      color: var(--muted);
+      margin-top: 0.15rem;
+    }
+
+    /* Timeline */
+    .timeline {
+      position: relative;
+      padding-left: 2rem;
+    }
+
+    .timeline::before {
+      content: '';
+      position: absolute;
+      left: 7px;
+      top: 0;
+      bottom: 0;
+      width: 2px;
+      background: var(--border);
+    }
+
+    .phase {
+      position: relative;
+      margin-bottom: 1.5rem;
+    }
+
+    .phase-dot {
+      position: absolute;
+      left: -1.75rem;
+      top: 1.1rem;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      border: 2px solid var(--bg);
+      flex-shrink: 0;
+    }
+
+    .phase-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+      transition: border-color 0.15s;
+    }
+
+    .phase-card:hover {
+      border-color: var(--accent);
+    }
+
+    .phase-header {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      padding: 0.85rem 1.25rem;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .phase-number {
+      font-size: 0.72rem;
+      font-weight: 700;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      min-width: 56px;
+    }
+
+    .phase-title {
+      font-size: 1rem;
+      font-weight: 600;
+      flex: 1;
+    }
+
+    .badges {
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .badge {
+      font-size: 0.72rem;
+      font-weight: 600;
+      padding: 0.2rem 0.55rem;
+      border-radius: 20px;
+      white-space: nowrap;
+    }
+
+    .badge-effort    { background: #1c2535; color: #58a6ff; border: 1px solid #2d4a7a; }
+    .badge-complex   { background: #2a1f1c; color: #f0883e; border: 1px solid #7a4020; }
+    .badge-complex.low  { background: #1c2b1c; color: #3fb950; border: 1px solid #2a5a2a; }
+    .badge-complex.med  { background: #2a2a1c; color: #d29922; border: 1px solid #5a4a10; }
+    .badge-complex.high { background: #2a1f1c; color: #f78166; border: 1px solid #7a3020; }
+    .badge-audience  { background: #1c1c2b; color: #bc8cff; border: 1px solid #3d2a7a; }
+
+    .chevron {
+      color: var(--muted);
+      font-size: 0.9rem;
+      transition: transform 0.2s;
+    }
+
+    .phase-card.open .chevron {
+      transform: rotate(90deg);
+    }
+
+    /* Status strip */
+    .status-strip {
+      height: 3px;
+    }
+
+    .status-strip.done     { background: var(--done-border); }
+    .status-strip.progress { background: var(--accent); }
+    .status-strip.todo     { background: var(--border); }
+
+    /* Phase state borders */
+    .phase-card.done     { border-color: var(--done-border); }
+    .phase-card.progress { border-color: var(--accent); }
+
+    /* Phase body */
+    .phase-body {
+      display: none;
+      padding: 0 1.25rem 1rem;
+      border-top: 1px solid var(--border);
+    }
+
+    .phase-card.open .phase-body {
+      display: block;
+    }
+
+    .phase-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1.5rem;
+      padding: 0.75rem 0;
+      margin-bottom: 0.75rem;
+      font-size: 0.83rem;
+      color: var(--muted);
+    }
+
+    .phase-meta span strong {
+      color: var(--text);
+    }
+
+    .phase-desc {
+      color: var(--muted);
+      font-size: 0.88rem;
+      margin-bottom: 0.9rem;
+      line-height: 1.6;
+    }
+
+    /* Task list */
+    .task-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 0.3rem;
+    }
+
+    .task-list li {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.5rem;
+      font-size: 0.85rem;
+      color: var(--muted);
+      padding: 0.3rem 0;
+    }
+
+    .task-check {
+      width: 16px;
+      height: 16px;
+      border-radius: 4px;
+      border: 1.5px solid var(--border);
+      flex-shrink: 0;
+      margin-top: 1px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+    }
+
+    .task-check.checked {
+      background: var(--accent2);
+      border-color: var(--accent2);
+      color: #000;
+    }
+
+    .task-check.checked + .task-text {
+      text-decoration: line-through;
+      opacity: 0.5;
+    }
+
+    /* Effort bar */
+    .effort-bar-wrap {
+      margin-top: 0.75rem;
+    }
+
+    .effort-bar-label {
+      font-size: 0.75rem;
+      color: var(--muted);
+      margin-bottom: 0.3rem;
+    }
+
+    .effort-bar {
+      height: 6px;
+      background: var(--border);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+
+    .effort-bar-fill {
+      height: 100%;
+      border-radius: 4px;
+      transition: width 0.4s;
+    }
+
+    /* Timeline bar (top of page) */
+    .gantt {
+      margin-bottom: 2.5rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+
+    .gantt-title {
+      padding: 0.75rem 1.25rem;
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .gantt-body {
+      padding: 0.75rem 1.25rem 1.25rem;
+      overflow-x: auto;
+    }
+
+    .gantt-row {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      margin-bottom: 0.45rem;
+    }
+
+    .gantt-row-label {
+      font-size: 0.78rem;
+      color: var(--muted);
+      min-width: 160px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .gantt-track {
+      flex: 1;
+      height: 20px;
+      background: var(--bg);
+      border-radius: 4px;
+      position: relative;
+      min-width: 600px;
+    }
+
+    .gantt-bar {
+      position: absolute;
+      height: 100%;
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      padding: 0 6px;
+      font-size: 0.7rem;
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+    }
+
+    .gantt-weeks {
+      display: flex;
+      gap: 0;
+      margin-bottom: 0.5rem;
+      margin-left: 160px + 0.75rem;
+    }
+
+    .gantt-week-labels {
+      display: flex;
+      margin-left: calc(160px + 0.75rem);
+      min-width: 600px;
+      margin-bottom: 0.5rem;
+    }
+
+    .gantt-week-label {
+      font-size: 0.7rem;
+      color: var(--muted);
+      flex: 1;
+      border-left: 1px solid var(--border);
+      padding-left: 3px;
+    }
+
+    /* Status colors for dots */
+    .dot-todo     { background: var(--border); }
+    .dot-progress { background: var(--accent); }
+    .dot-done     { background: var(--accent2); }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>ChatWizard</h1>
+  <p>VS Code Extension — Development Roadmap &amp; Phase Tracker</p>
+</header>
+
+<!-- Summary Cards -->
+<div class="summary">
+  <div class="card">
+    <div class="label">Total Phases</div>
+    <div class="value">10</div>
+    <div class="sub">3 done · 7 remaining</div>
+  </div>
+  <div class="card">
+    <div class="label">Total Effort</div>
+    <div class="value">~17.5w</div>
+    <div class="sub">estimated weeks</div>
+  </div>
+  <div class="card">
+    <div class="label">Target Audience</div>
+    <div class="value" style="font-size:1rem; padding-top:4px">Power-user devs</div>
+    <div class="sub">heavy AI chat users</div>
+  </div>
+  <div class="card">
+    <div class="label">Data Sources</div>
+    <div class="value">2</div>
+    <div class="sub">Copilot Chat + Claude Code</div>
+  </div>
+  <div class="card">
+    <div class="label">External Deps</div>
+    <div class="value">Local only</div>
+    <div class="sub">no cloud / no telemetry</div>
+  </div>
+</div>
+
+<!-- Legend -->
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot" style="background:#3fb950"></div> Done</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#58a6ff"></div> In Progress</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#30363d"></div> To Do</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#d29922"></div> Medium complexity</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#f78166"></div> High complexity</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#3fb950"></div> Low complexity</div>
+</div>
+
+<!-- Gantt chart -->
+<div class="gantt">
+  <div class="gantt-title">Timeline Overview — 18 weeks</div>
+  <div class="gantt-body">
+    <div class="gantt-week-labels" id="weekLabels"></div>
+    <div id="ganttRows"></div>
+  </div>
+</div>
+
+<!-- Phase timeline -->
+<div class="timeline" id="timeline"></div>
+
+<script>
+  const TOTAL_WEEKS = 18;
+
+  const phases = [
+    {
+      id: 0,
+      title: "Foundation & Scaffolding",
+      status: "done",
+      effort: 3,
+      effortLabel: "3 weeks",
+      complexity: "high",
+      complexityLabel: "High",
+      startWeek: 0,
+      audience: "Internal / dev foundation",
+      goal: "Establish the extension skeleton, data-layer contracts, and file-system access patterns. No UI — purely the parsing and indexing engine.",
+      tasks: [
+        "Scaffold VS Code extension with TypeScript (yo code)",
+        "Define data model interfaces: Session, Message, CodeBlock, Prompt",
+        "Implement Copilot JSONL parser (log replay → conversation state)",
+        "Implement Claude Code JSONL parser (~/.claude/projects/**/*.jsonl)",
+        "Implement Copilot workspace mapping reader (workspace.json + state.vscdb SQLite)",
+        "Implement FileSystemWatcher for live index updates",
+        "Build in-memory session index with basic CRUD",
+        "Unit tests for all parsers against sample fixture files",
+      ],
+      color: "#f78166",
+      barColor: "rgba(247,129,102,0.75)",
+    },
+    {
+      id: 1,
+      title: "Session Management Panel",
+      status: "done",
+      effort: 2,
+      effortLabel: "2 weeks",
+      complexity: "medium",
+      complexityLabel: "Medium",
+      startWeek: 3,
+      audience: "All users",
+      goal: "First visible surface — a TreeView listing all sessions across all workspaces, with a reader view for each session.",
+      tasks: [
+        "Register VS Code TreeView (vscode.window.createTreeView)",
+        "Show session nodes: title, source badge, workspace, date",
+        "Show per-session metadata: prompt count, response count",
+        "Implement sorting: by date, workspace, session length",
+        "Implement reader view (Webview panel rendering conversation as Markdown)",
+        "Wire FileSystemWatcher updates to refresh TreeView live",
+      ],
+      color: "#58a6ff",
+      barColor: "rgba(88,166,255,0.75)",
+    },
+    {
+      id: 2,
+      title: "Unified Search",
+      status: "done",
+      effort: 2,
+      effortLabel: "2 weeks",
+      complexity: "medium-high",
+      complexityLabel: "Medium-High",
+      startWeek: 3,
+      audience: "All users",
+      goal: "Full-text search across all sessions, all workspaces, all supported extensions — separated by user prompts vs. LLM responses.",
+      tasks: [
+        "Implement in-memory full-text index (trigram or inverted index)",
+        "Separate indexing of user prompts vs. LLM responses",
+        "Build search UI (QuickPick or dedicated Webview panel)",
+        "Display results with highlighted snippets",
+        "Add filters: source, workspace/project, date range",
+        "Add regex search support",
+        "Debounce live-search as user types",
+      ],
+      color: "#58a6ff",
+      barColor: "rgba(88,166,255,0.75)",
+    },
+    {
+      id: 3,
+      title: "Export to Markdown",
+      status: "todo",
+      effort: 1,
+      effortLabel: "1 week",
+      complexity: "low",
+      complexityLabel: "Low",
+      startWeek: 5,
+      audience: "All users",
+      goal: "Export any session or set of sessions to a navigable .md file, with VS Code Outline panel providing immediate navigation.",
+      tasks: [
+        "Implement Markdown serializer (H2 per prompt, H3 per response)",
+        "Add Export Session command from TreeView context menu",
+        "Add Export All command (bulk export)",
+        "Open exported file in VS Code editor",
+        "Preserve code block fencing and language identifiers",
+      ],
+      color: "#3fb950",
+      barColor: "rgba(63,185,80,0.75)",
+    },
+    {
+      id: 4,
+      title: "Code Block Extraction",
+      status: "todo",
+      effort: 1.5,
+      effortLabel: "1.5 weeks",
+      complexity: "medium",
+      complexityLabel: "Medium",
+      startWeek: 5,
+      audience: "All users",
+      goal: "Index all fenced code blocks across all sessions. Make them browsable, filterable by language, and copyable.",
+      tasks: [
+        "Extend parser to extract fenced code blocks with language + session context",
+        "Build Code Blocks TreeView or Webview panel (filterable by language)",
+        "Implement full-text search within code block content",
+        "Add one-click copy-to-clipboard",
+        "Show originating session title and date per block",
+      ],
+      color: "#d29922",
+      barColor: "rgba(210,153,34,0.75)",
+    },
+    {
+      id: 5,
+      title: "Prompt Library",
+      status: "todo",
+      effort: 1.5,
+      effortLabel: "1.5 weeks",
+      complexity: "medium",
+      complexityLabel: "Medium",
+      startWeek: 7,
+      audience: "Power users",
+      goal: "Extract, deduplicate, and cluster all user-turn prompts for re-use. Surface frequency to show which prompts the user reaches for repeatedly.",
+      tasks: [
+        "Extract all user-turn messages across sessions",
+        "Deduplicate exact matches",
+        "Cluster by trigram/TF-IDF similarity",
+        "Build Prompt Library panel: searchable, sorted by frequency",
+        "Add copy-to-clipboard per prompt",
+        "Show frequency count: 'Asked N times across M projects'",
+      ],
+      color: "#d29922",
+      barColor: "rgba(210,153,34,0.75)",
+    },
+    {
+      id: 6,
+      title: "Analytics & Usage Stats",
+      status: "todo",
+      effort: 2,
+      effortLabel: "2 weeks",
+      complexity: "medium-high",
+      complexityLabel: "Medium-High",
+      startWeek: 8.5,
+      audience: "Power users / managers",
+      goal: "Aggregate statistics computed from the session index. Token counting using BPE tokenizers shipped locally by Copilot and Claude.",
+      tasks: [
+        "Integrate js-tiktoken for Copilot/GPT token counting",
+        "Integrate @anthropic-ai/tokenizer for Claude token counting",
+        "Compute session-level metrics (sessions, prompts, responses, tokens)",
+        "Compute aggregate metrics (activity over time, daily token totals)",
+        "Surface most active projects, frequent terms in prompts",
+        "Build Analytics Webview panel with charts (Chart.js)",
+        "Show longest sessions by message and token count",
+      ],
+      color: "#f78166",
+      barColor: "rgba(247,129,102,0.75)",
+    },
+    {
+      id: 7,
+      title: "Duplicate Prompt Detection",
+      status: "todo",
+      effort: 1.5,
+      effortLabel: "1.5 weeks",
+      complexity: "medium",
+      complexityLabel: "Medium",
+      startWeek: 8.5,
+      audience: "Power users",
+      goal: "Surface semantically equivalent prompts across sessions using TF-IDF or trigram similarity — no ML dependencies required.",
+      tasks: [
+        "Implement TF-IDF or trigram similarity scoring",
+        "Identify clusters of near-duplicate prompts",
+        "Surface in UI: 'You asked this N times across M projects'",
+        "Allow merging/consolidating entries in Prompt Library",
+      ],
+      color: "#d29922",
+      barColor: "rgba(210,153,34,0.75)",
+    },
+    {
+      id: 8,
+      title: "Timeline View",
+      status: "todo",
+      effort: 1,
+      effortLabel: "1 week",
+      complexity: "low",
+      complexityLabel: "Low",
+      startWeek: 10.5,
+      audience: "All users",
+      goal: "Chronological feed of all sessions across all workspaces. Answers 'What was I working on last Tuesday?'",
+      tasks: [
+        "Implement Timeline Webview panel with chronological session feed",
+        "Show: project, session title, first prompt, message count, date",
+        "Add date navigation / jump-to-date",
+        "Filter by workspace/project",
+      ],
+      color: "#3fb950",
+      barColor: "rgba(63,185,80,0.75)",
+    },
+    {
+      id: 9,
+      title: "Polish & Release",
+      status: "todo",
+      effort: 2,
+      effortLabel: "2 weeks",
+      complexity: "medium",
+      complexityLabel: "Medium",
+      startWeek: 11.5,
+      audience: "All users (marketplace)",
+      goal: "Production-readiness: performance, packaging, documentation, and VS Code Marketplace publication.",
+      tasks: [
+        "Performance audit: index build time on large history (1000+ sessions)",
+        "Incremental index updates (avoid full rebuild on file change)",
+        "Extension settings: configurable source paths, refresh interval",
+        "Write README, feature walkthrough, and screenshot GIFs",
+        "Package with vsce and publish to VS Code Marketplace",
+        "Add telemetry opt-in (local only, no external calls)",
+      ],
+      color: "#bc8cff",
+      barColor: "rgba(188,140,255,0.75)",
+    },
+  ];
+
+  /* ---- Build week labels ---- */
+  const weekLabelsEl = document.getElementById('weekLabels');
+  for (let w = 0; w < TOTAL_WEEKS; w++) {
+    const el = document.createElement('div');
+    el.className = 'gantt-week-label';
+    el.style.flex = '1';
+    el.textContent = `W${w + 1}`;
+    weekLabelsEl.appendChild(el);
+  }
+
+  /* ---- Build Gantt rows ---- */
+  const ganttRowsEl = document.getElementById('ganttRows');
+  phases.forEach(p => {
+    const row = document.createElement('div');
+    row.className = 'gantt-row';
+
+    const label = document.createElement('div');
+    label.className = 'gantt-row-label';
+    label.textContent = `P${p.id}: ${p.title}`;
+    label.style.minWidth = '160px';
+
+    const track = document.createElement('div');
+    track.className = 'gantt-track';
+
+    const bar = document.createElement('div');
+    bar.className = 'gantt-bar';
+    const pct = (v) => `${(v / TOTAL_WEEKS) * 100}%`;
+    bar.style.left = pct(p.startWeek);
+    bar.style.width = pct(p.effort);
+    bar.style.background = p.barColor;
+    bar.style.border = `1px solid ${p.color}`;
+    bar.style.color = '#e6edf3';
+    bar.textContent = p.effortLabel;
+
+    track.appendChild(bar);
+    row.appendChild(label);
+    row.appendChild(track);
+    ganttRowsEl.appendChild(row);
+  });
+
+  /* ---- Build timeline ---- */
+  const timeline = document.getElementById('timeline');
+
+  const complexityClass = {
+    'low': 'low',
+    'medium': 'med',
+    'medium-high': 'med',
+    'high': 'high',
+  };
+
+  const statusColors = {
+    done: '#3fb950',
+    progress: '#58a6ff',
+    todo: '#30363d',
+  };
+
+  const effortWidths = {
+    1: '6%',
+    1.5: '9%',
+    2: '11%',
+    3: '17%',
+  };
+
+  phases.forEach(p => {
+    const phase = document.createElement('div');
+    phase.className = 'phase';
+
+    const dot = document.createElement('div');
+    dot.className = `phase-dot dot-${p.status}`;
+    dot.style.background = statusColors[p.status];
+
+    const card = document.createElement('div');
+    card.className = `phase-card ${p.status}`;
+
+    // Status strip
+    const strip = document.createElement('div');
+    strip.className = `status-strip ${p.status}`;
+    card.appendChild(strip);
+
+    // Header
+    const header = document.createElement('div');
+    header.className = 'phase-header';
+
+    const num = document.createElement('div');
+    num.className = 'phase-number';
+    num.textContent = `Phase ${p.id}`;
+
+    const title = document.createElement('div');
+    title.className = 'phase-title';
+    title.textContent = p.title;
+
+    const badges = document.createElement('div');
+    badges.className = 'badges';
+
+    const bEffort = document.createElement('span');
+    bEffort.className = 'badge badge-effort';
+    bEffort.textContent = `⏱ ${p.effortLabel}`;
+
+    const bComplex = document.createElement('span');
+    bComplex.className = `badge badge-complex ${complexityClass[p.complexity] || 'med'}`;
+    bComplex.textContent = `◆ ${p.complexityLabel}`;
+
+    const bAud = document.createElement('span');
+    bAud.className = 'badge badge-audience';
+    bAud.textContent = `👥 ${p.audience}`;
+
+    badges.appendChild(bEffort);
+    badges.appendChild(bComplex);
+    badges.appendChild(bAud);
+
+    const chev = document.createElement('span');
+    chev.className = 'chevron';
+    chev.textContent = '▶';
+
+    header.appendChild(num);
+    header.appendChild(title);
+    header.appendChild(badges);
+    header.appendChild(chev);
+
+    card.appendChild(header);
+
+    // Body
+    const body = document.createElement('div');
+    body.className = 'phase-body';
+
+    const meta = document.createElement('div');
+    meta.className = 'phase-meta';
+    meta.innerHTML = `
+      <span><strong>Start:</strong> Week ${Math.floor(p.startWeek) + 1}</span>
+      <span><strong>End:</strong> Week ${Math.ceil(p.startWeek + p.effort)}</span>
+      <span><strong>Effort:</strong> ${p.effortLabel}</span>
+      <span><strong>Complexity:</strong> ${p.complexityLabel}</span>
+    `;
+
+    const desc = document.createElement('div');
+    desc.className = 'phase-desc';
+    desc.textContent = p.goal;
+
+    const taskList = document.createElement('ul');
+    taskList.className = 'task-list';
+
+    const savedKey = `phase-${p.id}-tasks`;
+    const savedState = JSON.parse(localStorage.getItem(savedKey) || '{}');
+
+    p.tasks.forEach((t, i) => {
+      const li = document.createElement('li');
+
+      const isChecked = p.status === 'done' || !!savedState[i];
+      const check = document.createElement('div');
+      check.className = `task-check${isChecked ? ' checked' : ''}`;
+      check.textContent = isChecked ? '✓' : '';
+
+      const text = document.createElement('span');
+      text.className = 'task-text';
+      text.textContent = t;
+
+      check.addEventListener('click', () => {
+        const isChecked = check.classList.toggle('checked');
+        check.textContent = isChecked ? '✓' : '';
+        const state = JSON.parse(localStorage.getItem(savedKey) || '{}');
+        state[i] = isChecked;
+        localStorage.setItem(savedKey, JSON.stringify(state));
+      });
+
+      li.appendChild(check);
+      li.appendChild(text);
+      taskList.appendChild(li);
+    });
+
+    // Effort bar
+    const barWrap = document.createElement('div');
+    barWrap.className = 'effort-bar-wrap';
+    const barLabel = document.createElement('div');
+    barLabel.className = 'effort-bar-label';
+    barLabel.textContent = `Effort — ${p.effortLabel} of ${TOTAL_WEEKS} weeks total`;
+    const effortBar = document.createElement('div');
+    effortBar.className = 'effort-bar';
+    const effortFill = document.createElement('div');
+    effortFill.className = 'effort-bar-fill';
+    effortFill.style.width = `${(p.effort / TOTAL_WEEKS) * 100}%`;
+    effortFill.style.background = p.color;
+    effortBar.appendChild(effortFill);
+    barWrap.appendChild(barLabel);
+    barWrap.appendChild(effortBar);
+
+    body.appendChild(meta);
+    body.appendChild(desc);
+    body.appendChild(taskList);
+    body.appendChild(barWrap);
+
+    card.appendChild(body);
+
+    // Toggle
+    header.addEventListener('click', () => {
+      card.classList.toggle('open');
+    });
+
+    phase.appendChild(dot);
+    phase.appendChild(card);
+    timeline.appendChild(phase);
+  });
+</script>
+
+</body>
+</html>
