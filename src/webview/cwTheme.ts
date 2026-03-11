@@ -99,6 +99,8 @@ export function cwThemeCss(): string {
   color:         inherit;
   white-space:   nowrap;
   flex-shrink:   0;
+  position:      relative;
+  overflow:      hidden;
   transition:    background 0.12s, color 0.12s, border-color 0.12s;
 }
 
@@ -150,6 +152,86 @@ export function cwThemeCss(): string {
   background:    var(--cw-surface);
   border-bottom: 1px solid var(--cw-border);
 }
+
+/* ── Custom scrollbars ─────────────────────────────────────────── */
+::-webkit-scrollbar             { width: 6px; height: 6px; }
+::-webkit-scrollbar-track       { background: transparent; }
+::-webkit-scrollbar-thumb       { background: var(--cw-border-strong); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--cw-accent); }
+
+/* ── Staggered fade-in ─────────────────────────────────────────── */
+@keyframes cw-fade-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.cw-fade-item {
+  animation:       cw-fade-up 0.22s ease both;
+  animation-delay: calc(var(--cw-i, 0) * 35ms);
+}
+
+/* ── Toast notification ────────────────────────────────────────── */
+.cw-toast {
+  position:       fixed;
+  bottom:         20px;
+  left:           50%;
+  transform:      translateX(-50%) translateY(12px);
+  background:     var(--cw-surface-raised);
+  border:         1px solid var(--cw-border-strong);
+  border-radius:  var(--cw-radius-sm);
+  padding:        6px 18px;
+  font-size:      0.88em;
+  box-shadow:     var(--cw-shadow-hover);
+  opacity:        0;
+  pointer-events: none;
+  transition:     opacity 0.16s, transform 0.16s;
+  z-index:        9999;
+  white-space:    nowrap;
+  color:          var(--cw-accent);
+}
+.cw-toast.show {
+  opacity:   1;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* ── Button ripple ─────────────────────────────────────────────── */
+.cw-ripple-wave {
+  position:       absolute;
+  border-radius:  50%;
+  background:     rgba(255,255,255,0.22);
+  transform:      scale(0);
+  animation:      cw-ripple-anim 0.4s linear;
+  pointer-events: none;
+}
+@keyframes cw-ripple-anim {
+  to { transform: scale(4); opacity: 0; }
+}
+
+/* ── Back-to-top FAB ───────────────────────────────────────────── */
+.cw-back-top {
+  position:       fixed;
+  bottom:         20px;
+  right:          20px;
+  width:          34px;
+  height:         34px;
+  border-radius:  50%;
+  background:     var(--cw-accent);
+  color:          var(--cw-accent-text);
+  border:         none;
+  cursor:         pointer;
+  font-size:      1.1em;
+  line-height:    34px;
+  text-align:     center;
+  opacity:        0;
+  transform:      translateY(8px);
+  transition:     opacity 0.18s, transform 0.18s, background 0.12s;
+  z-index:        200;
+  box-shadow:     var(--cw-shadow-hover);
+  pointer-events: none;
+  padding:        0;
+  user-select:    none;
+}
+.cw-back-top.visible { opacity: 0.85; transform: translateY(0); pointer-events: auto; }
+.cw-back-top:hover   { opacity: 1; background: var(--cw-accent-hover); }
 `;
 }
 
@@ -312,6 +394,74 @@ export function syntaxHighlighterJs(): string {
   document.querySelectorAll('pre code').forEach(function(block) {
     block.innerHTML = tokenize(block.textContent || '');
   });
+})();
+`;
+}
+
+/**
+ * Returns shared interactive JS: button ripple, in-webview toast, copy-button morph helper.
+ * Include once per webview — either in a nonce script block or via <script> tag.
+ *
+ * Exports to window:
+ *   cwShowToast(msg)           — shows a brief toast at the bottom of the viewport
+ *   cwMorphCopy(btn, origText) — morphs a button to "✓ Copied" for 2 s then restores
+ */
+export function cwInteractiveJs(): string {
+    return `
+(function() {
+  // ── Ripple on buttons ──────────────────────────────────────────
+  function spawnRipple(btn, e) {
+    var s = getComputedStyle(btn).position;
+    if (s === 'static') { btn.style.position = 'relative'; }
+    btn.style.overflow = 'hidden';
+    var rect = btn.getBoundingClientRect();
+    var size = Math.max(rect.width, rect.height) * 1.6;
+    var x = e.clientX - rect.left - size / 2;
+    var y = e.clientY - rect.top  - size / 2;
+    var wave = document.createElement('span');
+    wave.className = 'cw-ripple-wave';
+    wave.style.width  = size + 'px';
+    wave.style.height = size + 'px';
+    wave.style.left   = x + 'px';
+    wave.style.top    = y + 'px';
+    btn.appendChild(wave);
+    setTimeout(function() { if (wave.parentNode) { wave.parentNode.removeChild(wave); } }, 450);
+  }
+  document.addEventListener('mousedown', function(e) {
+    var btn = e.target && e.target.closest ? e.target.closest('button') : null;
+    if (btn) { spawnRipple(btn, e); }
+  });
+
+  // ── Toast ──────────────────────────────────────────────────────
+  var _cwToast = null, _cwToastTimer = null;
+  window.cwShowToast = function(msg) {
+    if (!_cwToast) {
+      _cwToast = document.createElement('div');
+      _cwToast.className = 'cw-toast';
+      document.body.appendChild(_cwToast);
+    }
+    _cwToast.textContent = msg;
+    clearTimeout(_cwToastTimer);
+    _cwToast.classList.add('show');
+    _cwToastTimer = setTimeout(function() { _cwToast.classList.remove('show'); }, 1800);
+  };
+
+  // ── Copy-button morph ──────────────────────────────────────────
+  window.cwMorphCopy = function(btn, origText) {
+    btn.textContent   = '✓ Copied';
+    btn.style.background  = 'var(--cw-accent)';
+    btn.style.color       = 'var(--cw-accent-text)';
+    btn.style.borderColor = 'var(--cw-accent)';
+    btn.disabled = true;
+    setTimeout(function() {
+      btn.textContent       = origText;
+      btn.style.background  = '';
+      btn.style.color       = '';
+      btn.style.borderColor = '';
+      btn.disabled = false;
+    }, 2000);
+    if (window.cwShowToast) { window.cwShowToast('Copied to clipboard'); }
+  };
 })();
 `;
 }

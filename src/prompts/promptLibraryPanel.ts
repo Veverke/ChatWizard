@@ -2,7 +2,7 @@
 
 import * as vscode from 'vscode';
 import { SessionIndex } from '../index/sessionIndex';
-import { cwThemeCss } from '../webview/cwTheme';
+import { cwThemeCss, cwInteractiveJs } from '../webview/cwTheme';
 import { buildPromptLibrary, PromptEntry } from './promptExtractor';
 import { clusterPrompts, PromptCluster } from './similarityEngine';
 
@@ -60,7 +60,7 @@ export class PromptLibraryPanel {
     static getHtml(clusters: PromptCluster[]): string {
         const totalEntries = clusters.reduce((sum, c) => sum + 1 + c.variants.length, 0);
 
-        const cardsHtml = clusters.map(cluster => {
+        const cardsHtml = clusters.map((cluster, i) => {
             const { canonical, variants, totalFrequency, allProjectIds } = cluster;
             const projectCount = allProjectIds.length;
             const statsLabel = `Asked ${totalFrequency} time${totalFrequency === 1 ? '' : 's'}` +
@@ -96,7 +96,8 @@ export class PromptLibraryPanel {
         </details>`;
             }
 
-            return `<div class="prompt-card" data-text="${escapedTextLower}">
+            const fadeAttr = i < 15 ? ` style="--cw-i:${i}"` : '';
+            return `<div class="prompt-card cw-fade-item"${fadeAttr} data-text="${escapedTextLower}">
   <div class="card-header">
     <span class="freq-badge">${totalFrequency}×</span>
     <span class="stats-label">${PromptLibraryPanel._escapeHtml(statsLabel)}</span>
@@ -336,8 +337,10 @@ export class PromptLibraryPanel {
       if (!btn) { return; }
       const text = btn.dataset.text || '';
       vscode.postMessage({ command: 'copy', text });
+      if (window.cwMorphCopy) { window.cwMorphCopy(btn, btn.textContent); }
     });
   </script>
+  <script>${cwInteractiveJs()}</script>
 </body>
 </html>`;
     }

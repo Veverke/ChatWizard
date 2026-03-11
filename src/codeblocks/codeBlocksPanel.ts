@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { IndexedCodeBlock } from '../types/index';
 import { SessionIndex } from '../index/sessionIndex';
 import { CodeBlockSearchEngine } from './codeBlockSearchEngine';
-import { cwThemeCss, syntaxHighlighterCss, syntaxHighlighterJs } from '../webview/cwTheme';
+import { cwThemeCss, syntaxHighlighterCss, syntaxHighlighterJs, cwInteractiveJs } from '../webview/cwTheme';
 
 export class CodeBlocksPanel {
     private static _panel: vscode.WebviewPanel | undefined;
@@ -72,7 +72,7 @@ export class CodeBlocksPanel {
             .join('\n        ');
 
         // Build block cards
-        const cardsHtml = blocks.map(block => {
+        const cardsHtml = blocks.map((block, i) => {
             const lang = block.language || '';
             const langDisplay = lang || 'plain';
             const roleLabel = block.messageRole === 'user' ? 'User' : 'AI';
@@ -96,7 +96,8 @@ export class CodeBlocksPanel {
             const escapedSource = CodeBlocksPanel._escapeHtml(sourceLabel);
             const escapedRole = CodeBlocksPanel._escapeHtml(roleLabel);
 
-            return `<div class="block-card" data-lang="${escapedLangLower}" data-content="${escapedContentLower}" data-full-content="${escapedFullContent}">
+            const fadeAttr = i < 15 ? ` style="--cw-i:${i}"` : '';
+            return `<div class="block-card cw-fade-item"${fadeAttr} data-lang="${escapedLangLower}" data-content="${escapedContentLower}" data-full-content="${escapedFullContent}">
   <div class="card-header">
     <span class="badge badge-lang" data-lang="${escapedLangLower}">${escapedLangDisplay}</span>
     <span class="badge badge-role">${escapedRole}</span>
@@ -361,10 +362,12 @@ export class CodeBlocksPanel {
       btn.addEventListener('click', () => {
         const content = btn.closest('.block-card').dataset.fullContent;
         vscode.postMessage({ command: 'copy', text: content });
+        if (window.cwMorphCopy) { window.cwMorphCopy(btn, 'Copy'); }
       });
     });
   </script>
   <script>${syntaxHighlighterJs()}</script>
+  <script>${cwInteractiveJs()}</script>
 </body>
 </html>`;
     }

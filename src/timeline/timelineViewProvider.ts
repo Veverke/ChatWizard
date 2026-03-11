@@ -3,7 +3,7 @@
 import * as vscode from 'vscode';
 import { SessionIndex } from '../index/sessionIndex';
 import { buildTimeline, TimelineEntry } from './timelineBuilder';
-import { cwThemeCss } from '../webview/cwTheme';
+import { cwThemeCss, cwInteractiveJs } from '../webview/cwTheme';
 
 export interface TimelineFilter {
     workspacePath?: string;        // filter to a specific workspace path (exact match)
@@ -106,14 +106,17 @@ export class TimelineViewProvider implements vscode.WebviewViewProvider {
         if (entries.length === 0) {
             timelineHtml = `<div class="empty-state">No sessions found.</div>`;
         } else {
+            let fadeIdx = 0;
             timelineHtml = Array.from(monthMap.entries()).map(([ym, monthEntries]) => {
                 const monthLabel = TimelineViewProvider._monthLabel(ym);
                 const entryRows = monthEntries.map(entry => {
+                    const fi = fadeIdx++;
+                    const fadeAttr = fi < 25 ? ` style="--cw-i:${fi}"` : '';
                     const sourceLabel = entry.source === 'copilot' ? 'Copilot' : 'Claude';
                     const badgeClass = entry.source === 'copilot' ? 'cw-badge-copilot' : 'cw-badge-claude';
                     const wsMeta = entry.workspaceName || '(unknown workspace)';
                     const promptText = entry.firstPrompt || '(no prompt)';
-                    return `<div class="entry" onclick="openSession('${e(entry.sessionId)}')">
+                    return `<div class="entry cw-fade-item"${fadeAttr} onclick="openSession('${e(entry.sessionId)}')">
   <div class="entry-title">${e(entry.sessionTitle)}<span class="${badgeClass}">${e(sourceLabel)}</span></div>
   <div class="entry-meta">${e(wsMeta)} · ${entry.messageCount} messages · ${entry.promptCount} prompts · ${e(entry.date)}</div>
   <div class="entry-prompt">${e(promptText)}</div>
@@ -201,12 +204,14 @@ export class TimelineViewProvider implements vscode.WebviewViewProvider {
       background: var(--cw-surface-raised);
       box-shadow: var(--cw-shadow);
       cursor: pointer;
-      transition: box-shadow 0.12s, background 0.12s;
+      transition: box-shadow 0.14s, background 0.14s, transform 0.14s, border-color 0.14s;
     }
 
     .entry:hover {
-      background: var(--cw-surface-subtle);
-      box-shadow: var(--cw-shadow-hover);
+      background:   var(--cw-surface-subtle);
+      box-shadow:   var(--cw-shadow-hover);
+      transform:    translateY(-2px);
+      border-color: var(--cw-border-strong);
     }
 
     .entry-title {
@@ -267,6 +272,7 @@ ${timelineHtml}
       if (target) { target.querySelector('.month-header').scrollIntoView({ behavior: 'smooth', block: 'start' }); }
   }
 </script>
+<script>${cwInteractiveJs()}</script>
 </body>
 </html>`;
     }

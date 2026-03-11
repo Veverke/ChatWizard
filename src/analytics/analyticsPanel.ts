@@ -4,7 +4,7 @@ import * as vscode from 'vscode';
 import { SessionIndex } from '../index/sessionIndex';
 import { computeAnalytics, AnalyticsData } from './analyticsEngine';
 import { countTokens } from './tokenCounter';
-import { cwThemeCss } from '../webview/cwTheme';
+import { cwThemeCss, cwInteractiveJs } from '../webview/cwTheme';
 
 export class AnalyticsPanel {
     private static _panel: vscode.WebviewPanel | undefined;
@@ -145,8 +145,8 @@ export class AnalyticsPanel {
             { label: 'Copilot Sessions', value: data.copilotSessions.toLocaleString(), sub: '' },
             { label: 'Claude Sessions',  value: data.claudeSessions.toLocaleString(),  sub: '' },
             { label: 'Time Span',        value: timeSpanValue, sub: timeSpanSub },
-        ].map(card => `
-        <div class="summary-card">
+        ].map((card, idx) => `
+        <div class="summary-card cw-fade-item" style="--cw-i:${idx}">
           <div class="summary-value">${e(card.value)}</div>
           <div class="summary-label">${e(card.label)}</div>${card.sub ? `
           <div class="summary-sub">${e(card.sub)}</div>` : ''}
@@ -432,16 +432,35 @@ export class AnalyticsPanel {
   </div>
 
   <script>
+    ${cwInteractiveJs()}
     (function () {
       const hasActivity = ${hasActivity};
       const hasTerms    = ${hasTerms};
 
       // Apply VS Code theme colours to Chart.js defaults
-      const style = getComputedStyle(document.body);
-      const fgColor     = style.getPropertyValue('--vscode-editor-foreground').trim()         || '#cccccc';
-      const borderColor = style.getPropertyValue('--vscode-textSeparator-foreground').trim()  || 'rgba(128,128,128,0.3)';
+      const style       = getComputedStyle(document.body);
+      const fgColor     = style.getPropertyValue('--vscode-editor-foreground').trim()        || '#cccccc';
+      const borderColor = style.getPropertyValue('--vscode-textSeparator-foreground').trim() || 'rgba(128,128,128,0.3)';
+      const accentColor = style.getPropertyValue('--cw-accent').trim()                       || '#5B8AF5';
+      const copilotColor = style.getPropertyValue('--cw-copilot').trim()                     || '#f0883e';
       Chart.defaults.color       = fgColor;
       Chart.defaults.borderColor = borderColor;
+
+      // ── Count-up animation for summary cards ──────────────────
+      document.querySelectorAll('.summary-value').forEach(function(el) {
+        var raw = el.textContent.trim();
+        if (!/^\d[\d,]*$/.test(raw)) { return; }
+        var n = parseInt(raw.replace(/,/g, ''), 10);
+        if (!n) { return; }
+        var start = performance.now();
+        (function tick(now) {
+          var t    = Math.min((now - start) / 900, 1);
+          var ease = 1 - Math.pow(1 - t, 4);
+          el.textContent = Math.round(n * ease).toLocaleString();
+          if (t < 1) { requestAnimationFrame(tick); }
+          else { el.textContent = raw; }
+        })(start);
+      });
 
       if (hasActivity) {
         const ctx = document.getElementById('activityChart').getContext('2d');
@@ -453,19 +472,23 @@ export class AnalyticsPanel {
               {
                 label: 'Tokens',
                 data: ${dailyTokens},
-                borderColor: 'rgba(0, 122, 204, 0.9)',
-                backgroundColor: 'rgba(0, 122, 204, 0.15)',
+                borderColor: accentColor,
+                backgroundColor: accentColor.replace(')', ', 0.15)').replace('rgb', 'rgba'),
                 fill: true,
-                tension: 0.3,
+                tension: 0.4,
+                pointRadius: 3,
+                pointHoverRadius: 5,
                 yAxisID: 'yTokens'
               },
               {
                 label: 'Prompts',
                 data: ${dailyPrompts},
-                borderColor: 'rgba(255, 140, 0, 0.9)',
-                backgroundColor: 'rgba(255, 140, 0, 0.15)',
+                borderColor: copilotColor,
+                backgroundColor: copilotColor.replace(')', ', 0.12)').replace('rgb', 'rgba'),
                 fill: true,
-                tension: 0.3,
+                tension: 0.4,
+                pointRadius: 3,
+                pointHoverRadius: 5,
                 yAxisID: 'yPrompts'
               }
             ]
@@ -473,24 +496,17 @@ export class AnalyticsPanel {
           options: {
             responsive: true,
             maintainAspectRatio: true,
+            animation: { duration: 1200, easing: 'easeOutQuart' },
             interaction: { mode: 'index', intersect: false },
-            plugins: {
-              legend: { position: 'top' }
-            },
+            plugins: { legend: { position: 'top' } },
             scales: {
-              x: {
-                ticks: { maxTicksLimit: 12, maxRotation: 45 }
-              },
+              x: { ticks: { maxTicksLimit: 12, maxRotation: 45 } },
               yTokens: {
-                type: 'linear',
-                position: 'left',
-                beginAtZero: true,
+                type: 'linear', position: 'left', beginAtZero: true,
                 title: { display: true, text: 'Tokens' }
               },
               yPrompts: {
-                type: 'linear',
-                position: 'right',
-                beginAtZero: true,
+                type: 'linear', position: 'right', beginAtZero: true,
                 title: { display: true, text: 'Prompts' },
                 grid: { drawOnChartArea: false }
               }
@@ -509,9 +525,10 @@ export class AnalyticsPanel {
               {
                 label: 'Count',
                 data: ${termCounts},
-                backgroundColor: 'rgba(0, 122, 204, 0.7)',
-                borderColor:     'rgba(0, 122, 204, 1)',
-                borderWidth: 1
+                backgroundColor: accentColor.replace(')', ', 0.65)').replace('rgb', 'rgba'),
+                borderColor:     accentColor,
+                borderWidth: 1,
+                borderRadius: 3
               }
             ]
           },
@@ -519,10 +536,9 @@ export class AnalyticsPanel {
             indexAxis: 'y',
             responsive: true,
             maintainAspectRatio: false,
+            animation: { duration: 900, easing: 'easeOutQuart' },
             plugins: { legend: { display: false } },
-            scales: {
-              x: { beginAtZero: true }
-            }
+            scales: { x: { beginAtZero: true } }
           }
         });
       }

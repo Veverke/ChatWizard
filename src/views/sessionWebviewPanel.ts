@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { Session } from '../types/index';
-import { cwThemeCss, syntaxHighlighterCss, syntaxHighlighterJs } from '../webview/cwTheme';
+import { cwThemeCss, syntaxHighlighterCss, syntaxHighlighterJs, cwInteractiveJs } from '../webview/cwTheme';
 
 export class SessionWebviewPanel {
     static readonly _panels = new Map<string, vscode.WebviewPanel>();
@@ -340,7 +340,8 @@ export class SessionWebviewPanel {
                 : '';
             const renderedContent = SessionWebviewPanel._markdownToHtml(msg.content);
 
-            const html = `<div class="message ${roleClass}">
+            const fadeStyle = i < 16 ? ` style="--cw-i:${i}"` : '';
+            const html = `<div class="message ${roleClass} cw-fade-item"${fadeStyle}>
   <div class="message-header">
     <span class="role-label">${label}</span>${timestamp}
   </div>
@@ -589,12 +590,21 @@ export class SessionWebviewPanel {
     <button id="export-excerpt-btn">Export Excerpt…</button>
   </div>
   ${messagesHtml}
+  <button class="cw-back-top" id="backToTop" title="Back to top">↑</button>
   <div id="sel-ctx-menu">
     <div class="ctx-item" id="ctx-export-sel">Export selection as Markdown…</div>
   </div>
 <script nonce="${nonce}">
 ${syntaxHighlighterJs()}
+${cwInteractiveJs()}
 const vscode = acquireVsCodeApi();
+(function() {
+  var btn = document.getElementById('backToTop');
+  window.addEventListener('scroll', function() {
+    btn.classList.toggle('visible', window.scrollY > 300);
+  });
+  btn.addEventListener('click', function() { window.scrollTo({ top: 0, behavior: 'smooth' }); });
+})();
 (function() {
   document.getElementById('export-excerpt-btn').addEventListener('click', function() {
     vscode.postMessage({ command: 'exportExcerpt' });
