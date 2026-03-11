@@ -4,6 +4,7 @@ import * as vscode from 'vscode';
 import { SessionIndex } from '../index/sessionIndex';
 import { computeAnalytics, AnalyticsData } from './analyticsEngine';
 import { countTokens } from './tokenCounter';
+import { cwThemeCss } from '../webview/cwTheme';
 
 export class AnalyticsPanel {
     private static _panel: vscode.WebviewPanel | undefined;
@@ -61,43 +62,50 @@ export class AnalyticsPanel {
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';">
   <style>
+    * { box-sizing: border-box; }
     body {
       font-family: var(--vscode-font-family, sans-serif);
       background-color: var(--vscode-editor-background);
       color: var(--vscode-editor-foreground);
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      height: 100vh;
       margin: 0;
-      gap: 14px;
+      padding: 18px 20px;
     }
-    .progress-track {
-      width: 260px;
-      height: 3px;
-      background: var(--vscode-progressBar-background, rgba(128,128,128,0.2));
-      border-radius: 2px;
-      overflow: hidden;
+    ${cwThemeCss()}
+    .sk-section { height: 13px; width: 100px; margin-bottom: 16px; }
+    .sk-row { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 28px; }
+    .sk-card {
+      flex: 1 1 130px; min-width: 100px;
+      background: var(--cw-surface-raised);
+      border: 1px solid var(--cw-border);
+      border-radius: var(--cw-radius);
+      box-shadow: var(--cw-shadow);
+      padding: 14px;
+      display: flex; flex-direction: column; gap: 10px;
     }
-    .progress-fill {
-      height: 100%;
-      width: 40%;
-      background: var(--vscode-button-background, #007acc);
-      border-radius: 2px;
-      animation: slide 1.4s ease-in-out infinite;
+    .sk-val { height: 26px; width: 55%; }
+    .sk-lbl { height: 11px; width: 78%; }
+    .sk-chart {
+      height: 180px;
+      background: var(--cw-surface-raised);
+      border: 1px solid var(--cw-border);
+      border-radius: var(--cw-radius);
+      box-shadow: var(--cw-shadow);
     }
-    @keyframes slide {
-      0%   { transform: translateX(-150%) scaleX(0.6); }
-      50%  { transform: translateX(80%)   scaleX(1);   }
-      100% { transform: translateX(350%)  scaleX(0.6); }
-    }
-    .label { font-size: 0.82em; opacity: 0.55; }
   </style>
 </head>
 <body>
-  <div class="progress-track"><div class="progress-fill"></div></div>
-  <div class="label">Computing analytics…</div>
+  <div class="sk-section cw-skeleton" style="margin-bottom:18px"></div>
+  <div class="sk-row">
+    <div class="sk-card"><div class="sk-val cw-skeleton"></div><div class="sk-lbl cw-skeleton"></div></div>
+    <div class="sk-card"><div class="sk-val cw-skeleton"></div><div class="sk-lbl cw-skeleton"></div></div>
+    <div class="sk-card"><div class="sk-val cw-skeleton"></div><div class="sk-lbl cw-skeleton"></div></div>
+    <div class="sk-card"><div class="sk-val cw-skeleton"></div><div class="sk-lbl cw-skeleton"></div></div>
+    <div class="sk-card"><div class="sk-val cw-skeleton"></div><div class="sk-lbl cw-skeleton"></div></div>
+    <div class="sk-card"><div class="sk-val cw-skeleton"></div><div class="sk-lbl cw-skeleton"></div></div>
+    <div class="sk-card"><div class="sk-val cw-skeleton"></div><div class="sk-lbl cw-skeleton"></div></div>
+  </div>
+  <div class="sk-section cw-skeleton"></div>
+  <div class="sk-chart cw-skeleton" style="margin-top:14px"></div>
 </body>
 </html>`;
     }
@@ -227,6 +235,7 @@ export class AnalyticsPanel {
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'unsafe-inline';">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
   <style>
+    ${cwThemeCss()}
     * { box-sizing: border-box; }
 
     body {
@@ -263,9 +272,10 @@ export class AnalyticsPanel {
     .summary-card {
       flex: 1 1 130px;
       min-width: 100px;
-      background: var(--vscode-list-hoverBackground, rgba(255,255,255,0.04));
-      border: 1px solid var(--vscode-textSeparator-foreground, rgba(128,128,128,0.25));
-      border-radius: 6px;
+      background: var(--cw-surface-raised);
+      border: 1px solid var(--cw-border);
+      border-radius: var(--cw-radius);
+      box-shadow: var(--cw-shadow);
       padding: 12px 14px;
       text-align: center;
     }
@@ -274,7 +284,7 @@ export class AnalyticsPanel {
       font-size: 1.5em;
       font-weight: 700;
       font-family: var(--vscode-editor-font-family, monospace);
-      color: var(--vscode-button-background, #007acc);
+      color: var(--cw-accent);
       line-height: 1.2;
     }
 
@@ -307,8 +317,8 @@ export class AnalyticsPanel {
     .data-table th {
       text-align: left;
       padding: 5px 10px;
-      background: var(--vscode-list-hoverBackground, rgba(255,255,255,0.04));
-      border-bottom: 2px solid var(--vscode-textSeparator-foreground, rgba(128,128,128,0.4));
+      background: var(--cw-surface-subtle);
+      border-bottom: 2px solid var(--cw-border-strong);
       font-weight: 600;
       white-space: nowrap;
       opacity: 0.85;

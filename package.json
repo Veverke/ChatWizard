@@ -182,7 +182,10 @@
         { "command": "chatwizard.pinSession",     "when": "viewItem == session",        "group": "1_pin@1" },
         { "command": "chatwizard.unpinSession",   "when": "viewItem == session.pinned", "group": "1_pin@1" },
         { "command": "chatwizard.exportSession",  "when": "viewItem == session || viewItem == session.pinned", "group": "2_export@1" },
-        { "command": "chatwizard.exportFromTreeSelection", "when": "viewItem == session || viewItem == session.pinned", "group": "2_export@2" }
+        { "command": "chatwizard.exportFromTreeSelection", "when": "viewItem == session || viewItem == session.pinned", "group": "2_export@2" },
+        { "command": "chatwizard.pinSession",    "when": "viewItem == session",                               "group": "inline@1" },
+        { "command": "chatwizard.unpinSession",  "when": "viewItem == session.pinned",                        "group": "inline@1" },
+        { "command": "chatwizard.exportSession", "when": "viewItem == session || viewItem == session.pinned",  "group": "inline@2" }
       ]
     },
     "configuration": {

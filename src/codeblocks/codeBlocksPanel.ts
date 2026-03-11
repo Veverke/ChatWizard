@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { IndexedCodeBlock } from '../types/index';
 import { SessionIndex } from '../index/sessionIndex';
 import { CodeBlockSearchEngine } from './codeBlockSearchEngine';
+import { cwThemeCss, syntaxHighlighterCss, syntaxHighlighterJs } from '../webview/cwTheme';
 
 export class CodeBlocksPanel {
     private static _panel: vscode.WebviewPanel | undefined;
@@ -97,7 +98,7 @@ export class CodeBlocksPanel {
 
             return `<div class="block-card" data-lang="${escapedLangLower}" data-content="${escapedContentLower}" data-full-content="${escapedFullContent}">
   <div class="card-header">
-    <span class="badge badge-lang">${escapedLangDisplay}</span>
+    <span class="badge badge-lang" data-lang="${escapedLangLower}">${escapedLangDisplay}</span>
     <span class="badge badge-role">${escapedRole}</span>
     <span class="source-label">${escapedSource}</span>
     <span class="session-title">${escapedTitle}</span>
@@ -114,6 +115,8 @@ export class CodeBlocksPanel {
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline';">
   <style>
+    ${cwThemeCss()}
+    ${syntaxHighlighterCss()}
     * {
       box-sizing: border-box;
     }
@@ -131,13 +134,13 @@ export class CodeBlocksPanel {
     .toolbar {
       position: sticky;
       top: 0;
-      background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+      background: var(--cw-surface);
       padding: 8px 16px;
       display: flex;
       gap: 8px;
       align-items: center;
       z-index: 10;
-      border-bottom: 1px solid var(--vscode-textBlockQuote-background, #444);
+      border-bottom: 1px solid var(--cw-border);
     }
 
     .toolbar label {
@@ -181,9 +184,10 @@ export class CodeBlocksPanel {
 
     .block-card {
       margin-bottom: 12px;
-      border: 1px solid var(--vscode-textBlockQuote-background, #444);
-      border-radius: 6px;
-      background: var(--vscode-editor-background);
+      background: var(--cw-surface-raised);
+      border: 1px solid var(--cw-border);
+      border-radius: var(--cw-radius);
+      box-shadow: var(--cw-shadow);
       overflow: hidden;
     }
 
@@ -193,8 +197,8 @@ export class CodeBlocksPanel {
       gap: 6px;
       flex-wrap: wrap;
       padding: 6px 10px;
-      background: var(--vscode-textBlockQuote-background, rgba(255,255,255,0.04));
-      border-bottom: 1px solid var(--vscode-textBlockQuote-background, #444);
+      background: var(--cw-surface-subtle);
+      border-bottom: 1px solid var(--cw-border);
       position: relative;
     }
 
@@ -207,15 +211,40 @@ export class CodeBlocksPanel {
     }
 
     .badge-lang {
-      background: var(--vscode-badge-background, #4d4d4d);
-      color: var(--vscode-badge-foreground, #ffffff);
+      background: var(--cw-surface-subtle);
+      color: var(--cw-accent);
+      border: 1px solid var(--cw-border-strong);
       text-transform: lowercase;
       font-family: var(--vscode-editor-font-family, monospace);
     }
+    .badge-lang[data-lang="javascript"], .badge-lang[data-lang="js"],
+    .badge-lang[data-lang="typescript"], .badge-lang[data-lang="ts"],
+    .badge-lang[data-lang="jsx"],        .badge-lang[data-lang="tsx"] {
+      background: rgba(78,201,78,0.12); color: #4ec94e; border-color: rgba(78,201,78,0.3);
+    }
+    .badge-lang[data-lang="python"], .badge-lang[data-lang="py"] {
+      background: rgba(91,155,213,0.12); color: #5b9bd5; border-color: rgba(91,155,213,0.3);
+    }
+    .badge-lang[data-lang="rust"] {
+      background: rgba(240,136,62,0.12); color: #f0883e; border-color: rgba(240,136,62,0.3);
+    }
+    .badge-lang[data-lang="go"] {
+      background: rgba(41,190,176,0.12); color: #29beb0; border-color: rgba(41,190,176,0.3);
+    }
+    .badge-lang[data-lang="shell"], .badge-lang[data-lang="bash"], .badge-lang[data-lang="sh"] {
+      background: rgba(166,123,240,0.12); color: #a67bf0; border-color: rgba(166,123,240,0.3);
+    }
+    .badge-lang[data-lang="json"] {
+      background: rgba(226,201,111,0.12); color: #e2c96f; border-color: rgba(226,201,111,0.3);
+    }
+    .badge-lang[data-lang="html"], .badge-lang[data-lang="css"] {
+      background: rgba(244,112,103,0.12); color: #f47067; border-color: rgba(244,112,103,0.3);
+    }
 
     .badge-role {
-      background: var(--vscode-button-secondaryBackground, #3a3d41);
-      color: var(--vscode-button-secondaryForeground, #cccccc);
+      background: var(--cw-surface-subtle);
+      color: var(--cw-text-muted);
+      border: 1px solid var(--cw-border-strong);
     }
 
     .source-label {
@@ -251,32 +280,33 @@ export class CodeBlocksPanel {
     .copy-btn {
       margin-left: auto;
       font-size: 0.78em;
-      padding: 2px 8px;
-      border: none;
-      border-radius: 3px;
+      padding: 2px 10px;
+      border: 1px solid var(--cw-border-strong);
+      border-radius: var(--cw-radius-xs);
       cursor: pointer;
-      background: var(--vscode-button-background, #0e639c);
-      color: var(--vscode-button-foreground, #ffffff);
+      background: var(--cw-surface-subtle);
+      color: inherit;
       white-space: nowrap;
       flex-shrink: 0;
+      transition: background 0.12s, color 0.12s, border-color 0.12s;
     }
 
     .copy-btn:hover {
-      background: var(--vscode-button-hoverBackground, #1177bb);
+      background: var(--cw-accent);
+      color: var(--cw-accent-text);
+      border-color: var(--cw-accent);
     }
 
     pre {
       margin: 0;
       padding: 12px 14px;
       overflow-x: auto;
-      background: var(--vscode-textBlockQuote-background, rgba(255,255,255,0.04));
       white-space: pre;
     }
 
     code {
       font-family: var(--vscode-editor-font-family, monospace);
       font-size: 0.92em;
-      color: var(--vscode-editor-foreground);
     }
 
     .empty-state {
@@ -334,6 +364,7 @@ export class CodeBlocksPanel {
       });
     });
   </script>
+  <script>${syntaxHighlighterJs()}</script>
 </body>
 </html>`;
     }

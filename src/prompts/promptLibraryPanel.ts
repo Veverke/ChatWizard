@@ -2,6 +2,7 @@
 
 import * as vscode from 'vscode';
 import { SessionIndex } from '../index/sessionIndex';
+import { cwThemeCss } from '../webview/cwTheme';
 import { buildPromptLibrary, PromptEntry } from './promptExtractor';
 import { clusterPrompts, PromptCluster } from './similarityEngine';
 
@@ -111,6 +112,7 @@ export class PromptLibraryPanel {
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline';">
   <style>
+    ${cwThemeCss()}
     * { box-sizing: border-box; }
 
     body {
@@ -126,13 +128,13 @@ export class PromptLibraryPanel {
     .toolbar {
       position: sticky;
       top: 0;
-      background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+      background: var(--cw-surface);
       padding: 8px 16px;
       display: flex;
       gap: 8px;
       align-items: center;
       z-index: 10;
-      border-bottom: 1px solid var(--vscode-textBlockQuote-background, #444);
+      border-bottom: 1px solid var(--cw-border);
     }
 
     #promptCount {
@@ -164,9 +166,10 @@ export class PromptLibraryPanel {
 
     .prompt-card {
       margin-bottom: 10px;
-      border: 1px solid var(--vscode-textBlockQuote-background, #444);
-      border-radius: 6px;
-      background: var(--vscode-editor-background);
+      background: var(--cw-surface-raised);
+      border: 1px solid var(--cw-border);
+      border-radius: var(--cw-radius);
+      box-shadow: var(--cw-shadow);
       overflow: hidden;
     }
 
@@ -175,18 +178,18 @@ export class PromptLibraryPanel {
       align-items: center;
       gap: 8px;
       padding: 6px 10px;
-      background: var(--vscode-textBlockQuote-background, rgba(255,255,255,0.04));
-      border-bottom: 1px solid var(--vscode-textBlockQuote-background, #444);
+      background: var(--cw-surface-subtle);
+      border-bottom: 1px solid var(--cw-border);
     }
 
     .freq-badge {
-      font-size: 0.82em;
+      font-size: 0.78em;
       font-weight: 700;
       font-family: var(--vscode-editor-font-family, monospace);
-      color: var(--vscode-badge-foreground, #fff);
-      background: var(--vscode-badge-background, #4d4d4d);
-      padding: 1px 6px;
-      border-radius: 3px;
+      color: var(--cw-accent-text, #fff);
+      background: var(--cw-accent);
+      padding: 2px 9px;
+      border-radius: 10px;
       white-space: nowrap;
       flex-shrink: 0;
     }
@@ -199,18 +202,21 @@ export class PromptLibraryPanel {
 
     .copy-btn {
       font-size: 0.78em;
-      padding: 2px 8px;
-      border: none;
-      border-radius: 3px;
+      padding: 2px 10px;
+      border: 1px solid var(--cw-border-strong);
+      border-radius: var(--cw-radius-xs);
       cursor: pointer;
-      background: var(--vscode-button-background, #0e639c);
-      color: var(--vscode-button-foreground, #ffffff);
+      background: var(--cw-surface-subtle);
+      color: inherit;
       white-space: nowrap;
       flex-shrink: 0;
+      transition: background 0.12s, color 0.12s, border-color 0.12s;
     }
 
     .copy-btn:hover {
-      background: var(--vscode-button-hoverBackground, #1177bb);
+      background: var(--cw-accent);
+      color: var(--cw-accent-text);
+      border-color: var(--cw-accent);
     }
 
     .copy-btn-sm {
@@ -226,7 +232,7 @@ export class PromptLibraryPanel {
     }
 
     .variants-details {
-      border-top: 1px solid var(--vscode-textBlockQuote-background, #444);
+      border-top: 1px solid var(--cw-border);
     }
 
     .variants-summary {
@@ -252,7 +258,7 @@ export class PromptLibraryPanel {
       align-items: flex-start;
       gap: 8px;
       padding: 4px 0;
-      border-top: 1px solid var(--vscode-textBlockQuote-background, #333);
+      border-top: 1px solid var(--cw-border);
       font-size: 0.88em;
     }
 
