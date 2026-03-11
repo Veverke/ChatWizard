@@ -4,6 +4,7 @@ import * as vscode from 'vscode';
 import { SessionIndex } from '../index/sessionIndex';
 import { computeAnalytics, AnalyticsData } from './analyticsEngine';
 import { countTokens } from './tokenCounter';
+import { cwThemeCss, cwInteractiveJs } from '../webview/cwTheme';
 
 export class AnalyticsPanel {
     private static _panel: vscode.WebviewPanel | undefined;
@@ -61,43 +62,50 @@ export class AnalyticsPanel {
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';">
   <style>
+    * { box-sizing: border-box; }
     body {
       font-family: var(--vscode-font-family, sans-serif);
       background-color: var(--vscode-editor-background);
       color: var(--vscode-editor-foreground);
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      height: 100vh;
       margin: 0;
-      gap: 14px;
+      padding: 18px 20px;
     }
-    .progress-track {
-      width: 260px;
-      height: 3px;
-      background: var(--vscode-progressBar-background, rgba(128,128,128,0.2));
-      border-radius: 2px;
-      overflow: hidden;
+    ${cwThemeCss()}
+    .sk-section { height: 13px; width: 100px; margin-bottom: 16px; }
+    .sk-row { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 28px; }
+    .sk-card {
+      flex: 1 1 130px; min-width: 100px;
+      background: var(--cw-surface-raised);
+      border: 1px solid var(--cw-border);
+      border-radius: var(--cw-radius);
+      box-shadow: var(--cw-shadow);
+      padding: 14px;
+      display: flex; flex-direction: column; gap: 10px;
     }
-    .progress-fill {
-      height: 100%;
-      width: 40%;
-      background: var(--vscode-button-background, #007acc);
-      border-radius: 2px;
-      animation: slide 1.4s ease-in-out infinite;
+    .sk-val { height: 26px; width: 55%; }
+    .sk-lbl { height: 11px; width: 78%; }
+    .sk-chart {
+      height: 180px;
+      background: var(--cw-surface-raised);
+      border: 1px solid var(--cw-border);
+      border-radius: var(--cw-radius);
+      box-shadow: var(--cw-shadow);
     }
-    @keyframes slide {
-      0%   { transform: translateX(-150%) scaleX(0.6); }
-      50%  { transform: translateX(80%)   scaleX(1);   }
-      100% { transform: translateX(350%)  scaleX(0.6); }
-    }
-    .label { font-size: 0.82em; opacity: 0.55; }
   </style>
 </head>
 <body>
-  <div class="progress-track"><div class="progress-fill"></div></div>
-  <div class="label">Computing analytics…</div>
+  <div class="sk-section cw-skeleton" style="margin-bottom:18px"></div>
+  <div class="sk-row">
+    <div class="sk-card"><div class="sk-val cw-skeleton"></div><div class="sk-lbl cw-skeleton"></div></div>
+    <div class="sk-card"><div class="sk-val cw-skeleton"></div><div class="sk-lbl cw-skeleton"></div></div>
+    <div class="sk-card"><div class="sk-val cw-skeleton"></div><div class="sk-lbl cw-skeleton"></div></div>
+    <div class="sk-card"><div class="sk-val cw-skeleton"></div><div class="sk-lbl cw-skeleton"></div></div>
+    <div class="sk-card"><div class="sk-val cw-skeleton"></div><div class="sk-lbl cw-skeleton"></div></div>
+    <div class="sk-card"><div class="sk-val cw-skeleton"></div><div class="sk-lbl cw-skeleton"></div></div>
+    <div class="sk-card"><div class="sk-val cw-skeleton"></div><div class="sk-lbl cw-skeleton"></div></div>
+  </div>
+  <div class="sk-section cw-skeleton"></div>
+  <div class="sk-chart cw-skeleton" style="margin-top:14px"></div>
 </body>
 </html>`;
     }
@@ -137,8 +145,8 @@ export class AnalyticsPanel {
             { label: 'Copilot Sessions', value: data.copilotSessions.toLocaleString(), sub: '' },
             { label: 'Claude Sessions',  value: data.claudeSessions.toLocaleString(),  sub: '' },
             { label: 'Time Span',        value: timeSpanValue, sub: timeSpanSub },
-        ].map(card => `
-        <div class="summary-card">
+        ].map((card, idx) => `
+        <div class="summary-card cw-fade-item" style="--cw-i:${idx}">
           <div class="summary-value">${e(card.value)}</div>
           <div class="summary-label">${e(card.label)}</div>${card.sub ? `
           <div class="summary-sub">${e(card.sub)}</div>` : ''}
@@ -227,6 +235,7 @@ export class AnalyticsPanel {
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'unsafe-inline';">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
   <style>
+    ${cwThemeCss()}
     * { box-sizing: border-box; }
 
     body {
@@ -263,9 +272,10 @@ export class AnalyticsPanel {
     .summary-card {
       flex: 1 1 130px;
       min-width: 100px;
-      background: var(--vscode-list-hoverBackground, rgba(255,255,255,0.04));
-      border: 1px solid var(--vscode-textSeparator-foreground, rgba(128,128,128,0.25));
-      border-radius: 6px;
+      background: var(--cw-surface-raised);
+      border: 1px solid var(--cw-border);
+      border-radius: var(--cw-radius);
+      box-shadow: var(--cw-shadow);
       padding: 12px 14px;
       text-align: center;
     }
@@ -274,7 +284,7 @@ export class AnalyticsPanel {
       font-size: 1.5em;
       font-weight: 700;
       font-family: var(--vscode-editor-font-family, monospace);
-      color: var(--vscode-button-background, #007acc);
+      color: var(--cw-accent);
       line-height: 1.2;
     }
 
@@ -307,8 +317,8 @@ export class AnalyticsPanel {
     .data-table th {
       text-align: left;
       padding: 5px 10px;
-      background: var(--vscode-list-hoverBackground, rgba(255,255,255,0.04));
-      border-bottom: 2px solid var(--vscode-textSeparator-foreground, rgba(128,128,128,0.4));
+      background: var(--cw-surface-subtle);
+      border-bottom: 2px solid var(--cw-border-strong);
       font-weight: 600;
       white-space: nowrap;
       opacity: 0.85;
@@ -422,16 +432,35 @@ export class AnalyticsPanel {
   </div>
 
   <script>
+    ${cwInteractiveJs()}
     (function () {
       const hasActivity = ${hasActivity};
       const hasTerms    = ${hasTerms};
 
       // Apply VS Code theme colours to Chart.js defaults
-      const style = getComputedStyle(document.body);
-      const fgColor     = style.getPropertyValue('--vscode-editor-foreground').trim()         || '#cccccc';
-      const borderColor = style.getPropertyValue('--vscode-textSeparator-foreground').trim()  || 'rgba(128,128,128,0.3)';
+      const style       = getComputedStyle(document.body);
+      const fgColor     = style.getPropertyValue('--vscode-editor-foreground').trim()        || '#cccccc';
+      const borderColor = style.getPropertyValue('--vscode-textSeparator-foreground').trim() || 'rgba(128,128,128,0.3)';
+      const accentColor = style.getPropertyValue('--cw-accent').trim()                       || '#5B8AF5';
+      const copilotColor = style.getPropertyValue('--cw-copilot').trim()                     || '#f0883e';
       Chart.defaults.color       = fgColor;
       Chart.defaults.borderColor = borderColor;
+
+      // ── Count-up animation for summary cards ──────────────────
+      document.querySelectorAll('.summary-value').forEach(function(el) {
+        var raw = el.textContent.trim();
+        if (!/^\d[\d,]*$/.test(raw)) { return; }
+        var n = parseInt(raw.replace(/,/g, ''), 10);
+        if (!n) { return; }
+        var start = performance.now();
+        (function tick(now) {
+          var t    = Math.min((now - start) / 900, 1);
+          var ease = 1 - Math.pow(1 - t, 4);
+          el.textContent = Math.round(n * ease).toLocaleString();
+          if (t < 1) { requestAnimationFrame(tick); }
+          else { el.textContent = raw; }
+        })(start);
+      });
 
       if (hasActivity) {
         const ctx = document.getElementById('activityChart').getContext('2d');
@@ -443,19 +472,23 @@ export class AnalyticsPanel {
               {
                 label: 'Tokens',
                 data: ${dailyTokens},
-                borderColor: 'rgba(0, 122, 204, 0.9)',
-                backgroundColor: 'rgba(0, 122, 204, 0.15)',
+                borderColor: accentColor,
+                backgroundColor: accentColor.replace(')', ', 0.15)').replace('rgb', 'rgba'),
                 fill: true,
-                tension: 0.3,
+                tension: 0.4,
+                pointRadius: 3,
+                pointHoverRadius: 5,
                 yAxisID: 'yTokens'
               },
               {
                 label: 'Prompts',
                 data: ${dailyPrompts},
-                borderColor: 'rgba(255, 140, 0, 0.9)',
-                backgroundColor: 'rgba(255, 140, 0, 0.15)',
+                borderColor: copilotColor,
+                backgroundColor: copilotColor.replace(')', ', 0.12)').replace('rgb', 'rgba'),
                 fill: true,
-                tension: 0.3,
+                tension: 0.4,
+                pointRadius: 3,
+                pointHoverRadius: 5,
                 yAxisID: 'yPrompts'
               }
             ]
@@ -463,24 +496,17 @@ export class AnalyticsPanel {
           options: {
             responsive: true,
             maintainAspectRatio: true,
+            animation: { duration: 1200, easing: 'easeOutQuart' },
             interaction: { mode: 'index', intersect: false },
-            plugins: {
-              legend: { position: 'top' }
-            },
+            plugins: { legend: { position: 'top' } },
             scales: {
-              x: {
-                ticks: { maxTicksLimit: 12, maxRotation: 45 }
-              },
+              x: { ticks: { maxTicksLimit: 12, maxRotation: 45 } },
               yTokens: {
-                type: 'linear',
-                position: 'left',
-                beginAtZero: true,
+                type: 'linear', position: 'left', beginAtZero: true,
                 title: { display: true, text: 'Tokens' }
               },
               yPrompts: {
-                type: 'linear',
-                position: 'right',
-                beginAtZero: true,
+                type: 'linear', position: 'right', beginAtZero: true,
                 title: { display: true, text: 'Prompts' },
                 grid: { drawOnChartArea: false }
               }
@@ -499,9 +525,10 @@ export class AnalyticsPanel {
               {
                 label: 'Count',
                 data: ${termCounts},
-                backgroundColor: 'rgba(0, 122, 204, 0.7)',
-                borderColor:     'rgba(0, 122, 204, 1)',
-                borderWidth: 1
+                backgroundColor: accentColor.replace(')', ', 0.65)').replace('rgb', 'rgba'),
+                borderColor:     accentColor,
+                borderWidth: 1,
+                borderRadius: 3
               }
             ]
           },
@@ -509,10 +536,9 @@ export class AnalyticsPanel {
             indexAxis: 'y',
             responsive: true,
             maintainAspectRatio: false,
+            animation: { duration: 900, easing: 'easeOutQuart' },
             plugins: { legend: { display: false } },
-            scales: {
-              x: { beginAtZero: true }
-            }
+            scales: { x: { beginAtZero: true } }
           }
         });
       }

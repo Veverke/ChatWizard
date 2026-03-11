@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { Session } from '../types/index';
+import { cwThemeCss, syntaxHighlighterCss, syntaxHighlighterJs, cwInteractiveJs } from '../webview/cwTheme';
 
 export class SessionWebviewPanel {
     static readonly _panels = new Map<string, vscode.WebviewPanel>();
@@ -81,21 +82,43 @@ export class SessionWebviewPanel {
       padding: 16px 24px;
     }
     h1 { font-size: 1.4em; margin-bottom: 24px; padding-bottom: 8px; border-bottom: 1px solid var(--vscode-textBlockQuote-background, #444); }
-    .loading { display: flex; align-items: center; gap: 10px; opacity: 0.7; margin-top: 8px; }
-    @keyframes spin { to { transform: rotate(360deg); } }
-    .spinner {
-      width: 16px; height: 16px; flex-shrink: 0;
-      border: 2px solid var(--vscode-editor-foreground);
-      border-top-color: transparent;
-      border-radius: 50%;
-      animation: spin 0.75s linear infinite;
-      opacity: 0.6;
+    ${cwThemeCss()}
+    .sk-msg {
+      margin-bottom: 16px;
+      padding: 12px 16px;
+      border-radius: var(--cw-radius, 8px);
+      background: var(--cw-surface-raised, rgba(255,255,255,0.04));
+      border: 1px solid var(--cw-border, rgba(255,255,255,0.07));
     }
+    .sk-line { height: 13px; margin-bottom: 8px; }
+    .sk-line:last-child { margin-bottom: 0; }
+    .sk-w-85 { width: 85%; }
+    .sk-w-65 { width: 65%; }
+    .sk-w-40 { width: 40%; }
+    .sk-w-90 { width: 90%; }
+    .sk-w-75 { width: 75%; }
+    .sk-w-55 { width: 55%; }
+    .sk-w-70 { width: 70%; }
   </style>
 </head>
 <body>
   <h1>${escaped}</h1>
-  <p class="loading"><span class="spinner"></span>Loading conversation…</p>
+  <div class="sk-msg">
+    <div class="sk-line sk-w-85 cw-skeleton"></div>
+    <div class="sk-line sk-w-65 cw-skeleton"></div>
+    <div class="sk-line sk-w-40 cw-skeleton"></div>
+  </div>
+  <div class="sk-msg">
+    <div class="sk-line sk-w-90 cw-skeleton"></div>
+    <div class="sk-line sk-w-75 cw-skeleton"></div>
+    <div class="sk-line sk-w-90 cw-skeleton"></div>
+    <div class="sk-line sk-w-55 cw-skeleton"></div>
+    <div class="sk-line sk-w-70 cw-skeleton"></div>
+  </div>
+  <div class="sk-msg">
+    <div class="sk-line sk-w-65 cw-skeleton"></div>
+    <div class="sk-line sk-w-85 cw-skeleton"></div>
+  </div>
 </body>
 </html>`;
     }
@@ -317,7 +340,8 @@ export class SessionWebviewPanel {
                 : '';
             const renderedContent = SessionWebviewPanel._markdownToHtml(msg.content);
 
-            const html = `<div class="message ${roleClass}">
+            const fadeStyle = i < 16 ? ` style="--cw-i:${i}"` : '';
+            const html = `<div class="message ${roleClass} cw-fade-item"${fadeStyle}>
   <div class="message-header">
     <span class="role-label">${label}</span>${timestamp}
   </div>
@@ -343,6 +367,8 @@ export class SessionWebviewPanel {
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
   <style>
+    ${cwThemeCss()}
+    ${syntaxHighlighterCss()}
     body {
       font-family: var(--vscode-font-family, sans-serif);
       font-size: var(--vscode-font-size, 13px);
@@ -367,34 +393,38 @@ export class SessionWebviewPanel {
     }
 
     .toolbar button {
-      background: var(--vscode-button-secondaryBackground, rgba(255,255,255,0.08));
-      color: var(--vscode-button-secondaryForeground, inherit);
-      border: 1px solid var(--vscode-button-border, transparent);
+      background: var(--cw-surface-subtle);
+      color: inherit;
+      border: 1px solid var(--cw-border-strong);
       padding: 3px 10px;
-      border-radius: 3px;
+      border-radius: var(--cw-radius-xs);
       cursor: pointer;
       font-size: 0.82em;
       font-family: var(--vscode-font-family, sans-serif);
+      transition: background 0.12s, color 0.12s, border-color 0.12s;
     }
 
     .toolbar button:hover {
-      background: var(--vscode-button-secondaryHoverBackground, rgba(255,255,255,0.14));
+      background: var(--cw-accent);
+      color: var(--cw-accent-text);
+      border-color: var(--cw-accent);
     }
 
     .message {
-      margin-bottom: 16px;
-      border-radius: 6px;
+      margin-bottom: 14px;
+      border-radius: var(--cw-radius);
       padding: 12px 16px;
+      background: var(--cw-surface-raised);
+      border: 1px solid var(--cw-border);
+      box-shadow: var(--cw-shadow);
     }
 
     .message.user {
-      background-color: var(--vscode-textBlockQuote-background, rgba(255,255,255,0.05));
       border-left: 3px solid ${userColor};
     }
 
     .message.assistant {
-      background-color: var(--vscode-editor-background);
-      border-left: 3px solid var(--vscode-textPreformat-background, #444);
+      border-left: 3px solid var(--cw-claude, #a67bf0);
     }
 
     .message-header {
@@ -498,8 +528,7 @@ export class SessionWebviewPanel {
     }
 
     pre {
-      background-color: var(--vscode-textPreformat-background, #1e1e1e);
-      border-radius: 4px;
+      border-radius: var(--cw-radius-sm);
       padding: 12px;
       overflow-x: auto;
       margin: 8px 0;
@@ -561,11 +590,21 @@ export class SessionWebviewPanel {
     <button id="export-excerpt-btn">Export Excerpt…</button>
   </div>
   ${messagesHtml}
+  <button class="cw-back-top" id="backToTop" title="Back to top">↑</button>
   <div id="sel-ctx-menu">
     <div class="ctx-item" id="ctx-export-sel">Export selection as Markdown…</div>
   </div>
 <script nonce="${nonce}">
+${syntaxHighlighterJs()}
+${cwInteractiveJs()}
 const vscode = acquireVsCodeApi();
+(function() {
+  var btn = document.getElementById('backToTop');
+  window.addEventListener('scroll', function() {
+    btn.classList.toggle('visible', window.scrollY > 300);
+  });
+  btn.addEventListener('click', function() { window.scrollTo({ top: 0, behavior: 'smooth' }); });
+})();
 (function() {
   document.getElementById('export-excerpt-btn').addEventListener('click', function() {
     vscode.postMessage({ command: 'exportExcerpt' });

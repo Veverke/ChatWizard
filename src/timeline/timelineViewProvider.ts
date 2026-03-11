@@ -3,6 +3,7 @@
 import * as vscode from 'vscode';
 import { SessionIndex } from '../index/sessionIndex';
 import { buildTimeline, TimelineEntry } from './timelineBuilder';
+import { cwThemeCss, cwInteractiveJs } from '../webview/cwTheme';
 
 export interface TimelineFilter {
     workspacePath?: string;        // filter to a specific workspace path (exact match)
@@ -105,14 +106,18 @@ export class TimelineViewProvider implements vscode.WebviewViewProvider {
         if (entries.length === 0) {
             timelineHtml = `<div class="empty-state">No sessions found.</div>`;
         } else {
+            let fadeIdx = 0;
             timelineHtml = Array.from(monthMap.entries()).map(([ym, monthEntries]) => {
                 const monthLabel = TimelineViewProvider._monthLabel(ym);
                 const entryRows = monthEntries.map(entry => {
+                    const fi = fadeIdx++;
+                    const fadeAttr = fi < 25 ? ` style="--cw-i:${fi}"` : '';
                     const sourceLabel = entry.source === 'copilot' ? 'Copilot' : 'Claude';
+                    const badgeClass = entry.source === 'copilot' ? 'cw-badge-copilot' : 'cw-badge-claude';
                     const wsMeta = entry.workspaceName || '(unknown workspace)';
                     const promptText = entry.firstPrompt || '(no prompt)';
-                    return `<div class="entry" onclick="openSession('${e(entry.sessionId)}')">
-  <div class="entry-title">${e(entry.sessionTitle)}<span class="entry-source">${e(sourceLabel)}</span></div>
+                    return `<div class="entry cw-fade-item"${fadeAttr} onclick="openSession('${e(entry.sessionId)}')">
+  <div class="entry-title">${e(entry.sessionTitle)}<span class="${badgeClass}">${e(sourceLabel)}</span></div>
   <div class="entry-meta">${e(wsMeta)} · ${entry.messageCount} messages · ${entry.promptCount} prompts · ${e(entry.date)}</div>
   <div class="entry-prompt">${e(promptText)}</div>
 </div>`;
@@ -131,6 +136,7 @@ export class TimelineViewProvider implements vscode.WebviewViewProvider {
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline';">
   <style>
+    ${cwThemeCss()}
     * { box-sizing: border-box; }
 
     body {
@@ -151,8 +157,8 @@ export class TimelineViewProvider implements vscode.WebviewViewProvider {
       align-items: center;
       gap: 8px;
       padding: 10px 14px;
-      border-bottom: 1px solid var(--vscode-textSeparator-foreground, rgba(128,128,128,0.35));
-      background: var(--vscode-editor-background);
+      border-bottom: 1px solid var(--cw-border);
+      background: var(--cw-surface);
       z-index: 10;
     }
 
@@ -177,25 +183,35 @@ export class TimelineViewProvider implements vscode.WebviewViewProvider {
     }
 
     .month-header {
-      font-size: 0.88em;
-      font-weight: 600;
-      opacity: 0.65;
+      font-size: 0.78em;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--cw-accent);
       padding: 10px 14px 4px;
       position: sticky;
       top: 41px;
       background: var(--vscode-editor-background);
       z-index: 5;
-      border-bottom: 1px solid var(--vscode-textSeparator-foreground, rgba(128,128,128,0.35));
+      border-bottom: 1px solid var(--cw-border);
     }
 
     .entry {
+      margin: 5px 10px;
       padding: 9px 14px;
-      border-bottom: 1px solid var(--vscode-textSeparator-foreground, rgba(128,128,128,0.15));
+      border-radius: var(--cw-radius);
+      border: 1px solid var(--cw-border);
+      background: var(--cw-surface-raised);
+      box-shadow: var(--cw-shadow);
       cursor: pointer;
+      transition: box-shadow 0.14s, background 0.14s, transform 0.14s, border-color 0.14s;
     }
 
     .entry:hover {
-      background: var(--vscode-list-hoverBackground);
+      background:   var(--cw-surface-subtle);
+      box-shadow:   var(--cw-shadow-hover);
+      transform:    translateY(-2px);
+      border-color: var(--cw-border-strong);
     }
 
     .entry-title {
@@ -205,14 +221,6 @@ export class TimelineViewProvider implements vscode.WebviewViewProvider {
       display: flex;
       align-items: center;
       gap: 6px;
-    }
-
-    .entry-source {
-      font-size: 0.75em;
-      opacity: 0.55;
-      padding: 1px 5px;
-      border-radius: 3px;
-      border: 1px solid currentColor;
     }
 
     .entry-meta {
@@ -264,6 +272,7 @@ ${timelineHtml}
       if (target) { target.querySelector('.month-header').scrollIntoView({ behavior: 'smooth', block: 'start' }); }
   }
 </script>
+<script>${cwInteractiveJs()}</script>
 </body>
 </html>`;
     }
