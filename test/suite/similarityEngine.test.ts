@@ -6,7 +6,7 @@ import { trigramSimilarity, clusterPrompts } from '../../src/prompts/similarityE
 import { PromptEntry } from '../../src/prompts/promptExtractor';
 
 function makeEntry(text: string, frequency = 1, projectIds: string[] = []): PromptEntry {
-    return { text, frequency, sessionIds: [], projectIds, firstSeen: undefined };
+    return { text, frequency, sessionIds: [], projectIds, firstSeen: undefined, sessionMeta: [] };
 }
 
 // ── trigramSimilarity ─────────────────────────────────────────────────────────
@@ -64,6 +64,57 @@ suite('trigramSimilarity', () => {
         const a = 'optimize database queries';
         const b = 'optimize database performance';
         assert.strictEqual(trigramSimilarity(a, b), trigramSimilarity(b, a));
+    });
+
+    test('exactly 3-char equal strings return 1.0', () => {
+        // boundary condition: exactly 3 chars produces exactly one trigram
+        assert.strictEqual(trigramSimilarity('abc', 'abc'), 1.0);
+    });
+
+    test('exactly 3-char different strings return 0.0', () => {
+        assert.strictEqual(trigramSimilarity('abc', 'xyz'), 0.0);
+    });
+
+    test('one string exactly 3 chars, other is long, returns value in [0, 1]', () => {
+        // Neither string is < 3 chars, so the <3 short-circuit does not apply
+        const sim = trigramSimilarity('abc', 'abcdefghij');
+        assert.ok(sim >= 0.0 && sim <= 1.0, `expected value in [0,1], got ${sim}`);
+        // Should be > 0 because the trigram 'abc' is shared
+        assert.ok(sim > 0.0, `expected > 0.0 because "abc" trigram is shared, got ${sim}`);
+    });
+
+    test('strings sharing a long prefix have similarity > 0.7', () => {
+        // 'typescript linting rules' vs 'typescript linting config' share
+        // 'typescript linting ' (18 chars = 16 trigrams) out of ~23 total unique trigrams
+        const sim = trigramSimilarity('typescript linting rules', 'typescript linting config');
+        assert.ok(sim > 0.7, `expected > 0.7 for shared-prefix strings, got ${sim}`);
+    });
+
+    test('unicode characters do not crash and result is in [0, 1]', () => {
+        const sim = trigramSimilarity('café au lait', 'café con leche');
+        assert.ok(sim >= 0.0 && sim <= 1.0, `expected value in [0,1], got ${sim}`);
+    });
+
+    test('very long nearly-identical strings have similarity > 0.8', () => {
+        // Build a 1000-char base string and two variants that differ by one word only
+        const base = 'optimize the database query performance using proper indexing strategies ';
+        // Repeat to reach ~1000 chars (base is 71 chars; repeat 14 times = 994 chars)
+        const repeated = base.repeat(14);
+        const a = repeated + 'and caching';
+        const b = repeated + 'and batching';
+        const sim = trigramSimilarity(a, b);
+        assert.ok(sim > 0.8, `expected > 0.8 for nearly-identical long strings, got ${sim}`);
+    });
+
+    test('reflexive property: sim(a, a) === 1.0 for non-trivial strings', () => {
+        const strings = [
+            'refactor this TypeScript class method',
+            'explain the architecture of this module',
+            'write unit tests for the authentication service',
+        ];
+        for (const s of strings) {
+            assert.strictEqual(trigramSimilarity(s, s), 1.0, `expected 1.0 for reflexive sim of "${s}"`);
+        }
     });
 });
 
@@ -169,5 +220,156 @@ suite('clusterPrompts', () => {
         // At threshold 0, every entry matches the first cluster (similarity >= 0 always)
         assert.strictEqual(clusters.length, 1);
         assert.strictEqual(clusters[0].totalFrequency, 6);
+    });
+
+    test('many similar variants all land in the same cluster', () => {
+        // Five variants of "refactor this TypeScript class method"
+        const entries = [
+            makeEntry('refactor this TypeScript class method', 5),
+            makeEntry('refactor this TypeScript class methods', 4),
+            makeEntry('refactor the TypeScript class method', 3),
+            makeEntry('refactor this TypeScript class function', 2),
+            makeEntry('refactor this TypeScript class approach', 1),
+        ];
+        // Verify each variant is similar enough to the canonical to merge
+        for (let i = 1; i < entries.length; i++) {
+            const sim = trigramSimilarity(entries[0].text, entries[i].text);
+            assert.ok(sim >= 0.6, `precondition failed: sim(canonical, variant[${i}]) = ${sim} < 0.6`);
+        }
+        const clusters = clusterPrompts(entries);
+        assert.strictEqual(clusters.length, 1, `expected 1 cluster, got ${clusters.length}`);
+        assert.strictEqual(clusters[0].variants.length, 4);
+        assert.strictEqual(clusters[0].totalFrequency, 15);
+    });
+
+    test('threshold edge: entries at exactly the threshold boundary merge', () => {
+        // Use texts whose similarity we have verified is >= 0.6
+        const a = makeEntry('refactor this function', 3);
+        const b = makeEntry('refactor the function',  2);
+        const sim = trigramSimilarity(a.text, b.text);
+        assert.ok(sim >= 0.6, `precondition: sim ${sim} < 0.6`);
+        // Cluster at exactly that threshold value — they must merge
+        const clusters = clusterPrompts([a, b], sim);
+        assert.strictEqual(clusters.length, 1, `expected 1 cluster at threshold ${sim}, got ${clusters.length}`);
+        // Just above the threshold by a tiny amount they should still merge
+        const clusters2 = clusterPrompts([a, b], sim - 1e-10);
+        assert.strictEqual(clusters2.length, 1, `expected 1 cluster just below sim, got ${clusters2.length}`);
+        // Just above should NOT merge (similarity < threshold)
+        const clusters3 = clusterPrompts([a, b], sim + 1e-10);
+        assert.strictEqual(clusters3.length, 2, `expected 2 clusters just above sim, got ${clusters3.length}`);
+    });
+
+    test('greedy three-way cluster: c compares against canonical a, not b', () => {
+        // a and b are similar, so b joins a's cluster.
+        // c is similar to b but NOT to a — greedy algorithm checks a first,
+        // so c should form its own cluster.
+        const a = makeEntry('write unit tests for parser module', 5);
+        const b = makeEntry('write unit tests for parser component', 4);
+        const c = makeEntry('explain quantum physics theory clearly', 2);
+
+        const simAB = trigramSimilarity(a.text, b.text);
+        assert.ok(simAB >= 0.6, `precondition: a-b sim ${simAB} < 0.6`);
+        const simAC = trigramSimilarity(a.text, c.text);
+        assert.ok(simAC < 0.6, `precondition: a-c sim ${simAC} >= 0.6`);
+
+        const clusters = clusterPrompts([a, b, c]);
+        // b should merge with a; c is checked against a (not b) and stays separate
+        assert.strictEqual(clusters.length, 2, `expected 2 clusters, got ${clusters.length}`);
+        const aCluster = clusters.find(cl => cl.canonical === a);
+        assert.ok(aCluster !== undefined, 'expected a to be a canonical');
+        assert.strictEqual(aCluster.variants.length, 1);
+        assert.strictEqual(aCluster.variants[0], b);
+    });
+
+    test('single entry cluster: canonical is the entry itself (reference equality)', () => {
+        const entry = makeEntry('explain the module architecture', 7);
+        const clusters = clusterPrompts([entry]);
+        assert.strictEqual(clusters[0].canonical, entry);
+    });
+
+    test('cluster with two entries: totalFrequency equals sum of both frequencies', () => {
+        const canonical = makeEntry('refactor this function', 6);
+        const variant   = makeEntry('refactor the function',  3);
+        const sim = trigramSimilarity(canonical.text, variant.text);
+        assert.ok(sim >= 0.6, `precondition: sim ${sim} < 0.6`);
+
+        const clusters = clusterPrompts([canonical, variant]);
+        assert.strictEqual(clusters.length, 1);
+        assert.strictEqual(clusters[0].totalFrequency, canonical.frequency + variant.frequency);
+    });
+
+    test('large number of unrelated entries produces one cluster per entry', () => {
+        const entries = [
+            makeEntry('explain quantum entanglement', 1),
+            makeEntry('write a SQL migration script', 1),
+            makeEntry('build a REST API in Go', 1),
+            makeEntry('design a neural network architecture', 1),
+            makeEntry('parse CSV files with Python', 1),
+            makeEntry('configure nginx reverse proxy', 1),
+            makeEntry('implement binary search tree', 1),
+            makeEntry('set up docker compose for postgres', 1),
+            makeEntry('animate SVG paths with CSS', 1),
+            makeEntry('optimize webpack bundle size', 1),
+        ];
+        const clusters = clusterPrompts(entries);
+        assert.strictEqual(clusters.length, 10, `expected 10 clusters, got ${clusters.length}`);
+    });
+
+    test('allProjectIds deduplication across 3 variants sharing a projectId', () => {
+        const a = makeEntry('refactor this function', 3, ['proj-A', 'proj-B']);
+        const b = makeEntry('refactor the function',  2, ['proj-B', 'proj-C']);
+        const c = makeEntry('refactor that function', 1, ['proj-A', 'proj-C']);
+        const simAB = trigramSimilarity(a.text, b.text);
+        const simAC = trigramSimilarity(a.text, c.text);
+        assert.ok(simAB >= 0.6, `precondition: a-b sim ${simAB} < 0.6`);
+        assert.ok(simAC >= 0.6, `precondition: a-c sim ${simAC} < 0.6`);
+
+        const clusters = clusterPrompts([a, b, c]);
+        assert.strictEqual(clusters.length, 1, `expected 1 cluster, got ${clusters.length}`);
+        const ids = [...clusters[0].allProjectIds].sort();
+        // proj-A, proj-B, proj-C each appear in multiple entries but must appear only once
+        assert.deepStrictEqual(ids, ['proj-A', 'proj-B', 'proj-C']);
+    });
+
+    test('clusterPrompts preserves canonical.firstSeen', () => {
+        const entry = makeEntry('refactor this function', 3);
+        entry.firstSeen = '2024-01-15T10:00:00.000Z';
+        const clusters = clusterPrompts([entry]);
+        assert.strictEqual(clusters[0].canonical.firstSeen, '2024-01-15T10:00:00.000Z');
+    });
+
+    test('clusterPrompts works correctly when sessionMeta is populated', () => {
+        const sessionMetaA = [{ sessionId: 's1', title: 'Session One', updatedAt: '2024-01-01T00:00:00.000Z', source: 'copilot' as const }];
+        const sessionMetaB = [{ sessionId: 's2', title: 'Session Two', updatedAt: '2024-02-01T00:00:00.000Z', source: 'claude' as const }];
+
+        const a: PromptEntry = {
+            text: 'refactor this TypeScript class method',
+            frequency: 4,
+            sessionIds: ['s1'],
+            projectIds: ['proj-A'],
+            firstSeen: '2024-01-01T00:00:00.000Z',
+            sessionMeta: sessionMetaA,
+        };
+        const b: PromptEntry = {
+            text: 'refactor the TypeScript class method',
+            frequency: 2,
+            sessionIds: ['s2'],
+            projectIds: ['proj-B'],
+            firstSeen: '2024-02-01T00:00:00.000Z',
+            sessionMeta: sessionMetaB,
+        };
+
+        const sim = trigramSimilarity(a.text, b.text);
+        assert.ok(sim >= 0.6, `precondition: sim ${sim} < 0.6`);
+
+        const clusters = clusterPrompts([a, b]);
+        // sessionMeta presence does not affect clustering logic
+        assert.strictEqual(clusters.length, 1, `expected 1 cluster, got ${clusters.length}`);
+        assert.strictEqual(clusters[0].canonical, a);
+        assert.strictEqual(clusters[0].variants.length, 1);
+        assert.strictEqual(clusters[0].variants[0], b);
+        assert.strictEqual(clusters[0].totalFrequency, 6);
+        // sessionMeta is preserved on the canonical entry unchanged
+        assert.deepStrictEqual(clusters[0].canonical.sessionMeta, sessionMetaA);
     });
 });

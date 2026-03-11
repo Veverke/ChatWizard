@@ -2,6 +2,14 @@
 
 import { SessionIndex } from '../index/sessionIndex';
 
+/** Session metadata attached to each PromptEntry occurrence */
+export interface PromptSessionMeta {
+    sessionId: string;
+    title: string;
+    updatedAt: string;
+    source: 'copilot' | 'claude';
+}
+
 /** A deduplicated, aggregated entry in the Prompt Library. */
 export interface PromptEntry {
     /** Normalized prompt text (trimmed, collapsed internal whitespace) */
@@ -14,6 +22,8 @@ export interface PromptEntry {
     projectIds: string[];
     /** ISO timestamp of the earliest occurrence across all duplicates */
     firstSeen?: string;
+    /** Metadata for each distinct session where this prompt appeared */
+    sessionMeta: PromptSessionMeta[];
 }
 
 /**
@@ -39,6 +49,7 @@ export function buildPromptLibrary(index: SessionIndex): PromptEntry[] {
         sessionIds: Set<string>;
         projectIds: Set<string>;
         firstSeen: string | undefined;
+        sessionMetaMap: Map<string, PromptSessionMeta>;
     }>();
 
     for (const prompt of raw) {
@@ -57,6 +68,7 @@ export function buildPromptLibrary(index: SessionIndex): PromptEntry[] {
                 sessionIds: new Set(),
                 projectIds: new Set(),
                 firstSeen: undefined,
+                sessionMetaMap: new Map(),
             };
             map.set(normalized, entry);
         }
@@ -73,6 +85,15 @@ export function buildPromptLibrary(index: SessionIndex): PromptEntry[] {
                 entry.firstSeen = prompt.timestamp;
             }
         }
+
+        if (session !== undefined && !entry.sessionMetaMap.has(prompt.sessionId)) {
+            entry.sessionMetaMap.set(prompt.sessionId, {
+                sessionId: session.id,
+                title: session.title,
+                updatedAt: session.updatedAt,
+                source: session.source,
+            });
+        }
     }
 
     const result: PromptEntry[] = [];
@@ -83,6 +104,7 @@ export function buildPromptLibrary(index: SessionIndex): PromptEntry[] {
             sessionIds: Array.from(entry.sessionIds),
             projectIds: Array.from(entry.projectIds),
             firstSeen: entry.firstSeen,
+            sessionMeta: Array.from(entry.sessionMetaMap.values()),
         });
     }
 

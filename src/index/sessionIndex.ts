@@ -2,6 +2,11 @@
 
 import { Session, SessionSummary, Prompt, SessionSource, IndexedCodeBlock } from '../types/index';
 
+export type SessionIndexEvent =
+    | { type: 'upsert'; session: Session }
+    | { type: 'remove'; sessionId: string }
+    | { type: 'batch'; sessions: Session[] };
+
 /**
  * Convert a full Session to a lightweight SessionSummary.
  * Counts are computed from the messages array; message content is not retained.
@@ -40,6 +45,7 @@ function byUpdatedAtDesc(a: SessionSummary, b: SessionSummary): number {
 export class SessionIndex {
     private sessions: Map<string, Session>;
     private _changeListeners: (() => void)[] = [];
+    private _typedChangeListeners: ((event: SessionIndexEvent) => void)[] = [];
 
     constructor() {
         this.sessions = new Map();
@@ -50,13 +56,23 @@ export class SessionIndex {
         return { dispose: () => { this._changeListeners = this._changeListeners.filter(l => l !== fn); } };
     }
 
+    addTypedChangeListener(fn: (event: SessionIndexEvent) => void): { dispose: () => void } {
+        this._typedChangeListeners.push(fn);
+        return { dispose: () => { this._typedChangeListeners = this._typedChangeListeners.filter(l => l !== fn); } };
+    }
+
     private _notifyListeners(): void {
         for (const fn of this._changeListeners) { fn(); }
+    }
+
+    private _notifyTyped(event: SessionIndexEvent): void {
+        for (const fn of this._typedChangeListeners) { fn(event); }
     }
 
     /** Add or replace a session by id. */
     upsert(session: Session): void {
         this.sessions.set(session.id, session);
+        this._notifyTyped({ type: 'upsert', session });
         this._notifyListeners();
     }
 
@@ -66,8 +82,23 @@ export class SessionIndex {
      */
     remove(sessionId: string): boolean {
         const removed = this.sessions.delete(sessionId);
-        if (removed) { this._notifyListeners(); }
+        if (removed) {
+            this._notifyTyped({ type: 'remove', sessionId });
+            this._notifyListeners();
+        }
         return removed;
+    }
+
+    /**
+     * Insert or replace all sessions in the array, then fire one typed 'batch' event
+     * and one plain change notification.
+     */
+    batchUpsert(sessions: Session[]): void {
+        for (const session of sessions) {
+            this.sessions.set(session.id, session);
+        }
+        this._notifyTyped({ type: 'batch', sessions });
+        this._notifyListeners();
     }
 
     /** Get a full session by id. Returns undefined if not found. */

@@ -426,7 +426,7 @@
   <div class="card">
     <div class="label">Total Phases</div>
     <div class="value">10</div>
-    <div class="sub">3 done · 7 remaining</div>
+    <div class="sub">10 done · 0 remaining</div>
   </div>
   <div class="card">
     <div class="label">Total Effort</div>
@@ -446,7 +446,7 @@
   <div class="card">
     <div class="label">External Deps</div>
     <div class="value">Local only</div>
-    <div class="sub">no cloud / no telemetry</div>
+    <div class="sub">no cloud · opt-in local telemetry</div>
   </div>
 </div>
 
@@ -548,7 +548,7 @@
     {
       id: 3,
       title: "Export to Markdown",
-      status: "todo",
+      status: "done",
       effort: 1,
       effortLabel: "1 week",
       complexity: "low",
@@ -557,11 +557,11 @@
       audience: "All users",
       goal: "Export any session or set of sessions to a navigable .md file, with VS Code Outline panel providing immediate navigation.",
       tasks: [
-        "Implement Markdown serializer (H2 per prompt, H3 per response)",
-        "Add Export Session command from TreeView context menu",
-        "Add Export All command (bulk export)",
-        "Open exported file in VS Code editor",
-        "Preserve code block fencing and language identifiers",
+        "Implement Markdown serializer: H2 per user prompt, H3 per AI response, language-labeled code blocks",
+        "Add Export Session command from TreeView context menu; open exported file in VS Code editor",
+        "Add Export All Sessions command (bulk export with save dialog)",
+        "Add multi-select export via QuickPick (Export Selected Sessions)",
+        "Add session excerpt export — select specific messages from within the reader",
       ],
       color: "#3fb950",
       barColor: "rgba(63,185,80,0.75)",
@@ -569,7 +569,7 @@
     {
       id: 4,
       title: "Code Block Extraction",
-      status: "todo",
+      status: "done",
       effort: 1.5,
       effortLabel: "1.5 weeks",
       complexity: "medium",
@@ -578,11 +578,12 @@
       audience: "All users",
       goal: "Index all fenced code blocks across all sessions. Make them browsable, filterable by language, and copyable.",
       tasks: [
-        "Extend parser to extract fenced code blocks with language + session context",
-        "Build Code Blocks TreeView or Webview panel (filterable by language)",
-        "Implement full-text search within code block content",
-        "Add one-click copy-to-clipboard",
-        "Show originating session title and date per block",
+        "Extend parsers to extract fenced code blocks with language, content, and session context",
+        "Build CodeBlockSearchEngine: language filter + content search + removeBySession/upsertBySession",
+        "Build CodeBlocksPanel Webview with sticky toolbar (language filter + search input)",
+        "Build CodeBlockTreeProvider TreeView for the activity bar sidebar",
+        "Add one-click copy-to-clipboard for each block",
+        "Show originating session title, date, source, workspace, and message role per block",
       ],
       color: "#d29922",
       barColor: "rgba(210,153,34,0.75)",
@@ -590,7 +591,7 @@
     {
       id: 5,
       title: "Prompt Library",
-      status: "todo",
+      status: "done",
       effort: 1.5,
       effortLabel: "1.5 weeks",
       complexity: "medium",
@@ -599,10 +600,10 @@
       audience: "Power users",
       goal: "Extract, deduplicate, and cluster all user-turn prompts for re-use. Surface frequency to show which prompts the user reaches for repeatedly.",
       tasks: [
-        "Extract all user-turn messages across sessions",
-        "Deduplicate exact matches",
-        "Cluster by trigram/TF-IDF similarity",
-        "Build Prompt Library panel: searchable, sorted by frequency",
+        "Extract all user-turn messages across sessions; normalise prompt text",
+        "Deduplicate exact matches; count frequency across sessions and projects",
+        "Build PromptLibraryPanel Webview: searchable, sorted by frequency, copy button per entry",
+        "Build PromptLibraryViewProvider sidebar WebviewView tab (persistent panel in activity bar)",
         "Add copy-to-clipboard per prompt",
         "Show frequency count: 'Asked N times across M projects'",
       ],
@@ -612,7 +613,7 @@
     {
       id: 6,
       title: "Analytics & Usage Stats",
-      status: "todo",
+      status: "done",
       effort: 2,
       effortLabel: "2 weeks",
       complexity: "medium-high",
@@ -621,13 +622,14 @@
       audience: "Power users / managers",
       goal: "Aggregate statistics computed from the session index. Token counting using BPE tokenizers shipped locally by Copilot and Claude.",
       tasks: [
-        "Integrate js-tiktoken for Copilot/GPT token counting",
-        "Integrate @anthropic-ai/tokenizer for Claude token counting",
-        "Compute session-level metrics (sessions, prompts, responses, tokens)",
-        "Compute aggregate metrics (activity over time, daily token totals)",
-        "Surface most active projects, frequent terms in prompts",
-        "Build Analytics Webview panel with charts (Chart.js)",
-        "Show longest sessions by message and token count",
+        "Token counting utility: chars/4 for Claude, words×1.3 for Copilot (no external deps)",
+        "Analytics engine: computeAnalytics() → sessions, prompts, responses, tokens by source",
+        "Compute aggregate metrics: daily activity, token totals, session counts over time",
+        "Surface most active projects (by token count), top 20 frequent user-prompt terms",
+        "Build Analytics Webview panel with Chart.js (CDN): summary cards, daily chart, tables",
+        "Show longest sessions by message count and token count (top 10 each)",
+        "Register chatwizard.showAnalytics command; live refresh on index changes",
+        "Unit tests for tokenCounter and analyticsEngine (all aggregations and edge cases)",
       ],
       color: "#f78166",
       barColor: "rgba(247,129,102,0.75)",
@@ -635,7 +637,7 @@
     {
       id: 7,
       title: "Duplicate Prompt Detection",
-      status: "todo",
+      status: "done",
       effort: 1.5,
       effortLabel: "1.5 weeks",
       complexity: "medium",
@@ -644,10 +646,12 @@
       audience: "Power users",
       goal: "Surface semantically equivalent prompts across sessions using TF-IDF or trigram similarity — no ML dependencies required.",
       tasks: [
-        "Implement TF-IDF or trigram similarity scoring",
-        "Identify clusters of near-duplicate prompts",
-        "Surface in UI: 'You asked this N times across M projects'",
-        "Allow merging/consolidating entries in Prompt Library",
+        "Implement trigram similarity scoring between prompt texts",
+        "Cluster near-duplicate prompts with clusterPrompts() using similarity threshold",
+        "Enrich PromptEntry with sessionMeta: source session title, date, source per occurrence",
+        "Show variant session + date info in the Prompt Library cluster view",
+        "Merge button per cluster collapses variants into canonical (client-side + extension message)",
+        "Track merged texts in PromptLibraryViewProvider to prevent re-surfacing",
       ],
       color: "#d29922",
       barColor: "rgba(210,153,34,0.75)",
@@ -655,7 +659,7 @@
     {
       id: 8,
       title: "Timeline View",
-      status: "todo",
+      status: "done",
       effort: 1,
       effortLabel: "1 week",
       complexity: "low",
@@ -664,10 +668,12 @@
       audience: "All users",
       goal: "Chronological feed of all sessions across all workspaces. Answers 'What was I working on last Tuesday?'",
       tasks: [
-        "Implement Timeline Webview panel with chronological session feed",
-        "Show: project, session title, first prompt, message count, date",
-        "Add date navigation / jump-to-date",
-        "Filter by workspace/project",
+        "buildTimeline(): skips epoch/empty sessions, sorts newest-first, extracts firstPrompt",
+        "TimelineViewProvider sidebar WebviewView with month-grouped chronological feed",
+        "Each entry: project, session title, first user prompt preview, message count, date",
+        "Sticky filter bar: workspace dropdown + source dropdown",
+        "Jump-to-date input scrolls the feed to the nearest month group",
+        "Live refresh on index change events; tests: timelineBuilder (20 cases) + viewProvider (12 cases)",
       ],
       color: "#3fb950",
       barColor: "rgba(63,185,80,0.75)",
@@ -675,21 +681,24 @@
     {
       id: 9,
       title: "Polish & Release",
-      status: "todo",
+      status: "done",
       effort: 2,
       effortLabel: "2 weeks",
       complexity: "medium",
       complexityLabel: "Medium",
       startWeek: 11.5,
       audience: "All users (marketplace)",
-      goal: "Production-readiness: performance, packaging, documentation, and VS Code Marketplace publication.",
+      goal: "Production-readiness: batch initial build, incremental live updates, configurable source paths, local telemetry, README, and package metadata for VS Code Marketplace.",
       tasks: [
-        "Performance audit: index build time on large history (1000+ sessions)",
-        "Incremental index updates (avoid full rebuild on file change)",
-        "Extension settings: configurable source paths, refresh interval",
-        "Write README, feature walkthrough, and screenshot GIFs",
-        "Package with vsce and publish to VS Code Marketplace",
-        "Add telemetry opt-in (local only, no external calls)",
+        "Batch initial index build — collect all sessions then batchUpsert once (N→1 listener notification)",
+        "Typed change events (SessionIndexEvent) + addTypedChangeListener() on SessionIndex",
+        "Incremental full-text search updates — O(1) per live file change instead of O(n) full rebuild",
+        "CodeBlockSearchEngine: removeBySession(), upsertBySession(), get size",
+        "Configurable source paths: chatwizard.claudeProjectsPath, chatwizard.copilotStoragePath",
+        "Local telemetry opt-in: TelemetryRecorder writes JSONL to globalStorageUri, no network calls",
+        "Write README with full feature walkthrough, settings table, commands, architecture notes",
+        "Package metadata: version 1.0.0, MIT license, keywords, Visualization category",
+        "Unit tests: codeBlockSearchIncremental (17), sessionIndex extended, configPaths, telemetryRecorder",
       ],
       color: "#bc8cff",
       barColor: "rgba(188,140,255,0.75)",

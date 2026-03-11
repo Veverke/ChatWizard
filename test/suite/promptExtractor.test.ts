@@ -14,17 +14,22 @@ function makeMsg(role: 'user' | 'assistant', content: string, timestamp?: string
     return { id: `msg-${++_idCounter}`, role, content, codeBlocks: [], timestamp };
 }
 
-function makeSession(id: string, messages: Message[], workspacePath?: string): Session {
+function makeSession(
+    id: string,
+    messages: Message[],
+    workspacePath?: string,
+    opts?: { source?: 'copilot' | 'claude'; updatedAt?: string }
+): Session {
     return {
         id,
         title: `Session ${id}`,
-        source: 'copilot',
+        source: opts?.source ?? 'copilot',
         workspaceId: 'ws-default',
         workspacePath,
         messages,
         filePath: `/fake/${id}.jsonl`,
         createdAt: '2024-01-01T00:00:00.000Z',
-        updatedAt: '2024-06-01T00:00:00.000Z',
+        updatedAt: opts?.updatedAt ?? '2024-06-01T00:00:00.000Z',
     };
 }
 
@@ -205,5 +210,61 @@ suite('buildPromptLibrary', () => {
         const result = buildPromptLibrary(index);
         assert.strictEqual(result.length, 1);
         assert.strictEqual(result[0].frequency, 1);
+    });
+
+    // ── sessionMeta ──────────────────────────────────────────────────────────
+
+    test('sessionMeta contains one entry for a single-session prompt', () => {
+        const index = new SessionIndex();
+        index.upsert(makeSession('s-meta1', [makeMsg('user', 'Explain closures')], '/proj/a'));
+        const result = buildPromptLibrary(index);
+        assert.strictEqual(result.length, 1);
+        assert.strictEqual(result[0].sessionMeta.length, 1);
+        assert.strictEqual(result[0].sessionMeta[0].sessionId, 's-meta1');
+        assert.strictEqual(result[0].sessionMeta[0].title, 'Session s-meta1');
+        assert.strictEqual(result[0].sessionMeta[0].source, 'copilot');
+    });
+
+    test('sessionMeta contains two entries when prompt spans two sessions', () => {
+        const index = new SessionIndex();
+        index.upsert(makeSession('s-ma', [makeMsg('user', 'Refactor this module')], '/proj/a'));
+        index.upsert(makeSession('s-mb', [makeMsg('user', 'Refactor this module')], '/proj/b'));
+        const result = buildPromptLibrary(index);
+        assert.strictEqual(result.length, 1);
+        assert.strictEqual(result[0].sessionMeta.length, 2);
+        const ids = result[0].sessionMeta.map(m => m.sessionId).sort();
+        assert.deepStrictEqual(ids, ['s-ma', 's-mb']);
+    });
+
+    test('sessionMeta deduplicates: same session appearing multiple times has one meta entry', () => {
+        const index = new SessionIndex();
+        // Same prompt asked 3 times in the same session → only one meta entry
+        index.upsert(makeSession('s-dedup', [
+            makeMsg('user', 'Optimize this query'),
+            makeMsg('user', 'Optimize this query'),
+            makeMsg('user', 'Optimize this query'),
+        ]));
+        const result = buildPromptLibrary(index);
+        assert.strictEqual(result.length, 1);
+        assert.strictEqual(result[0].frequency, 3);
+        assert.strictEqual(result[0].sessionMeta.length, 1);
+        assert.strictEqual(result[0].sessionMeta[0].sessionId, 's-dedup');
+    });
+
+    test('sessionMeta source field reflects session source', () => {
+        const index = new SessionIndex();
+        index.upsert(makeSession('s-claude', [makeMsg('user', 'Explain monads')], '/proj/x', { source: 'claude' }));
+        const result = buildPromptLibrary(index);
+        assert.strictEqual(result.length, 1);
+        assert.strictEqual(result[0].sessionMeta[0].source, 'claude');
+    });
+
+    test('sessionMeta updatedAt reflects session updatedAt', () => {
+        const index = new SessionIndex();
+        const customDate = '2025-03-11T12:00:00.000Z';
+        index.upsert(makeSession('s-date', [makeMsg('user', 'Debug this crash')], undefined, { updatedAt: customDate }));
+        const result = buildPromptLibrary(index);
+        assert.strictEqual(result.length, 1);
+        assert.strictEqual(result[0].sessionMeta[0].updatedAt, customDate);
     });
 });

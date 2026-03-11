@@ -14,7 +14,7 @@ export class PromptLibraryPanel {
 
         if (PromptLibraryPanel._panel) {
             PromptLibraryPanel._panel.reveal(vscode.ViewColumn.One);
-            PromptLibraryPanel._panel.webview.html = PromptLibraryPanel._getHtml(clusters);
+            PromptLibraryPanel._panel.webview.html = PromptLibraryPanel.getHtml(clusters);
             return;
         }
 
@@ -26,7 +26,7 @@ export class PromptLibraryPanel {
         );
 
         PromptLibraryPanel._panel = panel;
-        panel.webview.html = PromptLibraryPanel._getHtml(clusters);
+        panel.webview.html = PromptLibraryPanel.getHtml(clusters);
 
         panel.onDidDispose(() => {
             PromptLibraryPanel._panel = undefined;
@@ -44,7 +44,7 @@ export class PromptLibraryPanel {
         if (!PromptLibraryPanel._panel) { return; }
         const entries = buildPromptLibrary(index);
         const clusters = clusterPrompts(entries);
-        PromptLibraryPanel._panel.webview.html = PromptLibraryPanel._getHtml(clusters);
+        PromptLibraryPanel._panel.webview.html = PromptLibraryPanel.getHtml(clusters);
     }
 
     private static _escapeHtml(text: string): string {
@@ -56,7 +56,7 @@ export class PromptLibraryPanel {
             .replace(/'/g, '&#39;');
     }
 
-    private static _getHtml(clusters: PromptCluster[]): string {
+    static getHtml(clusters: PromptCluster[]): string {
         const totalEntries = clusters.reduce((sum, c) => sum + 1 + c.variants.length, 0);
 
         const cardsHtml = clusters.map(cluster => {
@@ -72,8 +72,18 @@ export class PromptLibraryPanel {
             if (variants.length > 0) {
                 const variantItems = variants.map(v => {
                     const escapedV = PromptLibraryPanel._escapeHtml(v.text);
+                    const sessionInfoParts = v.sessionMeta.map(m => {
+                        const date = m.updatedAt ? m.updatedAt.substring(0, 10) : '';
+                        return PromptLibraryPanel._escapeHtml(`${m.title}${date ? ' · ' + date : ''}`);
+                    });
+                    const sessionInfoHtml = sessionInfoParts.length > 0
+                        ? `<span class="variant-session">${sessionInfoParts.join(', ')}</span>`
+                        : '';
                     return `<li class="variant-item">
-          <span class="variant-text">${escapedV}</span>
+          <div class="variant-body">
+            <span class="variant-text">${escapedV}</span>
+            ${sessionInfoHtml}
+          </div>
           <span class="variant-freq">${v.frequency}×</span>
           <button class="copy-btn copy-btn-sm" data-text="${PromptLibraryPanel._escapeHtml(v.text)}" title="Copy variant">Copy</button>
         </li>`;
@@ -246,11 +256,27 @@ export class PromptLibraryPanel {
       font-size: 0.88em;
     }
 
-    .variant-text {
+    .variant-body {
       flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+    }
+
+    .variant-text {
       white-space: pre-wrap;
       word-break: break-word;
       opacity: 0.85;
+    }
+
+    .variant-session {
+      font-size: 0.8em;
+      opacity: 0.55;
+      font-style: italic;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
     .variant-freq {

@@ -2,13 +2,20 @@
   "name": "chatwizard",
   "displayName": "ChatWizard",
   "description": "Unified search and analytics for AI chat history (GitHub Copilot Chat, Claude Code)",
-  "version": "0.0.1",
+  "version": "1.0.0",
   "publisher": "avrei",
+  "license": "MIT",
+  "keywords": ["copilot", "claude", "ai", "chat", "history", "search", "analytics", "prompt-library", "code-blocks", "timeline"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/avrei/chatwizard.git"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
   "categories": [
-    "Other"
+    "Other",
+    "Visualization"
   ],
   "activationEvents": [
     "onStartupFinished"
@@ -31,8 +38,23 @@
           "name": "Sessions"
         },
         {
+          "id": "chatwizardPromptLibrary",
+          "name": "Prompt Library",
+          "type": "webview"
+        },
+        {
           "id": "chatwizardCodeBlocks",
           "name": "Code Blocks"
+        },
+        {
+          "id": "chatwizardAnalytics",
+          "name": "Analytics",
+          "type": "webview"
+        },
+        {
+          "id": "chatwizardTimeline",
+          "name": "Timeline",
+          "type": "webview"
         }
       ]
     },
@@ -75,6 +97,8 @@
 
       { "command": "chatwizard.showCodeBlocks",  "title": "Show Code Blocks",           "category": "ChatWizard", "icon": "$(code)" },
       { "command": "chatwizard.showPromptLibrary", "title": "Show Prompt Library",        "category": "ChatWizard", "icon": "$(book)" },
+      { "command": "chatwizard.showAnalytics",   "title": "Show Analytics Dashboard",    "category": "ChatWizard", "icon": "$(graph)" },
+      { "command": "chatwizard.showTimeline", "title": "Show Timeline", "category": "ChatWizard", "icon": "$(history)" },
 
       { "command": "chatwizard.cbSortByDate",          "title": "Sort by Date",          "category": "ChatWizard", "icon": "$(calendar)" },
       { "command": "chatwizard.cbSortByDate.asc",       "title": "Sort by Date ↑",        "category": "ChatWizard", "icon": "$(arrow-up)" },
@@ -131,8 +155,6 @@
 
         { "command": "chatwizard.exportAll",       "when": "view == chatwizardSessions", "group": "export@1" },
         { "command": "chatwizard.exportSelected",  "when": "view == chatwizardSessions", "group": "export@2" },
-        { "command": "chatwizard.showCodeBlocks",  "when": "view == chatwizardSessions", "group": "navigation@6" },
-        { "command": "chatwizard.showPromptLibrary", "when": "view == chatwizardSessions", "group": "navigation@7" },
 
         { "command": "chatwizard.filterCodeBlocks", "when": "view == chatwizardCodeBlocks", "group": "navigation@0" },
 
@@ -188,6 +210,21 @@
           "type": "boolean",
           "default": true,
           "description": "When opening a session from the Code Blocks view, automatically scroll to the first code block."
+        },
+        "chatwizard.claudeProjectsPath": {
+          "type": "string",
+          "default": "",
+          "description": "Custom path to the Claude Code projects directory (where .jsonl session files are stored). Leave empty to use the default: ~/.claude/projects"
+        },
+        "chatwizard.copilotStoragePath": {
+          "type": "string",
+          "default": "",
+          "description": "Custom path to the GitHub Copilot Chat workspace storage directory. Leave empty to use the platform default (%APPDATA%/Code/User/workspaceStorage on Windows)."
+        },
+        "chatwizard.enableTelemetry": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable local usage telemetry. Events are recorded to a local JSONL file in the extension's global storage directory. No data ever leaves your machine."
         }
       }
     }

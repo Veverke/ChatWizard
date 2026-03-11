@@ -1,7 +1,7 @@
 // test/suite/sessionIndex.test.ts
 
 import * as assert from 'assert';
-import { SessionIndex, toSummary } from '../../src/index/sessionIndex';
+import { SessionIndex, toSummary, SessionIndexEvent } from '../../src/index/sessionIndex';
 import { Session, Message, SessionSource } from '../../src/types/index';
 
 // ---------------------------------------------------------------------------
@@ -380,5 +380,164 @@ suite('SessionIndex', () => {
         assert.strictEqual(summary.messageCount, 0);
         assert.strictEqual(summary.userMessageCount, 0);
         assert.strictEqual(summary.assistantMessageCount, 0);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Typed events and batchUpsert
+// ---------------------------------------------------------------------------
+
+function makeSimpleSession(id: string, title = 'Test'): Session {
+    return {
+        id,
+        title,
+        source: 'claude',
+        workspaceId: 'ws-test',
+        workspacePath: undefined,
+        model: undefined,
+        filePath: '/tmp/test.jsonl',
+        fileSizeBytes: 0,
+        messages: [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+    };
+}
+
+suite('SessionIndex — typed events and batchUpsert', () => {
+
+    let index: SessionIndex;
+
+    setup(() => {
+        index = new SessionIndex();
+    });
+
+    // 1. upsert fires typed listener with 'upsert' event
+    test('addTypedChangeListener — upsert event: listener receives correct event', () => {
+        const session = makeSimpleSession('t1');
+        let received: SessionIndexEvent | undefined;
+        index.addTypedChangeListener(ev => { received = ev; });
+        index.upsert(session);
+        assert.ok(received !== undefined, 'typed listener should have been called');
+        assert.strictEqual(received!.type, 'upsert');
+        assert.ok(received!.type === 'upsert' && received.session === session);
+    });
+
+    // 2. remove fires typed listener with 'remove' event
+    test('addTypedChangeListener — remove event: listener receives correct sessionId', () => {
+        const session = makeSimpleSession('t2');
+        index.upsert(session);
+        let received: SessionIndexEvent | undefined;
+        index.addTypedChangeListener(ev => { received = ev; });
+        index.remove('t2');
+        assert.ok(received !== undefined, 'typed listener should have been called on remove');
+        assert.strictEqual(received!.type, 'remove');
+        assert.ok(received!.type === 'remove' && received.sessionId === 't2');
+    });
+
+    // 3. remove non-existent: typed listener not called
+    test('addTypedChangeListener — remove non-existent: listener NOT called', () => {
+        let called = false;
+        index.addTypedChangeListener(() => { called = true; });
+        index.remove('does-not-exist');
+        assert.strictEqual(called, false, 'typed listener must not fire when nothing was removed');
+    });
+
+    // 4. dispose prevents future calls
+    test('addTypedChangeListener — dispose: listener not called after dispose', () => {
+        let callCount = 0;
+        const { dispose } = index.addTypedChangeListener(() => { callCount++; });
+        dispose();
+        index.upsert(makeSimpleSession('t4'));
+        assert.strictEqual(callCount, 0, 'disposed listener must not be called');
+    });
+
+    // 5. multiple typed listeners both receive event
+    test('addTypedChangeListener — multiple listeners: both receive upsert event', () => {
+        const events1: SessionIndexEvent[] = [];
+        const events2: SessionIndexEvent[] = [];
+        index.addTypedChangeListener(ev => { events1.push(ev); });
+        index.addTypedChangeListener(ev => { events2.push(ev); });
+        const session = makeSimpleSession('t5');
+        index.upsert(session);
+        assert.strictEqual(events1.length, 1);
+        assert.strictEqual(events2.length, 1);
+        assert.strictEqual(events1[0].type, 'upsert');
+        assert.strictEqual(events2[0].type, 'upsert');
+    });
+
+    // 6. batchUpsert indexes all sessions
+    test('batchUpsert — all sessions indexed', () => {
+        const s1 = makeSimpleSession('b1');
+        const s2 = makeSimpleSession('b2');
+        const s3 = makeSimpleSession('b3');
+        index.batchUpsert([s1, s2, s3]);
+        assert.strictEqual(index.size, 3);
+        assert.strictEqual(index.get('b1'), s1);
+        assert.strictEqual(index.get('b2'), s2);
+        assert.strictEqual(index.get('b3'), s3);
+    });
+
+    // 7. batchUpsert fires plain listener exactly once
+    test('batchUpsert — fires plain listener exactly once', () => {
+        let callCount = 0;
+        index.addChangeListener(() => { callCount++; });
+        index.batchUpsert([makeSimpleSession('c1'), makeSimpleSession('c2'), makeSimpleSession('c3')]);
+        assert.strictEqual(callCount, 1, 'plain listener must fire exactly once for a batch');
+    });
+
+    // 8. batchUpsert fires typed listener exactly once with batch event
+    test('batchUpsert — fires typed listener exactly once with batch event', () => {
+        let callCount = 0;
+        let lastEvent: SessionIndexEvent | undefined;
+        index.addTypedChangeListener(ev => { callCount++; lastEvent = ev; });
+        const sessions = [makeSimpleSession('d1'), makeSimpleSession('d2'), makeSimpleSession('d3')];
+        index.batchUpsert(sessions);
+        assert.strictEqual(callCount, 1, 'typed listener must fire exactly once for a batch');
+        assert.ok(lastEvent !== undefined);
+        assert.strictEqual(lastEvent!.type, 'batch');
+        assert.ok(lastEvent!.type === 'batch' && lastEvent.sessions.length === 3);
+    });
+
+    // 9. batchUpsert empty array: no error, plain listener still called once
+    test('batchUpsert — empty array: no error, plain listener called once', () => {
+        let callCount = 0;
+        index.addChangeListener(() => { callCount++; });
+        assert.doesNotThrow(() => { index.batchUpsert([]); });
+        assert.strictEqual(index.size, 0);
+        assert.strictEqual(callCount, 1, 'plain listener must fire once even for an empty batch');
+    });
+
+    // 10. batchUpsert replaces existing session
+    test('batchUpsert — upserts replace existing sessions', () => {
+        const s1v1 = makeSimpleSession('e1', 'Version 1');
+        const s1v2 = makeSimpleSession('e1', 'Version 2');
+        index.upsert(s1v1);
+        index.batchUpsert([s1v2]);
+        assert.strictEqual(index.get('e1'), s1v2);
+        assert.strictEqual(index.get('e1')!.title, 'Version 2');
+    });
+
+    // 11. both kinds of listeners fire on upsert
+    test('typed and plain listeners both fire on upsert', () => {
+        let plainCount = 0;
+        let typedCount = 0;
+        index.addChangeListener(() => { plainCount++; });
+        index.addTypedChangeListener(() => { typedCount++; });
+        index.upsert(makeSimpleSession('f1'));
+        assert.strictEqual(plainCount, 1, 'plain listener must fire on upsert');
+        assert.strictEqual(typedCount, 1, 'typed listener must fire on upsert');
+    });
+
+    // 12. both kinds of listeners fire on remove
+    test('typed and plain listeners both fire on remove', () => {
+        const session = makeSimpleSession('g1');
+        index.upsert(session);
+        let plainCount = 0;
+        let typedCount = 0;
+        index.addChangeListener(() => { plainCount++; });
+        index.addTypedChangeListener(() => { typedCount++; });
+        index.remove('g1');
+        assert.strictEqual(plainCount, 1, 'plain listener must fire on remove');
+        assert.strictEqual(typedCount, 1, 'typed listener must fire on remove');
     });
 });

@@ -82,6 +82,7 @@ export async function performExport(sessions: Session[]): Promise<void> {
 export function registerExportCommands(
     context: vscode.ExtensionContext,
     index: SessionIndex,
+    getOrderedSummaries?: () => SessionSummary[],
 ): void {
 
     // -----------------------------------------------------------------------
@@ -123,7 +124,7 @@ export function registerExportCommands(
     // -----------------------------------------------------------------------
     context.subscriptions.push(
         vscode.commands.registerCommand('chatwizard.exportSelected', async () => {
-            const allSummaries = index.getAllSummaries();
+            const allSummaries = getOrderedSummaries ? getOrderedSummaries() : index.getAllSummaries();
             if (allSummaries.length === 0) {
                 vscode.window.showInformationMessage('No sessions to export');
                 return;

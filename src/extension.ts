@@ -20,12 +20,22 @@ import { registerExportCommands, performExport } from './export/exportCommands';
 import { CodeBlockSearchEngine } from './codeblocks/codeBlockSearchEngine';
 import { CodeBlocksPanel } from './codeblocks/codeBlocksPanel';
 import { PromptLibraryPanel } from './prompts/promptLibraryPanel';
+import { PromptLibraryViewProvider } from './prompts/promptLibraryViewProvider';
+import { AnalyticsPanel } from './analytics/analyticsPanel';
+import { AnalyticsViewProvider } from './analytics/analyticsViewProvider';
+import { TimelineViewProvider } from './timeline/timelineViewProvider';
+import { TelemetryRecorder } from './telemetry/telemetryRecorder';
 
 let watcher: ChatWizardWatcher | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
     const channel = vscode.window.createOutputChannel('ChatWizard');
     context.subscriptions.push(channel);
+
+    // Local telemetry recorder (opt-in, no external calls)
+    const telemetry = new TelemetryRecorder(context.globalStorageUri.fsPath);
+    const telemetryCfg = vscode.workspace.getConfiguration('chatwizard');
+    telemetry.setEnabled(telemetryCfg.get<boolean>('enableTelemetry') ?? false);
 
     const index = new SessionIndex();
     watcher = await startWatcher(index, channel);
@@ -37,16 +47,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         `ChatWizard activated — ${index.size} sessions indexed (${copilotCount} Copilot, ${claudeCount} Claude)`
     );
 
-    // Build full-text search index
+    // Build full-text search index (initial pass — index already populated by watcher)
     const engine = new FullTextSearchEngine();
-    function rebuildSearchIndex(): void {
-        for (const summary of index.getAllSummaries()) {
-            const session = index.get(summary.id);
-            if (session) { engine.index(session); }
-        }
+    for (const summary of index.getAllSummaries()) {
+        const session = index.get(summary.id);
+        if (session) { engine.index(session); }
     }
-    rebuildSearchIndex();
-    const searchIndexListener = index.addChangeListener(() => rebuildSearchIndex());
+    // Incremental updates: only re-index the changed session instead of full rebuild
+    const searchIndexListener = index.addTypedChangeListener((event) => {
+        if (event.type === 'upsert') {
+            engine.index(event.session);
+        } else if (event.type === 'remove') {
+            engine.remove(event.sessionId);
+        } else if (event.type === 'batch') {
+            for (const session of event.sessions) { engine.index(session); }
+        }
+    });
     context.subscriptions.push(searchIndexListener);
 
     // Build code block index
@@ -63,11 +79,40 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     });
     context.subscriptions.push(codeBlockListener);
 
-    // Refresh Prompt Library panel when index changes
+    // Sidebar view providers (Prompt Library and Analytics as WebviewView tabs)
+    const promptLibraryViewProvider = new PromptLibraryViewProvider(index);
+    context.subscriptions.push(
+        vscode.window.registerWebviewViewProvider(PromptLibraryViewProvider.viewType, promptLibraryViewProvider)
+    );
+
+    const analyticsViewProvider = new AnalyticsViewProvider(index);
+    context.subscriptions.push(
+        vscode.window.registerWebviewViewProvider(AnalyticsViewProvider.viewType, analyticsViewProvider)
+    );
+
+    const timelineViewProvider = new TimelineViewProvider(index);
+    context.subscriptions.push(
+        vscode.window.registerWebviewViewProvider(TimelineViewProvider.viewType, timelineViewProvider)
+    );
+
+    // Refresh Prompt Library panel (editor tab) and sidebar view when index changes
     const promptLibraryListener = index.addChangeListener(() => {
         PromptLibraryPanel.refresh(index);
+        promptLibraryViewProvider.refresh();
     });
     context.subscriptions.push(promptLibraryListener);
+
+    // Refresh Analytics panel (editor tab) and sidebar view when index changes
+    const analyticsListener = index.addChangeListener(() => {
+        AnalyticsPanel.refresh(index);
+        analyticsViewProvider.refresh();
+    });
+    context.subscriptions.push(analyticsListener);
+
+    const timelineListener = index.addChangeListener(() => {
+        timelineViewProvider.refresh();
+    });
+    context.subscriptions.push(timelineListener);
 
     const provider = new SessionTreeProvider(index);
 
@@ -517,6 +562,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 vscode.window.showErrorMessage(`Session not found: ${summary.id}`);
                 return;
             }
+            telemetry.record('session.opened', { source: session.source });
             SessionWebviewPanel.show(context, session, searchTerm);
         })
     );
@@ -543,6 +589,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     context.subscriptions.push(
         vscode.commands.registerCommand('chatwizard.search', () => {
+            telemetry.record('search.opened');
             SearchPanel.show(context, index, engine);
         })
     );
@@ -559,7 +606,44 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         })
     );
 
-    registerExportCommands(context, index);
+    context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.showAnalytics', () => {
+            AnalyticsPanel.show(context, index);
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.showTimeline', () => {
+            void vscode.commands.executeCommand('chatwizardTimeline.focus');
+        })
+    );
+
+    // React to configuration changes
+    context.subscriptions.push(
+        vscode.workspace.onDidChangeConfiguration((e) => {
+            if (e.affectsConfiguration('chatwizard.enableTelemetry')) {
+                const cfg = vscode.workspace.getConfiguration('chatwizard');
+                telemetry.setEnabled(cfg.get<boolean>('enableTelemetry') ?? false);
+            }
+            if (
+                e.affectsConfiguration('chatwizard.claudeProjectsPath') ||
+                e.affectsConfiguration('chatwizard.copilotStoragePath')
+            ) {
+                void vscode.window.showInformationMessage(
+                    'ChatWizard: data source path changed — reload the window to apply.',
+                    'Reload Window'
+                ).then(action => {
+                    if (action === 'Reload Window') {
+                        void vscode.commands.executeCommand('workbench.action.reloadWindow');
+                    }
+                });
+            }
+        })
+    );
+
+    telemetry.record('extension.activated', { sessionCount: index.size });
+
+    registerExportCommands(context, index, () => provider.getSortedSummaries());
 
     // Export sessions selected via Ctrl+Click in the tree view.
     // VS Code passes (primaryItem, allSelectedItems) when canSelectMany is true.

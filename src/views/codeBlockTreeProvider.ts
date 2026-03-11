@@ -152,10 +152,17 @@ export class CodeBlockTreeItem extends vscode.TreeItem {
             sourceLabel,
         ].filter(Boolean).join(' · ');
 
-        // Icon: derive from primary language via resourceUri so file icon themes kick in.
-        // Falling back to 'txt' gives a generic file icon for plain/unknown.
-        const ext = langToExtension(group.primaryLanguage);
-        this.resourceUri = vscode.Uri.file(`file.${ext}`);
+        // Icon: explicit handling for common languages, falling back to resourceUri
+        const lang = group.primaryLanguage.toLowerCase().trim();
+        if (lang === 'css') {
+            // CSS uses curly braces {} as the universally recognized symbol
+            this.iconPath = new vscode.ThemeIcon('symbol-misc');
+        } else {
+            // For other languages, derive from extension via resourceUri so file icon themes kick in
+            // Falling back to 'txt' gives a generic file icon for plain/unknown
+            const ext = langToExtension(group.primaryLanguage);
+            this.resourceUri = vscode.Uri.file(`file.${ext}`);
+        }
 
         // Tooltip: metadata + up to 3 snippet previews
         const workspaceName = group.sessionWorkspacePath

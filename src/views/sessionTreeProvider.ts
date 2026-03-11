@@ -351,4 +351,9 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeI
         const pinnedSet = new Set(this._pinnedIds);
         return this._buildOrderedSummaries().map(s => new SessionTreeItem(s, pinnedSet.has(s.id)));
     }
+
+    /** Returns sessions in the same order as the tree view (sort, pins, filters applied). */
+    getSortedSummaries(): SessionSummary[] {
+        return this._buildOrderedSummaries();
+    }
 }

@@ -204,20 +204,22 @@ ChatWizard is a VS Code extension that reads AI chat session data directly from 
 
 ---
 
-## Phase 6 — Analytics & Usage Stats
+## Phase 6 — Analytics & Usage Stats ✅ COMPLETE
 
 **Goal:** Aggregate statistics computed from the session index.
 
 **Depends on:** Phase 0
 
 ### Tasks
-- [ ] Integrate `js-tiktoken` for Copilot/GPT token counting
-- [ ] Integrate `@anthropic-ai/tokenizer` for Claude token counting
-- [ ] Compute session-level metrics: total sessions, prompts, responses, tokens (user vs. LLM)
-- [ ] Compute aggregate metrics: activity over time (day/week/month), daily token totals
-- [ ] Surface most active projects, most frequent terms in user prompts
-- [ ] Build Analytics Webview panel with charts (use a lightweight charting lib, e.g. Chart.js via CDN in Webview)
-- [ ] Show longest sessions by message count and token count
+- [x] Token counting utility (`src/analytics/tokenCounter.ts`): char/4 approximation for Claude, word×1.3 for Copilot/GPT — no external deps
+- [x] Analytics engine (`src/analytics/analyticsEngine.ts`): `computeAnalytics()` produces `AnalyticsData` with session-level metrics, daily activity, project activity, top terms, longest sessions
+- [x] Compute session-level metrics: total sessions, prompts, responses, tokens (user vs. LLM) broken out by source
+- [x] Compute aggregate metrics: activity over time (daily token totals, prompt counts, session counts)
+- [x] Surface most active projects (by token count), most frequent user-prompt terms (top 20, stop-word filtered)
+- [x] Build Analytics Webview panel (`src/analytics/analyticsPanel.ts`) with Chart.js via CDN: summary cards, daily activity line chart, top projects table, top terms bar chart, longest sessions tables
+- [x] Show longest sessions by message count and token count (top 10 each)
+- [x] Register `chatwizard.showAnalytics` command; wire live refresh on index changes
+- [x] Unit tests for tokenCounter (full formula coverage) and analyticsEngine (all aggregations and edge cases)
 
 **Deliverable:** An analytics dashboard showing consumption trends, token usage, and project activity.
 
@@ -233,22 +235,26 @@ ChatWizard is a VS Code extension that reads AI chat session data directly from 
 
 ---
 
-## Phase 7 — Duplicate / Similar Prompt Detection
+## Phase 7 — Duplicate / Similar Prompt Detection ✅ COMPLETE
 
 **Goal:** Surface semantically equivalent prompts across sessions without ML dependencies.
 
 **Depends on:** Phase 5
 
 ### Tasks
-- [ ] Implement TF-IDF or trigram similarity scoring between prompts
-- [ ] Identify clusters of near-duplicate prompts
-- [ ] Surface in UI: "You asked something equivalent to this N times across M projects"
-- [ ] Allow merging/consolidating entries in the Prompt Library
+- [x] Implement TF-IDF or trigram similarity scoring between prompts
+- [x] Identify clusters of near-duplicate prompts
+- [x] Surface in UI: "You asked something equivalent to this N times across M projects"
+- [x] Allow merging/consolidating entries in the Prompt Library
+- [x] Enrich `PromptEntry` with `sessionMeta` (session title, date, source) per occurrence
+- [x] Show source session title + date on each variant in the Prompt Library sidebar tab
+- [x] Merge button per cluster collapses variants into canonical (client-side + extension message)
+- [x] Tests: sessionMeta coverage in promptExtractor.test.ts, HTML generation in promptLibraryPanel.test.ts, full similarityEngine coverage
 
 **Deliverable:** Notification-style hints and a grouped view of repeated prompts.
 
 **How to verify:**
-- Open the Prompt Library panel; confirm similar (but not identical) prompts are visually grouped together under a shared cluster heading.
+- Open the Prompt Library left side tab; confirm similar (but not identical) prompts are visually grouped together under a shared cluster heading.
 - Expand a cluster; confirm each variant is listed with its source session and date.
 - Confirm a tooltip or inline label reads something like "You asked something equivalent to this 4 times across 2 projects."
 - Use the merge/consolidate action on a cluster and confirm it collapses into a single canonical entry in the library.
@@ -258,17 +264,20 @@ ChatWizard is a VS Code extension that reads AI chat session data directly from 
 
 ---
 
-## Phase 8 — Timeline View
+## Phase 8 — Timeline View ✅ COMPLETE
 
 **Goal:** Chronological feed of all sessions across all workspaces.
 
 **Depends on:** Phase 1
 
 ### Tasks
-- [ ] Implement Timeline Webview panel with chronological session feed
-- [ ] Each entry: project, session title, first prompt, message count, date
-- [ ] Add date navigation / jump-to-date
-- [ ] Filter by workspace/project
+- [x] Implement Timeline Webview left side tab with chronological session feed (`src/timeline/timelineViewProvider.ts`)
+- [x] Each entry: project, session title, first prompt, message count, date
+- [x] Add date navigation / jump-to-date (date input scrolls to nearest month group)
+- [x] Filter by workspace/project (workspace + source dropdowns in sticky filter bar)
+- [x] `buildTimeline()` data builder (`src/timeline/timelineBuilder.ts`): skips epoch/empty sessions, sorts newest-first, extracts firstPrompt from string or content-block messages
+- [x] Live refresh on index changes via `addChangeListener`
+- [x] Unit tests: `test/suite/timelineBuilder.test.ts` (20 cases) + `test/suite/timelineViewProvider.test.ts` (12 cases)
 
 **Deliverable:** A "what was I working on last Tuesday?" view spanning all projects.
 
@@ -282,19 +291,37 @@ ChatWizard is a VS Code extension that reads AI chat session data directly from 
 
 ---
 
-## Phase 9 — Polish & Release
+## Phase 9 — Polish & Release ✅ COMPLETE
 
 **Goal:** Production-readiness: performance, packaging, documentation, marketplace listing.
 
 **Depends on:** All phases
 
 ### Tasks
-- [ ] Performance audit: index build time on large history (1000+ sessions)
-- [ ] Incremental index updates (avoid full rebuild on file change)
-- [ ] Extension settings: configurable data source paths, index refresh interval
-- [ ] Write README, feature walkthrough, and screenshot GIFs
-- [ ] Package with `vsce` and publish to VS Code Marketplace
-- [ ] Add telemetry opt-in (local only, no external calls)
+- [x] Performance audit: index build time on large history (1000+ sessions)
+- [x] Incremental index updates (avoid full rebuild on file change)
+- [x] Extension settings: configurable data source paths
+- [x] Write README with full feature walkthrough
+- [ ] Package with `vsce` and publish to VS Code Marketplace *(manual operational step)*
+- [x] Add telemetry opt-in (local only, no external calls)
+
+### Implementation details
+- **Batch initial build** (`src/watcher/fileWatcher.ts`): `buildInitialIndex()` now collects all sessions via `collectClaudeSessions()` / `collectCopilotSessions()`, then calls `index.batchUpsert(all)` — firing listeners exactly once instead of N times during startup.
+- **`parseFile()` helper** (`src/watcher/fileWatcher.ts`): shared private method returns `Session | null`; used by both the batch collector and the live `indexFile()` (single-file upsert on file change events).
+- **Typed change events** (`src/index/sessionIndex.ts`): `SessionIndexEvent` union type (`upsert` / `remove` / `batch`), `addTypedChangeListener()` method. `upsert()` fires `{ type: 'upsert', session }`, `remove()` fires `{ type: 'remove', sessionId }`, `batchUpsert()` fires `{ type: 'batch', sessions }`.
+- **`batchUpsert(sessions[])** (`src/index/sessionIndex.ts`): inserts all sessions silently then fires one typed + one plain notification.
+- **Incremental full-text search** (`src/extension.ts`): replaced `rebuildSearchIndex()` (full O(n) scan on every change) with `index.addTypedChangeListener()` that calls `engine.index(session)`, `engine.remove(sessionId)`, or a loop for batches — O(1) per live update.
+- **`CodeBlockSearchEngine` incremental methods** (`src/codeblocks/codeBlockSearchEngine.ts`): `removeBySession(sessionId)`, `upsertBySession(sessionId, blocks)`, `get size`.
+- **Configurable paths** (`src/watcher/configPaths.ts`): `resolveClaudeProjectsPath(override?)` and `resolveCopilotStoragePath(override?)` with override → config → default priority. Settings: `chatwizard.claudeProjectsPath`, `chatwizard.copilotStoragePath`. window-reload prompt on change.
+- **Local telemetry** (`src/telemetry/telemetryRecorder.ts`): `TelemetryRecorder` class; JSONL file in `context.globalStorageUri.fsPath`; no external calls; events: `extension.activated`, `session.opened`, `search.opened`; gated behind `chatwizard.enableTelemetry` (default false); `onDidChangeConfiguration` updates the gate at runtime.
+- **README.md**: written with full feature walkthrough, settings table, commands table, architecture/privacy notes.
+- **package.json**: version `1.0.0`, `license: "MIT"`, keywords, `categories: ["Other","Visualization"]`, repository; three new settings added.
+
+**Unit tests added:**
+- `test/suite/codeBlockSearchIncremental.test.ts` — 17 tests for `size`, `removeBySession`, `upsertBySession`, `getLanguages`, `search` incrementally
+- Extended `test/suite/sessionIndex.test.ts` — typed listener and `batchUpsert` coverage
+- `test/suite/configPaths.test.ts` — `resolveClaudeProjectsPath`/`resolveCopilotStoragePath`: default, override, empty-string fallback
+- `test/suite/telemetryRecorder.test.ts` — disabled no-op, enabled write, JSONL format, `getEvents`, `clear`, corrupt-line resilience
 
 **Deliverable:** A published `.vsix` and Marketplace listing; all features work end-to-end with no manual configuration required for standard Copilot Chat and Claude Code installs.
 
@@ -320,10 +347,10 @@ ChatWizard is a VS Code extension that reads AI chat session data directly from 
 | 3 | Export to Markdown | 1 week | Low | 1 | ✅ Complete |
 | 4 | Code Block Extraction | 1.5 weeks | Medium | 0 | ✅ Complete |
 | 5 | Prompt Library | 1.5 weeks | Medium | 0, 7 | ✅ Complete |
-| 6 | Analytics & Usage Stats | 2 weeks | Medium-High | 0 | |
-| 7 | Duplicate Prompt Detection | 1.5 weeks | Medium | 5 | |
-| 8 | Timeline View | 1 week | Low-Medium | 1 | |
-| 9 | Polish & Release | 2 weeks | Medium | All | |
+| 6 | Analytics & Usage Stats | 2 weeks | Medium-High | 0 | ✅ Complete |
+| 7 | Duplicate Prompt Detection | 1.5 weeks | Medium | 5 | ✅ Complete |
+| 8 | Timeline View | 1 week | Low-Medium | 1 | ✅ Complete |
+| 9 | Polish & Release | 2 weeks | Medium | All | ✅ Complete |
 
 **Total estimated effort:** ~17.5 weeks
 

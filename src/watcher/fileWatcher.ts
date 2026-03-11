@@ -1,12 +1,12 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import * as os from 'os';
 import * as fs from 'fs';
 import { SessionIndex } from '../index/sessionIndex';
 import { parseCopilotSession } from '../parsers/copilot';
 import { parseClaudeSession } from '../parsers/claude';
 import { discoverCopilotWorkspaces, listSessionFiles } from '../readers/copilotWorkspace';
-import { SessionSource } from '../types/index';
+import { Session, SessionSource } from '../types/index';
+import { resolveClaudeProjectsPath } from './configPaths';
 
 export class ChatWizardWatcher implements vscode.Disposable {
     private disposables: vscode.Disposable[] = [];
@@ -22,7 +22,7 @@ export class ChatWizardWatcher implements vscode.Disposable {
         await this.buildInitialIndex();
 
         // Watch Claude sessions
-        const claudeBaseDir = path.join(os.homedir(), '.claude', 'projects');
+        const claudeBaseDir = resolveClaudeProjectsPath();
         const claudePattern = new vscode.RelativePattern(
             vscode.Uri.file(claudeBaseDir),
             '**/*.jsonl'
@@ -79,24 +79,27 @@ export class ChatWizardWatcher implements vscode.Disposable {
     }
 
     private async buildInitialIndex(): Promise<void> {
-        this.indexAllClaudeSessions();
-        this.indexAllCopilotSessions();
+        const claudeSessions = this.collectClaudeSessions();
+        const copilotSessions = this.collectCopilotSessions();
+        const all = [...claudeSessions, ...copilotSessions];
+        this.index.batchUpsert(all);
+        this.channel.appendLine(`[init] Batch indexed ${all.length} sessions`);
     }
 
-    private indexAllClaudeSessions(): void {
-        const claudeProjectsDir = path.join(os.homedir(), '.claude', 'projects');
+    /** Parse all Claude sessions and return them; does not modify the index. */
+    private collectClaudeSessions(): Session[] {
+        const sessions: Session[] = [];
+        const claudeProjectsDir = resolveClaudeProjectsPath();
 
         try {
             if (!fs.existsSync(claudeProjectsDir)) {
-                return;
+                return sessions;
             }
 
             const projectDirs = fs.readdirSync(claudeProjectsDir, { withFileTypes: true });
 
             for (const projectDir of projectDirs) {
-                if (!projectDir.isDirectory()) {
-                    continue;
-                }
+                if (!projectDir.isDirectory()) { continue; }
 
                 const projectPath = path.join(claudeProjectsDir, projectDir.name);
 
@@ -104,47 +107,59 @@ export class ChatWizardWatcher implements vscode.Disposable {
                     const files = fs.readdirSync(projectPath, { withFileTypes: true });
 
                     for (const file of files) {
-                        if (!file.isFile() || !file.name.endsWith('.jsonl')) {
-                            continue;
-                        }
+                        if (!file.isFile() || !file.name.endsWith('.jsonl')) { continue; }
 
-                        this.indexFile(path.join(projectPath, file.name), 'claude');
+                        const session = this.parseFile(path.join(projectPath, file.name), 'claude');
+                        if (session) { sessions.push(session); }
                     }
                 } catch (err) {
                     this.channel.appendLine(`[error] Failed to read Claude project directory ${projectPath}: ${err}`);
                 }
             }
         } catch (err) {
-            this.channel.appendLine(`[error] Failed to index Claude sessions: ${err}`);
+            this.channel.appendLine(`[error] Failed to collect Claude sessions: ${err}`);
         }
+
+        return sessions;
     }
 
-    private indexAllCopilotSessions(): void {
+    /** Parse all Copilot sessions and return them; does not modify the index. */
+    private collectCopilotSessions(): Session[] {
+        const sessions: Session[] = [];
+
         try {
             const workspaces = discoverCopilotWorkspaces();
             for (const workspace of workspaces) {
                 try {
                     const sessionFiles = listSessionFiles(workspace.storageDir);
                     for (const filePath of sessionFiles) {
-                        this.indexFile(filePath, 'copilot', workspace.workspaceId, workspace.workspacePath);
+                        const session = this.parseFile(filePath, 'copilot', workspace.workspaceId, workspace.workspacePath);
+                        if (session) { sessions.push(session); }
                     }
                 } catch (err) {
                     this.channel.appendLine(
-                        `[error] Failed to index Copilot sessions for workspace ${workspace.workspaceId}: ${err}`
+                        `[error] Failed to collect Copilot sessions for workspace ${workspace.workspaceId}: ${err}`
                     );
                 }
             }
         } catch (err) {
             this.channel.appendLine(`[error] Failed to discover Copilot workspaces: ${err}`);
         }
+
+        return sessions;
     }
 
-    private indexFile(
+    /**
+     * Parse a single session file and return the Session object, or null if it
+     * should be skipped (empty, epoch-dated, or parse error).
+     * Does NOT modify the index — call index.upsert() or batchUpsert() separately.
+     */
+    private parseFile(
         filePath: string,
         source: SessionSource,
         workspaceId?: string,
         workspacePath?: string
-    ): void {
+    ): Session | null {
         try {
             if (source === 'claude') {
                 const result = parseClaudeSession(filePath);
@@ -152,23 +167,37 @@ export class ChatWizardWatcher implements vscode.Disposable {
                     this.channel.appendLine(`[warn] Parse errors in ${filePath}: ${result.errors.join('; ')}`);
                 }
                 if (result.session.messages.length === 0 || result.session.createdAt === new Date(0).toISOString()) {
-                    this.channel.appendLine(`[skip] empty/epoch session ${filePath}`);
-                    return;
+                    return null;
                 }
-                this.index.upsert(result.session);
+                return result.session;
             } else if (source === 'copilot') {
                 const result = parseCopilotSession(filePath, workspaceId!, workspacePath);
                 if (result.errors.length > 0) {
                     this.channel.appendLine(`[warn] Parse errors in ${filePath}: ${result.errors.join('; ')}`);
                 }
                 if (result.session.messages.length === 0) {
-                    this.channel.appendLine(`[skip] empty session ${filePath}`);
-                    return;
+                    return null;
                 }
-                this.index.upsert(result.session);
+                return result.session;
             }
         } catch (err) {
-            this.channel.appendLine(`[error] Failed to index file ${filePath}: ${err}`);
+            this.channel.appendLine(`[error] Failed to parse file ${filePath}: ${err}`);
+        }
+        return null;
+    }
+
+    /** Parse and immediately upsert a single file into the index (used for live file-change events). */
+    private indexFile(
+        filePath: string,
+        source: SessionSource,
+        workspaceId?: string,
+        workspacePath?: string
+    ): void {
+        const session = this.parseFile(filePath, source, workspaceId, workspacePath);
+        if (session) {
+            this.index.upsert(session);
+        } else {
+            this.channel.appendLine(`[skip] empty/epoch session ${filePath}`);
         }
     }
 

@@ -35,9 +35,11 @@ export class SessionWebviewPanel {
         SessionWebviewPanel._panels.set(session.id, panel);
 
         panel.webview.onDidReceiveMessage(
-            (msg: { command: string }) => {
+            (msg: { command: string; text?: string }) => {
                 if (msg.command === 'exportExcerpt') {
                     void vscode.commands.executeCommand('chatwizard.exportExcerpt', session.id);
+                } else if (msg.command === 'exportSelection' && msg.text) {
+                    void SessionWebviewPanel._saveSelection(msg.text, session.title);
                 }
             },
             undefined,
@@ -45,6 +47,21 @@ export class SessionWebviewPanel {
         );
 
         panel.onDidDispose(() => SessionWebviewPanel._panels.delete(session.id), null, []);
+    }
+
+    private static async _saveSelection(text: string, sessionTitle: string): Promise<void> {
+        const safe = sessionTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'session';
+        const home = process.env['USERPROFILE'] ?? process.env['HOME'] ?? '/';
+        const defaultUri = vscode.Uri.file(`${home}/${safe}-selection.md`);
+        const uri = await vscode.window.showSaveDialog({
+            defaultUri,
+            filters: { 'Markdown': ['md'] },
+            title: 'Export Selection as Markdown',
+        });
+        if (!uri) { return; }
+        const content = `# Selection from: ${sessionTitle}\n\n${text}\n`;
+        await vscode.workspace.fs.writeFile(uri, Buffer.from(content, 'utf8'));
+        await vscode.window.showTextDocument(uri);
     }
 
     private static _getLoadingHtml(title: string): string {
@@ -511,6 +528,31 @@ export class SessionWebviewPanel {
       border-radius: 2px;
       padding: 0 1px;
     }
+
+    #sel-ctx-menu {
+      position: fixed;
+      z-index: 9999;
+      background: var(--vscode-menu-background, #252526);
+      border: 1px solid var(--vscode-menu-border, #454545);
+      border-radius: 4px;
+      padding: 4px 0;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+      display: none;
+      min-width: 200px;
+    }
+
+    .ctx-item {
+      padding: 5px 14px;
+      cursor: pointer;
+      font-size: 0.92em;
+      color: var(--vscode-menu-foreground, inherit);
+      white-space: nowrap;
+    }
+
+    .ctx-item:hover {
+      background: var(--vscode-menu-selectionBackground, #094771);
+      color: var(--vscode-menu-selectionForeground, #fff);
+    }
   </style>
 </head>
 <body>
@@ -519,11 +561,40 @@ export class SessionWebviewPanel {
     <button id="export-excerpt-btn">Export Excerpt…</button>
   </div>
   ${messagesHtml}
+  <div id="sel-ctx-menu">
+    <div class="ctx-item" id="ctx-export-sel">Export selection as Markdown…</div>
+  </div>
 <script nonce="${nonce}">
+const vscode = acquireVsCodeApi();
 (function() {
-  const vscode = acquireVsCodeApi();
   document.getElementById('export-excerpt-btn').addEventListener('click', function() {
     vscode.postMessage({ command: 'exportExcerpt' });
+  });
+})();
+(function() {
+  const menu = document.getElementById('sel-ctx-menu');
+  let savedSelText = '';
+  function hideMenu() { menu.style.display = 'none'; }
+  document.addEventListener('contextmenu', function(e) {
+    const sel = window.getSelection();
+    const text = sel ? sel.toString().trim() : '';
+    if (!text) { hideMenu(); return; }
+    savedSelText = text;
+    e.preventDefault();
+    menu.style.left = e.clientX + 'px';
+    menu.style.top = e.clientY + 'px';
+    menu.style.display = 'block';
+    const rect = menu.getBoundingClientRect();
+    if (rect.right > window.innerWidth) { menu.style.left = (e.clientX - rect.width) + 'px'; }
+    if (rect.bottom > window.innerHeight) { menu.style.top = (e.clientY - rect.height) + 'px'; }
+  });
+  document.addEventListener('click', hideMenu);
+  document.addEventListener('keydown', function(e) { if (e.key === 'Escape') { hideMenu(); } });
+  document.getElementById('ctx-export-sel').addEventListener('click', function() {
+    if (!savedSelText) { return; }
+    vscode.postMessage({ command: 'exportSelection', text: savedSelText });
+    savedSelText = '';
+    hideMenu();
   });
 })();
 (function() {

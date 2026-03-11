@@ -41,4 +41,27 @@ export class CodeBlockSearchEngine {
 
         return results;
     }
+
+    /** Total number of blocks currently in the index. */
+    get size(): number {
+        return this.blocks.length;
+    }
+
+    /**
+     * Remove all blocks belonging to the given session.
+     * No-op if the sessionId is not present in the index.
+     */
+    removeBySession(sessionId: string): void {
+        this.blocks = this.blocks.filter(b => b.sessionId !== sessionId);
+    }
+
+    /**
+     * Replace all blocks for `sessionId` with the supplied `blocks` array,
+     * then append any blocks from other sessions that were already indexed.
+     * If `blocks` is empty this behaves like `removeBySession`.
+     */
+    upsertBySession(sessionId: string, blocks: IndexedCodeBlock[]): void {
+        this.removeBySession(sessionId);
+        this.blocks = [...this.blocks, ...blocks];
+    }
 }
