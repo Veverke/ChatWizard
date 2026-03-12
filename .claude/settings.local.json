@@ -2,7 +2,14 @@
   "permissions": {
     "allow": [
       "Bash(npm run:*)",
-      "Bash(node node_modules/mocha/bin/mocha.js --ui tdd out/test/suite/similarityEngine.test.js)"
+      "Bash(node node_modules/mocha/bin/mocha.js --ui tdd out/test/suite/similarityEngine.test.js)",
+      "Bash(npm test:*)",
+      "Bash(npx mocha:*)",
+      "Read(//c/Users/avrei/.claude/projects/c--Repos-Personal-ChatWizard/memory/**)",
+      "Bash(npx tsc:*)"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\avrei\\.claude\\projects\\c--Repos-Personal-ChatWizard\\memory"
     ]
   }
 }

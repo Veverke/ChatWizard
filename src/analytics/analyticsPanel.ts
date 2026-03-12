@@ -8,6 +8,7 @@ import { cwThemeCss, cwInteractiveJs } from '../webview/cwTheme';
 
 export class AnalyticsPanel {
     private static _panel: vscode.WebviewPanel | undefined;
+    private static _cache: { data: AnalyticsData; version: number } | null = null;
 
     static show(context: vscode.ExtensionContext, index: SessionIndex): void {
         if (AnalyticsPanel._panel) {
@@ -111,10 +112,20 @@ export class AnalyticsPanel {
     }
 
     static build(index: SessionIndex): AnalyticsData {
+        if (AnalyticsPanel._cache && AnalyticsPanel._cache.version === index.version) {
+            return AnalyticsPanel._cache.data;
+        }
         const allSessions = index.getAllSummaries()
             .map(s => index.get(s.id)!)
             .filter(s => s != null);
-        return computeAnalytics(allSessions, countTokens);
+        const data = computeAnalytics(allSessions, countTokens);
+        AnalyticsPanel._cache = { data, version: index.version };
+        return data;
+    }
+
+    /** Expose version of last cache build — used in tests. */
+    static get cachedVersion(): number | null {
+        return AnalyticsPanel._cache ? AnalyticsPanel._cache.version : null;
     }
 
     private static _escapeHtml(text: string): string {

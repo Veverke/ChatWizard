@@ -131,14 +131,14 @@ function groupBySession(blocks: IndexedCodeBlock[]): SessionCodeBlockGroup[] {
 }
 
 // ---------------------------------------------------------------------------
-// Tree item — one per session
+// Tree items
 // ---------------------------------------------------------------------------
 
-export class CodeBlockTreeItem extends vscode.TreeItem {
+export class CodeBlockGroupItem extends vscode.TreeItem {
     readonly sessionRef: CodeBlockSessionRef;
 
     constructor(group: SessionCodeBlockGroup) {
-        super(group.sessionTitle, vscode.TreeItemCollapsibleState.None);
+        super(group.sessionTitle, vscode.TreeItemCollapsibleState.Collapsed);
 
         this.sessionRef = { sessionId: group.sessionId, blocks: group.blocks };
 
@@ -200,30 +200,93 @@ export class CodeBlockTreeItem extends vscode.TreeItem {
     }
 }
 
+export class CodeBlockLeafItem extends vscode.TreeItem {
+    readonly block: IndexedCodeBlock;
+    readonly sessionRef: CodeBlockSessionRef;
+
+    constructor(block: IndexedCodeBlock) {
+        const langLabel = block.language || 'plain';
+        const preview = block.content.length > 60
+            ? block.content.slice(0, 60).replace(/\n/g, ' ') + '\u2026'
+            : block.content.replace(/\n/g, ' ');
+        super(`${langLabel}: ${preview}`, vscode.TreeItemCollapsibleState.None);
+
+        this.block = block;
+        this.sessionRef = { sessionId: block.sessionId, blocks: [block] };
+
+        const ext = langToExtension(block.language || '');
+        this.resourceUri = vscode.Uri.file(`file.${ext}`);
+
+        const fullPreview = block.content.length > 300
+            ? block.content.slice(0, 300) + '\u2026'
+            : block.content;
+        this.tooltip = new vscode.MarkdownString(
+            `**${langLabel}** · ${block.messageRole}\n\n\`\`\`${langLabel}\n${fullPreview}\n\`\`\``
+        );
+
+        this.contextValue = 'codeblockLeaf';
+
+        this.command = {
+            command: 'chatwizard.openSessionFromCodeBlock',
+            title: 'Open Session',
+            arguments: [this.sessionRef],
+        };
+    }
+}
+
+export class CodeBlockLoadMoreItem extends vscode.TreeItem {
+    readonly remaining: number;
+    constructor(remaining: number) {
+        super(`⋯ Load more (${remaining} remaining)`, vscode.TreeItemCollapsibleState.None);
+        this.remaining = remaining;
+        this.contextValue = 'cbLoadMore';
+        this.command = {
+            command: 'chatwizard.loadMoreCodeBlocks',
+            title: 'Load More Code Blocks',
+            arguments: [],
+        };
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Provider
 // ---------------------------------------------------------------------------
 
-export class CodeBlockTreeProvider implements vscode.TreeDataProvider<CodeBlockTreeItem> {
-    private _onDidChangeTreeData = new vscode.EventEmitter<CodeBlockTreeItem | undefined | void>();
+export class CodeBlockTreeProvider implements vscode.TreeDataProvider<CodeBlockGroupItem | CodeBlockLeafItem | CodeBlockLoadMoreItem> {
+    private _onDidChangeTreeData = new vscode.EventEmitter<CodeBlockGroupItem | CodeBlockLeafItem | CodeBlockLoadMoreItem | undefined | void>();
     readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
     private _filter: CodeBlockFilter = {};
     private _sortMode: CbSortMode = 'date';
     private _sortDir: CbSortDirection = 'desc';
+    private _groupCache: SessionCodeBlockGroup[] | null = null;
+    private _visibleGroupCount = 200;
 
     constructor(
         private readonly index: SessionIndex,
         private readonly engine: CodeBlockSearchEngine
     ) {
-        index.addChangeListener(() => this.refresh());
+        index.addChangeListener(() => {
+            this._groupCache = null;
+            this.refresh();
+        });
     }
 
     // ------------------------------------------------------------------
     // Filter
     // ------------------------------------------------------------------
-    setFilter(filter: CodeBlockFilter): void { this._filter = filter; }
-    clearFilter(): void { this._filter = {}; }
+    setFilter(filter: CodeBlockFilter): void {
+        this._filter = filter;
+        this._groupCache = null;
+        this._visibleGroupCount = 200;
+    }
+
+    clearFilter(): void {
+        this._filter = {};
+        this._groupCache = null;
+        this._visibleGroupCount = 200;
+    }
+
     getFilter(): CodeBlockFilter { return { ...this._filter }; }
 
     hasActiveFilter(): boolean {
@@ -259,6 +322,8 @@ export class CodeBlockTreeProvider implements vscode.TreeDataProvider<CodeBlockT
     // Sort
     // ------------------------------------------------------------------
     setSortMode(mode: CbSortMode): void {
+        this._groupCache = null;
+        this._visibleGroupCount = 200;
         if (this._sortMode === mode) {
             this._sortDir = this._sortDir === 'asc' ? 'desc' : 'asc';
         } else {
@@ -271,31 +336,24 @@ export class CodeBlockTreeProvider implements vscode.TreeDataProvider<CodeBlockT
     getSortDir(): CbSortDirection { return this._sortDir; }
 
     // ------------------------------------------------------------------
+    // Load more
+    // ------------------------------------------------------------------
+    loadMore(): void {
+        this._visibleGroupCount += 200;
+        this._onDidChangeTreeData.fire();
+    }
+
+    // ------------------------------------------------------------------
     // Description (shown below view title)
     // ------------------------------------------------------------------
     private _nonEmptyBlocks(): IndexedCodeBlock[] {
         return this.index.getAllCodeBlocks().filter(b => b.content.trim().length > 0);
     }
 
-    getDescription(): string {
-        const groups = groupBySession(this._nonEmptyBlocks());
-        const filtered = groups.filter(g => this._groupMatchesFilter(g));
-        const countPart = `${filtered.length} session${filtered.length === 1 ? '' : 's'}`;
-        const dirArrow = this._sortDir === 'asc' ? '\u2191' : '\u2193';
-        const sortPart = `${CB_SORT_KEY_LABELS[this._sortMode]} ${dirArrow}`;
-        const filterPart = this._filterDescription();
-        return filterPart
-            ? `${countPart}  \u00b7  ${sortPart}  \u00b7  ${filterPart}`
-            : `${countPart}  \u00b7  ${sortPart}`;
-    }
-
-    // ------------------------------------------------------------------
-    // TreeDataProvider
-    // ------------------------------------------------------------------
-    refresh(): void { this._onDidChangeTreeData.fire(); }
-    getTreeItem(element: CodeBlockTreeItem): vscode.TreeItem { return element; }
-
-    getChildren(): CodeBlockTreeItem[] {
+    private _buildSortedGroups(): SessionCodeBlockGroup[] {
+        if (this._groupCache !== null) {
+            return this._groupCache;
+        }
         const groups = groupBySession(this._nonEmptyBlocks());
         const filtered = groups.filter(g => this._groupMatchesFilter(g));
         const dir = this._sortDir === 'asc' ? 1 : -1;
@@ -316,7 +374,6 @@ export class CodeBlockTreeProvider implements vscode.TreeDataProvider<CodeBlockT
                     cmp = a.sessionTitle.localeCompare(b.sessionTitle);
                     break;
                 case 'language': {
-                    // Languages that map to 'txt' (unknown) sort after all known languages
                     const langKey = (lang: string) =>
                         lang && langToExtension(lang) !== 'txt' ? lang.toLowerCase() : '\uffff';
                     cmp = langKey(a.primaryLanguage).localeCompare(langKey(b.primaryLanguage));
@@ -326,6 +383,42 @@ export class CodeBlockTreeProvider implements vscode.TreeDataProvider<CodeBlockT
             return cmp * dir;
         });
 
-        return filtered.map(group => new CodeBlockTreeItem(group));
+        this._groupCache = filtered;
+        return this._groupCache;
+    }
+
+    getDescription(): string {
+        const filtered = this._buildSortedGroups();
+        const countPart = `${filtered.length} session${filtered.length === 1 ? '' : 's'}`;
+        const dirArrow = this._sortDir === 'asc' ? '\u2191' : '\u2193';
+        const sortPart = `${CB_SORT_KEY_LABELS[this._sortMode]} ${dirArrow}`;
+        const filterPart = this._filterDescription();
+        return filterPart
+            ? `${countPart}  \u00b7  ${sortPart}  \u00b7  ${filterPart}`
+            : `${countPart}  \u00b7  ${sortPart}`;
+    }
+
+    // ------------------------------------------------------------------
+    // TreeDataProvider
+    // ------------------------------------------------------------------
+    refresh(): void { this._onDidChangeTreeData.fire(); }
+
+    getTreeItem(element: CodeBlockGroupItem | CodeBlockLeafItem | CodeBlockLoadMoreItem): vscode.TreeItem { return element; }
+
+    getChildren(element?: CodeBlockGroupItem | CodeBlockLeafItem | CodeBlockLoadMoreItem): (CodeBlockGroupItem | CodeBlockLeafItem | CodeBlockLoadMoreItem)[] {
+        if (element instanceof CodeBlockGroupItem) {
+            // Lazy children: compute code block leaf items only when session is expanded
+            return element.sessionRef.blocks.map(b => new CodeBlockLeafItem(b));
+        }
+
+        // Top-level: return paginated session groups
+        const allGroups = this._buildSortedGroups();
+        const visible = allGroups.slice(0, this._visibleGroupCount);
+        const items: (CodeBlockGroupItem | CodeBlockLeafItem | CodeBlockLoadMoreItem)[] = visible.map(g => new CodeBlockGroupItem(g));
+        const remaining = allGroups.length - visible.length;
+        if (remaining > 0) {
+            items.push(new CodeBlockLoadMoreItem(remaining));
+        }
+        return items;
     }
 }

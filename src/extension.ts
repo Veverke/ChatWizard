@@ -5,6 +5,7 @@ import { ChatWizardWatcher, startWatcher } from './watcher/fileWatcher';
 import {
     SessionTreeProvider,
     SessionTreeItem,
+    LoadMoreTreeItem,
     SortMode,
     SortKey,
     SortCriterion,
@@ -553,6 +554,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
 
     // ------------------------------------------------------------------
+    // Load more commands (pagination)
+    // ------------------------------------------------------------------
+    context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.loadMoreSessions', () => provider.loadMore())
+    );
+    context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.loadMoreCodeBlocks', () => codeBlockProvider.loadMore())
+    );
+
+    // ------------------------------------------------------------------
     // Other commands
     // ------------------------------------------------------------------
     context.subscriptions.push(
@@ -577,13 +588,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
             // Reveal the session in the sessions tree view (best-effort)
             const sessionTreeItems = provider.getChildren();
-            const sessionItem = sessionTreeItems.find(item => item.summary.id === ref.sessionId);
+            const sessionItem = sessionTreeItems.find(
+                (item): item is SessionTreeItem => item instanceof SessionTreeItem && item.summary.id === ref.sessionId
+            );
             if (sessionItem) {
                 treeView.reveal(sessionItem, { select: true, focus: false });
             }
 
-            // Open the session and scroll to / highlight code blocks
-            SessionWebviewPanel.show(context, session, undefined, true);
+            // Open the session and scroll to / highlight code blocks.
+            // When exactly one block is in the ref (leaf item click), scroll to that specific block.
+            const targetMsgIdx = ref.blocks.length === 1 ? ref.blocks[0].messageIndex : undefined;
+            SessionWebviewPanel.show(context, session, undefined, true, targetMsgIdx);
         })
     );
 

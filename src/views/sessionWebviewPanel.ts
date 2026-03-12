@@ -9,13 +9,14 @@ export class SessionWebviewPanel {
         context: vscode.ExtensionContext,
         session: Session,
         searchTerm?: string,
-        scrollToCodeBlock?: boolean
+        scrollToCodeBlock?: boolean,
+        targetBlockMessageIndex?: number
     ): void {
         const existing = SessionWebviewPanel._panels.get(session.id);
         if (existing) {
             existing.reveal(vscode.ViewColumn.One);
             // Re-render with the (possibly new) options so highlights update
-            existing.webview.html = SessionWebviewPanel._getHtml(session, searchTerm, scrollToCodeBlock);
+            existing.webview.html = SessionWebviewPanel._getHtml(session, searchTerm, scrollToCodeBlock, targetBlockMessageIndex);
             return;
         }
 
@@ -30,7 +31,7 @@ export class SessionWebviewPanel {
         // Defer rendering so the loading state is painted first
         setTimeout(() => {
             if (!panel.visible && !SessionWebviewPanel._panels.has(session.id)) { return; }
-            panel.webview.html = SessionWebviewPanel._getHtml(session, searchTerm, scrollToCodeBlock);
+            panel.webview.html = SessionWebviewPanel._getHtml(session, searchTerm, scrollToCodeBlock, targetBlockMessageIndex);
         }, 0);
 
         SessionWebviewPanel._panels.set(session.id, panel);
@@ -317,7 +318,7 @@ export class SessionWebviewPanel {
         return n;
     }
 
-    private static _getHtml(session: Session, searchTerm?: string, scrollToCodeBlock?: boolean): string {
+    private static _getHtml(session: Session, searchTerm?: string, scrollToCodeBlock?: boolean, targetBlockMessageIndex?: number): string {
         const nonce = SessionWebviewPanel._nonce();
         const config = vscode.workspace.getConfiguration('chatwizard');
         const userColor = config.get<string>('userMessageColor', '#007acc') || '#007acc';
@@ -326,13 +327,18 @@ export class SessionWebviewPanel {
         const termJs = searchTerm ? JSON.stringify(searchTerm) : 'null';
         const cbHighlightJs = (scrollToCodeBlock && cbHighlightColor) ? JSON.stringify(cbHighlightColor) : 'null';
         const cbScrollJs = cbScroll ? 'true' : 'false';
+        // Use the message index (index in session.messages) to find the target block's message div
+        const targetMsgIdxJs = targetBlockMessageIndex !== undefined ? String(targetBlockMessageIndex) : 'null';
 
         const title = SessionWebviewPanel._escapeHtml(session.title);
         const assistantLabel = session.source === 'copilot' ? 'Copilot' : 'Claude';
 
-        const visibleMessages = session.messages.filter(msg => msg.content.trim() !== '');
+        // Keep original indices so data-msg-idx matches session.messages[] positions
+        const visibleMessages = session.messages
+            .map((msg, origIdx) => ({ msg, origIdx }))
+            .filter(({ msg }) => msg.content.trim() !== '');
 
-        const messagesHtml = visibleMessages.flatMap((msg, i) => {
+        const messagesHtml = visibleMessages.flatMap(({ msg, origIdx }, i) => {
             const roleClass = msg.role === 'user' ? 'user' : 'assistant';
             const label = msg.role === 'user' ? 'You' : assistantLabel;
             const timestamp = msg.timestamp
@@ -341,7 +347,7 @@ export class SessionWebviewPanel {
             const renderedContent = SessionWebviewPanel._markdownToHtml(msg.content);
 
             const fadeStyle = i < 16 ? ` style="--cw-i:${i}"` : '';
-            const html = `<div class="message ${roleClass} cw-fade-item"${fadeStyle}>
+            const html = `<div class="message ${roleClass} cw-fade-item"${fadeStyle} data-msg-idx="${origIdx}">
   <div class="message-header">
     <span class="role-label">${label}</span>${timestamp}
   </div>
@@ -349,8 +355,8 @@ export class SessionWebviewPanel {
 </div>`;
 
             // If this is a user message with no following assistant reply, add a placeholder
-            const nextMsg = visibleMessages[i + 1];
-            if (msg.role === 'user' && (!nextMsg || nextMsg.role === 'user')) {
+            const nextEntry = visibleMessages[i + 1];
+            if (msg.role === 'user' && (!nextEntry || nextEntry.msg.role === 'user')) {
                 const aborted = `<div class="message aborted">
   <div class="message-header"><span class="role-label">${assistantLabel}</span></div>
   <div class="message-body aborted-notice">&#9888; Response not available — cancelled or incomplete</div>
@@ -670,8 +676,20 @@ const vscode = acquireVsCodeApi();
 (function() {
   const highlightColor = ${cbHighlightJs};
   const shouldScroll = ${cbScrollJs};
+  const targetMsgIdx = ${targetMsgIdxJs};
   if (!highlightColor && !shouldScroll) { return; }
-  const pres = document.querySelectorAll('pre');
+  if (targetMsgIdx !== null) {
+    // Scroll to the first <pre> inside the specific message div
+    const msgEl = document.querySelector('[data-msg-idx="' + targetMsgIdx + '"]');
+    const target = msgEl ? msgEl.querySelector('pre') : null;
+    if (target) {
+      if (highlightColor) { target.style.boxShadow = '0 0 0 2px ' + highlightColor; }
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      return;
+    }
+  }
+  // Fallback: highlight all code blocks and scroll to the first
+  const pres = Array.from(document.querySelectorAll('pre'));
   if (highlightColor) {
     pres.forEach(function(pre) { pre.style.boxShadow = '0 0 0 2px ' + highlightColor; });
   }

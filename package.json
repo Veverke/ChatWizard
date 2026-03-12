@@ -89,6 +89,9 @@
       { "command": "chatwizard.pinSession",      "title": "Pin Session",              "category": "ChatWizard", "icon": "$(pin)" },
       { "command": "chatwizard.unpinSession",    "title": "Unpin Session",            "category": "ChatWizard", "icon": "$(pinned)" },
 
+      { "command": "chatwizard.loadMoreSessions",    "title": "Load More Sessions",    "category": "ChatWizard" },
+      { "command": "chatwizard.loadMoreCodeBlocks",  "title": "Load More Code Blocks", "category": "ChatWizard" },
+
       { "command": "chatwizard.exportSession",   "title": "Export Session to Markdown", "category": "ChatWizard", "icon": "$(export)" },
       { "command": "chatwizard.exportAll",       "title": "Export All Sessions…",       "category": "ChatWizard", "icon": "$(files)" },
       { "command": "chatwizard.exportSelected",  "title": "Export Selected Sessions…",  "category": "ChatWizard", "icon": "$(checklist)" },

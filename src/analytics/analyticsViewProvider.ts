@@ -11,6 +11,7 @@ export class AnalyticsViewProvider implements vscode.WebviewViewProvider {
     static readonly viewType = 'chatwizardAnalytics';
 
     private _view?: vscode.WebviewView;
+    private _refreshTimer: ReturnType<typeof setTimeout> | null = null;
 
     constructor(private readonly _index: SessionIndex) {}
 
@@ -30,9 +31,14 @@ export class AnalyticsViewProvider implements vscode.WebviewViewProvider {
         this._update();
     }
 
-    /** Re-render the view when the session index changes. No-op if the view is not visible. */
+    /** Re-render the view after a 5-second debounce. Analytics have high staleness tolerance. */
     refresh(): void {
-        if (this._view?.visible) { this._update(); }
+        if (!this._view?.visible) { return; }
+        if (this._refreshTimer) { clearTimeout(this._refreshTimer); }
+        this._refreshTimer = setTimeout(() => {
+            this._refreshTimer = null;
+            if (this._view?.visible) { this._update(); }
+        }, 5000);
     }
 
     private _update(): void {
