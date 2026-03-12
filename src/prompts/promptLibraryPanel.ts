@@ -4,48 +4,56 @@ import * as vscode from 'vscode';
 import { SessionIndex } from '../index/sessionIndex';
 import { cwThemeCss, cwInteractiveJs } from '../webview/cwTheme';
 import { buildPromptLibrary, PromptEntry } from './promptExtractor';
-import { clusterPrompts, PromptCluster } from './similarityEngine';
+import { clusterPromptsAsync, PromptCluster, MAX_CLUSTER_ENTRIES } from './similarityEngine';
 
 export class PromptLibraryPanel {
     private static _panel: vscode.WebviewPanel | undefined;
+    private static _cacheVersion = 0;
 
-    static show(context: vscode.ExtensionContext, index: SessionIndex): void {
-        const entries = buildPromptLibrary(index);
-        const clusters = clusterPrompts(entries);
-
+    static async show(context: vscode.ExtensionContext, index: SessionIndex): Promise<void> {
         if (PromptLibraryPanel._panel) {
             PromptLibraryPanel._panel.reveal(vscode.ViewColumn.One);
-            PromptLibraryPanel._panel.webview.html = PromptLibraryPanel.getHtml(clusters);
-            return;
+        } else {
+            const panel = vscode.window.createWebviewPanel(
+                'chatwizardPromptLibrary',
+                'Prompt Library',
+                vscode.ViewColumn.One,
+                { enableScripts: true }
+            );
+            PromptLibraryPanel._panel = panel;
+            panel.webview.html = PromptLibraryPanel.getLoadingHtml();
+
+            panel.onDidDispose(() => {
+                PromptLibraryPanel._panel = undefined;
+            }, null, context.subscriptions);
+
+            panel.webview.onDidReceiveMessage((message: { command: string; text: string }) => {
+                if (message.command === 'copy') {
+                    void vscode.env.clipboard.writeText(message.text);
+                    void vscode.window.showInformationMessage('Prompt copied to clipboard.');
+                }
+            }, undefined, context.subscriptions);
         }
 
-        const panel = vscode.window.createWebviewPanel(
-            'chatwizardPromptLibrary',
-            'Prompt Library',
-            vscode.ViewColumn.One,
-            { enableScripts: true }
-        );
-
-        PromptLibraryPanel._panel = panel;
-        panel.webview.html = PromptLibraryPanel.getHtml(clusters);
-
-        panel.onDidDispose(() => {
-            PromptLibraryPanel._panel = undefined;
-        }, null, context.subscriptions);
-
-        panel.webview.onDidReceiveMessage((message: { command: string; text: string }) => {
-            if (message.command === 'copy') {
-                void vscode.env.clipboard.writeText(message.text);
-                void vscode.window.showInformationMessage('Prompt copied to clipboard.');
-            }
-        }, undefined, context.subscriptions);
+        const entries = buildPromptLibrary(index);
+        const result = await clusterPromptsAsync(entries, 0.6, String(PromptLibraryPanel._cacheVersion));
+        if (PromptLibraryPanel._panel) {
+            PromptLibraryPanel._panel.webview.html = PromptLibraryPanel.getHtml(result.clusters, result.truncated);
+        }
     }
 
-    static refresh(index: SessionIndex): void {
+    static async refresh(index: SessionIndex): Promise<void> {
         if (!PromptLibraryPanel._panel) { return; }
+        PromptLibraryPanel._cacheVersion++;
         const entries = buildPromptLibrary(index);
-        const clusters = clusterPrompts(entries);
-        PromptLibraryPanel._panel.webview.html = PromptLibraryPanel.getHtml(clusters);
+        const result = await clusterPromptsAsync(entries, 0.6, String(PromptLibraryPanel._cacheVersion));
+        if (PromptLibraryPanel._panel) {
+            PromptLibraryPanel._panel.webview.html = PromptLibraryPanel.getHtml(result.clusters, result.truncated);
+        }
+    }
+
+    static getLoadingHtml(): string {
+        return `<!DOCTYPE html><html><body style="font-family:var(--vscode-font-family,sans-serif);padding:20px;opacity:0.6;"><p>Loading prompt library\u2026</p></body></html>`;
     }
 
     private static _escapeHtml(text: string): string {
@@ -57,8 +65,11 @@ export class PromptLibraryPanel {
             .replace(/'/g, '&#39;');
     }
 
-    static getHtml(clusters: PromptCluster[]): string {
+    static getHtml(clusters: PromptCluster[], truncated = false): string {
         const totalEntries = clusters.reduce((sum, c) => sum + 1 + c.variants.length, 0);
+        const truncatedBanner = truncated
+            ? `<div class="truncated-banner">Too many prompts to cluster \u2014 showing top ${MAX_CLUSTER_ENTRIES.toLocaleString()}</div>`
+            : '';
 
         const cardsHtml = clusters.map((cluster, i) => {
             const { canonical, variants, totalFrequency, allProjectIds } = cluster;
@@ -299,6 +310,14 @@ export class PromptLibraryPanel {
       font-style: italic;
       padding: 40px 16px;
     }
+
+    .truncated-banner {
+      background: var(--vscode-editorWarning-background, rgba(255,200,0,0.12));
+      color: var(--vscode-editorWarning-foreground, #c8a800);
+      border-bottom: 1px solid var(--vscode-editorWarning-border, rgba(200,168,0,0.3));
+      font-size: 0.82em;
+      padding: 5px 16px;
+    }
   </style>
 </head>
 <body>
@@ -306,6 +325,7 @@ export class PromptLibraryPanel {
     <span id="promptCount">${totalEntries} prompt${totalEntries === 1 ? '' : 's'}</span>
     <input id="searchInput" type="text" placeholder="Filter by text…" />
   </div>
+  ${truncatedBanner}
   <div class="prompts-list" id="promptsList">
     ${clusters.length === 0
             ? '<p class="empty-state">No prompts found across all sessions.</p>'

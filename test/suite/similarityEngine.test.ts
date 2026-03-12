@@ -2,7 +2,14 @@
 
 import * as assert from 'assert';
 import { suite, test } from 'mocha';
-import { trigramSimilarity, clusterPrompts } from '../../src/prompts/similarityEngine';
+import {
+    trigramSimilarity,
+    clusterPrompts,
+    clusterPromptsExt,
+    clusterPromptsAsync,
+    clearClusterCache,
+    MAX_CLUSTER_ENTRIES,
+} from '../../src/prompts/similarityEngine';
 import { PromptEntry } from '../../src/prompts/promptExtractor';
 
 function makeEntry(text: string, frequency = 1, projectIds: string[] = []): PromptEntry {
@@ -83,11 +90,11 @@ suite('trigramSimilarity', () => {
         assert.ok(sim > 0.0, `expected > 0.0 because "abc" trigram is shared, got ${sim}`);
     });
 
-    test('strings sharing a long prefix have similarity > 0.7', () => {
-        // 'typescript linting rules' vs 'typescript linting config' share
-        // 'typescript linting ' (18 chars = 16 trigrams) out of ~23 total unique trigrams
+    test('strings sharing a long prefix have similarity > 0.5', () => {
+        // 'typescript linting rules' vs 'typescript linting config' share most trigrams;
+        // actual Jaccard ≈ 0.607
         const sim = trigramSimilarity('typescript linting rules', 'typescript linting config');
-        assert.ok(sim > 0.7, `expected > 0.7 for shared-prefix strings, got ${sim}`);
+        assert.ok(sim > 0.5, `expected > 0.5 for shared-prefix strings, got ${sim}`);
     });
 
     test('unicode characters do not crash and result is in [0, 1]', () => {
@@ -371,5 +378,140 @@ suite('clusterPrompts', () => {
         assert.strictEqual(clusters[0].totalFrequency, 6);
         // sessionMeta is preserved on the canonical entry unchanged
         assert.deepStrictEqual(clusters[0].canonical.sessionMeta, sessionMetaA);
+    });
+});
+
+// ── clusterPromptsExt ─────────────────────────────────────────────────────────
+
+suite('clusterPromptsExt', () => {
+    setup(() => clearClusterCache());
+
+    test('produces same clusters as clusterPrompts', () => {
+        const entries = [
+            makeEntry('refactor this function', 3),
+            makeEntry('refactor the function', 2),
+            makeEntry('explain quantum computing', 1),
+        ];
+        const plain = clusterPrompts(entries);
+        const { clusters } = clusterPromptsExt(entries);
+        assert.strictEqual(clusters.length, plain.length);
+        assert.strictEqual(clusters[0].canonical.text, plain[0].canonical.text);
+    });
+
+    test('truncated is false when entries count <= MAX_CLUSTER_ENTRIES', () => {
+        const entries = Array.from({ length: 5 }, (_, i) => makeEntry(`prompt ${i}`, 1));
+        const { truncated } = clusterPromptsExt(entries);
+        assert.strictEqual(truncated, false);
+    });
+
+    test('truncated is true when entries exceed MAX_CLUSTER_ENTRIES', () => {
+        const entries = Array.from(
+            { length: MAX_CLUSTER_ENTRIES + 1 },
+            (_, i) => makeEntry(`unique prompt ${i}`, 1)
+        );
+        const { truncated } = clusterPromptsExt(entries);
+        assert.strictEqual(truncated, true);
+    });
+
+    test('total entries in result does not exceed MAX_CLUSTER_ENTRIES when truncated', () => {
+        const entries = Array.from(
+            { length: MAX_CLUSTER_ENTRIES + 50 },
+            (_, i) => makeEntry(`unique prompt xyz ${i}`, 1)
+        );
+        const { clusters } = clusterPromptsExt(entries);
+        const total = clusters.reduce((s, c) => s + 1 + c.variants.length, 0);
+        assert.ok(total <= MAX_CLUSTER_ENTRIES, `expected <= ${MAX_CLUSTER_ENTRIES}, got ${total}`);
+    });
+
+    test('cache hit: same cacheKey + threshold returns identical object reference', () => {
+        const entries = [makeEntry('refactor this function', 3), makeEntry('explain quantum', 2)];
+        const result1 = clusterPromptsExt(entries, 0.6, 'v1');
+        const result2 = clusterPromptsExt(entries, 0.6, 'v1');
+        assert.strictEqual(result1, result2, 'expected same ClusterResult reference on cache hit');
+    });
+
+    test('cache miss: different cacheKey returns new result', () => {
+        const entries = [makeEntry('refactor this function', 3)];
+        const result1 = clusterPromptsExt(entries, 0.6, 'v1');
+        const result2 = clusterPromptsExt(entries, 0.6, 'v2');
+        assert.notStrictEqual(result1, result2);
+    });
+
+    test('cache miss: different threshold returns new result', () => {
+        const entries = [makeEntry('refactor this function', 3)];
+        const result1 = clusterPromptsExt(entries, 0.6, 'v1');
+        const result2 = clusterPromptsExt(entries, 0.7, 'v1');
+        assert.notStrictEqual(result1, result2);
+    });
+
+    test('clearClusterCache invalidates cache', () => {
+        const entries = [makeEntry('refactor this function', 3)];
+        const result1 = clusterPromptsExt(entries, 0.6, 'v1');
+        clearClusterCache();
+        const result2 = clusterPromptsExt(entries, 0.6, 'v1');
+        assert.notStrictEqual(result1, result2);
+    });
+
+    test('threshold of 0 clusters everything together (bucket fallback path)', () => {
+        const entries = [
+            makeEntry('completely different text here', 1),
+            makeEntry('nothing in common at all xyz', 2),
+            makeEntry('unrelated thing aaabbbccc', 3),
+        ];
+        const { clusters } = clusterPromptsExt(entries, 0);
+        assert.strictEqual(clusters.length, 1);
+        assert.strictEqual(clusters[0].totalFrequency, 6);
+    });
+
+    test('clustering 5,000 entries completes in < 2 seconds', () => {
+        const base = 'refactor this TypeScript class method for better performance and readability ';
+        const entries = Array.from({ length: MAX_CLUSTER_ENTRIES }, (_, i) =>
+            makeEntry(base + String(i % 200), 1)
+        );
+        const start = Date.now();
+        clusterPromptsExt(entries, 0.6);
+        const elapsed = Date.now() - start;
+        assert.ok(elapsed < 2000, `clustering ${MAX_CLUSTER_ENTRIES} entries took ${elapsed}ms (limit: 2000ms)`);
+    });
+});
+
+// ── clusterPromptsAsync ───────────────────────────────────────────────────────
+
+suite('clusterPromptsAsync', () => {
+    setup(() => clearClusterCache());
+
+    test('empty input resolves to empty clusters', async () => {
+        const { clusters } = await clusterPromptsAsync([]);
+        assert.deepStrictEqual(clusters, []);
+    });
+
+    test('produces same clusters as clusterPrompts', async () => {
+        const entries = [
+            makeEntry('refactor this function', 3),
+            makeEntry('refactor the function', 2),
+            makeEntry('explain quantum computing', 1),
+        ];
+        const plain = clusterPrompts(entries);
+        const { clusters } = await clusterPromptsAsync(entries);
+        assert.strictEqual(clusters.length, plain.length);
+        const plainTexts = plain.map(c => c.canonical.text).sort();
+        const asyncTexts = clusters.map(c => c.canonical.text).sort();
+        assert.deepStrictEqual(asyncTexts, plainTexts);
+    });
+
+    test('cache hit returns resolved promise immediately', async () => {
+        const entries = [makeEntry('refactor this function', 3)];
+        const result1 = await clusterPromptsAsync(entries, 0.6, 'v1');
+        const result2 = await clusterPromptsAsync(entries, 0.6, 'v1');
+        assert.strictEqual(result1, result2, 'expected same reference on async cache hit');
+    });
+
+    test('truncated flag is set when entries exceed cap', async () => {
+        const entries = Array.from(
+            { length: MAX_CLUSTER_ENTRIES + 1 },
+            (_, i) => makeEntry(`unique prompt ${i}`, 1)
+        );
+        const { truncated } = await clusterPromptsAsync(entries);
+        assert.strictEqual(truncated, true);
     });
 });

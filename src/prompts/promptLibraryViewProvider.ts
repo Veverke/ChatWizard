@@ -3,7 +3,7 @@
 import * as vscode from 'vscode';
 import { SessionIndex } from '../index/sessionIndex';
 import { buildPromptLibrary } from './promptExtractor';
-import { clusterPrompts } from './similarityEngine';
+import { clusterPromptsAsync } from './similarityEngine';
 import { PromptLibraryPanel } from './promptLibraryPanel';
 
 /**
@@ -13,6 +13,7 @@ export class PromptLibraryViewProvider implements vscode.WebviewViewProvider {
     static readonly viewType = 'chatwizardPromptLibrary';
 
     private _view?: vscode.WebviewView;
+    private _cacheVersion = 0;
 
     constructor(private readonly _index: SessionIndex) {}
 
@@ -26,7 +27,7 @@ export class PromptLibraryViewProvider implements vscode.WebviewViewProvider {
         webviewView.webview.options = { enableScripts: true };
 
         webviewView.onDidChangeVisibility(() => {
-            if (webviewView.visible) { this._update(); }
+            if (webviewView.visible) { void this._update(); }
         });
 
         webviewView.webview.onDidReceiveMessage((message: { command: string; text: string }) => {
@@ -36,18 +37,24 @@ export class PromptLibraryViewProvider implements vscode.WebviewViewProvider {
             }
         });
 
-        this._update();
+        void this._update();
     }
 
     /** Re-render the view when the session index changes. No-op if the view is not visible. */
     refresh(): void {
-        if (this._view?.visible) { this._update(); }
+        if (this._view?.visible) {
+            this._cacheVersion++;
+            void this._update();
+        }
     }
 
-    private _update(): void {
+    private async _update(): Promise<void> {
         if (!this._view) { return; }
+        this._view.webview.html = PromptLibraryPanel.getLoadingHtml();
         const entries = buildPromptLibrary(this._index);
-        const clusters = clusterPrompts(entries);
-        this._view.webview.html = PromptLibraryPanel.getHtml(clusters);
+        const result = await clusterPromptsAsync(entries, 0.6, String(this._cacheVersion));
+        if (this._view) {
+            this._view.webview.html = PromptLibraryPanel.getHtml(result.clusters, result.truncated);
+        }
     }
 }

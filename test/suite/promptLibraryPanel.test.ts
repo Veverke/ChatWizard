@@ -3,7 +3,7 @@
 import * as assert from 'assert';
 import { suite, test } from 'mocha';
 import { PromptLibraryPanel } from '../../src/prompts/promptLibraryPanel';
-import { PromptCluster } from '../../src/prompts/similarityEngine';
+import { PromptCluster, MAX_CLUSTER_ENTRIES } from '../../src/prompts/similarityEngine';
 import { PromptEntry } from '../../src/prompts/promptExtractor';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -180,5 +180,25 @@ suite('PromptLibraryPanel.getHtml', () => {
     test('search input is present in toolbar', () => {
         const html = PromptLibraryPanel.getHtml([]);
         assert.ok(html.includes('id="searchInput"'), 'search input should be present');
+    });
+
+    test('no truncation banner when truncated is false (default)', () => {
+        const html = PromptLibraryPanel.getHtml([]);
+        assert.ok(!html.includes('truncated-banner'), 'truncation banner must not appear when not truncated');
+    });
+
+    test('truncation banner appears when truncated is true', () => {
+        const html = PromptLibraryPanel.getHtml([], true);
+        assert.ok(html.includes('truncated-banner'), 'truncation banner element must be present');
+        assert.ok(
+            html.includes(MAX_CLUSTER_ENTRIES.toLocaleString()),
+            `truncation banner must mention the cap (${MAX_CLUSTER_ENTRIES.toLocaleString()})`,
+        );
+    });
+
+    test('getLoadingHtml returns valid HTML with loading text', () => {
+        const html = PromptLibraryPanel.getLoadingHtml();
+        assert.ok(html.startsWith('<!DOCTYPE html>'), 'loading HTML should start with DOCTYPE');
+        assert.ok(html.toLowerCase().includes('loading'), 'loading HTML should contain loading text');
     });
 });

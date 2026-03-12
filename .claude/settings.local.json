@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run:*)",
+      "Bash(node node_modules/mocha/bin/mocha.js --ui tdd out/test/suite/similarityEngine.test.js)"
+    ]
+  }
+}
