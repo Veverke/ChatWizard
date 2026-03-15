@@ -4,6 +4,7 @@ import * as vscode from 'vscode';
 import { SessionIndex } from '../index/sessionIndex';
 import { buildTimeline, TimelineEntry } from './timelineBuilder';
 import { cwThemeCss, cwInteractiveJs } from '../webview/cwTheme';
+import { generateNonce } from '../views/webviewUtils';
 
 export interface TimelineFilter {
     workspacePath?: string;        // filter to a specific workspace path (exact match)
@@ -26,18 +27,32 @@ export class TimelineViewProvider implements vscode.WebviewViewProvider {
     /** YYYY-MM keys of months whose entries have been sent to the webview. */
     private _loadedMonthKeys: Set<string> = new Set();
 
-    constructor(private readonly _index: SessionIndex) {}
+    constructor(
+        private readonly _index: SessionIndex,
+        private readonly _extensionUri?: vscode.Uri
+    ) {}
 
     resolveWebviewView(
         webviewView: vscode.WebviewView,
         _context: vscode.WebviewViewResolveContext,
         _token: vscode.CancellationToken
     ): void {
-        webviewView.webview.options = { enableScripts: true };
+        let codiconCssUri: string | undefined;
+        if (this._extensionUri) {
+            const codiconDistUri = vscode.Uri.joinPath(
+                this._extensionUri, 'node_modules', '@vscode', 'codicons', 'dist'
+            );
+            webviewView.webview.options = { enableScripts: true, localResourceRoots: [codiconDistUri] };
+            codiconCssUri = webviewView.webview.asWebviewUri(
+                vscode.Uri.joinPath(codiconDistUri, 'codicon.css')
+            ).toString();
+        } else {
+            webviewView.webview.options = { enableScripts: true };
+        }
         this._view = webviewView;
 
         // Set shell HTML once — never reassigned
-        webviewView.webview.html = TimelineViewProvider.getShellHtml();
+        webviewView.webview.html = TimelineViewProvider.getShellHtml(codiconCssUri, webviewView.webview.cspSource);
 
         webviewView.webview.onDidReceiveMessage((msg: { command?: string; sessionId?: string; filter?: TimelineFilter; type?: string; month?: string }) => {
             if (msg.command === 'openSession') {
@@ -138,13 +153,19 @@ export class TimelineViewProvider implements vscode.WebviewViewProvider {
         });
     }
 
-    static getShellHtml(): string {
+    static getShellHtml(codiconCssUri?: string, cspSource?: string): string {
+        const nonce = generateNonce();
+        const fontSrc   = cspSource ? ` font-src ${cspSource};` : '';
+        const codiconLk = codiconCssUri
+            ? `<link rel="stylesheet" href="${codiconCssUri}">`
+            : '';
         return `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline';">
-  <style>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}' ${cspSource ?? ''};${fontSrc}">
+  ${codiconLk}
+  <style nonce="${nonce}">
     ${cwThemeCss()}
     * { box-sizing: border-box; }
 
@@ -289,9 +310,19 @@ export class TimelineViewProvider implements vscode.WebviewViewProvider {
       <option value="">All workspaces</option>
     </select>
   </div>
-  <div id="timeline-content"></div>
+  <div id="timeline-content">
+    <div id="cw-tl-skeleton">
+      <div style="height:10px;width:38%;margin:10px 14px 6px" class="cw-skeleton"></div>
+      <div style="margin:5px 10px;padding:9px 14px;border-radius:var(--cw-radius);border:1px solid var(--cw-border);background:var(--cw-surface-raised);box-shadow:var(--cw-shadow)"><div class="cw-skeleton" style="height:13px;width:68%;margin-bottom:6px"></div><div class="cw-skeleton" style="height:11px;width:42%;margin-bottom:5px"></div><div class="cw-skeleton" style="height:12px;width:88%"></div></div>
+      <div style="margin:5px 10px;padding:9px 14px;border-radius:var(--cw-radius);border:1px solid var(--cw-border);background:var(--cw-surface-raised);box-shadow:var(--cw-shadow)"><div class="cw-skeleton" style="height:13px;width:55%;margin-bottom:6px"></div><div class="cw-skeleton" style="height:11px;width:38%;margin-bottom:5px"></div><div class="cw-skeleton" style="height:12px;width:92%"></div></div>
+      <div style="margin:5px 10px;padding:9px 14px;border-radius:var(--cw-radius);border:1px solid var(--cw-border);background:var(--cw-surface-raised);box-shadow:var(--cw-shadow)"><div class="cw-skeleton" style="height:13px;width:74%;margin-bottom:6px"></div><div class="cw-skeleton" style="height:11px;width:44%;margin-bottom:5px"></div><div class="cw-skeleton" style="height:12px;width:78%"></div></div>
+      <div style="height:10px;width:32%;margin:14px 14px 6px" class="cw-skeleton"></div>
+      <div style="margin:5px 10px;padding:9px 14px;border-radius:var(--cw-radius);border:1px solid var(--cw-border);background:var(--cw-surface-raised);box-shadow:var(--cw-shadow)"><div class="cw-skeleton" style="height:13px;width:62%;margin-bottom:6px"></div><div class="cw-skeleton" style="height:11px;width:35%;margin-bottom:5px"></div><div class="cw-skeleton" style="height:12px;width:82%"></div></div>
+      <div style="margin:5px 10px;padding:9px 14px;border-radius:var(--cw-radius);border:1px solid var(--cw-border);background:var(--cw-surface-raised);box-shadow:var(--cw-shadow)"><div class="cw-skeleton" style="height:13px;width:50%;margin-bottom:6px"></div><div class="cw-skeleton" style="height:11px;width:48%;margin-bottom:5px"></div><div class="cw-skeleton" style="height:12px;width:70%"></div></div>
+    </div>
+  </div>
   <div id="load-more-container"></div>
-<script>
+<script nonce="${nonce}">
   const vscode = acquireVsCodeApi();
 
   function escHtml(s) {
@@ -470,13 +501,14 @@ export class TimelineViewProvider implements vscode.WebviewViewProvider {
   // Signal ready
   vscode.postMessage({ type: 'ready' });
 </script>
-<script>${cwInteractiveJs()}</script>
+<script nonce="${nonce}">${cwInteractiveJs()}</script>
 </body>
 </html>`;
     }
 
     static getHtml(entries: TimelineEntry[], filter: TimelineFilter = {}): string {
         const e = TimelineViewProvider._e.bind(TimelineViewProvider);
+        const nonce = generateNonce();
 
         // Collect unique workspaces (preserving first-seen order)
         const seenWorkspacePaths = new Set<string>();
@@ -540,8 +572,8 @@ export class TimelineViewProvider implements vscode.WebviewViewProvider {
 <html>
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline';">
-  <style>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}';">
+  <style nonce="${nonce}">
     ${cwThemeCss()}
     * { box-sizing: border-box; }
 
@@ -655,7 +687,7 @@ export class TimelineViewProvider implements vscode.WebviewViewProvider {
 <body>
 ${filterBar}
 ${timelineHtml}
-<script>
+<script nonce="${nonce}">
   const vscode = acquireVsCodeApi();
 
   function openSession(sessionId) {
@@ -678,7 +710,7 @@ ${timelineHtml}
       if (target) { target.querySelector('.month-header').scrollIntoView({ behavior: 'smooth', block: 'start' }); }
   }
 </script>
-<script>${cwInteractiveJs()}</script>
+<script nonce="${nonce}">${cwInteractiveJs()}</script>
 </body>
 </html>`;
     }

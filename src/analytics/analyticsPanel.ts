@@ -5,6 +5,14 @@ import { SessionIndex } from '../index/sessionIndex';
 import { computeAnalytics, AnalyticsData } from './analyticsEngine';
 import { countTokens } from './tokenCounter';
 import { cwThemeCss, cwInteractiveJs } from '../webview/cwTheme';
+import { generateNonce } from '../views/webviewUtils';
+
+// SEC-3: Chart.js pinned to 4.4.3 with SHA-384 Subresource Integrity hash.
+// To regenerate after an upgrade:
+//   curl -sL "https://cdn.jsdelivr.net/npm/chart.js@<VER>/dist/chart.umd.min.js" -o chart.js
+//   openssl dgst -sha384 -binary chart.js | openssl base64 -A
+const CHARTJS_URL = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js';
+const CHARTJS_SRI = 'sha384-JUh163oCRItcbPme8pYnROHQMC6fNKTBWtRG3I3I0erJkzNgL7uxKlNwcrcFKeqF';
 
 export class AnalyticsPanel {
     private static _panel: vscode.WebviewPanel | undefined;
@@ -20,6 +28,10 @@ export class AnalyticsPanel {
             return;
         }
 
+        const codiconDistUri = vscode.Uri.joinPath(
+            context.extensionUri, 'node_modules', '@vscode', 'codicons', 'dist'
+        );
+
         const panel = vscode.window.createWebviewPanel(
             'chatwizardAnalytics',
             'Chat Analytics',
@@ -27,11 +39,15 @@ export class AnalyticsPanel {
             {
                 enableScripts: true,
                 retainContextWhenHidden: true,
+                localResourceRoots: [codiconDistUri],
             }
         );
 
         AnalyticsPanel._panel = panel;
-        panel.webview.html = AnalyticsPanel.getShellHtml();
+        const codiconCssUri = panel.webview.asWebviewUri(
+            vscode.Uri.joinPath(codiconDistUri, 'codicon.css')
+        ).toString();
+        panel.webview.html = AnalyticsPanel.getShellHtml(codiconCssUri, panel.webview.cspSource);
 
         // Wait for webview to signal ready before sending data
         panel.webview.onDidReceiveMessage((msg: { type: string }) => {
@@ -76,14 +92,20 @@ export class AnalyticsPanel {
             .replace(/'/g, '&#39;');
     }
 
-    static getShellHtml(): string {
+    static getShellHtml(codiconCssUri?: string, cspSource?: string): string {
+        const nonce = generateNonce();
+        const fontSrc   = cspSource ? ` font-src ${cspSource};` : '';
+        const codiconLk = codiconCssUri
+            ? `<link rel="stylesheet" href="${codiconCssUri}">`
+            : '';
         return `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'unsafe-inline';">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
-  <style>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}' https://cdn.jsdelivr.net; style-src 'nonce-${nonce}' ${cspSource ?? ''};${fontSrc}">
+  ${codiconLk}
+  <script src="${CHARTJS_URL}" integrity="${CHARTJS_SRI}" crossorigin="anonymous" nonce="${nonce}"></script>
+  <style nonce="${nonce}">
     ${cwThemeCss()}
     * { box-sizing: border-box; }
 
@@ -202,11 +224,22 @@ export class AnalyticsPanel {
       padding: 20px 16px;
     }
 
-    #loading-msg {
-      padding: 40px 20px;
-      text-align: center;
-      opacity: 0.6;
+    /* -- Stat icon circle (codicon) -------------------------------- */
+    .stat-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: var(--cw-accent);
+      color: #fff;
+      margin: 0 auto 6px;
+      font-size: 13px;
     }
+
+    /* -- Skeleton card (overrides so sizing matches summary-card) -- */
+    .summary-card.sk > * { margin: 0 auto; display: block; }
   </style>
 </head>
 <body>
@@ -215,14 +248,20 @@ export class AnalyticsPanel {
   <div class="section">
     <h2>Overview</h2>
     <div class="summary-row" id="summary-row">
-      <div id="loading-msg">Loading analytics&#8230;</div>
+      <div class="summary-card sk cw-fade-item" style="--cw-i:0"><div class="cw-skeleton" style="width:28px;height:28px;border-radius:50%;margin-bottom:6px"></div><div class="cw-skeleton" style="height:26px;width:55%;margin-bottom:6px"></div><div class="cw-skeleton" style="height:12px;width:72%"></div></div>
+      <div class="summary-card sk cw-fade-item" style="--cw-i:1"><div class="cw-skeleton" style="width:28px;height:28px;border-radius:50%;margin-bottom:6px"></div><div class="cw-skeleton" style="height:26px;width:55%;margin-bottom:6px"></div><div class="cw-skeleton" style="height:12px;width:72%"></div></div>
+      <div class="summary-card sk cw-fade-item" style="--cw-i:2"><div class="cw-skeleton" style="width:28px;height:28px;border-radius:50%;margin-bottom:6px"></div><div class="cw-skeleton" style="height:26px;width:55%;margin-bottom:6px"></div><div class="cw-skeleton" style="height:12px;width:72%"></div></div>
+      <div class="summary-card sk cw-fade-item" style="--cw-i:3"><div class="cw-skeleton" style="width:28px;height:28px;border-radius:50%;margin-bottom:6px"></div><div class="cw-skeleton" style="height:26px;width:55%;margin-bottom:6px"></div><div class="cw-skeleton" style="height:12px;width:72%"></div></div>
+      <div class="summary-card sk cw-fade-item" style="--cw-i:4"><div class="cw-skeleton" style="width:28px;height:28px;border-radius:50%;margin-bottom:6px"></div><div class="cw-skeleton" style="height:26px;width:55%;margin-bottom:6px"></div><div class="cw-skeleton" style="height:12px;width:72%"></div></div>
+      <div class="summary-card sk cw-fade-item" style="--cw-i:5"><div class="cw-skeleton" style="width:28px;height:28px;border-radius:50%;margin-bottom:6px"></div><div class="cw-skeleton" style="height:26px;width:55%;margin-bottom:6px"></div><div class="cw-skeleton" style="height:12px;width:72%"></div></div>
+      <div class="summary-card sk cw-fade-item" style="--cw-i:6"><div class="cw-skeleton" style="width:28px;height:28px;border-radius:50%;margin-bottom:6px"></div><div class="cw-skeleton" style="height:26px;width:55%;margin-bottom:6px"></div><div class="cw-skeleton" style="height:12px;width:72%"></div></div>
     </div>
   </div>
 
   <!-- Daily Activity -->
   <div class="section">
     <h2>Daily Activity</h2>
-    <div id="activity-container"></div>
+    <div id="activity-container"><div class="cw-skeleton" style="height:180px;width:100%;border-radius:var(--cw-radius-sm)"></div></div>
   </div>
 
   <!-- Top Projects -->
@@ -237,14 +276,18 @@ export class AnalyticsPanel {
           <th class="num">Est. Tokens</th>
         </tr>
       </thead>
-      <tbody id="projects-tbody"></tbody>
+      <tbody id="projects-tbody">
+        <tr><td colspan="4"><div class="cw-skeleton" style="height:14px;width:80%;margin:6px 0"></div></td></tr>
+        <tr><td colspan="4"><div class="cw-skeleton" style="height:14px;width:65%;margin:6px 0"></div></td></tr>
+        <tr><td colspan="4"><div class="cw-skeleton" style="height:14px;width:72%;margin:6px 0"></div></td></tr>
+      </tbody>
     </table>
   </div>
 
   <!-- Top Terms -->
   <div class="section">
     <h2>Top Terms</h2>
-    <div id="terms-container"></div>
+    <div id="terms-container"><div class="cw-skeleton" style="height:140px;width:100%;border-radius:var(--cw-radius-sm)"></div></div>
   </div>
 
   <!-- Longest Sessions by Messages -->
@@ -260,7 +303,11 @@ export class AnalyticsPanel {
           <th class="num">Est. Tokens</th>
         </tr>
       </thead>
-      <tbody id="by-msg-tbody"></tbody>
+      <tbody id="by-msg-tbody">
+        <tr><td colspan="5"><div class="cw-skeleton" style="height:14px;width:75%;margin:6px 0"></div></td></tr>
+        <tr><td colspan="5"><div class="cw-skeleton" style="height:14px;width:60%;margin:6px 0"></div></td></tr>
+        <tr><td colspan="5"><div class="cw-skeleton" style="height:14px;width:68%;margin:6px 0"></div></td></tr>
+      </tbody>
     </table>
   </div>
 
@@ -277,11 +324,15 @@ export class AnalyticsPanel {
           <th class="num">Est. Tokens</th>
         </tr>
       </thead>
-      <tbody id="by-tok-tbody"></tbody>
+      <tbody id="by-tok-tbody">
+        <tr><td colspan="5"><div class="cw-skeleton" style="height:14px;width:80%;margin:6px 0"></div></td></tr>
+        <tr><td colspan="5"><div class="cw-skeleton" style="height:14px;width:55%;margin:6px 0"></div></td></tr>
+        <tr><td colspan="5"><div class="cw-skeleton" style="height:14px;width:70%;margin:6px 0"></div></td></tr>
+      </tbody>
     </table>
   </div>
 
-  <script>
+  <script nonce="${nonce}">
     ${cwInteractiveJs()}
 
     (function () {
@@ -317,19 +368,21 @@ export class AnalyticsPanel {
           : '';
 
         var cards = [
-          { label: 'Total Sessions',   value: data.totalSessions,   sub: '' },
-          { label: 'Total Prompts',    value: data.totalPrompts,     sub: '' },
-          { label: 'Total Responses',  value: data.totalResponses,   sub: '' },
-          { label: 'Est. Tokens',      value: data.totalTokens,      sub: '' },
-          { label: 'Copilot Sessions', value: data.copilotSessions,  sub: '' },
-          { label: 'Claude Sessions',  value: data.claudeSessions,   sub: '' },
-          { label: 'Time Span',        value: timeSpanValue,         sub: timeSpanSub, noAnim: true },
+          { label: 'Total Sessions',   value: data.totalSessions,   sub: '', icon: 'database' },
+          { label: 'Total Prompts',    value: data.totalPrompts,     sub: '', icon: 'comment' },
+          { label: 'Total Responses',  value: data.totalResponses,   sub: '', icon: 'reply' },
+          { label: 'Est. Tokens',      value: data.totalTokens,      sub: '', icon: 'pulse' },
+          { label: 'Copilot Sessions', value: data.copilotSessions,  sub: '', icon: 'cloud' },
+          { label: 'Claude Sessions',  value: data.claudeSessions,   sub: '', icon: 'sparkle' },
+          { label: 'Time Span',        value: timeSpanValue,         sub: timeSpanSub, noAnim: true, icon: 'history' },
         ];
 
         var html = cards.map(function(card, idx) {
           var valStr = typeof card.value === 'number' ? card.value.toLocaleString() : escHtml(String(card.value));
           var sub = card.sub ? '<div class="summary-sub">' + card.sub + '</div>' : '';
+          var icon = '<div class="stat-icon"><i class="codicon codicon-' + card.icon + '"></i></div>';
           return '<div class="summary-card cw-fade-item" style="--cw-i:' + idx + '">'
+            + icon
             + '<div class="summary-value">' + valStr + '</div>'
             + '<div class="summary-label">' + escHtml(card.label) + '</div>'
             + sub
@@ -567,6 +620,7 @@ export class AnalyticsPanel {
     /** @deprecated Use getShellHtml() + postMessage instead. Kept for backward compatibility. */
     static getHtml(data: AnalyticsData): string {
         const e = AnalyticsPanel._escapeHtml.bind(AnalyticsPanel);
+        const nonce = generateNonce();
 
         // Summary cards
         const timeSpanValue = data.timeSpanDays > 0
@@ -666,9 +720,9 @@ export class AnalyticsPanel {
 <html>
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'unsafe-inline';">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
-  <style>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}' https://cdn.jsdelivr.net; style-src 'nonce-${nonce}';">
+  <script src="${CHARTJS_URL}" integrity="${CHARTJS_SRI}" crossorigin="anonymous" nonce="${nonce}"></script>
+  <style nonce="${nonce}">
     ${cwThemeCss()}
     * { box-sizing: border-box; }
 
@@ -856,7 +910,7 @@ export class AnalyticsPanel {
     </table>
   </div>
 
-  <script>
+  <script nonce="${nonce}">
     ${cwInteractiveJs()}
     (function () {
       const hasActivity = ${hasActivity};

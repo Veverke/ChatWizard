@@ -4,6 +4,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { Session, Message, CodeBlock, ParseResult } from '../types/index';
 
+// SEC-7: Maximum size of a single JSONL line (characters) before it is skipped.
+const MAX_LINE_CHARS = 1_000_000; // 1 MB
+
 /**
  * Returns true if the entire text of a content part is a system-injected
  * XML context block (e.g. <ide_opened_file>…</ide_opened_file>).
@@ -103,6 +106,11 @@ export function parseClaudeSession(filePath: string): ParseResult {
     for (let i = 0; i < lines.length; i++) {
         const line = lines[i].trim();
         if (!line) { continue; }
+        // SEC-7: skip oversized lines to prevent memory/CPU exhaustion in JSON.parse
+        if (line.length > MAX_LINE_CHARS) {
+            errors.push(`Line ${i + 1}: skipped — length ${line.length} exceeds limit`);
+            continue;
+        }
         try {
             entries.push(JSON.parse(line) as RawEntry);
         } catch {

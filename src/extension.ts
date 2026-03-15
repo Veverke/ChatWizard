@@ -54,7 +54,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         vscode.window.registerWebviewViewProvider(AnalyticsViewProvider.viewType, analyticsViewProvider)
     );
 
-    const timelineViewProvider = new TimelineViewProvider(index);
+    const timelineViewProvider = new TimelineViewProvider(index, context.extensionUri);
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider(TimelineViewProvider.viewType, timelineViewProvider)
     );
@@ -91,8 +91,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     context.subscriptions.push(
         vscode.window.registerWebviewPanelSerializer('chatwizardAnalytics', {
             async deserializeWebviewPanel(webviewPanel: vscode.WebviewPanel) {
-                webviewPanel.webview.options = { enableScripts: true };
-                webviewPanel.webview.html = AnalyticsPanel.getShellHtml();
+                const codiconDistUri = vscode.Uri.joinPath(context.extensionUri, 'node_modules', '@vscode', 'codicons', 'dist');
+                webviewPanel.webview.options = { enableScripts: true, localResourceRoots: [codiconDistUri] };
+                const codiconCssUri = webviewPanel.webview.asWebviewUri(vscode.Uri.joinPath(codiconDistUri, 'codicon.css')).toString();
+                webviewPanel.webview.html = AnalyticsPanel.getShellHtml(codiconCssUri, webviewPanel.webview.cspSource);
                 webviewPanel.onDidDispose(() => { /* VS Code handles cleanup */ }, null, context.subscriptions);
                 webviewPanel.webview.onDidReceiveMessage((msg: { type: string }) => {
                     if (msg.type === 'ready') {

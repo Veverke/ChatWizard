@@ -7,8 +7,33 @@ function truncate(text: string, maxLen: number): string {
     return text.length <= maxLen ? text : text.slice(0, maxLen) + '…';
 }
 
-/** Serialize a single session to a Markdown string. */
-export function serializeSession(session: Session): string {
+// SEC-9: safe URL schemes in exported Markdown links
+const RE_SAFE_EXPORT_URL = /^https?:\/\/|^ftp:\/\/|^#|^\/[^/]|^\.\.?\//i;
+const RE_MD_LINK = /\[([^\]]*)\]\(([^)]+)\)/g;
+
+/**
+ * SEC-9: Strip Markdown link URLs that use an unsafe scheme.
+ * Replaces `[text](javascript:...)` with `[text]` to prevent XSS if the
+ * exported Markdown is rendered by a browser or Markdown preview.
+ * http(s), ftp, anchor (#), and relative paths are preserved unchanged.
+ */
+function sanitizeForExport(text: string): string {
+    return text.replace(RE_MD_LINK, (_match, linkText, url) => {
+        return RE_SAFE_EXPORT_URL.test(url.trim())
+            ? `[${linkText}](${url})`
+            : `[${linkText}]`;
+    });
+}
+
+// SEC-9: Export file preamble so renderers and users understand what the file is.
+const EXPORT_HEADER = '<!-- ChatWizard export — AI-generated content. ' +
+    'Render in a trusted environment only. -->\n\n';
+
+/** Serialize a single session to a Markdown string.
+ *
+ * @param sanitize When true (default), unsafe Markdown link URLs are stripped. SEC-9.
+ */
+export function serializeSession(session: Session, sanitize = true): string {
     const lines: string[] = [];
     lines.push(`# ${session.title || 'Untitled Session'}`);
     lines.push('');
@@ -20,20 +45,22 @@ export function serializeSession(session: Session): string {
     const visible = session.messages.filter(m => m.content.trim() !== '');
     let first = true;
     for (const msg of visible) {
+        // SEC-9: sanitize message content to strip unsafe Markdown links
+        const content = sanitize ? sanitizeForExport(msg.content) : msg.content;
         if (msg.role === 'user') {
-            const firstLine = msg.content.split('\n')[0].trim();
+            const firstLine = content.split('\n')[0].trim();
             const heading = truncate(firstLine || 'Prompt', 120);
             lines.push('---');
             lines.push('');
             if (first) { first = false; }
             lines.push(`## ${heading}`);
             lines.push('');
-            lines.push(msg.content);
+            lines.push(content);
             lines.push('');
         } else {
             lines.push('### Response');
             lines.push('');
-            lines.push(msg.content);
+            lines.push(content);
             lines.push('');
         }
     }
@@ -41,9 +68,14 @@ export function serializeSession(session: Session): string {
     return lines.join('\n');
 }
 
-/** Serialize multiple sessions to a single combined Markdown string with TOC. */
-export function serializeSessions(sessions: Session[], _mode: 'combined'): string {
+/** Serialize multiple sessions to a single combined Markdown string with TOC.
+ *
+ * @param sanitize When true (default), unsafe Markdown link URLs are stripped. SEC-9.
+ */
+export function serializeSessions(sessions: Session[], _mode: 'combined', sanitize = true): string {
     const parts: string[] = [];
+    // SEC-9: preamble warns renderers that content is AI-generated
+    parts.push(EXPORT_HEADER);
     parts.push('# ChatWizard Export');
     parts.push('');
     parts.push('## Table of Contents');
@@ -58,7 +90,7 @@ export function serializeSessions(sessions: Session[], _mode: 'combined'): strin
     parts.push('');
 
     for (const session of sessions) {
-        parts.push(serializeSession(session));
+        parts.push(serializeSession(session, sanitize));
     }
 
     return parts.join('\n');
