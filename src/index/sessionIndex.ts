@@ -46,10 +46,16 @@ export class SessionIndex {
     private sessions: Map<string, Session>;
     private _changeListeners: (() => void)[] = [];
     private _typedChangeListeners: ((event: SessionIndexEvent) => void)[] = [];
+    private _version = 0;
+    private _codeBlockCache: IndexedCodeBlock[] | null = null;
+    private _promptCache: Prompt[] | null = null;
 
     constructor() {
         this.sessions = new Map();
     }
+
+    /** Monotonically-increasing counter — incremented on every upsert, remove, or batchUpsert. */
+    get version(): number { return this._version; }
 
     addChangeListener(fn: () => void): { dispose: () => void } {
         this._changeListeners.push(fn);
@@ -69,9 +75,16 @@ export class SessionIndex {
         for (const fn of this._typedChangeListeners) { fn(event); }
     }
 
+    private _invalidateCaches(): void {
+        this._codeBlockCache = null;
+        this._promptCache = null;
+    }
+
     /** Add or replace a session by id. */
     upsert(session: Session): void {
         this.sessions.set(session.id, session);
+        this._version++;
+        this._invalidateCaches();
         this._notifyTyped({ type: 'upsert', session });
         this._notifyListeners();
     }
@@ -83,6 +96,8 @@ export class SessionIndex {
     remove(sessionId: string): boolean {
         const removed = this.sessions.delete(sessionId);
         if (removed) {
+            this._version++;
+            this._invalidateCaches();
             this._notifyTyped({ type: 'remove', sessionId });
             this._notifyListeners();
         }
@@ -96,6 +111,10 @@ export class SessionIndex {
     batchUpsert(sessions: Session[]): void {
         for (const session of sessions) {
             this.sessions.set(session.id, session);
+        }
+        if (sessions.length > 0) {
+            this._version++;
+            this._invalidateCaches();
         }
         this._notifyTyped({ type: 'batch', sessions });
         this._notifyListeners();
@@ -132,8 +151,10 @@ export class SessionIndex {
     /**
      * Extract all user-turn prompts across every session.
      * Order is: sessions in insertion order, messages in message order.
+     * Result is cached; invalidated on any mutation.
      */
     getAllPrompts(): Prompt[] {
+        if (this._promptCache !== null) { return this._promptCache; }
         const prompts: Prompt[] = [];
         for (const session of this.sessions.values()) {
             session.messages.forEach((message, messageIndex) => {
@@ -147,14 +168,17 @@ export class SessionIndex {
                 }
             });
         }
+        this._promptCache = prompts;
         return prompts;
     }
 
     /**
      * Extract all fenced code blocks across every session, with session metadata attached.
      * Order: sessions in insertion order, messages in message order, blocks in occurrence order.
+     * Result is cached; invalidated on any mutation.
      */
     getAllCodeBlocks(): IndexedCodeBlock[] {
+        if (this._codeBlockCache !== null) { return this._codeBlockCache; }
         const blocks: IndexedCodeBlock[] = [];
         for (const session of this.sessions.values()) {
             for (const message of session.messages) {
@@ -173,7 +197,20 @@ export class SessionIndex {
                 }
             }
         }
+        this._codeBlockCache = blocks;
         return blocks;
+    }
+
+    /** Number of indexed code blocks, without allocating a new array. */
+    getCodeBlockCount(): number {
+        if (this._codeBlockCache !== null) { return this._codeBlockCache.length; }
+        let count = 0;
+        for (const session of this.sessions.values()) {
+            for (const message of session.messages) {
+                count += message.codeBlocks.length;
+            }
+        }
+        return count;
     }
 
     /** Number of sessions currently held in the index. */

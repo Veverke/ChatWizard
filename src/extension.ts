@@ -5,6 +5,7 @@ import { ChatWizardWatcher, startWatcher } from './watcher/fileWatcher';
 import {
     SessionTreeProvider,
     SessionTreeItem,
+    LoadMoreTreeItem,
     SortMode,
     SortKey,
     SortCriterion,
@@ -38,48 +39,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     telemetry.setEnabled(telemetryCfg.get<boolean>('enableTelemetry') ?? false);
 
     const index = new SessionIndex();
-    watcher = await startWatcher(index, channel);
-    context.subscriptions.push(watcher);
 
-    const copilotCount = index.getSummariesBySource('copilot').length;
-    const claudeCount = index.getSummariesBySource('claude').length;
-    channel.appendLine(
-        `ChatWizard activated — ${index.size} sessions indexed (${copilotCount} Copilot, ${claudeCount} Claude)`
-    );
-
-    // Build full-text search index (initial pass — index already populated by watcher)
-    const engine = new FullTextSearchEngine();
-    for (const summary of index.getAllSummaries()) {
-        const session = index.get(summary.id);
-        if (session) { engine.index(session); }
-    }
-    // Incremental updates: only re-index the changed session instead of full rebuild
-    const searchIndexListener = index.addTypedChangeListener((event) => {
-        if (event.type === 'upsert') {
-            engine.index(event.session);
-        } else if (event.type === 'remove') {
-            engine.remove(event.sessionId);
-        } else if (event.type === 'batch') {
-            for (const session of event.sessions) { engine.index(session); }
-        }
-    });
-    context.subscriptions.push(searchIndexListener);
-
-    // Build code block index
-    const codeBlockEngine = new CodeBlockSearchEngine();
-    codeBlockEngine.index(index.getAllCodeBlocks());
-
-    // Create code blocks tree provider (before the listener so it can reference both)
-    const codeBlockProvider = new CodeBlockTreeProvider(index, codeBlockEngine);
-
-    const codeBlockListener = index.addChangeListener(() => {
-        codeBlockEngine.index(index.getAllCodeBlocks());
-        CodeBlocksPanel.refresh(index, codeBlockEngine);
-        codeBlockTreeView.description = codeBlockProvider.getDescription();
-    });
-    context.subscriptions.push(codeBlockListener);
-
-    // Sidebar view providers (Prompt Library and Analytics as WebviewView tabs)
+    // Register sidebar WebviewView providers BEFORE the slow file-indexing await so
+    // VS Code can call resolveWebviewView() immediately with fresh shell HTML instead
+    // of falling back to stale cached content (which can contain non-ASCII and break
+    // document.write() with a SyntaxError before the providers are even registered).
     const promptLibraryViewProvider = new PromptLibraryViewProvider(index);
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider(PromptLibraryViewProvider.viewType, promptLibraryViewProvider)
@@ -94,6 +58,95 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider(TimelineViewProvider.viewType, timelineViewProvider)
     );
+
+    // Build full-text search engine — populated lazily via the typed change listener.
+    // The batch event fired by batchUpsert() (inside startWatcher) will index all sessions.
+    const engine = new FullTextSearchEngine();
+    // Incremental updates: only re-index the changed session instead of full rebuild
+    const searchIndexListener = index.addTypedChangeListener((event) => {
+        if (event.type === 'upsert') {
+            engine.index(event.session);
+        } else if (event.type === 'remove') {
+            engine.remove(event.sessionId);
+        } else if (event.type === 'batch') {
+            for (const session of event.sessions) { engine.index(session); }
+            const stats = engine.indexStats();
+            channel.appendLine(
+                `[ChatWizard] Search index ready — ` +
+                `indexed tokens: ${stats.indexedTokenCount.toLocaleString()}, ` +
+                `hapax (single-session): ${stats.hapaxTokenCount.toLocaleString()}, ` +
+                `postings: ${stats.postingCount.toLocaleString()}, ` +
+                `~${stats.memoryEstimateKB} KB`
+            );
+        }
+    });
+    context.subscriptions.push(searchIndexListener);
+
+    // Build code block engine — populated by the codeBlockListener when batchUpsert fires.
+    const codeBlockEngine = new CodeBlockSearchEngine();
+
+    // Register WebviewPanel serializers so VS Code calls our code (with clean getShellHtml())
+    // instead of restoring stale cached panel HTML that may contain non-ASCII characters,
+    // which causes a SyntaxError in VS Code's document.write() on restart.
+    context.subscriptions.push(
+        vscode.window.registerWebviewPanelSerializer('chatwizardAnalytics', {
+            async deserializeWebviewPanel(webviewPanel: vscode.WebviewPanel) {
+                webviewPanel.webview.options = { enableScripts: true };
+                webviewPanel.webview.html = AnalyticsPanel.getShellHtml();
+                webviewPanel.onDidDispose(() => { /* VS Code handles cleanup */ }, null, context.subscriptions);
+                webviewPanel.webview.onDidReceiveMessage((msg: { type: string }) => {
+                    if (msg.type === 'ready') {
+                        void webviewPanel.webview.postMessage({ type: 'update', data: AnalyticsPanel.build(index) });
+                    }
+                }, undefined, context.subscriptions);
+                void webviewPanel.webview.postMessage({ type: 'update', data: AnalyticsPanel.build(index) });
+            }
+        })
+    );
+    context.subscriptions.push(
+        vscode.window.registerWebviewPanelSerializer('chatwizardCodeBlocks', {
+            async deserializeWebviewPanel(webviewPanel: vscode.WebviewPanel) {
+                webviewPanel.webview.options = { enableScripts: true };
+                webviewPanel.webview.html = CodeBlocksPanel.getShellHtml();
+                webviewPanel.onDidDispose(() => { /* VS Code handles cleanup */ }, null, context.subscriptions);
+                const blocks = index.getAllCodeBlocks();
+                webviewPanel.webview.onDidReceiveMessage((msg: { type?: string; command?: string; text?: string }) => {
+                    if (msg.command === 'copy') {
+                        void vscode.env.clipboard.writeText(msg.text ?? '');
+                    } else if (msg.type === 'ready') {
+                        void webviewPanel.webview.postMessage({ type: 'update', data: CodeBlocksPanel.buildPayload(blocks, codeBlockEngine) });
+                    }
+                }, undefined, context.subscriptions);
+                void webviewPanel.webview.postMessage({ type: 'update', data: CodeBlocksPanel.buildPayload(blocks, codeBlockEngine) });
+            }
+        })
+    );
+    context.subscriptions.push(
+        vscode.window.registerWebviewPanelSerializer('chatwizardPromptLibrary', {
+            async deserializeWebviewPanel(webviewPanel: vscode.WebviewPanel) {
+                webviewPanel.dispose();
+            }
+        })
+    );
+    context.subscriptions.push(
+        vscode.window.registerWebviewPanelSerializer('chatwizardSession3', {
+            async deserializeWebviewPanel(webviewPanel: vscode.WebviewPanel) {
+                // Session panels need the session data; dispose gracefully.
+                // The user can reopen from the Chat Sessions tree view.
+                webviewPanel.dispose();
+            }
+        })
+    );
+
+    // Create code blocks tree provider (before the listener so it can reference both)
+    const codeBlockProvider = new CodeBlockTreeProvider(index, codeBlockEngine);
+
+    const codeBlockListener = index.addChangeListener(() => {
+        codeBlockEngine.index(index.getAllCodeBlocks());
+        CodeBlocksPanel.refresh(index, codeBlockEngine);
+        codeBlockTreeView.description = codeBlockProvider.getDescription();
+    });
+    context.subscriptions.push(codeBlockListener);
 
     // Refresh Prompt Library panel (editor tab) and sidebar view when index changes
     const promptLibraryListener = index.addChangeListener(() => {
@@ -553,6 +606,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
 
     // ------------------------------------------------------------------
+    // Load more commands (pagination)
+    // ------------------------------------------------------------------
+    context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.loadMoreSessions', () => provider.loadMore())
+    );
+    context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.loadMoreCodeBlocks', () => codeBlockProvider.loadMore())
+    );
+
+    // ------------------------------------------------------------------
     // Other commands
     // ------------------------------------------------------------------
     context.subscriptions.push(
@@ -575,15 +638,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 return;
             }
 
-            // Reveal the session in the sessions tree view (best-effort)
-            const sessionTreeItems = provider.getChildren();
-            const sessionItem = sessionTreeItems.find(item => item.summary.id === ref.sessionId);
-            if (sessionItem) {
-                treeView.reveal(sessionItem, { select: true, focus: false });
-            }
-
-            // Open the session and scroll to / highlight code blocks
-            SessionWebviewPanel.show(context, session, undefined, true);
+            // Open the session and scroll to / highlight code blocks.
+            // Parent (group) click: just open, no scroll. Leaf click: scroll to specific block.
+            const isLeaf = ref.blocks.length === 1;
+            const targetMsgIdx = isLeaf ? ref.blocks[0].messageIndex : undefined;
+            const targetBlockContent = isLeaf ? ref.blocks[0].content.slice(0, 100).trim() : undefined;
+            SessionWebviewPanel.show(context, session, undefined, isLeaf, targetMsgIdx, targetBlockContent);
         })
     );
 
@@ -641,8 +701,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         })
     );
 
-    telemetry.record('extension.activated', { sessionCount: index.size });
-
     registerExportCommands(context, index, () => provider.getSortedSummaries());
 
     // Export sessions selected via Ctrl+Click in the tree view.
@@ -659,6 +717,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             }
         )
     );
+
+    // Yield for webview IPC round-trips, then start the file watcher in the background.
+    // activate() returns immediately so VS Code is never blocked — the tree view is already
+    // registered (empty) and will populate when batchUpsert() fires the change listeners.
+    await new Promise<void>(resolve => setTimeout(resolve, 200));
+    void startWatcher(index, channel).then(w => {
+        watcher = w;
+        context.subscriptions.push(w);
+        const copilotCount = index.getSummariesBySource('copilot').length;
+        const claudeCount = index.getSummariesBySource('claude').length;
+        channel.appendLine(
+            `ChatWizard activated — ${index.size} sessions indexed (${copilotCount} Copilot, ${claudeCount} Claude)`
+        );
+        telemetry.record('extension.activated', { sessionCount: index.size });
+    }).catch(err => channel.appendLine(`[error] Watcher init failed: ${err}`));
 }
 
 export function deactivate(): void {

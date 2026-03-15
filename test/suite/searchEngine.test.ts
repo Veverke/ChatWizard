@@ -50,59 +50,65 @@ function makeSession(
 
 suite('FullTextSearchEngine', () => {
 
-    // 1. Basic index + search: single session, one user message.
-    test('index and search plain text — single session returns one result', () => {
+    // 1. Basic index + search: tokens must appear in ≥ 2 sessions to reach the main index (S11).
+    test('index and search plain text — tokens in ≥2 sessions are searchable', () => {
         const engine = new FullTextSearchEngine();
-        const session = makeSession('s1', [
-            makeMessage('user', 'How do I implement a binary search tree?'),
-        ]);
+        const session    = makeSession('s1',   [makeMessage('user', 'How do I implement a binary search tree?')]);
+        const companion  = makeSession('s1-b', [makeMessage('user', 'binary search tree tutorial')]);
         engine.index(session);
+        engine.index(companion);
 
-        const results = engine.search({ text: 'binary search tree' });
+        const { results } = engine.search({ text: 'binary search tree' });
 
-        assert.strictEqual(results.length, 1);
-        assert.strictEqual(results[0].sessionId,    's1');
-        assert.strictEqual(results[0].messageIndex, 0);
-        assert.strictEqual(results[0].messageRole,  'user');
+        assert.ok(results.length >= 1);
+        const s1Result = results.find(r => r.sessionId === 's1');
+        assert.ok(s1Result, 's1 should be in results');
+        assert.strictEqual(s1Result!.messageIndex, 0);
+        assert.strictEqual(s1Result!.messageRole,  'user');
     });
 
     // 2. Multi-token query — all tokens must be present.
     test('multi-token query excludes messages missing any token', () => {
         const engine = new FullTextSearchEngine();
 
-        const sessionMatch = makeSession('s-match', [
-            makeMessage('user', 'quick brown fox jumps over the lazy dog'),
-        ]);
-        const sessionNoMatch = makeSession('s-no-match', [
-            makeMessage('user', 'quick brown fox without the last word'),
-        ]);
+        const sessionMatch   = makeSession('s-match',    [makeMessage('user', 'quick brown fox jumps over the lazy dog')]);
+        const sessionNoMatch = makeSession('s-no-match', [makeMessage('user', 'quick brown fox without the last word')]);
+        // Companion ensures 'lazy' and 'dog' reach MIN_DOC_FREQ (S11).
+        const companion      = makeSession('s-lazy-dog', [makeMessage('user', 'the lazy dog slept all day')]);
         engine.index(sessionMatch);
         engine.index(sessionNoMatch);
+        engine.index(companion);
 
-        // "lazy dog" — both tokens must appear.
-        const results = engine.search({ text: 'lazy dog' });
+        // "lazy dog" — both tokens must appear; s-no-match must be excluded.
+        const { results } = engine.search({ text: 'lazy dog' });
 
-        assert.strictEqual(results.length, 1);
-        assert.strictEqual(results[0].sessionId, 's-match');
+        assert.ok(results.length >= 1);
+        assert.ok(!results.some(r => r.sessionId === 's-no-match'), 's-no-match must not appear');
+        assert.ok(results.some(r => r.sessionId === 's-match'),     's-match must appear');
     });
 
     // 3. Role filter — searchPrompts:false skips user messages.
     test('searchPrompts:false excludes user messages', () => {
         const engine = new FullTextSearchEngine();
-        const session = makeSession('s-roles', [
+        const session    = makeSession('s-roles',    [
             makeMessage('user',      'hello world from the user'),
             makeMessage('assistant', 'hello world from the assistant'),
         ]);
+        // Companion ensures 'hello' and 'world' reach MIN_DOC_FREQ (S11).
+        const companion  = makeSession('s-roles-cmp', [makeMessage('user', 'hello world companion content')]);
         engine.index(session);
+        engine.index(companion);
 
-        const results = engine.search({
+        const { results } = engine.search({
             text:   'hello world',
             filter: { searchPrompts: false },
         });
 
         assert.ok(results.length >= 1, 'expected at least one result');
         for (const r of results) {
-            assert.strictEqual(r.messageRole, 'assistant');
+            if (r.sessionId === 's-roles') {
+                assert.strictEqual(r.messageRole, 'assistant');
+            }
         }
     });
 
@@ -110,15 +116,15 @@ suite('FullTextSearchEngine', () => {
     test('source filter excludes sessions from wrong source', () => {
         const engine = new FullTextSearchEngine();
         const copilotSession = makeSession('s-copilot', [
-            makeMessage('user', 'refactor this function please'),
+            makeMessage('user', 'please refactor function implementation'),
         ], { source: 'copilot' });
         const claudeSession = makeSession('s-claude', [
-            makeMessage('user', 'refactor this function please'),
+            makeMessage('user', 'please refactor function implementation'),
         ], { source: 'claude' });
         engine.index(copilotSession);
         engine.index(claudeSession);
 
-        const results = engine.search({
+        const { results } = engine.search({
             text:   'refactor function',
             filter: { source: 'claude' },
         });
@@ -141,7 +147,7 @@ suite('FullTextSearchEngine', () => {
         engine.index(wsA);
         engine.index(wsB);
 
-        const results = engine.search({
+        const { results } = engine.search({
             text:   'database query',
             filter: { workspaceId: 'workspace-A' },
         });
@@ -163,7 +169,7 @@ suite('FullTextSearchEngine', () => {
         engine.index(recent);
         engine.index(future);
 
-        const results = engine.search({
+        const { results } = engine.search({
             text:   'memory leak',
             filter: {
                 dateFrom: '2024-01-01T00:00:00.000Z',
@@ -185,57 +191,60 @@ suite('FullTextSearchEngine', () => {
         ]);
         engine.index(session);
 
-        const results = engine.search({ text: 'hello.*world', isRegex: true });
+        const { results } = engine.search({ text: 'hello.*world', isRegex: true });
 
         assert.strictEqual(results.length, 1);
         assert.strictEqual(results[0].sessionId,   's-regex');
         assert.strictEqual(results[0].messageRole, 'assistant');
     });
 
-    // 8. remove — searching after removal returns no results.
+    // 8. remove — searching after removal returns no results for that session.
     test('remove clears the session from search results', () => {
-        const engine = new FullTextSearchEngine();
-        const session = makeSession('s-remove', [
-            makeMessage('user', 'deploy the application to production'),
-        ]);
+        const engine    = new FullTextSearchEngine();
+        const session   = makeSession('s-remove',     [makeMessage('user', 'deploy application to production')]);
+        // Companion ensures tokens reach MIN_DOC_FREQ so the main index is exercised (S11).
+        const companion = makeSession('s-remove-cmp', [makeMessage('user', 'deploy application guide')]);
         engine.index(session);
+        engine.index(companion);
 
-        // Verify it's found before removal.
-        assert.strictEqual(engine.search({ text: 'deploy application' }).length, 1);
-        assert.strictEqual(engine.size, 1);
+        // Both sessions are found before removal.
+        assert.strictEqual(engine.search({ text: 'deploy application' }).results.length, 2);
+        assert.strictEqual(engine.size, 2);
 
         engine.remove('s-remove');
 
-        assert.strictEqual(engine.size, 0);
-        assert.strictEqual(engine.search({ text: 'deploy application' }).length, 0);
+        assert.strictEqual(engine.size, 1);
+        const { results } = engine.search({ text: 'deploy application' });
+        assert.ok(!results.some(r => r.sessionId === 's-remove'), 's-remove must be gone');
+        assert.strictEqual(results.length, 1, 'companion still matches');
     });
 
     // 9. index idempotency — indexing the same session twice does not duplicate results.
     test('indexing the same session twice yields no duplicate results', () => {
-        const engine = new FullTextSearchEngine();
-        const session = makeSession('s-idem', [
-            makeMessage('user', 'write unit tests for the parser'),
-        ]);
-
+        const engine    = new FullTextSearchEngine();
+        const session   = makeSession('s-idem',     [makeMessage('user', 'write unit tests parser functions')]);
+        // Companion ensures tokens reach MIN_DOC_FREQ (S11).
+        const companion = makeSession('s-idem-cmp', [makeMessage('user', 'unit tests parser guide')]);
         engine.index(session);
+        engine.index(companion);
         engine.index(session);  // second call — should overwrite, not append.
 
-        const results = engine.search({ text: 'unit tests parser' });
+        const { results } = engine.search({ text: 'unit tests parser' });
 
-        assert.strictEqual(results.length, 1, 'expected exactly one result, not duplicated');
-        assert.strictEqual(engine.size, 1);
+        assert.ok(results.length === 2, 'expected exactly 2 results (s-idem + companion), not duplicated');
+        assert.strictEqual(engine.size, 2);
     });
 
-    // 10. Empty query returns [].
-    test('empty query text returns empty array', () => {
+    // 10. Empty query returns empty response.
+    test('empty query text returns empty results', () => {
         const engine = new FullTextSearchEngine();
         const session = makeSession('s-empty', [
             makeMessage('user', 'some content that would normally match anything'),
         ]);
         engine.index(session);
 
-        const results = engine.search({ text: '' });
+        const response = engine.search({ text: '' });
 
-        assert.deepStrictEqual(results, []);
+        assert.deepStrictEqual(response, { results: [], totalCount: 0 });
     });
 });

@@ -77,6 +77,20 @@ export class SessionTreeItem extends vscode.TreeItem {
     }
 }
 
+export class LoadMoreTreeItem extends vscode.TreeItem {
+    readonly remaining: number;
+    constructor(remaining: number) {
+        super(`⋯ Load more (${remaining} remaining)`, vscode.TreeItemCollapsibleState.None);
+        this.remaining = remaining;
+        this.contextValue = 'loadMore';
+        this.command = {
+            command: 'chatwizard.loadMoreSessions',
+            title: 'Load More Sessions',
+            arguments: [],
+        };
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Sort types
 // ---------------------------------------------------------------------------
@@ -163,8 +177,8 @@ function compareBy(key: SortKey, a: SessionSummary, b: SessionSummary): number {
 // Provider
 // ---------------------------------------------------------------------------
 
-export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeItem> {
-    private _onDidChangeTreeData = new vscode.EventEmitter<SessionTreeItem | undefined | void>();
+export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeItem | LoadMoreTreeItem> {
+    private _onDidChangeTreeData = new vscode.EventEmitter<SessionTreeItem | LoadMoreTreeItem | undefined | void>();
     readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
     private sortStack: SortStack = [{ key: 'date', direction: 'desc' }];
@@ -173,9 +187,15 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeI
     private _pinnedIds: string[] = [];
     /** Full display order set by drag-and-drop; empty means use sort stack */
     private _manualOrder: string[] = [];
+    private _sortedCache: SessionSummary[] | null = null;
+    private _visibleCount = 200;
+    private _filterDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
     constructor(private readonly index: SessionIndex) {
-        index.addChangeListener(() => this.refresh());
+        index.addChangeListener(() => {
+            this._sortedCache = null;
+            this.refresh();
+        });
     }
 
     // ------------------------------------------------------------------
@@ -219,6 +239,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeI
         // Keep pinned IDs sorted to match the new order
         const pinnedSet = new Set(this._pinnedIds);
         this._pinnedIds = order.filter(id => pinnedSet.has(id));
+        this._sortedCache = null;
     }
 
     // ------------------------------------------------------------------
@@ -230,7 +251,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeI
     }
 
     setSortStack(stack: SortStack): void {
-        if (stack.length > 0) { this.sortStack = stack; this._manualOrder = []; }
+        if (stack.length > 0) { this.sortStack = stack; this._manualOrder = []; this.invalidateSortCache(); }
     }
 
     getSortStack(): SortStack {
@@ -238,6 +259,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeI
     }
 
     setSortMode(mode: SortMode): void {
+        this.invalidateSortCache();
         this._manualOrder = [];
         if (this.sortStack[0]?.key === mode) {
             const cur = this.sortStack[0].direction;
@@ -256,8 +278,16 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeI
     // Filters
     // ------------------------------------------------------------------
 
-    setFilter(filter: SessionFilter): void { this._filter = filter; }
-    clearFilter(): void { this._filter = {}; }
+    setFilter(filter: SessionFilter): void {
+        this._filter = filter;
+        this.invalidateSortCache();
+    }
+
+    clearFilter(): void {
+        this._filter = {};
+        this.invalidateSortCache();
+    }
+
     getFilter(): SessionFilter { return { ...this._filter }; }
 
     hasActiveFilter(): boolean {
@@ -305,14 +335,45 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeI
     }
 
     // ------------------------------------------------------------------
+    // Cache management
+    // ------------------------------------------------------------------
+
+    private invalidateSortCache(): void {
+        this._sortedCache = null;
+        this._visibleCount = 200;
+    }
+
+    loadMore(): void {
+        this._visibleCount += 200;
+        this._onDidChangeTreeData.fire();
+    }
+
+    setFilterDebounced(filter: SessionFilter): void {
+        this._filter = filter;
+        this.invalidateSortCache();
+        if (this._filterDebounceTimer) { clearTimeout(this._filterDebounceTimer); }
+        this._filterDebounceTimer = setTimeout(() => {
+            this._filterDebounceTimer = null;
+            this._onDidChangeTreeData.fire();
+        }, 150);
+    }
+
+    // ------------------------------------------------------------------
     // TreeDataProvider
     // ------------------------------------------------------------------
 
     refresh(): void { this._onDidChangeTreeData.fire(); }
 
-    getTreeItem(element: SessionTreeItem): vscode.TreeItem { return element; }
+    getTreeItem(element: SessionTreeItem | LoadMoreTreeItem): vscode.TreeItem { return element; }
+
+    // Required by VS Code for treeView.reveal() to work — all items are root-level, so no parent.
+    getParent(_element: SessionTreeItem | LoadMoreTreeItem): undefined { return undefined; }
 
     private _buildOrderedSummaries(): SessionSummary[] {
+        if (this._sortedCache !== null) {
+            return this._sortedCache;
+        }
+
         let summaries = this.index.getAllSummaries();
         if (this.hasActiveFilter()) {
             summaries = summaries.filter(s => this._matchesFilter(s));
@@ -327,7 +388,8 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeI
             // Append sessions that arrived after the last drag (not yet in manual order)
             const inManual = new Set(this._manualOrder);
             const extras = summaries.filter(s => !inManual.has(s.id));
-            return [...ordered, ...extras];
+            this._sortedCache = [...ordered, ...extras];
+            return this._sortedCache;
         }
 
         const pinnedSet = new Set(this._pinnedIds);
@@ -344,12 +406,20 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeI
             return 0;
         });
 
-        return [...pinned, ...unpinned];
+        this._sortedCache = [...pinned, ...unpinned];
+        return this._sortedCache;
     }
 
-    getChildren(): SessionTreeItem[] {
+    getChildren(): (SessionTreeItem | LoadMoreTreeItem)[] {
         const pinnedSet = new Set(this._pinnedIds);
-        return this._buildOrderedSummaries().map(s => new SessionTreeItem(s, pinnedSet.has(s.id)));
+        const all = this._buildOrderedSummaries();
+        const visible = all.slice(0, this._visibleCount);
+        const items: (SessionTreeItem | LoadMoreTreeItem)[] = visible.map(s => new SessionTreeItem(s, pinnedSet.has(s.id)));
+        const remaining = all.length - visible.length;
+        if (remaining > 0) {
+            items.push(new LoadMoreTreeItem(remaining));
+        }
+        return items;
     }
 
     /** Returns sessions in the same order as the tree view (sort, pins, filters applied). */

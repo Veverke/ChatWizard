@@ -45,3 +45,11 @@ export interface SearchResult {
     /** Relevance score; higher = more relevant */
     score: number;
 }
+
+/** Return value of FullTextSearchEngine.search() */
+export interface SearchResponse {
+    /** Sorted result set, capped at MAX_RESULTS (500) */
+    results: SearchResult[];
+    /** Total matches found before any cap was applied; equals results.length if no truncation */
+    totalCount: number;
+}

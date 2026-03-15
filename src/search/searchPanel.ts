@@ -4,7 +4,7 @@ import * as vscode from 'vscode';
 import { SessionIndex } from '../index/sessionIndex';
 import { SessionSummary, SessionSource } from '../types/index';
 import { FullTextSearchEngine } from './fullTextEngine';
-import { SearchResult, SearchFilter } from './types';
+import { SearchResult, SearchFilter, SearchResponse } from './types';
 
 interface SearchResultItem extends vscode.QuickPickItem {
     result: SearchResult;
@@ -116,16 +116,26 @@ export class SearchPanel {
             filter.searchPrompts = msgTypeFilter !== 'responses';
             filter.searchResponses = msgTypeFilter !== 'prompts';
 
-            let results: SearchResult[];
+            let response: SearchResponse;
             try {
-                results = engine.search({ text, isRegex, filter });
+                response = engine.search({ text, isRegex, filter });
             } catch {
                 quickPick.items = [];
                 return;
             }
 
             const items: SearchResultItem[] = [];
-            for (const result of results) {
+
+            if (response.totalCount > response.results.length) {
+                items.push({
+                    label: `$(info) Showing top ${response.results.length} of ${response.totalCount} results — refine your query`,
+                    result: undefined as unknown as SearchResult,
+                    summary: undefined as unknown as import('../types/index').SessionSummary,
+                    alwaysShow: true,
+                });
+            }
+
+            for (const result of response.results) {
                 const summary = summaryMap.get(result.sessionId);
                 if (!summary) { continue; }
 
@@ -178,7 +188,7 @@ export class SearchPanel {
 
         quickPick.onDidAccept(() => {
             const active = quickPick.activeItems[0];
-            if (active) {
+            if (active && active.result) {
                 const raw = quickPick.value;
                 const term = raw.startsWith('/') ? raw.slice(1) : raw;
                 vscode.commands.executeCommand('chatwizard.openSession', active.summary, term);

@@ -3,7 +3,7 @@
 import * as vscode from 'vscode';
 import { SessionIndex } from '../index/sessionIndex';
 import { buildPromptLibrary } from './promptExtractor';
-import { clusterPrompts } from './similarityEngine';
+import { clusterPromptsAsync } from './similarityEngine';
 import { PromptLibraryPanel } from './promptLibraryPanel';
 
 /**
@@ -13,6 +13,7 @@ export class PromptLibraryViewProvider implements vscode.WebviewViewProvider {
     static readonly viewType = 'chatwizardPromptLibrary';
 
     private _view?: vscode.WebviewView;
+    private _cacheVersion = 0;
 
     constructor(private readonly _index: SessionIndex) {}
 
@@ -24,30 +25,41 @@ export class PromptLibraryViewProvider implements vscode.WebviewViewProvider {
         this._view = webviewView;
 
         webviewView.webview.options = { enableScripts: true };
+        webviewView.webview.html = PromptLibraryPanel.getShellHtml();
 
         webviewView.onDidChangeVisibility(() => {
-            if (webviewView.visible) { this._update(); }
+            if (webviewView.visible) { void this._sendData(); }
         });
 
-        webviewView.webview.onDidReceiveMessage((message: { command: string; text: string }) => {
+        webviewView.webview.onDidReceiveMessage((message: { command?: string; type?: string; text?: string }) => {
             if (message.command === 'copy') {
-                void vscode.env.clipboard.writeText(message.text);
+                void vscode.env.clipboard.writeText(message.text ?? '');
                 void vscode.window.showInformationMessage('Prompt copied to clipboard.');
+            } else if (message.type === 'ready') {
+                void this._sendData();
             }
         });
 
-        this._update();
+        void this._sendData();
     }
 
     /** Re-render the view when the session index changes. No-op if the view is not visible. */
     refresh(): void {
-        if (this._view?.visible) { this._update(); }
+        if (this._view?.visible) {
+            this._cacheVersion++;
+            void this._sendData();
+        }
     }
 
-    private _update(): void {
+    private async _sendData(): Promise<void> {
         if (!this._view) { return; }
         const entries = buildPromptLibrary(this._index);
-        const clusters = clusterPrompts(entries);
-        this._view.webview.html = PromptLibraryPanel.getHtml(clusters);
+        const result = await clusterPromptsAsync(entries, 0.6, String(this._cacheVersion));
+        if (this._view) {
+            void this._view.webview.postMessage({
+                type: 'update',
+                data: { clusters: result.clusters, truncated: result.truncated },
+            });
+        }
     }
 }

@@ -11,6 +11,7 @@ export class AnalyticsViewProvider implements vscode.WebviewViewProvider {
     static readonly viewType = 'chatwizardAnalytics';
 
     private _view?: vscode.WebviewView;
+    private _refreshTimer: ReturnType<typeof setTimeout> | null = null;
 
     constructor(private readonly _index: SessionIndex) {}
 
@@ -23,24 +24,37 @@ export class AnalyticsViewProvider implements vscode.WebviewViewProvider {
 
         webviewView.webview.options = { enableScripts: true };
 
-        webviewView.onDidChangeVisibility(() => {
-            if (webviewView.visible) { this._update(); }
+        // Set shell HTML once — never reassigned
+        webviewView.webview.html = AnalyticsPanel.getShellHtml();
+
+        // When the webview signals ready, send the initial data
+        webviewView.webview.onDidReceiveMessage((msg: { type: string }) => {
+            if (msg.type === 'ready') { this._sendData(); }
         });
 
-        this._update();
+        webviewView.onDidChangeVisibility(() => {
+            if (webviewView.visible) { this._sendData(); }
+        });
     }
 
-    /** Re-render the view when the session index changes. No-op if the view is not visible. */
+    /** Re-render the view when the session index changes. Debounced 5 s. No-op if not visible. */
     refresh(): void {
-        if (this._view?.visible) { this._update(); }
+        if (!this._view?.visible) { return; }
+        if (this._refreshTimer) { clearTimeout(this._refreshTimer); }
+        this._refreshTimer = setTimeout(() => {
+            this._refreshTimer = null;
+            if (this._view?.visible) { this._sendData(); }
+        }, 5000);
     }
 
-    private _update(): void {
+    private _sendData(): void {
         if (!this._view) { return; }
-        this._view.webview.html = AnalyticsPanel.getLoadingHtml();
         setImmediate(() => {
             if (this._view?.visible) {
-                this._view.webview.html = AnalyticsPanel.getHtml(AnalyticsPanel.build(this._index));
+                void this._view.webview.postMessage({
+                    type: 'update',
+                    data: AnalyticsPanel.build(this._index),
+                });
             }
         });
     }

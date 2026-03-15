@@ -9,7 +9,7 @@
  */
 export function cwThemeCss(): string {
     return `
-/* ── CW Design Tokens ─────────────────────────────────────────── */
+/* -- CW Design Tokens ------------------------------------------- */
 :root {
   --cw-radius:    8px;
   --cw-radius-sm: 5px;
@@ -52,7 +52,7 @@ export function cwThemeCss(): string {
   --cw-sk-shine:       #ffffff;
 }
 
-/* ── Skeleton shimmer ─────────────────────────────────────────── */
+/* -- Skeleton shimmer ------------------------------------------- */
 @keyframes cw-shimmer {
   0%   { background-position: -400px 0; }
   100% { background-position:  400px 0; }
@@ -70,7 +70,7 @@ export function cwThemeCss(): string {
   border-radius: var(--cw-radius-xs);
 }
 
-/* ── Card ─────────────────────────────────────────────────────── */
+/* -- Card ------------------------------------------------------- */
 .cw-card {
   background:    var(--cw-surface-raised);
   border:        1px solid var(--cw-border);
@@ -88,7 +88,7 @@ export function cwThemeCss(): string {
   gap:           8px;
 }
 
-/* ── Button ───────────────────────────────────────────────────── */
+/* -- Button ----------------------------------------------------- */
 .cw-btn {
   font-size:     0.78em;
   padding:       2px 10px;
@@ -110,7 +110,7 @@ export function cwThemeCss(): string {
   border-color: var(--cw-accent);
 }
 
-/* ── Badges ───────────────────────────────────────────────────── */
+/* -- Badges ----------------------------------------------------- */
 .cw-badge-accent {
   display:       inline-block;
   font-size:     0.78em;
@@ -147,19 +147,19 @@ export function cwThemeCss(): string {
   white-space:   nowrap;
 }
 
-/* ── Toolbar ──────────────────────────────────────────────────── */
+/* -- Toolbar ---------------------------------------------------- */
 .cw-toolbar {
   background:    var(--cw-surface);
   border-bottom: 1px solid var(--cw-border);
 }
 
-/* ── Custom scrollbars ─────────────────────────────────────────── */
+/* -- Custom scrollbars ------------------------------------------- */
 ::-webkit-scrollbar             { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track       { background: transparent; }
 ::-webkit-scrollbar-thumb       { background: var(--cw-border-strong); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--cw-accent); }
 
-/* ── Staggered fade-in ─────────────────────────────────────────── */
+/* -- Staggered fade-in ------------------------------------------- */
 @keyframes cw-fade-up {
   from { opacity: 0; transform: translateY(8px); }
   to   { opacity: 1; transform: translateY(0); }
@@ -169,7 +169,7 @@ export function cwThemeCss(): string {
   animation-delay: calc(var(--cw-i, 0) * 35ms);
 }
 
-/* ── Toast notification ────────────────────────────────────────── */
+/* -- Toast notification ------------------------------------------ */
 .cw-toast {
   position:       fixed;
   bottom:         20px;
@@ -193,7 +193,7 @@ export function cwThemeCss(): string {
   transform: translateX(-50%) translateY(0);
 }
 
-/* ── Button ripple ─────────────────────────────────────────────── */
+/* -- Button ripple ----------------------------------------------- */
 .cw-ripple-wave {
   position:       absolute;
   border-radius:  50%;
@@ -206,7 +206,7 @@ export function cwThemeCss(): string {
   to { transform: scale(4); opacity: 0; }
 }
 
-/* ── Back-to-top FAB ───────────────────────────────────────────── */
+/* -- Back-to-top FAB --------------------------------------------- */
 .cw-back-top {
   position:       fixed;
   bottom:         20px;
@@ -242,7 +242,7 @@ export function cwThemeCss(): string {
  */
 export function syntaxHighlighterCss(): string {
     return `
-/* ── Syntax Highlight (fixed dark palette) ───────────────────── */
+/* -- Syntax Highlight (fixed dark palette) --------------------- */
 pre {
   background: #0d1117 !important;
   border-radius: var(--cw-radius-sm, 5px);
@@ -409,7 +409,7 @@ export function syntaxHighlighterJs(): string {
 export function cwInteractiveJs(): string {
     return `
 (function() {
-  // ── Ripple on buttons ──────────────────────────────────────────
+  // Ripple on buttons
   function spawnRipple(btn, e) {
     var s = getComputedStyle(btn).position;
     if (s === 'static') { btn.style.position = 'relative'; }
@@ -432,7 +432,7 @@ export function cwInteractiveJs(): string {
     if (btn) { spawnRipple(btn, e); }
   });
 
-  // ── Toast ──────────────────────────────────────────────────────
+  // Toast
   var _cwToast = null, _cwToastTimer = null;
   window.cwShowToast = function(msg) {
     if (!_cwToast) {
@@ -446,9 +446,9 @@ export function cwInteractiveJs(): string {
     _cwToastTimer = setTimeout(function() { _cwToast.classList.remove('show'); }, 1800);
   };
 
-  // ── Copy-button morph ──────────────────────────────────────────
+  // Copy-button morph
   window.cwMorphCopy = function(btn, origText) {
-    btn.textContent   = '✓ Copied';
+    btn.textContent   = '\\u2713 Copied';
     btn.style.background  = 'var(--cw-accent)';
     btn.style.color       = 'var(--cw-accent-text)';
     btn.style.borderColor = 'var(--cw-accent)';
