@@ -18,6 +18,9 @@ export class FullTextSearchEngine {
     /** token → Set of "sessionId:messageIndex" strings */
     private readonly invertedIndex = new Map<string, Set<string>>();
 
+    /** sessionId → Set of tokens indexed for that session (reverse map for O(1) removal) */
+    private readonly sessionTokens = new Map<string, Set<string>>();
+
     get size(): number {
         return this.sessions.size;
     }
@@ -29,6 +32,9 @@ export class FullTextSearchEngine {
         }
 
         this.sessions.set(session.id, session);
+
+        const tokenSet = new Set<string>();
+        this.sessionTokens.set(session.id, tokenSet);
 
         for (let msgIdx = 0; msgIdx < session.messages.length; msgIdx++) {
             const message = session.messages[msgIdx];
@@ -42,6 +48,7 @@ export class FullTextSearchEngine {
                     this.invertedIndex.set(token, postings);
                 }
                 postings.add(entry);
+                tokenSet.add(token);
             }
         }
     }
@@ -208,14 +215,26 @@ export class FullTextSearchEngine {
 
     private _removeFromInvertedIndex(sessionId: string): void {
         const prefix = `${sessionId}:`;
-        for (const [token, postings] of this.invertedIndex) {
-            for (const entry of postings) {
-                if (entry.startsWith(prefix)) {
-                    postings.delete(entry);
+        const tokens = this.sessionTokens.get(sessionId);
+        if (tokens !== undefined) {
+            // O(unique_tokens_in_session) — fast path using reverse map
+            for (const token of tokens) {
+                const postings = this.invertedIndex.get(token);
+                if (postings !== undefined) {
+                    for (const entry of postings) {
+                        if (entry.startsWith(prefix)) { postings.delete(entry); }
+                    }
+                    if (postings.size === 0) { this.invertedIndex.delete(token); }
                 }
             }
-            if (postings.size === 0) {
-                this.invertedIndex.delete(token);
+            this.sessionTokens.delete(sessionId);
+        } else {
+            // Fallback: O(total_tokens) scan — only hit if sessionTokens is out of sync
+            for (const [token, postings] of this.invertedIndex) {
+                for (const entry of postings) {
+                    if (entry.startsWith(prefix)) { postings.delete(entry); }
+                }
+                if (postings.size === 0) { this.invertedIndex.delete(token); }
             }
         }
     }

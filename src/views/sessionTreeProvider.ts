@@ -366,6 +366,9 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeI
 
     getTreeItem(element: SessionTreeItem | LoadMoreTreeItem): vscode.TreeItem { return element; }
 
+    // Required by VS Code for treeView.reveal() to work — all items are root-level, so no parent.
+    getParent(_element: SessionTreeItem | LoadMoreTreeItem): undefined { return undefined; }
+
     private _buildOrderedSummaries(): SessionSummary[] {
         if (this._sortedCache !== null) {
             return this._sortedCache;

@@ -39,6 +39,35 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     telemetry.setEnabled(telemetryCfg.get<boolean>('enableTelemetry') ?? false);
 
     const index = new SessionIndex();
+
+    // Register sidebar WebviewView providers BEFORE the slow file-indexing await so
+    // VS Code can call resolveWebviewView() immediately with fresh shell HTML instead
+    // of falling back to stale cached content (which can contain non-ASCII and break
+    // document.write() with a SyntaxError before the providers are even registered).
+    const promptLibraryViewProvider = new PromptLibraryViewProvider(index);
+    context.subscriptions.push(
+        vscode.window.registerWebviewViewProvider(PromptLibraryViewProvider.viewType, promptLibraryViewProvider)
+    );
+
+    const analyticsViewProvider = new AnalyticsViewProvider(index);
+    context.subscriptions.push(
+        vscode.window.registerWebviewViewProvider(AnalyticsViewProvider.viewType, analyticsViewProvider)
+    );
+
+    const timelineViewProvider = new TimelineViewProvider(index);
+    context.subscriptions.push(
+        vscode.window.registerWebviewViewProvider(TimelineViewProvider.viewType, timelineViewProvider)
+    );
+
+    // Yield the event loop long enough for VS Code to complete ALL resolveWebviewView()
+    // IPC round-trips (renderer -> ext host -> renderer) before buildInitialIndex() blocks
+    // with synchronous file I/O across 400+ JSONL session files.
+    // A single tick (setTimeout 0) is not enough: VS Code needs several ticks to process
+    // the provider-registration ACKs, decide which views are visible, send resolveWebviewView()
+    // back to the extension host, and receive the clean shell HTML in response.
+    // 200 ms is well within VS Code's activation timeout and covers slow machines.
+    await new Promise<void>(resolve => setTimeout(resolve, 200));
+
     watcher = await startWatcher(index, channel);
     context.subscriptions.push(watcher);
 
@@ -70,6 +99,59 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const codeBlockEngine = new CodeBlockSearchEngine();
     codeBlockEngine.index(index.getAllCodeBlocks());
 
+    // Register WebviewPanel serializers so VS Code calls our code (with clean getShellHtml())
+    // instead of restoring stale cached panel HTML that may contain non-ASCII characters,
+    // which causes a SyntaxError in VS Code's document.write() on restart.
+    context.subscriptions.push(
+        vscode.window.registerWebviewPanelSerializer('chatwizardAnalytics', {
+            async deserializeWebviewPanel(webviewPanel: vscode.WebviewPanel) {
+                webviewPanel.webview.options = { enableScripts: true };
+                webviewPanel.webview.html = AnalyticsPanel.getShellHtml();
+                webviewPanel.onDidDispose(() => { /* VS Code handles cleanup */ }, null, context.subscriptions);
+                webviewPanel.webview.onDidReceiveMessage((msg: { type: string }) => {
+                    if (msg.type === 'ready') {
+                        void webviewPanel.webview.postMessage({ type: 'update', data: AnalyticsPanel.build(index) });
+                    }
+                }, undefined, context.subscriptions);
+                void webviewPanel.webview.postMessage({ type: 'update', data: AnalyticsPanel.build(index) });
+            }
+        })
+    );
+    context.subscriptions.push(
+        vscode.window.registerWebviewPanelSerializer('chatwizardCodeBlocks', {
+            async deserializeWebviewPanel(webviewPanel: vscode.WebviewPanel) {
+                webviewPanel.webview.options = { enableScripts: true };
+                webviewPanel.webview.html = CodeBlocksPanel.getShellHtml();
+                webviewPanel.onDidDispose(() => { /* VS Code handles cleanup */ }, null, context.subscriptions);
+                const blocks = index.getAllCodeBlocks();
+                webviewPanel.webview.onDidReceiveMessage((msg: { type?: string; command?: string; text?: string }) => {
+                    if (msg.command === 'copy') {
+                        void vscode.env.clipboard.writeText(msg.text ?? '');
+                    } else if (msg.type === 'ready') {
+                        void webviewPanel.webview.postMessage({ type: 'update', data: CodeBlocksPanel.buildPayload(blocks, codeBlockEngine) });
+                    }
+                }, undefined, context.subscriptions);
+                void webviewPanel.webview.postMessage({ type: 'update', data: CodeBlocksPanel.buildPayload(blocks, codeBlockEngine) });
+            }
+        })
+    );
+    context.subscriptions.push(
+        vscode.window.registerWebviewPanelSerializer('chatwizardPromptLibrary', {
+            async deserializeWebviewPanel(webviewPanel: vscode.WebviewPanel) {
+                webviewPanel.dispose();
+            }
+        })
+    );
+    context.subscriptions.push(
+        vscode.window.registerWebviewPanelSerializer('chatwizardSession3', {
+            async deserializeWebviewPanel(webviewPanel: vscode.WebviewPanel) {
+                // Session panels need the session data; dispose gracefully.
+                // The user can reopen from the Chat Sessions tree view.
+                webviewPanel.dispose();
+            }
+        })
+    );
+
     // Create code blocks tree provider (before the listener so it can reference both)
     const codeBlockProvider = new CodeBlockTreeProvider(index, codeBlockEngine);
 
@@ -79,22 +161,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         codeBlockTreeView.description = codeBlockProvider.getDescription();
     });
     context.subscriptions.push(codeBlockListener);
-
-    // Sidebar view providers (Prompt Library and Analytics as WebviewView tabs)
-    const promptLibraryViewProvider = new PromptLibraryViewProvider(index);
-    context.subscriptions.push(
-        vscode.window.registerWebviewViewProvider(PromptLibraryViewProvider.viewType, promptLibraryViewProvider)
-    );
-
-    const analyticsViewProvider = new AnalyticsViewProvider(index);
-    context.subscriptions.push(
-        vscode.window.registerWebviewViewProvider(AnalyticsViewProvider.viewType, analyticsViewProvider)
-    );
-
-    const timelineViewProvider = new TimelineViewProvider(index);
-    context.subscriptions.push(
-        vscode.window.registerWebviewViewProvider(TimelineViewProvider.viewType, timelineViewProvider)
-    );
 
     // Refresh Prompt Library panel (editor tab) and sidebar view when index changes
     const promptLibraryListener = index.addChangeListener(() => {
@@ -596,9 +662,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             }
 
             // Open the session and scroll to / highlight code blocks.
-            // When exactly one block is in the ref (leaf item click), scroll to that specific block.
-            const targetMsgIdx = ref.blocks.length === 1 ? ref.blocks[0].messageIndex : undefined;
-            SessionWebviewPanel.show(context, session, undefined, true, targetMsgIdx);
+            // Parent (group) click: just open, no scroll. Leaf click: scroll to specific block.
+            const isLeaf = ref.blocks.length === 1;
+            const targetMsgIdx = isLeaf ? ref.blocks[0].messageIndex : undefined;
+            const targetBlockContent = isLeaf ? ref.blocks[0].content.slice(0, 100).trim() : undefined;
+            SessionWebviewPanel.show(context, session, undefined, isLeaf, targetMsgIdx, targetBlockContent);
         })
     );
 

@@ -132,7 +132,7 @@ This matters when a user archives sessions or the watcher detects deleted files.
 
 ---
 
-## S6 — Webview HTML Full Regeneration on Every Update ✦ HIGH ✅ COMPLETED
+## S6 — Webview HTML Full Regeneration on Every Update ✦ HIGH ✅ COMPLETED (implemented 2026-03-14)
 
 **Files:**
 - [src/analytics/analyticsPanel.ts](src/analytics/analyticsPanel.ts)
