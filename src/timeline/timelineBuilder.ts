@@ -50,14 +50,23 @@ function extractMessageText(content: unknown): string {
     return '';
 }
 
+export interface TimelineOptions {
+    /** Only include entries with timestamp strictly before this date. */
+    before?: Date;
+    /** Limit to at most this many distinct calendar months (YYYY-MM). */
+    monthCount?: number;
+}
+
 /**
  * Build a timeline of sessions sorted newest-first.
  *
  * - Sessions with 0 messages are skipped.
  * - Sessions whose updatedAt resolves to the epoch date ('1970-01-01') are skipped.
  * - Results are sorted by timestamp descending.
+ * - Optional `options.before` excludes entries >= that date.
+ * - Optional `options.monthCount` limits to N distinct calendar months.
  */
-export function buildTimeline(sessions: Session[]): TimelineEntry[] {
+export function buildTimeline(sessions: Session[], options?: TimelineOptions): TimelineEntry[] {
     const entries: TimelineEntry[] = [];
 
     for (const session of sessions) {
@@ -119,5 +128,25 @@ export function buildTimeline(sessions: Session[]): TimelineEntry[] {
     // Sort newest first
     entries.sort((a, b) => b.timestamp - a.timestamp);
 
-    return entries;
+    // Apply before filter
+    let result: TimelineEntry[] = entries;
+    if (options?.before !== undefined) {
+        const cutoff = options.before.getTime();
+        result = result.filter(e => e.timestamp < cutoff);
+    }
+
+    // Apply monthCount limit
+    if (options?.monthCount !== undefined) {
+        const seenMonths = new Set<string>();
+        const limited: TimelineEntry[] = [];
+        for (const entry of result) {
+            const ym = entry.date.slice(0, 7);
+            seenMonths.add(ym);
+            if (seenMonths.size > options.monthCount) { break; }
+            limited.push(entry);
+        }
+        result = limited;
+    }
+
+    return result;
 }

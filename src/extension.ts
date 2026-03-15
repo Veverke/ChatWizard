@@ -59,30 +59,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         vscode.window.registerWebviewViewProvider(TimelineViewProvider.viewType, timelineViewProvider)
     );
 
-    // Yield the event loop long enough for VS Code to complete ALL resolveWebviewView()
-    // IPC round-trips (renderer -> ext host -> renderer) before buildInitialIndex() blocks
-    // with synchronous file I/O across 400+ JSONL session files.
-    // A single tick (setTimeout 0) is not enough: VS Code needs several ticks to process
-    // the provider-registration ACKs, decide which views are visible, send resolveWebviewView()
-    // back to the extension host, and receive the clean shell HTML in response.
-    // 200 ms is well within VS Code's activation timeout and covers slow machines.
-    await new Promise<void>(resolve => setTimeout(resolve, 200));
-
-    watcher = await startWatcher(index, channel);
-    context.subscriptions.push(watcher);
-
-    const copilotCount = index.getSummariesBySource('copilot').length;
-    const claudeCount = index.getSummariesBySource('claude').length;
-    channel.appendLine(
-        `ChatWizard activated — ${index.size} sessions indexed (${copilotCount} Copilot, ${claudeCount} Claude)`
-    );
-
-    // Build full-text search index (initial pass — index already populated by watcher)
+    // Build full-text search engine — populated lazily via the typed change listener.
+    // The batch event fired by batchUpsert() (inside startWatcher) will index all sessions.
     const engine = new FullTextSearchEngine();
-    for (const summary of index.getAllSummaries()) {
-        const session = index.get(summary.id);
-        if (session) { engine.index(session); }
-    }
     // Incremental updates: only re-index the changed session instead of full rebuild
     const searchIndexListener = index.addTypedChangeListener((event) => {
         if (event.type === 'upsert') {
@@ -91,13 +70,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             engine.remove(event.sessionId);
         } else if (event.type === 'batch') {
             for (const session of event.sessions) { engine.index(session); }
+            const stats = engine.indexStats();
+            channel.appendLine(
+                `[ChatWizard] Search index ready — ` +
+                `indexed tokens: ${stats.indexedTokenCount.toLocaleString()}, ` +
+                `hapax (single-session): ${stats.hapaxTokenCount.toLocaleString()}, ` +
+                `postings: ${stats.postingCount.toLocaleString()}, ` +
+                `~${stats.memoryEstimateKB} KB`
+            );
         }
     });
     context.subscriptions.push(searchIndexListener);
 
-    // Build code block index
+    // Build code block engine — populated by the codeBlockListener when batchUpsert fires.
     const codeBlockEngine = new CodeBlockSearchEngine();
-    codeBlockEngine.index(index.getAllCodeBlocks());
 
     // Register WebviewPanel serializers so VS Code calls our code (with clean getShellHtml())
     // instead of restoring stale cached panel HTML that may contain non-ASCII characters,
@@ -652,15 +638,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 return;
             }
 
-            // Reveal the session in the sessions tree view (best-effort)
-            const sessionTreeItems = provider.getChildren();
-            const sessionItem = sessionTreeItems.find(
-                (item): item is SessionTreeItem => item instanceof SessionTreeItem && item.summary.id === ref.sessionId
-            );
-            if (sessionItem) {
-                treeView.reveal(sessionItem, { select: true, focus: false });
-            }
-
             // Open the session and scroll to / highlight code blocks.
             // Parent (group) click: just open, no scroll. Leaf click: scroll to specific block.
             const isLeaf = ref.blocks.length === 1;
@@ -724,8 +701,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         })
     );
 
-    telemetry.record('extension.activated', { sessionCount: index.size });
-
     registerExportCommands(context, index, () => provider.getSortedSummaries());
 
     // Export sessions selected via Ctrl+Click in the tree view.
@@ -742,6 +717,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             }
         )
     );
+
+    // Yield for webview IPC round-trips, then start the file watcher in the background.
+    // activate() returns immediately so VS Code is never blocked — the tree view is already
+    // registered (empty) and will populate when batchUpsert() fires the change listeners.
+    await new Promise<void>(resolve => setTimeout(resolve, 200));
+    void startWatcher(index, channel).then(w => {
+        watcher = w;
+        context.subscriptions.push(w);
+        const copilotCount = index.getSummariesBySource('copilot').length;
+        const claudeCount = index.getSummariesBySource('claude').length;
+        channel.appendLine(
+            `ChatWizard activated — ${index.size} sessions indexed (${copilotCount} Copilot, ${claudeCount} Claude)`
+        );
+        telemetry.record('extension.activated', { sessionCount: index.size });
+    }).catch(err => channel.appendLine(`[error] Watcher init failed: ${err}`));
 }
 
 export function deactivate(): void {

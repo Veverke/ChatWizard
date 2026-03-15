@@ -3,8 +3,8 @@
   "displayName": "ChatWizard",
   "description": "Unified search and analytics for AI chat history (GitHub Copilot Chat, Claude Code)",
   "version": "1.0.0",
-  "publisher": "avrei",
-  "license": "MIT",
+  "publisher": "Veverke",
+  "license": "MIT AND LicenseRef-CommonClause-1.0",
   "keywords": ["copilot", "claude", "ai", "chat", "history", "search", "analytics", "prompt-library", "code-blocks", "timeline"],
   "repository": {
     "type": "git",

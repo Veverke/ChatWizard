@@ -4,7 +4,12 @@ import * as fs from 'fs';
 import { SessionIndex } from '../index/sessionIndex';
 import { parseCopilotSession } from '../parsers/copilot';
 import { parseClaudeSession } from '../parsers/claude';
-import { discoverCopilotWorkspaces, listSessionFiles } from '../readers/copilotWorkspace';
+import {
+    discoverCopilotWorkspaces,
+    discoverCopilotWorkspacesAsync,
+    listSessionFiles,
+    listSessionFilesAsync,
+} from '../readers/copilotWorkspace';
 import { Session, SessionSource } from '../types/index';
 import { resolveClaudeProjectsPath } from './configPaths';
 
@@ -79,14 +84,111 @@ export class ChatWizardWatcher implements vscode.Disposable {
     }
 
     private async buildInitialIndex(): Promise<void> {
-        const claudeSessions = this.collectClaudeSessions();
-        const copilotSessions = this.collectCopilotSessions();
-        const all = [...claudeSessions, ...copilotSessions];
-        this.index.batchUpsert(all);
-        this.channel.appendLine(`[init] Batch indexed ${all.length} sessions`);
+        await vscode.window.withProgress(
+            {
+                location: vscode.ProgressLocation.Window,
+                title: 'ChatWizard: indexing sessions…',
+                cancellable: false,
+            },
+            async (progress) => {
+                const onProgress = (current: number, total: number) => {
+                    progress.report({ message: `${current}/${total}` });
+                };
+
+                const [claudeSessions, copilotSessions] = await Promise.all([
+                    this.collectClaudeSessionsAsync(onProgress),
+                    this.collectCopilotSessionsAsync(onProgress),
+                ]);
+
+                const all = [...claudeSessions, ...copilotSessions];
+                this.index.batchUpsert(all);
+                this.channel.appendLine(`[init] Batch indexed ${all.length} sessions`);
+            }
+        );
     }
 
-    /** Parse all Claude sessions and return them; does not modify the index. */
+    /** Async: parse all Claude sessions using non-blocking directory reads. */
+    async collectClaudeSessionsAsync(
+        onProgress?: (current: number, total: number) => void
+    ): Promise<Session[]> {
+        const claudeProjectsDir = resolveClaudeProjectsPath();
+        try {
+            let exists = false;
+            try { exists = (await fs.promises.stat(claudeProjectsDir)).isDirectory(); } catch { /* not found */ }
+            if (!exists) { return []; }
+
+            const projectDirEntries = await fs.promises.readdir(claudeProjectsDir, { withFileTypes: true });
+            const dirEntries = projectDirEntries.filter(d => d.isDirectory());
+
+            // Collect all file lists in parallel
+            const fileLists = await Promise.all(dirEntries.map(async (d) => {
+                const projectPath = path.join(claudeProjectsDir, d.name);
+                try {
+                    const files = await fs.promises.readdir(projectPath, { withFileTypes: true });
+                    return { projectPath, files: files.filter(f => f.isFile() && f.name.endsWith('.jsonl')) };
+                } catch {
+                    return { projectPath, files: [] };
+                }
+            }));
+
+            const total = fileLists.reduce((s, { files }) => s + files.length, 0);
+            let current = 0;
+
+            // Parse each directory's files in parallel across directories
+            const dirResults = await Promise.all(fileLists.map(async ({ projectPath, files }) => {
+                const dirSessions: Session[] = [];
+                for (const file of files) {
+                    const session = this.parseFile(path.join(projectPath, file.name), 'claude');
+                    if (session) { dirSessions.push(session); }
+                    current++;
+                    onProgress?.(current, total);
+                }
+                return dirSessions;
+            }));
+
+            return dirResults.flat();
+        } catch (err) {
+            this.channel.appendLine(`[error] Failed to collect Claude sessions: ${err}`);
+            return [];
+        }
+    }
+
+    /** Async: parse all Copilot sessions using non-blocking discovery + parallel workspace reads. */
+    async collectCopilotSessionsAsync(
+        onProgress?: (current: number, total: number) => void
+    ): Promise<Session[]> {
+        try {
+            const workspaces = await discoverCopilotWorkspacesAsync();
+
+            // Discover all session file paths across workspaces in parallel
+            const fileListsPerWorkspace = await Promise.all(
+                workspaces.map(ws => listSessionFilesAsync(ws.storageDir))
+            );
+
+            const total = fileListsPerWorkspace.reduce((s, files) => s + files.length, 0);
+            let current = 0;
+
+            // Parse each workspace's files in parallel
+            const wsResults = await Promise.all(workspaces.map(async (workspace, idx) => {
+                const files = fileListsPerWorkspace[idx];
+                const wsSessions: Session[] = [];
+                for (const filePath of files) {
+                    const session = this.parseFile(filePath, 'copilot', workspace.workspaceId, workspace.workspacePath);
+                    if (session) { wsSessions.push(session); }
+                    current++;
+                    onProgress?.(current, total);
+                }
+                return wsSessions;
+            }));
+
+            return wsResults.flat();
+        } catch (err) {
+            this.channel.appendLine(`[error] Failed to collect Copilot sessions: ${err}`);
+            return [];
+        }
+    }
+
+    /** Synchronous collectors kept for internal use by live-update code paths. */
     private collectClaudeSessions(): Session[] {
         const sessions: Session[] = [];
         const claudeProjectsDir = resolveClaudeProjectsPath();
@@ -123,7 +225,6 @@ export class ChatWizardWatcher implements vscode.Disposable {
         return sessions;
     }
 
-    /** Parse all Copilot sessions and return them; does not modify the index. */
     private collectCopilotSessions(): Session[] {
         const sessions: Session[] = [];
 

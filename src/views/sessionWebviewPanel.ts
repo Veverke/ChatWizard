@@ -1,9 +1,50 @@
 import * as vscode from 'vscode';
 import { Session } from '../types/index';
 import { cwThemeCss, syntaxHighlighterCss, cwInteractiveJs } from '../webview/cwTheme';
+import {
+    VisibleMessage,
+    renderChunk,
+    renderMessage,
+    escapeHtml,
+    markdownToHtml,
+} from './sessionRenderer';
+
+// ── Streaming constants ───────────────────────────────────────────────────────
+const INITIAL_WINDOW = 50;   // messages shown in initial render (normal sessions)
+const LARGE_THRESHOLD = 500; // sessions above this get a truncation banner
+const LARGE_INITIAL   = 200; // initial window for large sessions
+const CHUNK_SIZE      = 20;  // messages per setImmediate batch
+
+// ── Internal types ────────────────────────────────────────────────────────────
+interface ScrollInit {
+    targetMsgIdx:      number | null;
+    targetBlockContent: string | null;
+    highlightColor:    string | null;
+    shouldScroll:      boolean;
+}
+
+interface PanelMsgState {
+    session:          Session;
+    visibleMessages:  VisibleMessage[];
+    renderedMessages: (string | null)[]; // null = not yet rendered
+    windowStart:      number;            // first index currently in webview
+    windowEnd:        number;            // exclusive end currently in webview
+    isTruncated:      boolean;
+    streamVersion:    number;            // bumped to abort stale streams
+    assistantLabel:   string;
+    panel:            vscode.WebviewPanel;
+}
 
 export class SessionWebviewPanel {
     static readonly _panels = new Map<string, vscode.WebviewPanel>();
+
+    /** Cache: `sessionId::updatedAt` → rendered HTML per visible message (null = not yet rendered) */
+    static readonly _renderCache = new Map<string, (string | null)[]>();
+
+    /** Per-panel window / streaming state */
+    static readonly _panelState = new Map<string, PanelMsgState>();
+
+    // ── Public entry point ────────────────────────────────────────────────────
 
     static show(
         context: vscode.ExtensionContext,
@@ -22,35 +63,91 @@ export class SessionWebviewPanel {
             ? (config.get<boolean>('scrollToFirstCodeBlock', true) ?? false)
             : false;
 
-        const payload = SessionWebviewPanel._buildPayload(
-            session, userColor, searchTerm,
-            cbHighlightColor, cbScroll,
-            targetBlockMessageIndex, targetBlockContent
-        );
+        const assistantLabel = session.source === 'copilot' ? 'Copilot' : 'Claude';
 
-        // Re-use existing panel: just push new data
+        // Compute visible messages (non-empty content)
+        const visibleMessages: VisibleMessage[] = session.messages
+            .map((msg, origIdx) => ({ msg, origIdx }))
+            .filter(({ msg }) => msg.content.trim() !== '');
+
+        const total     = visibleMessages.length;
+        const isLarge   = total > LARGE_THRESHOLD;
+        const initialSz = isLarge ? LARGE_INITIAL : INITIAL_WINDOW;
+
+        // Default window = last N messages; adjust if targeting a specific message
+        let windowStart = Math.max(0, total - initialSz);
+        if (targetBlockMessageIndex !== undefined) {
+            const targetVisibleIdx = visibleMessages.findIndex(
+                vm => vm.origIdx === targetBlockMessageIndex
+            );
+            if (targetVisibleIdx >= 0 && targetVisibleIdx < windowStart) {
+                // Ensure target is visible with a few messages of context above it
+                windowStart = Math.max(0, targetVisibleIdx - 3);
+            }
+        }
+        const isTruncated = isLarge && windowStart > 0;
+
+        // Render cache keyed on sessionId + updatedAt
+        const cacheKey = `${session.id}::${session.updatedAt}`;
+        let renderedMessages = SessionWebviewPanel._renderCache.get(cacheKey);
+        if (!renderedMessages) {
+            renderedMessages = new Array<string | null>(total).fill(null);
+            SessionWebviewPanel._renderCache.set(cacheKey, renderedMessages);
+        }
+
+        const scrollInit: ScrollInit = {
+            targetMsgIdx:       targetBlockMessageIndex ?? null,
+            targetBlockContent: targetBlockContent ?? null,
+            highlightColor:     cbHighlightColor || null,
+            shouldScroll:       cbScroll,
+        };
+
+        // ── Re-use existing panel ─────────────────────────────────────────────
         const existing = SessionWebviewPanel._panels.get(session.id);
         if (existing) {
             existing.reveal(vscode.ViewColumn.One);
-            void existing.webview.postMessage(payload);
+            const prev = SessionWebviewPanel._panelState.get(session.id);
+            const newVersion = (prev?.streamVersion ?? 0) + 1;
+            SessionWebviewPanel._panelState.set(session.id, {
+                session, visibleMessages, renderedMessages,
+                windowStart, windowEnd: total,
+                isTruncated, streamVersion: newVersion,
+                assistantLabel, panel: existing,
+            });
+            void SessionWebviewPanel._startStream(
+                session.id, newVersion, userColor, searchTerm, scrollInit
+            );
             return;
         }
 
+        // ── Create new panel ──────────────────────────────────────────────────
         const panel = vscode.window.createWebviewPanel(
             'chatwizardSession3',
             session.title,
             vscode.ViewColumn.One,
             { enableScripts: true }
         );
-
-        // Set shell ONCE — no user content, so document.write() never sees session data
         panel.webview.html = SessionWebviewPanel._getShellHtml();
 
+        SessionWebviewPanel._panelState.set(session.id, {
+            session, visibleMessages, renderedMessages,
+            windowStart, windowEnd: total,
+            isTruncated, streamVersion: 0,
+            assistantLabel, panel,
+        });
+        SessionWebviewPanel._panels.set(session.id, panel);
+
         panel.webview.onDidReceiveMessage(
-            (msg: { type?: string; command?: string; text?: string }) => {
+            (msg: { type?: string; command?: string; text?: string; direction?: 'older' | 'newer' }) => {
                 if (msg.type === 'ready') {
-                    // Webview signalled it is ready — send session data
-                    void panel.webview.postMessage(payload);
+                    const st = SessionWebviewPanel._panelState.get(session.id);
+                    void SessionWebviewPanel._startStream(
+                        session.id, st?.streamVersion ?? 0, userColor, searchTerm, scrollInit
+                    );
+                } else if (msg.type === 'loadMoreMessages') {
+                    void SessionWebviewPanel._loadMoreMessages(session.id, msg.direction ?? 'older');
+                } else if (msg.type === 'loadAll') {
+                    void SessionWebviewPanel._loadAll(session.id, userColor);
                 } else if (msg.command === 'exportExcerpt') {
                     void vscode.commands.executeCommand('chatwizard.exportExcerpt', session.id);
                 } else if (msg.command === 'exportSelection' && msg.text) {
@@ -61,80 +158,206 @@ export class SessionWebviewPanel {
             context.subscriptions
         );
 
-        SessionWebviewPanel._panels.set(session.id, panel);
-        panel.onDidDispose(() => SessionWebviewPanel._panels.delete(session.id), null, []);
+        panel.onDidDispose(() => {
+            SessionWebviewPanel._panels.delete(session.id);
+            SessionWebviewPanel._panelState.delete(session.id);
+        }, null, []);
     }
 
-    // ── Payload builder ──────────────────────────────────────────────────────
+    // ── Streaming pipeline ────────────────────────────────────────────────────
 
-    private static _buildPayload(
-        session: Session,
-        userColor: string,
+    static async _startStream(
+        panelId:    string,
+        myVersion:  number,
+        userColor:  string,
         searchTerm: string | undefined,
-        cbHighlightColor: string,
-        cbScroll: boolean,
-        targetBlockMessageIndex: number | undefined,
-        targetBlockContent: string | undefined
-    ): {
-        type: 'render';
-        title: string;
-        userColor: string;
-        assistantLabel: string;
-        messagesHtml: string;
-        term: string | null;
-        scrollInit: {
-            targetMsgIdx: number | null;
-            targetBlockContent: string | null;
-            highlightColor: string | null;
-            shouldScroll: boolean;
-        };
-    } {
-        const title = session.title;
-        const assistantLabel = session.source === 'copilot' ? 'Copilot' : 'Claude';
+        scrollInit: ScrollInit
+    ): Promise<void> {
+        const state = SessionWebviewPanel._panelState.get(panelId);
+        if (!state || state.streamVersion !== myVersion) { return; }
 
-        const visibleMessages = session.messages
-            .map((msg, origIdx) => ({ msg, origIdx }))
-            .filter(({ msg }) => msg.content.trim() !== '');
+        const { visibleMessages, renderedMessages, windowStart, isTruncated, assistantLabel, panel, session } = state;
+        const total = visibleMessages.length;
 
-        const messagesHtml = visibleMessages.flatMap(({ msg, origIdx }, i) => {
-            const roleClass = msg.role === 'user' ? 'user' : 'assistant';
-            const label = msg.role === 'user' ? 'You' : assistantLabel;
-            const timestamp = msg.timestamp
-                ? `<span class="timestamp">${SessionWebviewPanel._escapeHtml(new Date(msg.timestamp).toLocaleString())}</span>`
-                : '';
-            const renderedContent = SessionWebviewPanel._markdownToHtml(msg.content);
-            const fadeStyle = i < 16 ? ` style="--cw-i:${i}"` : '';
-            const html = `<div class="message ${roleClass} cw-fade-item"${fadeStyle} data-msg-idx="${origIdx}">
-  <div class="message-header">
-    <span class="role-label">${label}</span>${timestamp}
-  </div>
-  <div class="message-body">${renderedContent}</div>
-</div>`;
-            const nextEntry = visibleMessages[i + 1];
-            if (msg.role === 'user' && (!nextEntry || nextEntry.msg.role === 'user')) {
-                const aborted = `<div class="message aborted">
-  <div class="message-header"><span class="role-label">${assistantLabel}</span></div>
-  <div class="message-body aborted-notice">&#9888; Response not available &mdash; cancelled or incomplete</div>
-</div>`;
-                return [html, aborted];
-            }
-            return [html];
-        }).join('\n');
+        // ── First chunk: rendered synchronously so first content appears immediately ──
+        const firstEnd = Math.min(windowStart + CHUNK_SIZE, total);
+        const firstHtml = SessionWebviewPanel._renderChunk(
+            visibleMessages, renderedMessages, windowStart, firstEnd, assistantLabel, true
+        );
+        state.windowStart = windowStart;
+        state.windowEnd   = firstEnd;
 
-        return {
+        void panel.webview.postMessage({
             type: 'render',
-            title,
+            title:        session.title,
             userColor,
-            assistantLabel,
-            messagesHtml,
-            term: searchTerm ?? null,
-            scrollInit: {
-                targetMsgIdx: targetBlockMessageIndex ?? null,
-                targetBlockContent: targetBlockContent ?? null,
-                highlightColor: cbHighlightColor || null,
-                shouldScroll: cbScroll,
-            },
-        };
+            term:         searchTerm ?? null,
+            scrollInit:   null, // scroll sent separately after all chunks via cwScroll
+            messagesHtml: firstHtml,
+            windowStart,
+            windowEnd:    firstEnd,
+            total,
+            hasOlder:     windowStart > 0,
+            hasNewer:     firstEnd < total,
+            isTruncated,
+        });
+
+        // ── Stream remaining initial window via setImmediate ──────────────────
+        let cursor = firstEnd;
+        while (cursor < total) {
+            await new Promise<void>(resolve => setImmediate(resolve));
+            if (SessionWebviewPanel._panelState.get(panelId)?.streamVersion !== myVersion) { return; }
+
+            const chunkEnd  = Math.min(cursor + CHUNK_SIZE, total);
+            const chunkHtml = SessionWebviewPanel._renderChunk(
+                visibleMessages, renderedMessages, cursor, chunkEnd, assistantLabel, false
+            );
+            state.windowEnd = chunkEnd;
+            void panel.webview.postMessage({
+                type:           'appendChunk',
+                messagesHtml:   chunkHtml,
+                position:       'end',
+                newWindowStart: state.windowStart,
+                newWindowEnd:   chunkEnd,
+                hasOlder:       state.windowStart > 0,
+                hasNewer:       false,
+            });
+            cursor = chunkEnd;
+        }
+
+        // ── Send scroll command after all initial chunks are posted ───────────
+        // cwScroll arrives in the webview AFTER all appendChunk messages, so
+        // the target element is guaranteed to be in the DOM at that point.
+        if (scrollInit.highlightColor || scrollInit.shouldScroll) {
+            if (SessionWebviewPanel._panelState.get(panelId)?.streamVersion === myVersion) {
+                void panel.webview.postMessage({ type: 'cwScroll', ...scrollInit });
+            }
+        }
+
+        // ── Background pre-render older messages for fast load-more ──────────
+        let bgCursor = windowStart - 1;
+        while (bgCursor >= 0) {
+            await new Promise<void>(resolve => setImmediate(resolve));
+            if (SessionWebviewPanel._panelState.get(panelId)?.streamVersion !== myVersion) { return; }
+
+            const bgStart = Math.max(0, bgCursor - CHUNK_SIZE + 1);
+            for (let i = bgStart; i <= bgCursor; i++) {
+                if (renderedMessages[i] === null) {
+                    renderedMessages[i] = renderMessage(
+                        visibleMessages[i].msg, visibleMessages[i].origIdx,
+                        i, visibleMessages, assistantLabel, undefined
+                    );
+                }
+            }
+            bgCursor = bgStart - 1;
+        }
+    }
+
+    static async _loadMoreMessages(panelId: string, direction: 'older' | 'newer'): Promise<void> {
+        const state = SessionWebviewPanel._panelState.get(panelId);
+        if (!state) { return; }
+
+        const { visibleMessages, renderedMessages, assistantLabel, panel } = state;
+        const total = visibleMessages.length;
+
+        if (direction === 'older' && state.windowStart > 0) {
+            const newStart  = Math.max(0, state.windowStart - CHUNK_SIZE);
+            const chunkHtml = SessionWebviewPanel._renderChunk(
+                visibleMessages, renderedMessages, newStart, state.windowStart, assistantLabel, false
+            );
+            state.windowStart = newStart;
+            void panel.webview.postMessage({
+                type:           'appendChunk',
+                messagesHtml:   chunkHtml,
+                position:       'start',
+                newWindowStart: newStart,
+                newWindowEnd:   state.windowEnd,
+                hasOlder:       newStart > 0,
+                hasNewer:       state.windowEnd < total,
+            });
+        } else if (direction === 'newer' && state.windowEnd < total) {
+            const newEnd    = Math.min(total, state.windowEnd + CHUNK_SIZE);
+            const chunkHtml = SessionWebviewPanel._renderChunk(
+                visibleMessages, renderedMessages, state.windowEnd, newEnd, assistantLabel, false
+            );
+            state.windowEnd = newEnd;
+            void panel.webview.postMessage({
+                type:           'appendChunk',
+                messagesHtml:   chunkHtml,
+                position:       'end',
+                newWindowStart: state.windowStart,
+                newWindowEnd:   newEnd,
+                hasOlder:       state.windowStart > 0,
+                hasNewer:       newEnd < total,
+            });
+        }
+    }
+
+    static async _loadAll(panelId: string, userColor: string): Promise<void> {
+        const state = SessionWebviewPanel._panelState.get(panelId);
+        if (!state) { return; }
+        const myVersion = ++state.streamVersion;
+
+        const { visibleMessages, renderedMessages, assistantLabel, panel, session } = state;
+        const total = visibleMessages.length;
+
+        let cursor = 0;
+        while (cursor < total) {
+            if (SessionWebviewPanel._panelState.get(panelId)?.streamVersion !== myVersion) { return; }
+
+            const chunkEnd  = Math.min(cursor + CHUNK_SIZE, total);
+            const chunkHtml = SessionWebviewPanel._renderChunk(
+                visibleMessages, renderedMessages, cursor, chunkEnd, assistantLabel, cursor === 0
+            );
+
+            if (cursor === 0) {
+                void panel.webview.postMessage({
+                    type:         'render',
+                    title:        session.title,
+                    userColor,
+                    term:         null,
+                    scrollInit:   null,
+                    messagesHtml: chunkHtml,
+                    windowStart:  0,
+                    windowEnd:    chunkEnd,
+                    total,
+                    hasOlder:     false,
+                    hasNewer:     chunkEnd < total,
+                    isTruncated:  false,
+                });
+            } else {
+                void panel.webview.postMessage({
+                    type:           'appendChunk',
+                    messagesHtml:   chunkHtml,
+                    position:       'end',
+                    newWindowStart: 0,
+                    newWindowEnd:   chunkEnd,
+                    hasOlder:       false,
+                    hasNewer:       chunkEnd < total,
+                });
+            }
+            state.windowStart = 0;
+            state.windowEnd   = chunkEnd;
+            cursor = chunkEnd;
+            await new Promise<void>(resolve => setImmediate(resolve));
+        }
+    }
+
+    // ── Render helpers (delegate to sessionRenderer.ts) ─────────────────────
+
+    static _renderChunk(
+        visibleMessages:  VisibleMessage[],
+        renderedMessages: (string | null)[],
+        start: number, end: number,
+        assistantLabel: string, withFade: boolean
+    ): string {
+        return renderChunk(visibleMessages, renderedMessages, start, end, assistantLabel, withFade);
+    }
+
+    static _renderMessage(
+        ...args: Parameters<typeof renderMessage>
+    ): string {
+        return renderMessage(...args);
     }
 
     // ── Shell HTML (set once, no user content) ───────────────────────────────
@@ -307,6 +530,45 @@ export class SessionWebviewPanel {
       background: var(--vscode-menu-selectionBackground, #094771);
       color: var(--vscode-menu-selectionForeground, #fff);
     }
+    #truncation-banner {
+      display: none;
+      background: var(--vscode-inputValidation-warningBackground, rgba(255,200,0,0.12));
+      border: 1px solid var(--vscode-inputValidation-warningBorder, rgba(255,200,0,0.4));
+      border-radius: var(--cw-radius-xs);
+      padding: 6px 14px;
+      margin-bottom: 12px;
+      font-size: 0.85em;
+      display: none;
+      align-items: center;
+      gap: 10px;
+    }
+    #truncation-banner button {
+      background: none;
+      border: 1px solid currentColor;
+      border-radius: var(--cw-radius-xs);
+      padding: 2px 8px;
+      cursor: pointer;
+      font-size: 0.9em;
+      white-space: nowrap;
+    }
+    #load-older-btn, #load-newer-btn {
+      display: none;
+      width: 100%;
+      margin: 6px 0;
+      background: var(--cw-surface-subtle);
+      color: inherit;
+      border: 1px solid var(--cw-border-strong);
+      padding: 5px 10px;
+      border-radius: var(--cw-radius-xs);
+      cursor: pointer;
+      font-size: 0.82em;
+      font-family: var(--vscode-font-family, sans-serif);
+    }
+    #load-older-btn:hover, #load-newer-btn:hover {
+      background: var(--cw-accent);
+      color: var(--cw-accent-text);
+      border-color: var(--cw-accent);
+    }
   </style>
 </head>
 <body>
@@ -320,7 +582,10 @@ export class SessionWebviewPanel {
       <button id="search-next" title="Next (Enter)">&#9660;</button>
     </div>
   </div>
+  <div id="truncation-banner"></div>
+  <button id="load-older-btn">&#8679; Load older messages</button>
   <div id="messages-container"></div>
+  <button id="load-newer-btn">&#8681; Load newer messages</button>
   <button class="cw-back-top" id="backToTop" title="Back to top">&#8593;</button>
   <div id="sel-ctx-menu">
     <div class="ctx-item" id="ctx-export-sel">Export selection as Markdown&#8230;</div>
@@ -330,19 +595,45 @@ ${cwInteractiveJs()}
 (function() {
   var vscode = acquireVsCodeApi();
 
-  // Back to top
+  // ── State ──────────────────────────────────────────────────────────────────
+  var _hasOlder    = false;
+  var _hasNewer    = false;
+  var _loadingMore = false;
+
+  // ── Back to top ────────────────────────────────────────────────────────────
   var backTopBtn = document.getElementById('backToTop');
   window.addEventListener('scroll', function() {
     backTopBtn.classList.toggle('visible', window.scrollY > 300);
+    if (!_loadingMore && _hasOlder && window.scrollY < 300) {
+      _loadingMore = true;
+      vscode.postMessage({ type: 'loadMoreMessages', direction: 'older' });
+    }
   });
   backTopBtn.addEventListener('click', function() { window.scrollTo({ top: 0, behavior: 'smooth' }); });
 
-  // Export excerpt
+  // ── Export excerpt ─────────────────────────────────────────────────────────
   document.getElementById('export-excerpt-btn').addEventListener('click', function() {
     vscode.postMessage({ command: 'exportExcerpt' });
   });
 
-  // Context menu
+  // ── Load older/newer buttons ───────────────────────────────────────────────
+  document.getElementById('load-older-btn').addEventListener('click', function() {
+    if (_loadingMore || !_hasOlder) { return; }
+    _loadingMore = true;
+    vscode.postMessage({ type: 'loadMoreMessages', direction: 'older' });
+  });
+  document.getElementById('load-newer-btn').addEventListener('click', function() {
+    if (_loadingMore || !_hasNewer) { return; }
+    _loadingMore = true;
+    vscode.postMessage({ type: 'loadMoreMessages', direction: 'newer' });
+  });
+
+  function updateLoadMoreButtons() {
+    document.getElementById('load-older-btn').style.display = _hasOlder ? 'block' : 'none';
+    document.getElementById('load-newer-btn').style.display = _hasNewer ? 'block' : 'none';
+  }
+
+  // ── Context menu ───────────────────────────────────────────────────────────
   var ctxMenu = document.getElementById('sel-ctx-menu');
   var savedSelText = '';
   function hideMenu() { ctxMenu.style.display = 'none'; }
@@ -368,7 +659,7 @@ ${cwInteractiveJs()}
     hideMenu();
   });
 
-  // Syntax highlighter (tokenize exposed via closure below)
+  // ── Syntax highlighter ─────────────────────────────────────────────────────
   var KEYWORDS = new Set([
     'abstract','as','async','await','break','case','catch','class','const',
     'continue','debugger','declare','default','delete','do','else','enum',
@@ -439,7 +730,7 @@ ${cwInteractiveJs()}
     });
   }
 
-  // Search
+  // ── Search ─────────────────────────────────────────────────────────────────
   var cwMarks = [], cwIdx = -1;
   var srchInput   = document.getElementById('search-input');
   var srchCounter = document.getElementById('search-counter');
@@ -500,15 +791,15 @@ ${cwInteractiveJs()}
     else if (e.key === 'Escape') { srchInput.value = ''; runSearch(''); }
   });
 
-  // Scroll to element, offsetting for sticky toolbar
+  // ── Scroll helpers ─────────────────────────────────────────────────────────
   var _toolbar = document.querySelector('.toolbar');
   function cwScrollTo(el) {
-    el.scrollIntoView({ block: 'start' });
     var toolbarH = _toolbar ? _toolbar.offsetHeight : 0;
-    if (toolbarH > 0) { window.scrollBy(0, -(toolbarH + 8)); }
+    var rect = el.getBoundingClientRect();
+    var targetY = window.scrollY + rect.top - toolbarH - 8;
+    window.scrollTo(0, Math.max(0, targetY));
   }
 
-  // Scroll to code block
   function cwDoScroll(p) {
     if (!p || (!p.highlightColor && !p.shouldScroll)) { return; }
     if (p.targetMsgIdx !== null && p.targetMsgIdx !== undefined) {
@@ -533,30 +824,87 @@ ${cwInteractiveJs()}
     if (p.shouldScroll && pres.length > 0) { cwScrollTo(pres[0]); }
   }
 
-  // Message handler: receives rendered session data
+  // ── DOM helpers for appending/prepending message chunks ───────────────────
+  var container = document.getElementById('messages-container');
+
+  function appendHtml(html) {
+    var tmp = document.createElement('div');
+    tmp.innerHTML = html;
+    while (tmp.firstChild) { container.appendChild(tmp.firstChild); }
+    highlightAll();
+  }
+
+  function prependHtml(html) {
+    var prevScrollY   = window.scrollY;
+    var prevHeight    = document.body.scrollHeight;
+    var tmp = document.createElement('div');
+    tmp.innerHTML = html;
+    // Insert children in reverse order so their DOM order is preserved
+    var kids = Array.from(tmp.childNodes).reverse();
+    kids.forEach(function(child) {
+      container.insertBefore(child, container.firstChild);
+    });
+    highlightAll();
+    // Compensate scroll so the viewport doesn't jump
+    var delta = document.body.scrollHeight - prevHeight;
+    if (delta > 0) { window.scrollTo(0, prevScrollY + delta); }
+  }
+
+  // ── Message handler ────────────────────────────────────────────────────────
   window.addEventListener('message', function(event) {
     var data = event.data;
+
     if (data.type === 'render') {
-      // Update title
       document.getElementById('session-title').textContent = data.title;
-      // Update user colour CSS variable
       document.documentElement.style.setProperty('--cw-user-color', data.userColor || '#007acc');
-      // Insert messages HTML
-      var container = document.getElementById('messages-container');
       container.innerHTML = data.messagesHtml;
-      // Syntax highlight new code blocks
       highlightAll();
-      // Initialise search
+
+      // Truncation banner
+      var banner = document.getElementById('truncation-banner');
+      if (data.isTruncated) {
+        var shown = data.total - data.windowStart;
+        banner.innerHTML =
+          'Showing last <strong>' + shown + '</strong> of <strong>' + data.total +
+          '</strong> messages. <button id="load-all-btn">Load all</button>';
+        banner.style.display = 'flex';
+        document.getElementById('load-all-btn').addEventListener('click', function() {
+          vscode.postMessage({ type: 'loadAll' });
+          banner.style.display = 'none';
+        });
+      } else {
+        banner.style.display = 'none';
+      }
+
+      _hasOlder    = !!data.hasOlder;
+      _hasNewer    = !!data.hasNewer;
+      _loadingMore = false;
+      updateLoadMoreButtons();
+
       clearMarks();
       if (data.term) { srchInput.value = data.term; runSearch(data.term); }
       else           { srchInput.value = ''; srchCounter.textContent = ''; }
-      // Scroll to code block if requested
-      if (data.scrollInit && (data.scrollInit.highlightColor || data.scrollInit.shouldScroll)) {
-        setTimeout(function() { cwDoScroll(data.scrollInit); }, 50);
-      }
+
     }
+
+    if (data.type === 'appendChunk') {
+      if (data.position === 'start') {
+        prependHtml(data.messagesHtml);
+      } else {
+        appendHtml(data.messagesHtml);
+      }
+      _hasOlder    = !!data.hasOlder;
+      _hasNewer    = !!data.hasNewer;
+      _loadingMore = false;
+      updateLoadMoreButtons();
+    }
+
     if (data.type === 'cwScroll') {
-      cwDoScroll(data);
+      // Double rAF: first frame lets the browser apply any pending layout from
+      // appended chunks, second frame ensures paint is complete before measuring.
+      requestAnimationFrame(function() {
+        requestAnimationFrame(function() { cwDoScroll(data); });
+      });
     }
   });
 
@@ -568,7 +916,7 @@ ${cwInteractiveJs()}
 </html>`;
     }
 
-    // ── Helpers ──────────────────────────────────────────────────────────────
+    // ── Helpers ───────────────────────────────────────────────────────────────
 
     private static async _saveSelection(text: string, sessionTitle: string): Promise<void> {
         const safe = sessionTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'session';
@@ -585,171 +933,4 @@ ${cwInteractiveJs()}
         await vscode.window.showTextDocument(uri);
     }
 
-    private static _escapeHtml(text: string): string {
-        return text
-            .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#39;')
-            .replace(/[^\x00-\x7F]/gu, c => `&#${c.codePointAt(0)};`);
-    }
-
-    private static _applyInline(text: string): string {
-        return text
-            .replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
-            .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-            .replace(/\*(.+?)\*/g, '<em>$1</em>')
-            .replace(/~~(.+?)~~/g, '<del>$1</del>')
-            .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
-    }
-
-    private static _markdownToHtml(markdown: string): string {
-        // Strip non-printable control characters (keep \t \n \r)
-        markdown = markdown.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
-        // Encode non-ASCII as HTML entities
-        markdown = markdown.replace(/[^\x00-\x7F]/gu, c => `&#${c.codePointAt(0)};`);
-
-        const codeBlocks: string[] = [];
-        let text = markdown.replace(/```([^\n`]*)\n([\s\S]*?)```/g, (_m, lang, code) => {
-            const esc = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-            const attr = lang.trim() ? ` class="language-${lang.trim()}"` : '';
-            codeBlocks.push(`<pre><code${attr}>${esc}</code></pre>`);
-            return `\x00CB${codeBlocks.length - 1}\x00`;
-        });
-
-        text = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
-        const inlineCodes: string[] = [];
-        text = text.replace(/`([^`]+)`/g, (_m, code) => {
-            inlineCodes.push(`<code>${code}</code>`);
-            return `\x00IC${inlineCodes.length - 1}\x00`;
-        });
-
-        const lines = text.split('\n');
-        const out: string[] = [];
-        let inUl = false, inOl = false, inTable = false;
-        let columnAligns: string[] = [];
-        let paragraphLines: string[] = [];
-
-        const closeList  = (): void => {
-            if (inUl) { out.push('</ul>'); inUl = false; }
-            if (inOl) { out.push('</ol>'); inOl = false; }
-        };
-        const closeTable = (): void => {
-            if (inTable) { out.push('</tbody></table></div>'); inTable = false; columnAligns = []; }
-        };
-        const alignAttr = (colIdx: number): string => {
-            const a = columnAligns[colIdx] ?? '';
-            return a ? ` style="text-align:${a}"` : '';
-        };
-        const flushParagraph = (): void => {
-            if (paragraphLines.length > 0) {
-                out.push(`<p>${paragraphLines.join('<br>')}</p>`);
-                paragraphLines = [];
-            }
-        };
-
-        for (let i = 0; i < lines.length; i++) {
-            const line = lines[i];
-
-            const cbMatch = line.trim().match(/^\x00CB(\d+)\x00$/);
-            if (cbMatch) { flushParagraph(); closeList(); closeTable(); out.push(codeBlocks[+cbMatch[1]]); continue; }
-
-            if (line.startsWith('    ') && !inUl && !inOl) {
-                flushParagraph(); closeList(); closeTable();
-                const indentedLines: string[] = [line.slice(4)];
-                while (i + 1 < lines.length && lines[i + 1].startsWith('    ')) {
-                    i++; indentedLines.push(lines[i].slice(4));
-                }
-                const esc = indentedLines.join('\n').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-                out.push(`<pre><code>${esc}</code></pre>`);
-                continue;
-            }
-
-            const hMatch = line.match(/^(#{1,6})\s+(.+)$/);
-            if (hMatch) {
-                flushParagraph(); closeList(); closeTable();
-                const lvl = hMatch[1].length;
-                out.push(`<h${lvl}>${SessionWebviewPanel._applyInline(hMatch[2])}</h${lvl}>`);
-                continue;
-            }
-
-            if (/^([-*_])\1\1+\s*$/.test(line)) { flushParagraph(); closeList(); closeTable(); out.push('<hr>'); continue; }
-
-            const bqMatch = line.match(/^&gt;\s?(.*)$/);
-            if (bqMatch) {
-                flushParagraph(); closeList(); closeTable();
-                out.push(`<blockquote><p>${SessionWebviewPanel._applyInline(bqMatch[1])}</p></blockquote>`);
-                continue;
-            }
-
-            if (line.trim().startsWith('|') && line.trim().endsWith('|')) {
-                const nextLine = lines[i + 1] ?? '';
-                const isSeparator = /^\|[\s|:-]+\|$/.test(nextLine.trim());
-                if (isSeparator && !inTable) {
-                    flushParagraph(); closeList();
-                    const headerCells = line.trim().slice(1, -1).split('|').map(c => c.trim());
-                    const sepCells    = nextLine.trim().slice(1, -1).split('|').map(c => c.trim());
-                    columnAligns = sepCells.map(c => {
-                        if (c.startsWith(':') && c.endsWith(':')) { return 'center'; }
-                        if (c.endsWith(':')) { return 'right'; }
-                        if (c.startsWith(':')) { return 'left'; }
-                        return '';
-                    });
-                    out.push('<div class="table-wrap"><table><thead><tr>');
-                    for (let ci = 0; ci < headerCells.length; ci++) {
-                        out.push(`<th${alignAttr(ci)}>${SessionWebviewPanel._applyInline(headerCells[ci])}</th>`);
-                    }
-                    out.push('</tr></thead><tbody>');
-                    inTable = true; i++; continue;
-                }
-                if (/^\|[\s|:-]+\|$/.test(line.trim())) { continue; }
-                if (inTable || (!isSeparator && /^\|/.test(line.trim()))) {
-                    if (!inTable) { flushParagraph(); closeList(); out.push('<div class="table-wrap"><table><tbody>'); inTable = true; }
-                    const cells = line.trim().slice(1, -1).split('|').map(c => c.trim());
-                    out.push('<tr>');
-                    for (let ci = 0; ci < cells.length; ci++) {
-                        out.push(`<td${alignAttr(ci)}>${SessionWebviewPanel._applyInline(cells[ci])}</td>`);
-                    }
-                    out.push('</tr>');
-                    continue;
-                }
-            } else if (inTable) {
-                closeTable();
-            }
-
-            const ulMatch = line.match(/^[-*+]\s+(.+)$/);
-            if (ulMatch) {
-                flushParagraph(); closeTable();
-                if (inOl) { out.push('</ol>'); inOl = false; }
-                if (!inUl) { out.push('<ul>'); inUl = true; }
-                out.push(`<li>${SessionWebviewPanel._applyInline(ulMatch[1])}</li>`);
-                continue;
-            }
-
-            const olMatch = line.match(/^\d+\.\s+(.+)$/);
-            if (olMatch) {
-                flushParagraph(); closeTable();
-                if (inUl) { out.push('</ul>'); inUl = false; }
-                if (!inOl) { out.push('<ol>'); inOl = true; }
-                out.push(`<li>${SessionWebviewPanel._applyInline(olMatch[1])}</li>`);
-                continue;
-            }
-
-            if (line.trim() === '') { flushParagraph(); closeList(); closeTable(); continue; }
-
-            closeList(); closeTable();
-            paragraphLines.push(SessionWebviewPanel._applyInline(line));
-        }
-        flushParagraph(); closeList(); closeTable();
-
-        let result = out.join('\n');
-        result = result.replace(/\x00IC(\d+)\x00/g, (_m, i) => inlineCodes[+i]);
-        result = result.replace(/\x00CB(\d+)\x00/g, (_m, i) => codeBlocks[+i]);
-        return result;
-    }
-
 }
-

@@ -191,7 +191,7 @@ This matters when a user archives sessions or the watcher detects deleted files.
 
 ---
 
-## S9 — Synchronous File Discovery at Activation ✦ MEDIUM ✅ COMPLETED
+## S9 — Synchronous File Discovery at Activation ✦ MEDIUM ✅ COMPLETED (implemented 2026-03-15)
 
 **File:** [src/watcher/fileWatcher.ts](src/watcher/fileWatcher.ts)
 
@@ -226,7 +226,7 @@ This matters when a user archives sessions or the watcher detects deleted files.
 
 ---
 
-## S11 — No Limit on Inverted Index Token Count ✦ MEDIUM ✅ COMPLETED
+## S11 — No Limit on Inverted Index Token Count ✦ MEDIUM ✅ COMPLETED (implemented 2026-03-15)
 
 **File:** [src/search/fullTextEngine.ts](src/search/fullTextEngine.ts)
 
@@ -244,7 +244,7 @@ This matters when a user archives sessions or the watcher detects deleted files.
 
 ---
 
-## S12 — Timeline View Loads All Entries for Rendering ✦ MEDIUM ✅ COMPLETED
+## S12 — Timeline View Loads All Entries for Rendering ✦ MEDIUM ✅ COMPLETED (implemented 2026-03-15)
 
 **File:** [src/timeline/timelineViewProvider.ts](src/timeline/timelineViewProvider.ts)
 

@@ -105,3 +105,68 @@ export function listSessionFiles(storageHashDir: string): string[] {
         return [];
     }
 }
+
+// ---------------------------------------------------------------------------
+// Async variants (S9 — non-blocking startup)
+// ---------------------------------------------------------------------------
+
+async function readWorkspaceJsonAsync(storageHashDir: string): Promise<string | undefined> {
+    try {
+        const workspaceJsonPath = path.join(storageHashDir, 'workspace.json');
+        const raw = await fs.promises.readFile(workspaceJsonPath, 'utf8');
+        const parsed = JSON.parse(raw);
+        const folder: string | undefined = parsed.folder;
+        if (!folder) { return undefined; }
+        let decoded = decodeURIComponent(folder.replace('file://', ''));
+        if (process.platform === 'win32' && decoded.startsWith('/')) {
+            decoded = decoded.slice(1);
+        }
+        return decoded;
+    } catch {
+        return undefined;
+    }
+}
+
+/**
+ * Async version of `discoverCopilotWorkspaces`. Uses `fs.promises` and
+ * `Promise.all` to scan all workspace hash directories concurrently.
+ */
+export async function discoverCopilotWorkspacesAsync(): Promise<CopilotWorkspaceInfo[]> {
+    try {
+        const root = getWorkspaceStorageRoot();
+        const entries = await fs.promises.readdir(root);
+
+        const results = await Promise.all(entries.map(async (entry) => {
+            const storageDir = path.join(root, entry);
+            const chatSessionsDir = path.join(storageDir, 'chatSessions');
+            try {
+                const stat = await fs.promises.stat(chatSessionsDir);
+                if (!stat.isDirectory()) { return null; }
+            } catch {
+                return null;
+            }
+            const workspacePath = await readWorkspaceJsonAsync(storageDir);
+            if (workspacePath === undefined) { return null; }
+            return { workspaceId: entry, workspacePath, storageDir } satisfies CopilotWorkspaceInfo;
+        }));
+
+        return results.filter((r): r is CopilotWorkspaceInfo => r !== null);
+    } catch {
+        return [];
+    }
+}
+
+/**
+ * Async version of `listSessionFiles`.
+ */
+export async function listSessionFilesAsync(storageHashDir: string): Promise<string[]> {
+    try {
+        const chatSessionsDir = path.join(storageHashDir, 'chatSessions');
+        const files = await fs.promises.readdir(chatSessionsDir);
+        return files
+            .filter(f => f.endsWith('.jsonl'))
+            .map(f => path.join(chatSessionsDir, f));
+    } catch {
+        return [];
+    }
+}

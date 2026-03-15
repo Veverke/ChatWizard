@@ -535,6 +535,18 @@ export class AnalyticsPanel {
         _firstRender = false;
       }
 
+      // Chart.js ResizeObserver doesn't reliably fire when a VS Code panel expands
+      // (the canvas itself sets the min-size, blocking the observer). Calling resize()
+      // explicitly on window.resize fixes the expand-direction blind spot.
+      var _resizeTimer = null;
+      window.addEventListener('resize', function() {
+        clearTimeout(_resizeTimer);
+        _resizeTimer = setTimeout(function() {
+          if (activityChart) { activityChart.resize(); }
+          if (termsChart) { termsChart.resize(); }
+        }, 50);
+      });
+
       var vscode = acquireVsCodeApi();
 
       window.addEventListener('message', function(event) {

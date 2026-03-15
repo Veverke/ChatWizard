@@ -71,34 +71,43 @@ suite('S5 — InvertedIndex O(session_tokens) Removal', () => {
         engine.index(target);
         engine.index(bystander);
 
-        assert.strictEqual(engine.search({ text: 'findme' }).length, 2);
+        assert.strictEqual(engine.search({ text: 'findme' }).results.length, 2);
 
         engine.remove('s-target');
 
-        const results = engine.search({ text: 'findme' });
+        const { results } = engine.search({ text: 'findme' });
         assert.strictEqual(results.length, 1);
         assert.strictEqual(results[0].sessionId, 's-bystander');
     });
 
     test('re-indexing a session after removal works correctly', () => {
         const engine = new FullTextSearchEngine();
-        const session = makeSession('s-reindex', ['alpha', 'bravo', 'charlie']);
+        // Companion session ensures 'alpha' reaches MIN_DOC_FREQ and is searchable (S11).
+        const companion = makeSession('s-companion-reindex', ['alpha', 'companion', 'extra']);
+        const session   = makeSession('s-reindex',           ['alpha', 'bravo', 'charlie']);
+        engine.index(companion);
         engine.index(session);
 
         engine.remove('s-reindex');
-        assert.strictEqual(engine.search({ text: 'alpha' }).length, 0);
+        // companion still holds 'alpha' in main index
+        assert.strictEqual(engine.search({ text: 'alpha' }).results.length, 1);
 
         engine.index(session);
-        assert.strictEqual(engine.search({ text: 'alpha' }).length, 1);
+        // Both companion and re-indexed session now match
+        assert.strictEqual(engine.search({ text: 'alpha' }).results.length, 2);
     });
 
     test('idempotent re-index clears old tokens via reverse map', () => {
         const engine = new FullTextSearchEngine();
 
+        // Companion ensures 'delta'/'golf' reach MIN_DOC_FREQ (S11).
+        const companion = makeSession('s-v1-companion', ['delta', 'echo', 'foxtrot', 'golf', 'hotel', 'india']);
+
         // Index with one set of tokens
         const v1 = makeSession('s-v1', ['delta', 'echo', 'foxtrot']);
+        engine.index(companion);
         engine.index(v1);
-        assert.strictEqual(engine.search({ text: 'delta' }).length, 1);
+        assert.strictEqual(engine.search({ text: 'delta' }).results.length, 2); // v1 + companion
 
         // Re-index same session ID with different tokens
         const v2: Session = {
@@ -107,10 +116,13 @@ suite('S5 — InvertedIndex O(session_tokens) Removal', () => {
         };
         engine.index(v2);
 
-        // Old tokens should be gone
-        assert.strictEqual(engine.search({ text: 'delta' }).length, 0);
-        // New tokens should be findable
-        assert.strictEqual(engine.search({ text: 'golf' }).length, 1);
+        // Old tokens should be gone from v1's postings (companion still has delta)
+        const deltaResults = engine.search({ text: 'delta' }).results;
+        assert.ok(!deltaResults.some(r => r.sessionId === 's-v1'), 'v1 no longer has delta');
+        assert.strictEqual(deltaResults.length, 1, 'only companion has delta');
+
+        // New tokens should be findable (v2 + companion both have 'golf')
+        assert.strictEqual(engine.search({ text: 'golf' }).results.length, 2);
     });
 
     test('removing a non-existent session is a no-op', () => {
