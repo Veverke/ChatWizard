@@ -3,6 +3,7 @@ import { IndexedCodeBlock } from '../types/index';
 import { SessionIndex } from '../index/sessionIndex';
 import { CodeBlockSearchEngine } from './codeBlockSearchEngine';
 import { cwThemeCss, syntaxHighlighterCss, cwInteractiveJs } from '../webview/cwTheme';
+import { generateNonce } from '../views/webviewUtils';
 
 interface CodeBlockPayloadItem {
     language: string;
@@ -103,12 +104,13 @@ export class CodeBlocksPanel {
     }
 
     static getShellHtml(): string {
+        const nonce = generateNonce();
         return `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline';">
-  <style>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}';">
+  <style nonce="${nonce}">
     ${cwThemeCss()}
     ${syntaxHighlighterCss()}
     * {
@@ -321,7 +323,7 @@ export class CodeBlocksPanel {
     <input id="searchInput" type="text" placeholder="Filter by content&#8230;" />
   </div>
   <div class="blocks-list" id="blocks-list"></div>
-  <script>
+  <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
 
     function escHtml(s) {
@@ -459,7 +461,7 @@ export class CodeBlocksPanel {
     // Signal ready
     vscode.postMessage({ type: 'ready' });
   </script>
-  <script>
+  <script nonce="${nonce}">
     // Expose tokenize globally so renderData can re-run after DOM rebuild
     (function() {
       var KEYWORDS = new Set([
@@ -504,7 +506,7 @@ export class CodeBlocksPanel {
       window._cwRunHighlighter();
     })();
   </script>
-  <script>${cwInteractiveJs()}</script>
+  <script nonce="${nonce}">${cwInteractiveJs()}</script>
 </body>
 </html>`;
     }

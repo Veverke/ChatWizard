@@ -8,6 +8,7 @@ import {
     escapeHtml,
     markdownToHtml,
 } from './sessionRenderer';
+import { generateNonce, validateColor } from './webviewUtils';
 
 // ── Streaming constants ───────────────────────────────────────────────────────
 const INITIAL_WINDOW = 50;   // messages shown in initial render (normal sessions)
@@ -55,9 +56,13 @@ export class SessionWebviewPanel {
         targetBlockContent?: string
     ): void {
         const config = vscode.workspace.getConfiguration('chatwizard');
-        const userColor = config.get<string>('userMessageColor', '#007acc') || '#007acc';
+        // SEC-4: validate color settings before use to prevent CSS injection
+        const userColor = validateColor(
+            config.get<string>('userMessageColor', '#007acc') || '#007acc',
+            '#007acc'
+        );
         const cbHighlightColor = scrollToCodeBlock
-            ? (config.get<string>('codeBlockHighlightColor', '#EA5C00') || '')
+            ? validateColor(config.get<string>('codeBlockHighlightColor', '#EA5C00') || '', '#EA5C00')
             : '';
         const cbScroll = scrollToCodeBlock
             ? (config.get<boolean>('scrollToFirstCodeBlock', true) ?? false)
@@ -363,12 +368,13 @@ export class SessionWebviewPanel {
     // ── Shell HTML (set once, no user content) ───────────────────────────────
 
     private static _getShellHtml(): string {
+        const nonce = generateNonce();
         return `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
-  <style>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
+  <style nonce="${nonce}">
     ${cwThemeCss()}
     ${syntaxHighlighterCss()}
     :root { --cw-user-color: #007acc; }
@@ -590,7 +596,7 @@ export class SessionWebviewPanel {
   <div id="sel-ctx-menu">
     <div class="ctx-item" id="ctx-export-sel">Export selection as Markdown&#8230;</div>
   </div>
-<script>
+<script nonce="${nonce}">
 ${cwInteractiveJs()}
 (function() {
   var vscode = acquireVsCodeApi();
