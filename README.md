@@ -235,7 +235,7 @@ Initial release. All nine development phases complete:
 
 ## Contributing
 
-Issues and pull requests are welcome at [https://github.com/avrei/chatwizard](https://github.com/avrei/chatwizard).
+Issues and pull requests are welcome at [https://github.com/veverke/chatwizard](https://github.com/veverke/chatwizard).
 
 ---
 

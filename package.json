@@ -8,7 +8,7 @@
   "keywords": ["copilot", "claude", "ai", "chat", "history", "search", "analytics", "prompt-library", "code-blocks", "timeline"],
   "repository": {
     "type": "git",
-    "url": "https://github.com/avrei/chatwizard.git"
+    "url": "https://github.com/veverke/chatwizard.git"
   },
   "engines": {
     "vscode": "^1.85.0"
