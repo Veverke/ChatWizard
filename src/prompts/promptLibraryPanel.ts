@@ -5,7 +5,6 @@ import { SessionIndex } from '../index/sessionIndex';
 import { cwThemeCss, cwInteractiveJs } from '../webview/cwTheme';
 import { buildPromptLibrary, PromptEntry } from './promptExtractor';
 import { clusterPrompts, PromptCluster, MAX_CLUSTER_ENTRIES } from './similarityEngine';
-import { generateNonce } from '../views/webviewUtils';
 
 export class PromptLibraryPanel {
     private static _panel: vscode.WebviewPanel | undefined;
@@ -28,7 +27,7 @@ export class PromptLibraryPanel {
             'chatwizardPromptLibrary',
             'Prompt Library',
             vscode.ViewColumn.One,
-            { enableScripts: true }
+            { enableScripts: true, retainContextWhenHidden: true }
         );
 
         PromptLibraryPanel._panel = panel;
@@ -38,15 +37,14 @@ export class PromptLibraryPanel {
             PromptLibraryPanel._panel = undefined;
         }, null, context.subscriptions);
 
-        panel.webview.onDidReceiveMessage((message: { type?: string; command?: string; text?: string; sessionId?: string; searchTerm?: string }) => {
+        panel.webview.onDidReceiveMessage((message: { type?: string; command?: string; text?: string }) => {
             if (message.command === 'copy') {
                 void vscode.env.clipboard.writeText(message.text ?? '');
                 void vscode.window.showInformationMessage('Prompt copied to clipboard.');
-            } else if (message.command === 'openSession') {
-                const session = index.get(message.sessionId ?? '');
-                if (session) {
-                    void vscode.commands.executeCommand('chatwizard.openSession', session, message.searchTerm);
-                }
+            } else if (message.command === 'openSettings') {
+                void vscode.commands.executeCommand('workbench.action.openSettings', 'chatwizard');
+            } else if (message.command === 'rescan') {
+                void vscode.commands.executeCommand('chatwizard.rescan');
             } else if (message.type === 'ready') {
                 void panel.webview.postMessage({
                     type: 'update',
@@ -76,13 +74,12 @@ export class PromptLibraryPanel {
     }
 
     static getShellHtml(): string {
-        const nonce = generateNonce();
         return `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}';">
-  <style nonce="${nonce}">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline';">
+  <style>
     ${cwThemeCss()}
     * { box-sizing: border-box; }
 
@@ -200,11 +197,6 @@ export class PromptLibraryPanel {
       white-space: pre-wrap;
       word-break: break-word;
       font-size: 0.95em;
-      cursor: pointer;
-    }
-
-    .prompt-text:hover {
-      background: var(--vscode-list-hoverBackground);
     }
 
     .variants-details {
@@ -250,12 +242,6 @@ export class PromptLibraryPanel {
       white-space: pre-wrap;
       word-break: break-word;
       opacity: 0.85;
-      cursor: pointer;
-    }
-
-    .variant-text:hover {
-      opacity: 1;
-      text-decoration: underline;
     }
 
     .variant-session {
@@ -290,6 +276,12 @@ export class PromptLibraryPanel {
       border-bottom: 1px solid var(--cw-border);
       text-align: center;
     }
+    :focus-visible { outline: 2px solid var(--vscode-focusBorder, #007fd4); outline-offset: 2px; }
+    .variants-summary:focus-visible { outline: 2px solid var(--vscode-focusBorder, #007fd4); outline-offset: 1px; }
+    .empty-state-guided { text-align: center; padding: 40px 20px; }
+    .empty-state-guided .empty-state-title { font-size: 1.05em; font-weight: 600; margin-bottom: 8px; }
+    .empty-state-guided .empty-state-body { opacity: 0.6; margin-bottom: 16px; font-size: 0.92em; }
+    .empty-state-guided .empty-state-actions { display: flex; gap: 8px; justify-content: center; }
   </style>
 </head>
 <body>
@@ -299,7 +291,7 @@ export class PromptLibraryPanel {
   </div>
   <div id="truncatedBanner"></div>
   <div class="prompts-list" id="promptsList"></div>
-  <script nonce="${nonce}">
+  <script>
     const vscode = acquireVsCodeApi();
 
     function escHtml(s) {
@@ -340,21 +332,22 @@ export class PromptLibraryPanel {
       if (window.cwMorphCopy) { window.cwMorphCopy(btn, btn.textContent); }
     });
 
-    // Open session via event delegation
-    document.addEventListener('click', function(e) {
-      const el = e.target && e.target.closest ? e.target.closest('[data-open-session]') : null;
-      if (!el || e.target.closest('.copy-btn')) { return; }
-      const sessionId = el.dataset.openSession;
-      const searchTerm = el.dataset.searchTerm || '';
-      if (sessionId) { vscode.postMessage({ command: 'openSession', sessionId: sessionId, searchTerm: searchTerm }); }
-    });
-
     function renderClusters(clusters) {
       const scrollTop = window.scrollY;
       const savedQuery = searchInput.value;
 
       if (clusters.length === 0) {
-        listEl.innerHTML = '<p class="empty-state">No prompts found across all sessions.</p>';
+        listEl.innerHTML = '<div class="empty-state-guided">'
+          + '<p class="empty-state-title">No prompts indexed yet.</p>'
+          + '<p class="empty-state-body">ChatWizard reads your Claude Code and GitHub Copilot chat history. Make sure the data paths are configured correctly.</p>'
+          + '<div class="empty-state-actions">'
+          + '<button class="copy-btn" id="btn-open-settings">Configure Paths</button>'
+          + '<button class="copy-btn" id="btn-rescan">Rescan</button>'
+          + '</div></div>';
+        var btnCfg = document.getElementById('btn-open-settings');
+        var btnScan = document.getElementById('btn-rescan');
+        if (btnCfg) { btnCfg.addEventListener('click', function() { vscode.postMessage({ command: 'openSettings' }); }); }
+        if (btnScan) { btnScan.addEventListener('click', function() { vscode.postMessage({ command: 'rescan' }); }); }
         countEl.textContent = '0 prompts';
         searchInput.value = savedQuery;
         return;
@@ -377,15 +370,10 @@ export class PromptLibraryPanel {
         const escapedText      = escHtml(canonical.text);
         const escapedTextLower = escHtml(canonical.text.toLowerCase());
 
-        const canonicalSessionId = (canonical.sessionMeta && canonical.sessionMeta.length > 0)
-          ? canonical.sessionMeta[0].sessionId : '';
-
         let variantsHtml = '';
         if (variants.length > 0) {
           const variantItems = variants.map(function(v) {
             const escapedV = escHtml(v.text);
-            const variantSessionId = (v.sessionMeta && v.sessionMeta.length > 0)
-              ? v.sessionMeta[0].sessionId : '';
             const sessionInfoParts = (v.sessionMeta || []).map(function(m) {
               const date = m.updatedAt ? m.updatedAt.substring(0, 10) : '';
               return escHtml(m.title + (date ? ' \\u00b7 ' + date : ''));
@@ -393,12 +381,9 @@ export class PromptLibraryPanel {
             const sessionInfoHtml = sessionInfoParts.length > 0
               ? '<span class="variant-session">' + sessionInfoParts.join(', ') + '</span>'
               : '';
-            const openAttr = variantSessionId
-              ? ' data-open-session="' + escHtml(variantSessionId) + '" data-search-term="' + escHtml(v.text) + '"'
-              : '';
             return '<li class="variant-item">'
               + '<div class="variant-body">'
-              + '<span class="variant-text"' + openAttr + '>' + escapedV + '</span>'
+              + '<span class="variant-text">' + escapedV + '</span>'
               + sessionInfoHtml
               + '</div>'
               + '<span class="variant-freq">' + v.frequency + '\\u00d7</span>'
@@ -411,10 +396,6 @@ export class PromptLibraryPanel {
             + '</details>';
         }
 
-        const promptOpenAttr = canonicalSessionId
-          ? ' data-open-session="' + escHtml(canonicalSessionId) + '" data-search-term="' + escapedText + '"'
-          : '';
-
         const fadeAttr = i < 15 ? ' style="--cw-i:' + i + '"' : '';
         cardsHtml +=
           '<div class="prompt-card cw-fade-item"' + fadeAttr + ' data-text="' + escapedTextLower + '">'
@@ -423,7 +404,7 @@ export class PromptLibraryPanel {
           + '\\n    <span class="stats-label">' + escHtml(statsLabel) + '</span>'
           + '\\n    <button class="copy-btn" data-text="' + escapedText + '" title="Copy prompt">Copy</button>'
           + '\\n  </div>'
-          + '\\n  <div class="prompt-text"' + promptOpenAttr + '>' + escapedText + '</div>'
+          + '\\n  <div class="prompt-text">' + escapedText + '</div>'
           + variantsHtml
           + '\\n</div>';
       });
@@ -454,7 +435,7 @@ export class PromptLibraryPanel {
     // Signal ready
     vscode.postMessage({ type: 'ready' });
   </script>
-  <script nonce="${nonce}">${cwInteractiveJs()}</script>
+  <script>${cwInteractiveJs()}</script>
 </body>
 </html>`;
     }
@@ -465,7 +446,6 @@ export class PromptLibraryPanel {
     }
 
     static getHtml(clusters: PromptCluster[], truncated = false): string {
-        const nonce = generateNonce();
         const totalEntries = clusters.reduce((sum, c) => sum + 1 + c.variants.length, 0);
 
         const cardsHtml = clusters.map((cluster, i) => {
@@ -519,8 +499,8 @@ export class PromptLibraryPanel {
 <html>
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}';">
-  <style nonce="${nonce}">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline';">
+  <style>
     ${cwThemeCss()}
     * { box-sizing: border-box; }
 
@@ -638,11 +618,6 @@ export class PromptLibraryPanel {
       white-space: pre-wrap;
       word-break: break-word;
       font-size: 0.95em;
-      cursor: pointer;
-    }
-
-    .prompt-text:hover {
-      background: var(--vscode-list-hoverBackground);
     }
 
     .variants-details {
@@ -688,12 +663,6 @@ export class PromptLibraryPanel {
       white-space: pre-wrap;
       word-break: break-word;
       opacity: 0.85;
-      cursor: pointer;
-    }
-
-    .variant-text:hover {
-      opacity: 1;
-      text-decoration: underline;
     }
 
     .variant-session {
@@ -738,7 +707,7 @@ export class PromptLibraryPanel {
             ? '<p class="empty-state">No prompts found across all sessions.</p>'
             : cardsHtml}
   </div>
-  <script nonce="${nonce}">
+  <script>
     const vscode = acquireVsCodeApi();
     const searchInput = document.getElementById('searchInput');
     const cards = document.querySelectorAll('.prompt-card');
@@ -767,7 +736,7 @@ export class PromptLibraryPanel {
       if (window.cwMorphCopy) { window.cwMorphCopy(btn, btn.textContent); }
     });
   </script>
-  <script nonce="${nonce}">${cwInteractiveJs()}</script>
+  <script>${cwInteractiveJs()}</script>
 </body>
 </html>`;
     }

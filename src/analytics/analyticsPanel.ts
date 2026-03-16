@@ -5,14 +5,6 @@ import { SessionIndex } from '../index/sessionIndex';
 import { computeAnalytics, AnalyticsData } from './analyticsEngine';
 import { countTokens } from './tokenCounter';
 import { cwThemeCss, cwInteractiveJs } from '../webview/cwTheme';
-import { generateNonce } from '../views/webviewUtils';
-
-// SEC-3: Chart.js pinned to 4.4.3 with SHA-384 Subresource Integrity hash.
-// To regenerate after an upgrade:
-//   curl -sL "https://cdn.jsdelivr.net/npm/chart.js@<VER>/dist/chart.umd.min.js" -o chart.js
-//   openssl dgst -sha384 -binary chart.js | openssl base64 -A
-const CHARTJS_URL = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js';
-const CHARTJS_SRI = 'sha384-JUh163oCRItcbPme8pYnROHQMC6fNKTBWtRG3I3I0erJkzNgL7uxKlNwcrcFKeqF';
 
 export class AnalyticsPanel {
     private static _panel: vscode.WebviewPanel | undefined;
@@ -28,10 +20,6 @@ export class AnalyticsPanel {
             return;
         }
 
-        const codiconDistUri = vscode.Uri.joinPath(
-            context.extensionUri, 'node_modules', '@vscode', 'codicons', 'dist'
-        );
-
         const panel = vscode.window.createWebviewPanel(
             'chatwizardAnalytics',
             'Chat Analytics',
@@ -39,18 +27,14 @@ export class AnalyticsPanel {
             {
                 enableScripts: true,
                 retainContextWhenHidden: true,
-                localResourceRoots: [codiconDistUri],
             }
         );
 
         AnalyticsPanel._panel = panel;
-        const codiconCssUri = panel.webview.asWebviewUri(
-            vscode.Uri.joinPath(codiconDistUri, 'codicon.css')
-        ).toString();
-        panel.webview.html = AnalyticsPanel.getShellHtml(codiconCssUri, panel.webview.cspSource);
+        panel.webview.html = AnalyticsPanel.getShellHtml();
 
         // Wait for webview to signal ready before sending data
-        panel.webview.onDidReceiveMessage((msg: { type: string }) => {
+        panel.webview.onDidReceiveMessage((msg: { type?: string; command?: string; sessionId?: string }) => {
             if (msg.type === 'ready' && AnalyticsPanel._panel) {
                 setImmediate(() => {
                     if (AnalyticsPanel._panel) {
@@ -60,6 +44,12 @@ export class AnalyticsPanel {
                         });
                     }
                 });
+            } else if (msg.command === 'openSession' && msg.sessionId) {
+                void vscode.commands.executeCommand('chatwizard.openSession', { id: msg.sessionId });
+            } else if (msg.command === 'openSettings') {
+                void vscode.commands.executeCommand('workbench.action.openSettings', 'chatwizard');
+            } else if (msg.command === 'rescan') {
+                void vscode.commands.executeCommand('chatwizard.rescan');
             }
         }, undefined, context.subscriptions);
 
@@ -79,7 +69,7 @@ export class AnalyticsPanel {
     static build(index: SessionIndex): AnalyticsData {
         const allSessions = index.getAllSummaries()
             .map(s => index.get(s.id)!)
-            .filter(s => s != null);
+            .filter(s => s !== null);
         return computeAnalytics(allSessions, countTokens);
     }
 
@@ -92,20 +82,14 @@ export class AnalyticsPanel {
             .replace(/'/g, '&#39;');
     }
 
-    static getShellHtml(codiconCssUri?: string, cspSource?: string): string {
-        const nonce = generateNonce();
-        const fontSrc   = cspSource ? ` font-src ${cspSource};` : '';
-        const codiconLk = codiconCssUri
-            ? `<link rel="stylesheet" href="${codiconCssUri}">`
-            : '';
+    static getShellHtml(): string {
         return `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}' https://cdn.jsdelivr.net; style-src 'nonce-${nonce}' ${cspSource ?? ''};${fontSrc}">
-  ${codiconLk}
-  <script src="${CHARTJS_URL}" integrity="${CHARTJS_SRI}" crossorigin="anonymous" nonce="${nonce}"></script>
-  <style nonce="${nonce}">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'unsafe-inline';">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+  <style>
     ${cwThemeCss()}
     * { box-sizing: border-box; }
 
@@ -217,6 +201,10 @@ export class AnalyticsPanel {
       background: var(--vscode-list-hoverBackground, rgba(255,255,255,0.04));
     }
 
+    .data-table tr[data-sid] {
+      cursor: pointer;
+    }
+
     .empty-state {
       text-align: center;
       opacity: 0.5;
@@ -224,25 +212,72 @@ export class AnalyticsPanel {
       padding: 20px 16px;
     }
 
-    /* -- Stat icon circle (codicon) -------------------------------- */
-    .stat-icon {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 28px;
-      height: 28px;
-      border-radius: 50%;
-      background: var(--cw-accent);
-      color: #fff;
-      margin: 0 auto 6px;
-      font-size: 13px;
+    .empty-state-guided {
+      text-align: center;
+      padding: 40px 20px;
     }
 
-    /* -- Skeleton card (overrides so sizing matches summary-card) -- */
-    .summary-card.sk > * { margin: 0 auto; display: block; }
+    .empty-state-guided .empty-state-title {
+      font-size: 1.05em;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+
+    .empty-state-guided .empty-state-body {
+      opacity: 0.6;
+      margin-bottom: 16px;
+      font-size: 0.92em;
+    }
+
+    .empty-state-guided .empty-state-actions {
+      display: flex;
+      gap: 8px;
+      justify-content: center;
+    }
+
+    .cw-action-btn {
+      font-size: 0.85em;
+      padding: 4px 14px;
+      border: 1px solid var(--cw-border-strong);
+      border-radius: var(--cw-radius-xs);
+      cursor: pointer;
+      background: var(--cw-surface-subtle);
+      color: inherit;
+      white-space: nowrap;
+      transition: background 0.12s, color 0.12s;
+    }
+
+    .cw-action-btn:hover {
+      background: var(--cw-accent);
+      color: var(--cw-accent-text);
+      border-color: var(--cw-accent);
+    }
+
+    .token-footnote {
+      font-size: 0.78em;
+      opacity: 0.5;
+      padding: 12px 20px;
+      margin: 0;
+    }
+
+    #freshness-bar {
+      padding: 5px 20px;
+      font-size: 0.78em;
+      opacity: 0.55;
+      border-bottom: 1px solid var(--cw-border);
+      display: none;
+    }
+
+    #loading-msg {
+      padding: 40px 20px;
+      text-align: center;
+      opacity: 0.6;
+    }
   </style>
 </head>
 <body>
+
+  <div id="freshness-bar"></div>
 
   <!-- Overview -->
   <div class="section">
@@ -273,7 +308,7 @@ export class AnalyticsPanel {
           <th>Workspace</th>
           <th class="num">Sessions</th>
           <th class="num">Prompts</th>
-          <th class="num">Est. Tokens</th>
+          <th class="num">Est. Tokens *</th>
         </tr>
       </thead>
       <tbody id="projects-tbody">
@@ -300,7 +335,7 @@ export class AnalyticsPanel {
           <th>Source</th>
           <th>Workspace</th>
           <th class="num">Messages</th>
-          <th class="num">Est. Tokens</th>
+          <th class="num">Est. Tokens *</th>
         </tr>
       </thead>
       <tbody id="by-msg-tbody">
@@ -321,7 +356,7 @@ export class AnalyticsPanel {
           <th>Source</th>
           <th>Workspace</th>
           <th class="num">Messages</th>
-          <th class="num">Est. Tokens</th>
+          <th class="num">Est. Tokens *</th>
         </tr>
       </thead>
       <tbody id="by-tok-tbody">
@@ -331,8 +366,9 @@ export class AnalyticsPanel {
       </tbody>
     </table>
   </div>
+  <p class="token-footnote">* Token counts are estimates (Claude: characters÷4, Copilot: words×1.3) and are not billing-accurate.</p>
 
-  <script nonce="${nonce}">
+  <script>
     ${cwInteractiveJs()}
 
     (function () {
@@ -360,6 +396,20 @@ export class AnalyticsPanel {
       }
 
       function renderSummary(data) {
+        if (data.totalSessions === 0) {
+          document.getElementById('summary-row').innerHTML =
+            '<div class="empty-state-guided">'
+            + '<p class="empty-state-title">No sessions indexed yet.</p>'
+            + '<p class="empty-state-body">ChatWizard reads your Claude Code and GitHub Copilot chat history. Make sure the data paths are configured correctly.</p>'
+            + '<div class="empty-state-actions">'
+            + '<button class="cw-action-btn" id="btn-cfg-paths">Configure Paths</button>'
+            + '<button class="cw-action-btn" id="btn-rescan">Rescan</button>'
+            + '</div></div>';
+          document.getElementById('btn-cfg-paths').addEventListener('click', function() { vscode.postMessage({ command: 'openSettings' }); });
+          document.getElementById('btn-rescan').addEventListener('click', function() { vscode.postMessage({ command: 'rescan' }); });
+          return;
+        }
+
         var timeSpanValue = data.timeSpanDays > 0
           ? data.timeSpanDays + ' day' + (data.timeSpanDays === 1 ? '' : 's')
           : '\\u2014';
@@ -368,21 +418,19 @@ export class AnalyticsPanel {
           : '';
 
         var cards = [
-          { label: 'Total Sessions',   value: data.totalSessions,   sub: '', icon: 'database' },
-          { label: 'Total Prompts',    value: data.totalPrompts,     sub: '', icon: 'comment' },
-          { label: 'Total Responses',  value: data.totalResponses,   sub: '', icon: 'reply' },
-          { label: 'Est. Tokens',      value: data.totalTokens,      sub: '', icon: 'pulse' },
-          { label: 'Copilot Sessions', value: data.copilotSessions,  sub: '', icon: 'cloud' },
-          { label: 'Claude Sessions',  value: data.claudeSessions,   sub: '', icon: 'sparkle' },
-          { label: 'Time Span',        value: timeSpanValue,         sub: timeSpanSub, noAnim: true, icon: 'history' },
+          { label: 'Total Sessions',   value: data.totalSessions,   sub: '' },
+          { label: 'Total Prompts',    value: data.totalPrompts,     sub: '' },
+          { label: 'Total Responses',  value: data.totalResponses,   sub: '' },
+          { label: 'Est. Tokens *',    value: data.totalTokens,      sub: '' },
+          { label: 'Copilot Sessions', value: data.copilotSessions,  sub: '' },
+          { label: 'Claude Sessions',  value: data.claudeSessions,   sub: '' },
+          { label: 'Time Span',        value: timeSpanValue,         sub: timeSpanSub, noAnim: true },
         ];
 
         var html = cards.map(function(card, idx) {
           var valStr = typeof card.value === 'number' ? card.value.toLocaleString() : escHtml(String(card.value));
           var sub = card.sub ? '<div class="summary-sub">' + card.sub + '</div>' : '';
-          var icon = '<div class="stat-icon"><i class="codicon codicon-' + card.icon + '"></i></div>';
           return '<div class="summary-card cw-fade-item" style="--cw-i:' + idx + '">'
-            + icon
             + '<div class="summary-value">' + valStr + '</div>'
             + '<div class="summary-label">' + escHtml(card.label) + '</div>'
             + sub
@@ -566,9 +614,12 @@ export class AnalyticsPanel {
             var ws = s.workspacePath
               ? (s.workspacePath.replace(/\\\\/g, '/').split('/').pop() || '')
               : '';
-            return '<tr>'
+            var srcBadge = s.sessionSource === 'copilot'
+              ? '<span class="cw-badge-copilot">Copilot</span>'
+              : '<span class="cw-badge-claude">Claude</span>';
+            return '<tr data-sid="' + escHtml(s.sessionId) + '" title="Click to open session">'
               + '<td title="' + escHtml(s.sessionId) + '">' + escHtml(s.sessionTitle) + '</td>'
-              + '<td>' + escHtml(s.sessionSource) + '</td>'
+              + '<td>' + srcBadge + '</td>'
               + '<td title="' + escHtml(s.workspacePath || '') + '">' + escHtml(ws) + '</td>'
               + '<td class="num">' + s.totalMessageCount.toLocaleString() + '</td>'
               + '<td class="num">' + s.totalTokens.toLocaleString() + '</td>'
@@ -586,6 +637,13 @@ export class AnalyticsPanel {
         renderSessionTable('by-msg-tbody', data.longestByMessages, 5);
         renderSessionTable('by-tok-tbody', data.longestByTokens, 5);
         _firstRender = false;
+
+        // Freshness bar
+        var fb = document.getElementById('freshness-bar');
+        if (fb && data.totalSessions > 0) {
+          fb.style.display = '';
+          fb.textContent = data.totalSessions.toLocaleString() + ' session' + (data.totalSessions === 1 ? '' : 's') + ' indexed \u00b7 Updated ' + new Date().toLocaleTimeString();
+        }
       }
 
       // Chart.js ResizeObserver doesn't reliably fire when a VS Code panel expands
@@ -602,6 +660,14 @@ export class AnalyticsPanel {
 
       var vscode = acquireVsCodeApi();
 
+      // Session row click-through
+      document.addEventListener('click', function(e) {
+        var row = e.target && e.target.closest ? e.target.closest('tr[data-sid]') : null;
+        if (row && row.dataset.sid) {
+          vscode.postMessage({ command: 'openSession', sessionId: row.dataset.sid });
+        }
+      });
+
       window.addEventListener('message', function(event) {
         var msg = event.data;
         if (msg && msg.type === 'update') {
@@ -617,411 +683,8 @@ export class AnalyticsPanel {
 </html>`;
     }
 
-    /** @deprecated Use getShellHtml() + postMessage instead. Kept for backward compatibility. */
-    static getHtml(data: AnalyticsData): string {
-        const e = AnalyticsPanel._escapeHtml.bind(AnalyticsPanel);
-        const nonce = generateNonce();
-
-        // Summary cards
-        const timeSpanValue = data.timeSpanDays > 0
-            ? `${data.timeSpanDays} day${data.timeSpanDays === 1 ? '' : 's'}`
-            : '&#8212;';
-        const timeSpanSub = (data.oldestDate && data.newestDate)
-            ? `(${data.oldestDate} &#8211; ${data.newestDate})`
-            : '';
-
-        const summaryCards = [
-            { label: 'Total Sessions',   value: data.totalSessions.toLocaleString(), sub: '' },
-            { label: 'Total Prompts',    value: data.totalPrompts.toLocaleString(),   sub: '' },
-            { label: 'Total Responses',  value: data.totalResponses.toLocaleString(), sub: '' },
-            { label: 'Est. Tokens',      value: data.totalTokens.toLocaleString(),    sub: '' },
-            { label: 'Copilot Sessions', value: data.copilotSessions.toLocaleString(), sub: '' },
-            { label: 'Claude Sessions',  value: data.claudeSessions.toLocaleString(),  sub: '' },
-            { label: 'Time Span',        value: timeSpanValue, sub: timeSpanSub },
-        ].map((card, idx) => `
-        <div class="summary-card cw-fade-item" style="--cw-i:${idx}">
-          <div class="summary-value">${e(card.value)}</div>
-          <div class="summary-label">${e(card.label)}</div>${card.sub ? `
-          <div class="summary-sub">${e(card.sub)}</div>` : ''}
-        </div>`).join('');
-
-        const hasActivity = data.dailyActivity.length > 0;
-        const dailyLabels  = JSON.stringify(data.dailyActivity.map(d => d.date));
-        const dailyTokens  = JSON.stringify(data.dailyActivity.map(d => d.tokenCount));
-        const dailyPrompts = JSON.stringify(data.dailyActivity.map(d => d.promptCount));
-
-        const activityChartHtml = hasActivity
-            ? `<div class="chart-container"><canvas id="activityChart"></canvas></div>`
-            : `<p class="empty-state">No activity data yet.</p>`;
-
-        const topProjects = [...data.projectActivity]
-            .sort((a, b) => b.tokenCount - a.tokenCount)
-            .slice(0, 10);
-
-        const projectRowsHtml = topProjects.length > 0
-            ? topProjects.map(p => {
-                const wsName = p.workspacePath
-                    ? (p.workspacePath.replace(/\\/g, '/').split('/').pop() ?? p.workspacePath)
-                    : '(unknown)';
-                return `<tr>
-              <td title="${e(p.workspacePath)}">${e(wsName)}</td>
-              <td class="num">${p.sessionCount.toLocaleString()}</td>
-              <td class="num">${p.promptCount.toLocaleString()}</td>
-              <td class="num">${p.tokenCount.toLocaleString()}</td>
-            </tr>`;
-            }).join('\n')
-            : `<tr><td colspan="4" class="empty-state">No project data.</td></tr>`;
-
-        const topTerms  = data.topTerms.slice(0, 20);
-        const hasTerms  = topTerms.length > 0;
-        const termLabels = JSON.stringify(topTerms.map(t => t.term));
-        const termCounts = JSON.stringify(topTerms.map(t => t.count));
-        const termsChartHeight = Math.max(180, topTerms.length * 24);
-
-        const termsChartHtml = hasTerms
-            ? `<div class="chart-container" style="height:${termsChartHeight}px"><canvas id="termsChart"></canvas></div>`
-            : `<p class="empty-state">No term data yet.</p>`;
-
-        const byMsgRows = data.longestByMessages.slice(0, 10).map(s => {
-            const ws = s.workspacePath
-                ? (s.workspacePath.replace(/\\/g, '/').split('/').pop() ?? s.workspacePath)
-                : '';
-            return `<tr>
-            <td title="${e(s.sessionId)}">${e(s.sessionTitle)}</td>
-            <td>${e(s.sessionSource)}</td>
-            <td title="${e(s.workspacePath ?? '')}">${e(ws)}</td>
-            <td class="num">${s.totalMessageCount.toLocaleString()}</td>
-            <td class="num">${s.totalTokens.toLocaleString()}</td>
-          </tr>`;
-        }).join('\n');
-
-        const byMsgContent = byMsgRows.length > 0
-            ? byMsgRows
-            : `<tr><td colspan="5" class="empty-state">No sessions.</td></tr>`;
-
-        const byTokRows = data.longestByTokens.slice(0, 10).map(s => {
-            const ws = s.workspacePath
-                ? (s.workspacePath.replace(/\\/g, '/').split('/').pop() ?? s.workspacePath)
-                : '';
-            return `<tr>
-            <td title="${e(s.sessionId)}">${e(s.sessionTitle)}</td>
-            <td>${e(s.sessionSource)}</td>
-            <td title="${e(s.workspacePath ?? '')}">${e(ws)}</td>
-            <td class="num">${s.totalMessageCount.toLocaleString()}</td>
-            <td class="num">${s.totalTokens.toLocaleString()}</td>
-          </tr>`;
-        }).join('\n');
-
-        const byTokContent = byTokRows.length > 0
-            ? byTokRows
-            : `<tr><td colspan="5" class="empty-state">No sessions.</td></tr>`;
-
-        return `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}' https://cdn.jsdelivr.net; style-src 'nonce-${nonce}';">
-  <script src="${CHARTJS_URL}" integrity="${CHARTJS_SRI}" crossorigin="anonymous" nonce="${nonce}"></script>
-  <style nonce="${nonce}">
-    ${cwThemeCss()}
-    * { box-sizing: border-box; }
-
-    body {
-      font-family: var(--vscode-font-family, sans-serif);
-      font-size: var(--vscode-font-size, 13px);
-      background-color: var(--vscode-editor-background);
-      color: var(--vscode-editor-foreground);
-      margin: 0;
-      padding: 0 0 40px 0;
-      line-height: 1.5;
-    }
-
-    h2 {
-      font-size: 1em;
-      font-weight: 600;
-      margin: 0 0 12px 0;
-      padding-bottom: 6px;
-      border-bottom: 1px solid var(--vscode-textSeparator-foreground, rgba(128,128,128,0.35));
-      opacity: 0.85;
-    }
-
-    .section {
-      padding: 18px 20px;
-      border-bottom: 1px solid var(--vscode-textSeparator-foreground, rgba(128,128,128,0.2));
-    }
-
-    .summary-row {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 12px;
-    }
-
-    .summary-card {
-      flex: 1 1 130px;
-      min-width: 100px;
-      background: var(--cw-surface-raised);
-      border: 1px solid var(--cw-border);
-      border-radius: var(--cw-radius);
-      box-shadow: var(--cw-shadow);
-      padding: 12px 14px;
-      text-align: center;
-    }
-
-    .summary-value {
-      font-size: 1.5em;
-      font-weight: 700;
-      font-family: var(--vscode-editor-font-family, monospace);
-      color: var(--cw-accent);
-      line-height: 1.2;
-    }
-
-    .summary-label {
-      font-size: 0.82em;
-      opacity: 0.7;
-      margin-top: 4px;
-    }
-
-    .summary-sub {
-      font-size: 0.75em;
-      opacity: 0.5;
-      margin-top: 2px;
-      font-family: var(--vscode-editor-font-family, monospace);
-    }
-
-    .chart-container {
-      position: relative;
-      width: 100%;
-    }
-
-    .data-table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 0.92em;
-    }
-
-    .data-table th {
-      text-align: left;
-      padding: 5px 10px;
-      background: var(--cw-surface-subtle);
-      border-bottom: 2px solid var(--cw-border-strong);
-      font-weight: 600;
-      white-space: nowrap;
-      opacity: 0.85;
-    }
-
-    .data-table th.num,
-    .data-table td.num {
-      text-align: right;
-    }
-
-    .data-table td {
-      padding: 5px 10px;
-      border-bottom: 1px solid var(--vscode-textSeparator-foreground, rgba(128,128,128,0.15));
-      max-width: 260px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    .data-table tr:last-child td {
-      border-bottom: none;
-    }
-
-    .data-table tr:hover td {
-      background: var(--vscode-list-hoverBackground, rgba(255,255,255,0.04));
-    }
-
-    .empty-state {
-      text-align: center;
-      opacity: 0.5;
-      font-style: italic;
-      padding: 20px 16px;
-    }
-  </style>
-</head>
-<body>
-
-  <div class="section">
-    <h2>Overview</h2>
-    <div class="summary-row">${summaryCards}
-    </div>
-  </div>
-
-  <div class="section">
-    <h2>Daily Activity</h2>
-    ${activityChartHtml}
-  </div>
-
-  <div class="section">
-    <h2>Top Projects</h2>
-    <table class="data-table">
-      <thead>
-        <tr>
-          <th>Workspace</th>
-          <th class="num">Sessions</th>
-          <th class="num">Prompts</th>
-          <th class="num">Est. Tokens</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${projectRowsHtml}
-      </tbody>
-    </table>
-  </div>
-
-  <div class="section">
-    <h2>Top Terms</h2>
-    ${termsChartHtml}
-  </div>
-
-  <div class="section">
-    <h2>Longest Sessions (by Messages)</h2>
-    <table class="data-table">
-      <thead>
-        <tr>
-          <th>Title</th>
-          <th>Source</th>
-          <th>Workspace</th>
-          <th class="num">Messages</th>
-          <th class="num">Est. Tokens</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${byMsgContent}
-      </tbody>
-    </table>
-  </div>
-
-  <div class="section">
-    <h2>Longest Sessions (by Tokens)</h2>
-    <table class="data-table">
-      <thead>
-        <tr>
-          <th>Title</th>
-          <th>Source</th>
-          <th>Workspace</th>
-          <th class="num">Messages</th>
-          <th class="num">Est. Tokens</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${byTokContent}
-      </tbody>
-    </table>
-  </div>
-
-  <script nonce="${nonce}">
-    ${cwInteractiveJs()}
-    (function () {
-      const hasActivity = ${hasActivity};
-      const hasTerms    = ${hasTerms};
-
-      const style       = getComputedStyle(document.body);
-      const fgColor     = style.getPropertyValue('--vscode-editor-foreground').trim()        || '#cccccc';
-      const borderColor = style.getPropertyValue('--vscode-textSeparator-foreground').trim() || 'rgba(128,128,128,0.3)';
-      const accentColor = style.getPropertyValue('--cw-accent').trim()                       || '#5B8AF5';
-      const copilotColor = style.getPropertyValue('--cw-copilot').trim()                     || '#f0883e';
-      Chart.defaults.color       = fgColor;
-      Chart.defaults.borderColor = borderColor;
-
-      document.querySelectorAll('.summary-value').forEach(function(el) {
-        var raw = el.textContent.trim();
-        if (!/^\d[\d,]*$/.test(raw)) { return; }
-        var n = parseInt(raw.replace(/,/g, ''), 10);
-        if (!n) { return; }
-        var start = performance.now();
-        (function tick(now) {
-          var t    = Math.min((now - start) / 900, 1);
-          var ease = 1 - Math.pow(1 - t, 4);
-          el.textContent = Math.round(n * ease).toLocaleString();
-          if (t < 1) { requestAnimationFrame(tick); }
-          else { el.textContent = raw; }
-        })(start);
-      });
-
-      if (hasActivity) {
-        const ctx = document.getElementById('activityChart').getContext('2d');
-        new Chart(ctx, {
-          type: 'line',
-          data: {
-            labels: ${dailyLabels},
-            datasets: [
-              {
-                label: 'Tokens',
-                data: ${dailyTokens},
-                borderColor: accentColor,
-                backgroundColor: accentColor.replace(')', ', 0.15)').replace('rgb', 'rgba'),
-                fill: true,
-                tension: 0.4,
-                pointRadius: 3,
-                pointHoverRadius: 5,
-                yAxisID: 'yTokens'
-              },
-              {
-                label: 'Prompts',
-                data: ${dailyPrompts},
-                borderColor: copilotColor,
-                backgroundColor: copilotColor.replace(')', ', 0.12)').replace('rgb', 'rgba'),
-                fill: true,
-                tension: 0.4,
-                pointRadius: 3,
-                pointHoverRadius: 5,
-                yAxisID: 'yPrompts'
-              }
-            ]
-          },
-          options: {
-            responsive: true,
-            maintainAspectRatio: true,
-            animation: { duration: 1200, easing: 'easeOutQuart' },
-            interaction: { mode: 'index', intersect: false },
-            plugins: { legend: { position: 'top' } },
-            scales: {
-              x: { ticks: { maxTicksLimit: 12, maxRotation: 45 } },
-              yTokens: {
-                type: 'linear', position: 'left', beginAtZero: true,
-                title: { display: true, text: 'Tokens' }
-              },
-              yPrompts: {
-                type: 'linear', position: 'right', beginAtZero: true,
-                title: { display: true, text: 'Prompts' },
-                grid: { drawOnChartArea: false }
-              }
-            }
-          }
-        });
-      }
-
-      if (hasTerms) {
-        const ctx = document.getElementById('termsChart').getContext('2d');
-        new Chart(ctx, {
-          type: 'bar',
-          data: {
-            labels: ${termLabels},
-            datasets: [
-              {
-                label: 'Count',
-                data: ${termCounts},
-                backgroundColor: accentColor.replace(')', ', 0.65)').replace('rgb', 'rgba'),
-                borderColor:     accentColor,
-                borderWidth: 1,
-                borderRadius: 3
-              }
-            ]
-          },
-          options: {
-            indexAxis: 'y',
-            responsive: true,
-            maintainAspectRatio: false,
-            animation: { duration: 900, easing: 'easeOutQuart' },
-            plugins: { legend: { display: false } },
-            scales: { x: { beginAtZero: true } }
-          }
-        });
-      }
-    })();
-  </script>
-</body>
-</html>`;
+    /** @deprecated */
+    static getHtml(_data: AnalyticsData): string {
+        return AnalyticsPanel.getShellHtml();
     }
 }

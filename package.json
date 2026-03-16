@@ -270,6 +270,12 @@
         "icon": "$(history)"
       },
       {
+        "command": "chatwizard.rescan",
+        "title": "Rescan Sessions",
+        "category": "ChatWizard",
+        "icon": "$(refresh)"
+      },
+      {
         "command": "chatwizard.cbSortByDate",
         "title": "Sort by Date",
         "category": "ChatWizard",
@@ -358,14 +364,6 @@
         "title": "Sort by Language ↓",
         "category": "ChatWizard",
         "icon": "$(arrow-down)"
-      }
-    ],
-    "keybindings": [
-      {
-        "command": "chatwizard.search",
-        "key": "ctrl+shift+h",
-        "mac": "cmd+shift+h",
-        "when": "!inputFocus"
       }
     ],
     "menus": {
@@ -624,24 +622,6 @@
           "type": "boolean",
           "default": false,
           "description": "Enable local usage telemetry. Events are recorded to a local JSONL file in the extension's global storage directory. No data ever leaves your machine."
-        },
-        "chatwizard.enabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "Enable ChatWizard. When false, no session files are indexed or watched. Useful to disable the extension without uninstalling it.",
-          "order": 1
-        },
-        "chatwizard.indexClaude": {
-          "type": "boolean",
-          "default": true,
-          "description": "Index Claude Code session files (~/.claude/projects/**/*.jsonl). Set to false to skip Claude sessions entirely.",
-          "order": 2
-        },
-        "chatwizard.indexCopilot": {
-          "type": "boolean",
-          "default": true,
-          "description": "Index GitHub Copilot Chat session files (workspaceStorage/*/chatSessions/*.jsonl). Set to false to skip Copilot sessions entirely.",
-          "order": 3
         }
       }
     }
@@ -667,7 +647,6 @@
   },
   "dependencies": {
     "@types/better-sqlite3": "^7.6.8",
-    "@vscode/codicons": "^0.0.45",
     "better-sqlite3": "^9.4.3"
   }
 }

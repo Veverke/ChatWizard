@@ -4,7 +4,6 @@ import * as vscode from 'vscode';
 import { SessionIndex } from '../index/sessionIndex';
 import { buildTimeline, TimelineEntry } from './timelineBuilder';
 import { cwThemeCss, cwInteractiveJs } from '../webview/cwTheme';
-import { generateNonce } from '../views/webviewUtils';
 
 export interface TimelineFilter {
     workspacePath?: string;        // filter to a specific workspace path (exact match)
@@ -27,32 +26,18 @@ export class TimelineViewProvider implements vscode.WebviewViewProvider {
     /** YYYY-MM keys of months whose entries have been sent to the webview. */
     private _loadedMonthKeys: Set<string> = new Set();
 
-    constructor(
-        private readonly _index: SessionIndex,
-        private readonly _extensionUri?: vscode.Uri
-    ) {}
+    constructor(private readonly _index: SessionIndex) {}
 
     resolveWebviewView(
         webviewView: vscode.WebviewView,
         _context: vscode.WebviewViewResolveContext,
         _token: vscode.CancellationToken
     ): void {
-        let codiconCssUri: string | undefined;
-        if (this._extensionUri) {
-            const codiconDistUri = vscode.Uri.joinPath(
-                this._extensionUri, 'node_modules', '@vscode', 'codicons', 'dist'
-            );
-            webviewView.webview.options = { enableScripts: true, localResourceRoots: [codiconDistUri] };
-            codiconCssUri = webviewView.webview.asWebviewUri(
-                vscode.Uri.joinPath(codiconDistUri, 'codicon.css')
-            ).toString();
-        } else {
-            webviewView.webview.options = { enableScripts: true };
-        }
+        webviewView.webview.options = { enableScripts: true };
         this._view = webviewView;
 
         // Set shell HTML once — never reassigned
-        webviewView.webview.html = TimelineViewProvider.getShellHtml(codiconCssUri, webviewView.webview.cspSource);
+        webviewView.webview.html = TimelineViewProvider.getShellHtml();
 
         webviewView.webview.onDidReceiveMessage((msg: { command?: string; sessionId?: string; filter?: TimelineFilter; type?: string; month?: string }) => {
             if (msg.command === 'openSession') {
@@ -64,6 +49,8 @@ export class TimelineViewProvider implements vscode.WebviewViewProvider {
                 this._sendMore();
             } else if (msg.command === 'jumpToMonth') {
                 this._sendMore(msg.month);
+            } else if (msg.command === 'openSettings') {
+                void vscode.commands.executeCommand('workbench.action.openSettings', 'chatwizard');
             } else if (msg.type === 'ready') {
                 this._sendInitial();
             }
@@ -136,9 +123,10 @@ export class TimelineViewProvider implements vscode.WebviewViewProvider {
         if (!this._view) { return; }
         this._rebuildCache();
         const entries = this._sliceNextMonths(INITIAL_MONTHS);
+        const totalCount = this._index.getAllSummaries().length;
         void this._view.webview.postMessage({
             type: 'update',
-            data: { entries, filter: this._filter, allEntries: this._allEntries, hasMore: this._hasMore() },
+            data: { entries, filter: this._filter, allEntries: this._allEntries, hasMore: this._hasMore(), totalCount },
         });
     }
 
@@ -153,19 +141,13 @@ export class TimelineViewProvider implements vscode.WebviewViewProvider {
         });
     }
 
-    static getShellHtml(codiconCssUri?: string, cspSource?: string): string {
-        const nonce = generateNonce();
-        const fontSrc   = cspSource ? ` font-src ${cspSource};` : '';
-        const codiconLk = codiconCssUri
-            ? `<link rel="stylesheet" href="${codiconCssUri}">`
-            : '';
+    static getShellHtml(): string {
         return `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}' ${cspSource ?? ''};${fontSrc}">
-  ${codiconLk}
-  <style nonce="${nonce}">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline';">
+  <style>
     ${cwThemeCss()}
     * { box-sizing: border-box; }
 
@@ -178,6 +160,8 @@ export class TimelineViewProvider implements vscode.WebviewViewProvider {
       padding: 0;
       line-height: 1.5;
     }
+
+    :focus-visible { outline: 2px solid var(--vscode-focusBorder, #007fd4); outline-offset: 2px; }
 
     .filter-bar {
       position: sticky;
@@ -192,8 +176,7 @@ export class TimelineViewProvider implements vscode.WebviewViewProvider {
       z-index: 10;
     }
 
-    .filter-bar select,
-    .filter-bar input[type=date] {
+    .filter-bar select {
       background: var(--vscode-input-background);
       color: var(--vscode-input-foreground);
       border: 1px solid var(--vscode-input-border, rgba(128,128,128,0.4));
@@ -206,6 +189,14 @@ export class TimelineViewProvider implements vscode.WebviewViewProvider {
     .filter-bar label {
       font-size: 0.82em;
       opacity: 0.7;
+    }
+
+    #freshness-bar {
+      padding: 4px 14px;
+      font-size: 0.78em;
+      opacity: 0.55;
+      border-bottom: 1px solid var(--cw-border);
+      display: none;
     }
 
     .month-group {
@@ -275,6 +266,23 @@ export class TimelineViewProvider implements vscode.WebviewViewProvider {
       font-style: italic;
     }
 
+    .empty-state-guided { text-align: center; padding: 40px 20px; }
+    .empty-state-guided .empty-state-title { font-size: 1.05em; font-weight: 600; margin-bottom: 8px; }
+    .empty-state-guided .empty-state-body { opacity: 0.6; margin-bottom: 16px; font-size: 0.92em; }
+    .empty-state-guided .empty-state-actions { display: flex; gap: 8px; justify-content: center; }
+
+    .cw-btn {
+      font-size: 0.85em;
+      padding: 4px 14px;
+      border: 1px solid var(--cw-border-strong);
+      border-radius: var(--cw-radius-xs);
+      cursor: pointer;
+      background: var(--cw-surface-subtle);
+      color: inherit;
+      white-space: nowrap;
+    }
+    .cw-btn:hover { background: var(--cw-accent); color: var(--cw-accent-text); border-color: var(--cw-accent); }
+
     .load-more-btn {
       display: block;
       width: calc(100% - 20px);
@@ -298,18 +306,21 @@ export class TimelineViewProvider implements vscode.WebviewViewProvider {
 <body>
   <div class="filter-bar" id="filter-bar">
     <label>Source</label>
-    <select id="srcFilter" onchange="applyFilter()">
+    <select id="srcFilter" onchange="applyFilter()" aria-label="Filter by source">
       <option value="">All</option>
       <option value="copilot">Copilot</option>
       <option value="claude">Claude</option>
     </select>
     <label>Jump to</label>
-    <input type="date" id="jumpDate" onchange="jumpToDate(this.value)">
+    <select id="jumpDate" onchange="jumpToMonth(this.value)" aria-label="Jump to month">
+      <option value="">Month&hellip;</option>
+    </select>
     <label>Workspace</label>
-    <select id="wsFilter" onchange="applyFilter()">
+    <select id="wsFilter" onchange="applyFilter()" aria-label="Filter by workspace">
       <option value="">All workspaces</option>
     </select>
   </div>
+  <div id="freshness-bar" aria-live="polite"></div>
   <div id="timeline-content">
     <div id="cw-tl-skeleton">
       <div style="height:10px;width:38%;margin:10px 14px 6px" class="cw-skeleton"></div>
@@ -318,11 +329,11 @@ export class TimelineViewProvider implements vscode.WebviewViewProvider {
       <div style="margin:5px 10px;padding:9px 14px;border-radius:var(--cw-radius);border:1px solid var(--cw-border);background:var(--cw-surface-raised);box-shadow:var(--cw-shadow)"><div class="cw-skeleton" style="height:13px;width:74%;margin-bottom:6px"></div><div class="cw-skeleton" style="height:11px;width:44%;margin-bottom:5px"></div><div class="cw-skeleton" style="height:12px;width:78%"></div></div>
       <div style="height:10px;width:32%;margin:14px 14px 6px" class="cw-skeleton"></div>
       <div style="margin:5px 10px;padding:9px 14px;border-radius:var(--cw-radius);border:1px solid var(--cw-border);background:var(--cw-surface-raised);box-shadow:var(--cw-shadow)"><div class="cw-skeleton" style="height:13px;width:62%;margin-bottom:6px"></div><div class="cw-skeleton" style="height:11px;width:35%;margin-bottom:5px"></div><div class="cw-skeleton" style="height:12px;width:82%"></div></div>
-      <div style="margin:5px 10px;padding:9px 14px;border-radius:var(--cw-radius);border:1px solid var(--cw-border);background:var(--cw-surface-raised);box-shadow:var(--cw-shadow)"><div class="cw-skeleton" style="height:13px;width:50%;margin-bottom:6px"></div><div class="cw-skeleton" style="height:11px;width:48%;margin-bottom:5px"></div><div class="cw-skeleton" style="height:12px;width:70%"></div></div>
     </div>
   </div>
   <div id="load-more-container"></div>
-<script nonce="${nonce}">
+<script>
+  ${cwInteractiveJs()}
   const vscode = acquireVsCodeApi();
 
   function escHtml(s) {
@@ -340,26 +351,31 @@ export class TimelineViewProvider implements vscode.WebviewViewProvider {
     vscode.postMessage({ command: 'setFilter', filter: { source: src || undefined, workspacePath: ws || undefined } });
   }
 
-  function jumpToDate(val) {
+  function jumpToMonth(val) {
     if (!val) { return; }
-    const month = val.slice(0, 7);
-    // If the month is already in the DOM, scroll to it (or closest older one)
-    const existing = document.querySelector('[data-month="' + month + '"]');
+    const existing = document.querySelector('[data-month="' + val + '"]');
     if (existing) {
-      existing.querySelector('.month-header').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      const header = existing.querySelector('.month-header');
+      if (header) {
+        const top = header.getBoundingClientRect().top + window.scrollY - 90;
+        window.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+      }
       return;
     }
-    // Check if the month is older than what's currently loaded
     const headers = Array.from(document.querySelectorAll('[data-month]'));
     const oldest = headers.length > 0 ? headers[headers.length - 1].dataset.month : null;
-    if (oldest && month < oldest) {
-      // Request extension to load entries up to (and including) this month
-      vscode.postMessage({ command: 'jumpToMonth', month: month });
+    if (oldest && val < oldest) {
+      vscode.postMessage({ command: 'jumpToMonth', month: val });
       return;
     }
-    // Scroll to closest loaded month at or before target
-    const target = headers.find(function(el) { return el.dataset.month <= month; });
-    if (target) { target.querySelector('.month-header').scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+    const target = headers.find(function(el) { return el.dataset.month <= val; });
+    if (target) {
+      const header = target.querySelector('.month-header');
+      if (header) {
+        const top = header.getBoundingClientRect().top + window.scrollY - 90;
+        window.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+      }
+    }
   }
 
   function monthLabel(ym) {
@@ -367,14 +383,17 @@ export class TimelineViewProvider implements vscode.WebviewViewProvider {
   }
 
   function renderEntryHtml(entry, fadeIdx) {
-    const fadeAttr   = fadeIdx < 25 ? ' style="--cw-i:' + fadeIdx + '"' : '';
+    const fadeAttr    = fadeIdx < 25 ? ' style="--cw-i:' + fadeIdx + '"' : '';
     const sourceLabel = entry.source === 'copilot' ? 'Copilot' : 'Claude';
     const badgeClass  = entry.source === 'copilot' ? 'cw-badge-copilot' : 'cw-badge-claude';
     const wsMeta      = entry.workspaceName || '(unknown workspace)';
     const promptText  = entry.firstPrompt   || '(no prompt)';
-    return '<div class="entry cw-fade-item"' + fadeAttr + ' data-sid="' + escHtml(entry.sessionId) + '">'
+    const ariaLabel   = escHtml(entry.sessionTitle) + ', ' + sourceLabel + ', ' + escHtml(entry.date);
+    return '<div class="entry cw-fade-item"' + fadeAttr
+      + ' data-sid="' + escHtml(entry.sessionId) + '"'
+      + ' role="button" tabindex="0" aria-label="' + ariaLabel + '">'
       + '<div class="entry-title">' + escHtml(entry.sessionTitle) + '<span class="' + badgeClass + '">' + escHtml(sourceLabel) + '</span></div>'
-      + '<div class="entry-meta">' + escHtml(wsMeta) + ' \\u00b7 ' + entry.messageCount + ' messages \\u00b7 ' + entry.promptCount + ' prompts \\u00b7 ' + escHtml(entry.date) + '</div>'
+      + '<div class="entry-meta">' + escHtml(wsMeta) + ' \u00b7 ' + entry.messageCount + ' messages \u00b7 ' + entry.promptCount + ' prompts \u00b7 ' + escHtml(entry.date) + '</div>'
       + '<div class="entry-prompt">' + escHtml(promptText) + '</div>'
       + '</div>';
   }
@@ -414,13 +433,32 @@ export class TimelineViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  function populateJumpDropdown(allEntries, currentFilter) {
+    const seenYm = new Set();
+    const months = [];
+    allEntries.forEach(function(e) {
+      const ym = e.date.slice(0, 7);
+      if (currentFilter && currentFilter.source && e.source !== currentFilter.source) { return; }
+      if (currentFilter && currentFilter.workspacePath && e.workspacePath !== currentFilter.workspacePath) { return; }
+      if (!seenYm.has(ym)) { seenYm.add(ym); months.push(ym); }
+    });
+    const sel = document.getElementById('jumpDate');
+    const saved = sel.value;
+    let opts = '<option value="">Month\u2026</option>';
+    months.forEach(function(ym) {
+      opts += '<option value="' + escHtml(ym) + '">' + escHtml(monthLabel(ym)) + '</option>';
+    });
+    sel.innerHTML = opts;
+    if (saved && seenYm.has(saved)) { sel.value = saved; }
+  }
+
   function renderTimeline(data) {
     const entries    = data.entries    || [];
     const filter     = data.filter     || {};
     const allEntries = data.allEntries || [];
     const scrollTop  = window.scrollY;
 
-    // Rebuild workspace dropdown -- collect unique workspaces from allEntries
+    // Rebuild workspace dropdown
     const wsFilter  = document.getElementById('wsFilter');
     const savedWs   = wsFilter.value;
     const seenPaths = new Set();
@@ -438,34 +476,48 @@ export class TimelineViewProvider implements vscode.WebviewViewProvider {
       wsOptHtml += '<option value="' + escHtml(ws.workspacePath) + '"' + selected + '>' + escHtml(label) + '</option>';
     });
     wsFilter.innerHTML = wsOptHtml;
-
-    // Restore saved value if it matches filter
     if (filter.workspacePath !== undefined) {
       wsFilter.value = filter.workspacePath;
     } else if (workspaces.some(function(w) { return w.workspacePath === savedWs; })) {
       wsFilter.value = savedWs;
     }
 
-    // Update source filter
     document.getElementById('srcFilter').value = filter.source || '';
 
-    // Render entries (full replace for filter change / initial load)
+    populateJumpDropdown(allEntries, filter);
+
     const container = document.getElementById('timeline-content');
     if (entries.length === 0) {
-      container.innerHTML = '<div class="empty-state">No sessions found.</div>';
+      if (!data.totalCount) {
+        container.innerHTML =
+          '<div class="empty-state-guided">'
+          + '<p class="empty-state-title">No sessions indexed yet.</p>'
+          + '<p class="empty-state-body">ChatWizard reads your Claude Code and GitHub Copilot chat history. Make sure the data paths are configured correctly.</p>'
+          + '<div class="empty-state-actions">'
+          + '<button class="cw-btn" id="btn-cfg">Configure Paths</button>'
+          + '</div></div>';
+        document.getElementById('btn-cfg').addEventListener('click', function() { vscode.postMessage({ command: 'openSettings' }); });
+      } else {
+        container.innerHTML = '<div class="empty-state">No sessions match this filter.</div>';
+      }
     } else {
       container.innerHTML = buildMonthGroupsHtml(entries, 0);
     }
 
     setLoadMoreBtn(!!data.hasMore);
     window.scrollTo(0, scrollTop);
+
+    if (data.totalCount) {
+      var fb = document.getElementById('freshness-bar');
+      fb.style.display = '';
+      fb.textContent = data.totalCount.toLocaleString() + ' session' + (data.totalCount === 1 ? '' : 's') + ' indexed';
+    }
   }
 
   function appendMonths(data) {
     const entries = data.entries || [];
     if (entries.length === 0) { return; }
 
-    // Count existing entries for fade index
     const existingCount = document.querySelectorAll('.entry').length;
     const html = buildMonthGroupsHtml(entries, existingCount);
 
@@ -474,17 +526,27 @@ export class TimelineViewProvider implements vscode.WebviewViewProvider {
 
     setLoadMoreBtn(!!data.hasMore);
 
-    // Scroll to requested month if specified
     if (data.scrollToMonth) {
       const target = document.getElementById('month-' + data.scrollToMonth);
-      if (target) { target.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+      if (target) {
+        const top = target.getBoundingClientRect().top + window.scrollY - 90;
+        window.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+      }
     }
   }
 
-  // Event delegation for session clicks -- avoids inline onclick escaping issues
   document.addEventListener('click', function(e) {
     var entry = e.target && e.target.closest ? e.target.closest('.entry') : null;
     if (entry && entry.dataset.sid) {
+      vscode.postMessage({ command: 'openSession', sessionId: entry.dataset.sid });
+    }
+  });
+
+  document.addEventListener('keydown', function(e) {
+    if (e.key !== 'Enter' && e.key !== ' ') { return; }
+    var entry = e.target && e.target.closest ? e.target.closest('.entry') : null;
+    if (entry && entry.dataset.sid) {
+      e.preventDefault();
       vscode.postMessage({ command: 'openSession', sessionId: entry.dataset.sid });
     }
   });
@@ -498,233 +560,11 @@ export class TimelineViewProvider implements vscode.WebviewViewProvider {
     }
   });
 
-  // Signal ready
   vscode.postMessage({ type: 'ready' });
 </script>
-<script nonce="${nonce}">${cwInteractiveJs()}</script>
 </body>
 </html>`;
     }
 
-    static getHtml(entries: TimelineEntry[], filter: TimelineFilter = {}): string {
-        const e = TimelineViewProvider._e.bind(TimelineViewProvider);
-        const nonce = generateNonce();
 
-        // Collect unique workspaces (preserving first-seen order)
-        const seenWorkspacePaths = new Set<string>();
-        const uniqueWorkspaces: { workspacePath: string; workspaceName: string }[] = [];
-        for (const entry of entries) {
-            if (!seenWorkspacePaths.has(entry.workspacePath)) {
-                seenWorkspacePaths.add(entry.workspacePath);
-                uniqueWorkspaces.push({ workspacePath: entry.workspacePath, workspaceName: entry.workspaceName });
-            }
-        }
-
-        const workspaceOptions = uniqueWorkspaces.map(ws => {
-            const label = ws.workspaceName || ws.workspacePath;
-            const selected = filter.workspacePath === ws.workspacePath ? ' selected' : '';
-            return `<option value="${e(ws.workspacePath)}"${selected}>${e(label)}</option>`;
-        }).join('');
-
-        const filterBar = `<div class="filter-bar">
-  <label>Source</label><select id="srcFilter" onchange="applyFilter()"><option value="">All</option><option value="copilot"${filter.source === 'copilot' ? ' selected' : ''}>Copilot</option><option value="claude"${filter.source === 'claude' ? ' selected' : ''}>Claude</option></select>
-  <label>Jump to</label><input type="date" id="jumpDate" onchange="jumpToDate(this.value)">
-  <label>Workspace</label><select id="wsFilter" onchange="applyFilter()"><option value="">All workspaces</option>${workspaceOptions}</select>
-</div>`;
-
-        // Group entries by YYYY-MM
-        const monthMap = new Map<string, TimelineEntry[]>();
-        for (const entry of entries) {
-            const ym = entry.date.slice(0, 7);
-            if (!monthMap.has(ym)) { monthMap.set(ym, []); }
-            monthMap.get(ym)!.push(entry);
-        }
-
-        let timelineHtml: string;
-        if (entries.length === 0) {
-            timelineHtml = `<div class="empty-state">No sessions found.</div>`;
-        } else {
-            let fadeIdx = 0;
-            timelineHtml = Array.from(monthMap.entries()).map(([ym, monthEntries]) => {
-                const monthLabel = TimelineViewProvider._monthLabel(ym);
-                const entryRows = monthEntries.map(entry => {
-                    const fi = fadeIdx++;
-                    const fadeAttr = fi < 25 ? ` style="--cw-i:${fi}"` : '';
-                    const sourceLabel = entry.source === 'copilot' ? 'Copilot' : 'Claude';
-                    const badgeClass = entry.source === 'copilot' ? 'cw-badge-copilot' : 'cw-badge-claude';
-                    const wsMeta = entry.workspaceName || '(unknown workspace)';
-                    const promptText = entry.firstPrompt || '(no prompt)';
-                    return `<div class="entry cw-fade-item"${fadeAttr} onclick="openSession('${e(entry.sessionId)}')">
-  <div class="entry-title">${e(entry.sessionTitle)}<span class="${badgeClass}">${e(sourceLabel)}</span></div>
-  <div class="entry-meta">${e(wsMeta)} &#183; ${entry.messageCount} messages · ${entry.promptCount} prompts · ${e(entry.date)}</div>
-  <div class="entry-prompt">${e(promptText)}</div>
-</div>`;
-                }).join('\n');
-
-                return `<div class="month-group" data-month="${e(ym)}">
-  <div class="month-header" id="month-${e(ym)}">${e(monthLabel)}</div>
-  ${entryRows}
-</div>`;
-            }).join('\n');
-        }
-
-        return `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}';">
-  <style nonce="${nonce}">
-    ${cwThemeCss()}
-    * { box-sizing: border-box; }
-
-    body {
-      font-family: var(--vscode-font-family, sans-serif);
-      font-size: var(--vscode-font-size, 13px);
-      background-color: var(--vscode-editor-background);
-      color: var(--vscode-editor-foreground);
-      margin: 0;
-      padding: 0;
-      line-height: 1.5;
-    }
-
-    .filter-bar {
-      position: sticky;
-      top: 0;
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      gap: 8px;
-      padding: 10px 14px;
-      border-bottom: 1px solid var(--cw-border);
-      background: var(--cw-surface);
-      z-index: 10;
-    }
-
-    .filter-bar select,
-    .filter-bar input[type=date] {
-      background: var(--vscode-input-background);
-      color: var(--vscode-input-foreground);
-      border: 1px solid var(--vscode-input-border, rgba(128,128,128,0.4));
-      padding: 3px 6px;
-      border-radius: 3px;
-      font-size: 0.85em;
-      font-family: inherit;
-    }
-
-    .filter-bar label {
-      font-size: 0.82em;
-      opacity: 0.7;
-    }
-
-    .month-group {
-      margin: 0;
-    }
-
-    .month-header {
-      font-size: 0.78em;
-      font-weight: 700;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-      color: var(--cw-accent);
-      padding: 10px 14px 4px;
-      position: sticky;
-      top: 41px;
-      background: var(--vscode-editor-background);
-      z-index: 5;
-      border-bottom: 1px solid var(--cw-border);
-    }
-
-    .entry {
-      margin: 5px 10px;
-      padding: 9px 14px;
-      border-radius: var(--cw-radius);
-      border: 1px solid var(--cw-border);
-      background: var(--cw-surface-raised);
-      box-shadow: var(--cw-shadow);
-      cursor: pointer;
-      transition: box-shadow 0.14s, background 0.14s, transform 0.14s, border-color 0.14s;
-    }
-
-    .entry:hover {
-      background:   var(--cw-surface-subtle);
-      box-shadow:   var(--cw-shadow-hover);
-      transform:    translateY(-2px);
-      border-color: var(--cw-border-strong);
-    }
-
-    .entry-title {
-      font-weight: 600;
-      font-size: 0.93em;
-      margin-bottom: 2px;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-    }
-
-    .entry-meta {
-      font-size: 0.78em;
-      opacity: 0.55;
-      margin-bottom: 3px;
-    }
-
-    .entry-prompt {
-      font-size: 0.85em;
-      opacity: 0.75;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      max-width: 100%;
-    }
-
-    .empty-state {
-      text-align: center;
-      padding: 40px 20px;
-      opacity: 0.5;
-      font-style: italic;
-    }
-  </style>
-</head>
-<body>
-${filterBar}
-${timelineHtml}
-<script nonce="${nonce}">
-  const vscode = acquireVsCodeApi();
-
-  function openSession(sessionId) {
-      vscode.postMessage({ command: 'openSession', sessionId });
-  }
-
-  function applyFilter() {
-      const src = document.getElementById('srcFilter').value;
-      const ws  = document.getElementById('wsFilter').value;
-      vscode.postMessage({ command: 'setFilter', filter: { source: src || undefined, workspacePath: ws || undefined } });
-  }
-
-  function jumpToDate(val) {
-      if (!val) { return; }
-      const month = val.slice(0, 7);
-      // Find the closest month header at or before the selected month
-      const headers = Array.from(document.querySelectorAll('[data-month]'));
-      // months are in descending order, so find first one <= selected month
-      const target = headers.find(el => el.dataset.month <= month);
-      if (target) { target.querySelector('.month-header').scrollIntoView({ behavior: 'smooth', block: 'start' }); }
-  }
-</script>
-<script nonce="${nonce}">${cwInteractiveJs()}</script>
-</body>
-</html>`;
-    }
-
-    private static _e(text: string): string {
-        return text
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#39;');
-    }
-
-    private static _monthLabel(ym: string): string {
-        return new Date(ym + '-15').toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
-    }
 }

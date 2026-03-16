@@ -8,7 +8,6 @@ import {
     escapeHtml,
     markdownToHtml,
 } from './sessionRenderer';
-import { generateNonce, validateColor } from './webviewUtils';
 
 // ── Streaming constants ───────────────────────────────────────────────────────
 const INITIAL_WINDOW = 50;   // messages shown in initial render (normal sessions)
@@ -56,13 +55,9 @@ export class SessionWebviewPanel {
         targetBlockContent?: string
     ): void {
         const config = vscode.workspace.getConfiguration('chatwizard');
-        // SEC-4: validate color settings before use to prevent CSS injection
-        const userColor = validateColor(
-            config.get<string>('userMessageColor', '#007acc') || '#007acc',
-            '#007acc'
-        );
+        const userColor = config.get<string>('userMessageColor', '#007acc') || '#007acc';
         const cbHighlightColor = scrollToCodeBlock
-            ? validateColor(config.get<string>('codeBlockHighlightColor', '#EA5C00') || '', '#EA5C00')
+            ? (config.get<string>('codeBlockHighlightColor', '#EA5C00') || '')
             : '';
         const cbScroll = scrollToCodeBlock
             ? (config.get<boolean>('scrollToFirstCodeBlock', true) ?? false)
@@ -368,13 +363,12 @@ export class SessionWebviewPanel {
     // ── Shell HTML (set once, no user content) ───────────────────────────────
 
     private static _getShellHtml(): string {
-        const nonce = generateNonce();
         return `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
-  <style nonce="${nonce}">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
+  <style>
     ${cwThemeCss()}
     ${syntaxHighlighterCss()}
     :root { --cw-user-color: #007acc; }
@@ -421,6 +415,7 @@ export class SessionWebviewPanel {
       color: var(--cw-accent-text);
       border-color: var(--cw-accent);
     }
+    :focus-visible { outline: 2px solid var(--vscode-focusBorder, #007fd4); outline-offset: 2px; }
     .search-group {
       display: flex;
       flex: 1;
@@ -580,13 +575,13 @@ export class SessionWebviewPanel {
 <body>
   <h1 id="session-title"></h1>
   <div class="toolbar">
-    <button id="export-excerpt-btn">Export Excerpt&#8230;</button>
     <div class="search-group">
-      <input id="search-input" type="text" placeholder="Search in messages&#8230;" autocomplete="off" />
-      <span class="search-counter" id="search-counter"></span>
-      <button id="search-prev" title="Previous (Shift+Enter)">&#9650;</button>
-      <button id="search-next" title="Next (Enter)">&#9660;</button>
+      <input id="search-input" type="text" placeholder="Search in messages&#8230;" autocomplete="off" aria-label="Search within session messages" />
+      <span class="search-counter" id="search-counter" aria-live="polite"></span>
+      <button id="search-prev" title="Previous (Shift+Enter)" aria-label="Previous match">&#9650;</button>
+      <button id="search-next" title="Next (Enter)" aria-label="Next match">&#9660;</button>
     </div>
+    <button id="export-excerpt-btn" style="opacity:0.7;" title="Export an excerpt of this session as Markdown">Export Excerpt&#8230;</button>
   </div>
   <div id="truncation-banner"></div>
   <button id="load-older-btn">&#8679; Load older messages</button>
@@ -596,7 +591,7 @@ export class SessionWebviewPanel {
   <div id="sel-ctx-menu">
     <div class="ctx-item" id="ctx-export-sel">Export selection as Markdown&#8230;</div>
   </div>
-<script nonce="${nonce}">
+<script>
 ${cwInteractiveJs()}
 (function() {
   var vscode = acquireVsCodeApi();

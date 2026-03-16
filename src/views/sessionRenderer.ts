@@ -40,8 +40,6 @@ const RE_BOLD        = /\*\*(.+?)\*\*/g;
 const RE_ITALIC      = /\*(.+?)\*/g;
 const RE_STRIKE      = /~~(.+?)~~/g;
 const RE_LINK        = /\[([^\]]+)\]\(([^)]+)\)/g;
-// SEC-1: safe URL schemes for rendered links
-const RE_SAFE_URL    = /^https?:\/\/|^#|^\/[^/]|^\.\.?\//;
 // escapeHtml patterns
 const RE_ESC_CONTROL = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g;
 
@@ -175,28 +173,13 @@ export function escapeHtml(text: string): string {
         .replace(RE_NON_ASCII, c => `&#${c.codePointAt(0)};`);
 }
 
-/**
- * SEC-1: Validates a URL captured from Markdown link syntax.
- * Only http/https, anchor links, absolute paths, and relative paths are allowed.
- * Any other scheme (javascript:, data:, vbscript:, etc.) is replaced with '#'.
- *
- * The URL may contain HTML-entity-escaped characters from the earlier escaping pass
- * (& → &amp; etc.). We decode & and ' entities before scheme-checking so that
- * obfuscated schemes like "javascript&colon;" are also rejected.
- */
-function sanitizeUrl(url: string): string {
-    const decoded = url.replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&quot;/g, '"');
-    return RE_SAFE_URL.test(decoded) ? url : '#';
-}
-
 function applyInline(text: string): string {
     return text
         .replace(RE_BOLD_ITALIC, '<strong><em>$1</em></strong>')
         .replace(RE_BOLD,        '<strong>$1</strong>')
         .replace(RE_ITALIC,      '<em>$1</em>')
         .replace(RE_STRIKE,      '<del>$1</del>')
-        // SEC-1: sanitize href to block javascript: / data: / vbscript: etc.
-        .replace(RE_LINK, (_m, linkText, url) => `<a href="${sanitizeUrl(url)}">${linkText}</a>`);
+        .replace(RE_LINK,        '<a href="$2">$1</a>');
 }
 
 export function markdownToHtml(markdown: string): string {

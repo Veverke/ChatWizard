@@ -306,10 +306,9 @@ suite('TimelineViewProvider — shell+postMessage', () => {
         assert.ok(updateCalls.length >= 1, 'refresh() should use postMessage');
     });
 
-    // Ensure the legacy getHtml() static method still works for existing tests
-    test('getHtml() static method is still present and returns DOCTYPE', () => {
-        const html = TimelineViewProvider.getHtml([]);
-        assert.ok(html.startsWith('<!DOCTYPE html>'), 'getHtml should still work');
+    test('getShellHtml() returns DOCTYPE', () => {
+        const html = TimelineViewProvider.getShellHtml();
+        assert.ok(html.startsWith('<!DOCTYPE html>'), 'getShellHtml should return valid HTML');
     });
 });
 

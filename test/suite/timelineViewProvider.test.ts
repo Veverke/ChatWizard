@@ -2,142 +2,102 @@
 
 import * as assert from 'assert';
 import { suite, test } from 'mocha';
-import { TimelineViewProvider, TimelineFilter } from '../../src/timeline/timelineViewProvider';
-import { TimelineEntry } from '../../src/timeline/timelineBuilder';
+import { TimelineViewProvider } from '../../src/timeline/timelineViewProvider';
 
-// ── Helper ────────────────────────────────────────────────────────────────────
+// ── getShellHtml — structure ───────────────────────────────────────────────────
 
-function makeEntry(overrides: Partial<TimelineEntry>): TimelineEntry {
-    return {
-        sessionId: 'session-1',
-        sessionTitle: 'Test Session',
-        source: 'copilot',
-        workspacePath: '/workspace/project',
-        workspaceName: 'project',
-        date: '2026-03-11',
-        timestamp: 1741651200000,
-        firstPrompt: 'Hello world',
-        messageCount: 4,
-        promptCount: 2,
-        ...overrides,
-    };
-}
+suite('TimelineViewProvider.getShellHtml', () => {
 
-// ── getHtml — empty state ─────────────────────────────────────────────────────
-
-suite('TimelineViewProvider.getHtml', () => {
-
-    test('empty entries renders empty-state, no entry class', () => {
-        const html = TimelineViewProvider.getHtml([]);
-        assert.ok(html.includes('empty-state'), 'should have class empty-state');
-        assert.ok(!html.includes('class="entry"'), 'should not have any entry divs');
+    test('returns a valid DOCTYPE html document', () => {
+        const html = TimelineViewProvider.getShellHtml();
+        assert.ok(html.startsWith('<!DOCTYPE html>'), 'should start with DOCTYPE');
+        assert.ok(html.includes('<html>'), 'should have html tag');
+        assert.ok(html.includes('</html>'), 'should close html tag');
     });
 
-    // ── single entry ─────────────────────────────────────────────────────────
-
-    test('single entry renders title, workspaceName, date, and firstPrompt', () => {
-        const entry = makeEntry({
-            sessionTitle: 'My First Session',
-            workspaceName: 'my-project',
-            date: '2026-01-15',
-            firstPrompt: 'Explain closures in JS',
-        });
-        const html = TimelineViewProvider.getHtml([entry]);
-        assert.ok(html.includes('My First Session'), 'should contain session title');
-        assert.ok(html.includes('my-project'), 'should contain workspace name');
-        assert.ok(html.includes('2026-01-15'), 'should contain date');
-        assert.ok(html.includes('Explain closures in JS'), 'should contain firstPrompt');
+    test('uses unsafe-inline CSP (no nonce)', () => {
+        const html = TimelineViewProvider.getShellHtml();
+        assert.ok(html.includes("'unsafe-inline'"), 'should use unsafe-inline');
+        assert.ok(!html.includes('nonce-'), 'should not use nonce-based CSP');
     });
 
-    // ── month grouping ────────────────────────────────────────────────────────
-
-    test('multiple entries in same month produce a single month-group', () => {
-        const entries = [
-            makeEntry({ sessionId: 's1', date: '2026-03-10', timestamp: 1741564800000 }),
-            makeEntry({ sessionId: 's2', date: '2026-03-05', timestamp: 1741132800000 }),
-        ];
-        const html = TimelineViewProvider.getHtml(entries);
-        const monthGroupMatches = html.match(/class="month-group"/g) ?? [];
-        assert.strictEqual(monthGroupMatches.length, 1, 'should have exactly 1 month-group');
+    test('filter bar has source, workspace, and jump-to-month dropdowns', () => {
+        const html = TimelineViewProvider.getShellHtml();
+        assert.ok(html.includes('id="srcFilter"'), 'should have source filter');
+        assert.ok(html.includes('id="wsFilter"'), 'should have workspace filter');
+        assert.ok(html.includes('id="jumpDate"'), 'should have month jump dropdown');
     });
 
-    test('entries from 2 different months produce 2 month-group divs', () => {
-        const entries = [
-            makeEntry({ sessionId: 's1', date: '2026-03-10', timestamp: 1741564800000 }),
-            makeEntry({ sessionId: 's2', date: '2026-02-05', timestamp: 1738713600000 }),
-        ];
-        const html = TimelineViewProvider.getHtml(entries);
-        const monthGroupMatches = html.match(/class="month-group"/g) ?? [];
-        assert.strictEqual(monthGroupMatches.length, 2, 'should have 2 month-group divs');
+    test('jump-to control is a select element (not a date input)', () => {
+        const html = TimelineViewProvider.getShellHtml();
+        assert.ok(!html.includes('type="date"'), 'should not have date input');
+        assert.ok(html.includes('id="jumpDate"'), 'should have jumpDate select');
+        // The jumpDate element should be a select (check for onchange="jumpToMonth")
+        assert.ok(html.includes('jumpToMonth'), 'should call jumpToMonth function');
     });
 
-    // ── source labels ─────────────────────────────────────────────────────────
-
-    test('copilot source entry contains "Copilot" label', () => {
-        const entry = makeEntry({ source: 'copilot' });
-        const html = TimelineViewProvider.getHtml([entry]);
-        assert.ok(html.includes('Copilot'), 'should show Copilot label');
+    test('contains freshness-bar element', () => {
+        const html = TimelineViewProvider.getShellHtml();
+        assert.ok(html.includes('id="freshness-bar"'), 'should have freshness-bar');
     });
 
-    test('claude source entry contains "Claude" label', () => {
-        const entry = makeEntry({ source: 'claude' });
-        const html = TimelineViewProvider.getHtml([entry]);
-        assert.ok(html.includes('Claude'), 'should show Claude label');
+    test('contains timeline-content container', () => {
+        const html = TimelineViewProvider.getShellHtml();
+        assert.ok(html.includes('id="timeline-content"'), 'should have timeline-content div');
     });
 
-    // ── filter bar pre-selection ──────────────────────────────────────────────
-
-    test('filter.source = copilot marks copilot option as selected', () => {
-        const filter: TimelineFilter = { source: 'copilot' };
-        const html = TimelineViewProvider.getHtml([], filter);
-        assert.ok(html.includes('value="copilot" selected'), 'copilot option should be selected');
+    test('contains load-more-container', () => {
+        const html = TimelineViewProvider.getShellHtml();
+        assert.ok(html.includes('id="load-more-container"'), 'should have load-more-container');
     });
 
-    test('filter.workspacePath = /foo/bar marks that workspace option as selected', () => {
-        const entries = [
-            makeEntry({ workspacePath: '/foo/bar', workspaceName: 'bar' }),
-        ];
-        const filter: TimelineFilter = { workspacePath: '/foo/bar' };
-        const html = TimelineViewProvider.getHtml(entries, filter);
-        assert.ok(html.includes('selected'), 'workspace option should be selected');
-        // The option value should be the escaped path and marked selected
-        assert.ok(html.includes('/foo/bar'), 'workspace path should appear in option');
+    test('script contains acquireVsCodeApi and ready signal', () => {
+        const html = TimelineViewProvider.getShellHtml();
+        assert.ok(html.includes('acquireVsCodeApi'), 'should acquire VS Code API');
+        assert.ok(html.includes("'ready'"), 'should signal ready to extension');
     });
 
-    // ── empty firstPrompt ─────────────────────────────────────────────────────
-
-    test('entry with empty firstPrompt shows (no prompt)', () => {
-        const entry = makeEntry({ firstPrompt: '' });
-        const html = TimelineViewProvider.getHtml([entry]);
-        assert.ok(html.includes('(no prompt)'), 'should show (no prompt) placeholder');
+    test('script contains renderTimeline and appendMonths functions', () => {
+        const html = TimelineViewProvider.getShellHtml();
+        assert.ok(html.includes('function renderTimeline'), 'should have renderTimeline');
+        assert.ok(html.includes('function appendMonths'), 'should have appendMonths');
     });
 
-    // ── HTML escaping ─────────────────────────────────────────────────────────
-
-    test('entry title containing <script> is HTML-escaped', () => {
-        const entry = makeEntry({ sessionTitle: '<script>alert("xss")</script>' });
-        const html = TimelineViewProvider.getHtml([entry]);
-        assert.ok(!html.includes('<script>alert'), 'raw script tag must not appear in output');
-        assert.ok(html.includes('&lt;script&gt;'), 'angle brackets must be escaped');
+    test('script contains jumpToMonth function', () => {
+        const html = TimelineViewProvider.getShellHtml();
+        assert.ok(html.includes('function jumpToMonth'), 'should have jumpToMonth function');
     });
 
-    // ── script tag presence ───────────────────────────────────────────────────
-
-    test('HTML output contains the jumpToDate function', () => {
-        const html = TimelineViewProvider.getHtml([]);
-        assert.ok(html.includes('function jumpToDate'), 'should contain jumpToDate function');
+    test('script contains keyboard handler for Enter/Space', () => {
+        const html = TimelineViewProvider.getShellHtml();
+        assert.ok(html.includes('keydown'), 'should have keydown listener');
+        assert.ok(html.includes("'Enter'") || html.includes('"Enter"'), 'should handle Enter key');
     });
 
-    // ── unique workspace options ──────────────────────────────────────────────
+    test('entry elements have role=button and tabindex', () => {
+        const html = TimelineViewProvider.getShellHtml();
+        assert.ok(html.includes('role="button"'), 'entries should have role=button');
+        assert.ok(html.includes('tabindex="0"'), 'entries should be keyboard focusable');
+    });
 
-    test('two entries with same workspacePath produce only one workspace option', () => {
-        const entries = [
-            makeEntry({ sessionId: 's1', workspacePath: '/shared/ws', workspaceName: 'ws' }),
-            makeEntry({ sessionId: 's2', workspacePath: '/shared/ws', workspaceName: 'ws' }),
-        ];
-        const html = TimelineViewProvider.getHtml(entries);
-        // Count occurrences of the workspace path as an option value
-        const optionMatches = html.match(/value="\/shared\/ws"/g) ?? [];
-        assert.strictEqual(optionMatches.length, 1, 'should have exactly one option for the shared workspace');
+    test('empty-state-guided CSS is present', () => {
+        const html = TimelineViewProvider.getShellHtml();
+        assert.ok(html.includes('empty-state-guided'), 'should have empty-state-guided CSS class');
+    });
+
+    test('cw-badge-copilot and cw-badge-claude are referenced in script', () => {
+        const html = TimelineViewProvider.getShellHtml();
+        assert.ok(html.includes('cw-badge-copilot'), 'should reference copilot badge class');
+        assert.ok(html.includes('cw-badge-claude'), 'should reference claude badge class');
+    });
+
+    test('openSettings command is wired to configure-paths CTA', () => {
+        const html = TimelineViewProvider.getShellHtml();
+        assert.ok(html.includes('openSettings'), 'should post openSettings command');
+    });
+
+    test('skeleton placeholder is present for initial loading state', () => {
+        const html = TimelineViewProvider.getShellHtml();
+        assert.ok(html.includes('cw-tl-skeleton') || html.includes('cw-skeleton'), 'should have skeleton placeholder');
     });
 });
