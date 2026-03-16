@@ -327,11 +327,14 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeI
     // ------------------------------------------------------------------
 
     getDescription(): string {
+        const count = this.index.getAllSummaries().length;
+        const countPart = `${count.toLocaleString()} session${count === 1 ? '' : 's'}`;
         const sortPart = this.sortStack
             .map(c => `${SHORT_LABEL[c.key]} ${c.direction === 'asc' ? '↑' : '↓'}`)
             .join(' · ');
         const filterPart = this._filterDescription();
-        return filterPart ? `${sortPart}  ·  ${filterPart}` : sortPart;
+        const right = filterPart ? `${sortPart}  ·  ${filterPart}` : sortPart;
+        return `${countPart}  ·  ${right}`;
     }
 
     // ------------------------------------------------------------------

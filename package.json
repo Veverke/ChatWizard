@@ -102,6 +102,7 @@
       { "command": "chatwizard.showPromptLibrary", "title": "Show Prompt Library",        "category": "ChatWizard", "icon": "$(book)" },
       { "command": "chatwizard.showAnalytics",   "title": "Show Analytics Dashboard",    "category": "ChatWizard", "icon": "$(graph)" },
       { "command": "chatwizard.showTimeline", "title": "Show Timeline", "category": "ChatWizard", "icon": "$(history)" },
+      { "command": "chatwizard.rescan", "title": "Rescan Sessions", "category": "ChatWizard", "icon": "$(refresh)" },
 
       { "command": "chatwizard.cbSortByDate",          "title": "Sort by Date",          "category": "ChatWizard", "icon": "$(calendar)" },
       { "command": "chatwizard.cbSortByDate.asc",       "title": "Sort by Date ↑",        "category": "ChatWizard", "icon": "$(arrow-up)" },
@@ -122,14 +123,6 @@
       { "command": "chatwizard.cbSortByLanguage",       "title": "Sort by Language",      "category": "ChatWizard", "icon": "$(symbol-event)" },
       { "command": "chatwizard.cbSortByLanguage.asc",   "title": "Sort by Language ↑",    "category": "ChatWizard", "icon": "$(arrow-up)" },
       { "command": "chatwizard.cbSortByLanguage.desc",  "title": "Sort by Language ↓",    "category": "ChatWizard", "icon": "$(arrow-down)" }
-    ],
-    "keybindings": [
-      {
-        "command": "chatwizard.search",
-        "key": "ctrl+shift+h",
-        "mac": "cmd+shift+h",
-        "when": "!inputFocus"
-      }
     ],
     "menus": {
       "view/title": [

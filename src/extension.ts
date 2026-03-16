@@ -237,6 +237,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     treeView.description = provider.getDescription();
     context.subscriptions.push(treeView);
 
+    // Keep treeView description (session count + sort) fresh when index changes
+    const sessionDescListener = index.addChangeListener(() => {
+        treeView.description = provider.getDescription();
+    });
+    context.subscriptions.push(sessionDescListener);
+
     const codeBlockTreeView = vscode.window.createTreeView('chatwizardCodeBlocks', {
         treeDataProvider: codeBlockProvider,
         canSelectMany: false,
@@ -698,6 +704,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                     }
                 });
             }
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.rescan', () => {
+            void vscode.window.showInformationMessage(
+                'ChatWizard indexes sessions automatically via file system events. ' +
+                'If sessions are missing, reload the window to trigger a fresh scan.',
+                'Reload Window'
+            ).then(action => {
+                if (action === 'Reload Window') {
+                    void vscode.commands.executeCommand('workbench.action.reloadWindow');
+                }
+            });
         })
     );
 

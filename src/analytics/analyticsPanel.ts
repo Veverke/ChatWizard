@@ -34,7 +34,7 @@ export class AnalyticsPanel {
         panel.webview.html = AnalyticsPanel.getShellHtml();
 
         // Wait for webview to signal ready before sending data
-        panel.webview.onDidReceiveMessage((msg: { type: string }) => {
+        panel.webview.onDidReceiveMessage((msg: { type?: string; command?: string; sessionId?: string }) => {
             if (msg.type === 'ready' && AnalyticsPanel._panel) {
                 setImmediate(() => {
                     if (AnalyticsPanel._panel) {
@@ -44,6 +44,12 @@ export class AnalyticsPanel {
                         });
                     }
                 });
+            } else if (msg.command === 'openSession' && msg.sessionId) {
+                void vscode.commands.executeCommand('chatwizard.openSession', { id: msg.sessionId });
+            } else if (msg.command === 'openSettings') {
+                void vscode.commands.executeCommand('workbench.action.openSettings', 'chatwizard');
+            } else if (msg.command === 'rescan') {
+                void vscode.commands.executeCommand('chatwizard.rescan');
             }
         }, undefined, context.subscriptions);
 
@@ -195,6 +201,10 @@ export class AnalyticsPanel {
       background: var(--vscode-list-hoverBackground, rgba(255,255,255,0.04));
     }
 
+    .data-table tr[data-sid] {
+      cursor: pointer;
+    }
+
     .empty-state {
       text-align: center;
       opacity: 0.5;
@@ -202,14 +212,77 @@ export class AnalyticsPanel {
       padding: 20px 16px;
     }
 
+    .empty-state-guided {
+      text-align: center;
+      padding: 40px 20px;
+    }
+
+    .empty-state-guided .empty-state-title {
+      font-size: 1.05em;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+
+    .empty-state-guided .empty-state-body {
+      opacity: 0.6;
+      margin-bottom: 16px;
+      font-size: 0.92em;
+    }
+
+    .empty-state-guided .empty-state-actions {
+      display: flex;
+      gap: 8px;
+      justify-content: center;
+    }
+
+    .cw-action-btn {
+      font-size: 0.85em;
+      padding: 4px 14px;
+      border: 1px solid var(--cw-border-strong);
+      border-radius: var(--cw-radius-xs);
+      cursor: pointer;
+      background: var(--cw-surface-subtle);
+      color: inherit;
+      white-space: nowrap;
+      transition: background 0.12s, color 0.12s;
+    }
+
+    .cw-action-btn:hover {
+      background: var(--cw-accent);
+      color: var(--cw-accent-text);
+      border-color: var(--cw-accent);
+    }
+
+    .token-footnote {
+      font-size: 0.78em;
+      opacity: 0.5;
+      padding: 12px 20px;
+      margin: 0;
+    }
+
+    #freshness-bar {
+      padding: 5px 20px;
+      font-size: 0.78em;
+      opacity: 0.55;
+      border-bottom: 1px solid var(--cw-border);
+      display: none;
+    }
+
     #loading-msg {
       padding: 40px 20px;
       text-align: center;
       opacity: 0.6;
     }
+
+    :focus-visible {
+      outline: 2px solid var(--vscode-focusBorder, #007fd4);
+      outline-offset: 2px;
+    }
   </style>
 </head>
 <body>
+
+  <div id="freshness-bar"></div>
 
   <!-- Overview -->
   <div class="section">
@@ -234,7 +307,7 @@ export class AnalyticsPanel {
           <th>Workspace</th>
           <th class="num">Sessions</th>
           <th class="num">Prompts</th>
-          <th class="num">Est. Tokens</th>
+          <th class="num">Est. Tokens *</th>
         </tr>
       </thead>
       <tbody id="projects-tbody"></tbody>
@@ -257,7 +330,7 @@ export class AnalyticsPanel {
           <th>Source</th>
           <th>Workspace</th>
           <th class="num">Messages</th>
-          <th class="num">Est. Tokens</th>
+          <th class="num">Est. Tokens *</th>
         </tr>
       </thead>
       <tbody id="by-msg-tbody"></tbody>
@@ -274,12 +347,13 @@ export class AnalyticsPanel {
           <th>Source</th>
           <th>Workspace</th>
           <th class="num">Messages</th>
-          <th class="num">Est. Tokens</th>
+          <th class="num">Est. Tokens *</th>
         </tr>
       </thead>
       <tbody id="by-tok-tbody"></tbody>
     </table>
   </div>
+  <p class="token-footnote">* Token counts are estimates (Claude: characters÷4, Copilot: words×1.3) and are not billing-accurate.</p>
 
   <script>
     ${cwInteractiveJs()}
@@ -309,6 +383,20 @@ export class AnalyticsPanel {
       }
 
       function renderSummary(data) {
+        if (data.totalSessions === 0) {
+          document.getElementById('summary-row').innerHTML =
+            '<div class="empty-state-guided">'
+            + '<p class="empty-state-title">No sessions indexed yet.</p>'
+            + '<p class="empty-state-body">ChatWizard reads your Claude Code and GitHub Copilot chat history. Make sure the data paths are configured correctly.</p>'
+            + '<div class="empty-state-actions">'
+            + '<button class="cw-action-btn" id="btn-cfg-paths">Configure Paths</button>'
+            + '<button class="cw-action-btn" id="btn-rescan">Rescan</button>'
+            + '</div></div>';
+          document.getElementById('btn-cfg-paths').addEventListener('click', function() { vscode.postMessage({ command: 'openSettings' }); });
+          document.getElementById('btn-rescan').addEventListener('click', function() { vscode.postMessage({ command: 'rescan' }); });
+          return;
+        }
+
         var timeSpanValue = data.timeSpanDays > 0
           ? data.timeSpanDays + ' day' + (data.timeSpanDays === 1 ? '' : 's')
           : '\\u2014';
@@ -320,7 +408,7 @@ export class AnalyticsPanel {
           { label: 'Total Sessions',   value: data.totalSessions,   sub: '' },
           { label: 'Total Prompts',    value: data.totalPrompts,     sub: '' },
           { label: 'Total Responses',  value: data.totalResponses,   sub: '' },
-          { label: 'Est. Tokens',      value: data.totalTokens,      sub: '' },
+          { label: 'Est. Tokens *',    value: data.totalTokens,      sub: '' },
           { label: 'Copilot Sessions', value: data.copilotSessions,  sub: '' },
           { label: 'Claude Sessions',  value: data.claudeSessions,   sub: '' },
           { label: 'Time Span',        value: timeSpanValue,         sub: timeSpanSub, noAnim: true },
@@ -513,9 +601,12 @@ export class AnalyticsPanel {
             var ws = s.workspacePath
               ? (s.workspacePath.replace(/\\\\/g, '/').split('/').pop() || '')
               : '';
-            return '<tr>'
+            var srcBadge = s.sessionSource === 'copilot'
+              ? '<span class="cw-badge-copilot">Copilot</span>'
+              : '<span class="cw-badge-claude">Claude</span>';
+            return '<tr data-sid="' + escHtml(s.sessionId) + '" title="Click to open session">'
               + '<td title="' + escHtml(s.sessionId) + '">' + escHtml(s.sessionTitle) + '</td>'
-              + '<td>' + escHtml(s.sessionSource) + '</td>'
+              + '<td>' + srcBadge + '</td>'
               + '<td title="' + escHtml(s.workspacePath || '') + '">' + escHtml(ws) + '</td>'
               + '<td class="num">' + s.totalMessageCount.toLocaleString() + '</td>'
               + '<td class="num">' + s.totalTokens.toLocaleString() + '</td>'
@@ -533,6 +624,13 @@ export class AnalyticsPanel {
         renderSessionTable('by-msg-tbody', data.longestByMessages, 5);
         renderSessionTable('by-tok-tbody', data.longestByTokens, 5);
         _firstRender = false;
+
+        // Freshness bar
+        var fb = document.getElementById('freshness-bar');
+        if (fb && data.totalSessions > 0) {
+          fb.style.display = '';
+          fb.textContent = data.totalSessions.toLocaleString() + ' session' + (data.totalSessions === 1 ? '' : 's') + ' indexed \u00b7 Updated ' + new Date().toLocaleTimeString();
+        }
       }
 
       // Chart.js ResizeObserver doesn't reliably fire when a VS Code panel expands
@@ -548,6 +646,14 @@ export class AnalyticsPanel {
       });
 
       var vscode = acquireVsCodeApi();
+
+      // Session row click-through
+      document.addEventListener('click', function(e) {
+        var row = e.target && e.target.closest ? e.target.closest('tr[data-sid]') : null;
+        if (row && row.dataset.sid) {
+          vscode.postMessage({ command: 'openSession', sessionId: row.dataset.sid });
+        }
+      });
 
       window.addEventListener('message', function(event) {
         var msg = event.data;

@@ -49,6 +49,8 @@ export class TimelineViewProvider implements vscode.WebviewViewProvider {
                 this._sendMore();
             } else if (msg.command === 'jumpToMonth') {
                 this._sendMore(msg.month);
+            } else if (msg.command === 'openSettings') {
+                void vscode.commands.executeCommand('workbench.action.openSettings', 'chatwizard');
             } else if (msg.type === 'ready') {
                 this._sendInitial();
             }
@@ -254,6 +256,29 @@ export class TimelineViewProvider implements vscode.WebviewViewProvider {
       font-style: italic;
     }
 
+    .empty-state-guided { text-align: center; padding: 30px 20px; }
+    .empty-state-guided .empty-state-title { font-size: 1.05em; font-weight: 600; margin-bottom: 8px; opacity: 0.9; }
+    .empty-state-guided .empty-state-body { opacity: 0.6; margin-bottom: 16px; font-size: 0.92em; }
+    .empty-state-guided .empty-state-actions { display: flex; gap: 8px; justify-content: center; }
+
+    .cw-btn {
+      font-size: 0.85em;
+      padding: 4px 12px;
+      border: 1px solid var(--cw-border-strong);
+      border-radius: var(--cw-radius-xs);
+      cursor: pointer;
+      background: var(--cw-surface-subtle);
+      color: inherit;
+      white-space: nowrap;
+      transition: background 0.12s, color 0.12s;
+    }
+    .cw-btn:hover { background: var(--cw-accent); color: var(--cw-accent-text); border-color: var(--cw-accent); }
+
+    :focus-visible { outline: 2px solid var(--vscode-focusBorder, #007fd4); outline-offset: 2px; }
+    .entry:focus-visible { outline: 2px solid var(--vscode-focusBorder, #007fd4); outline-offset: 1px; }
+
+    #freshness-bar { padding: 4px 14px; font-size: 0.75em; opacity: 0.5; border-bottom: 1px solid var(--cw-border); display: none; }
+
     .load-more-btn {
       display: block;
       width: calc(100% - 20px);
@@ -283,12 +308,15 @@ export class TimelineViewProvider implements vscode.WebviewViewProvider {
       <option value="claude">Claude</option>
     </select>
     <label>Jump to</label>
-    <input type="date" id="jumpDate" onchange="jumpToDate(this.value)">
+    <select id="jumpDate" onchange="jumpToMonth(this.value)">
+      <option value="">Month&hellip;</option>
+    </select>
     <label>Workspace</label>
     <select id="wsFilter" onchange="applyFilter()">
       <option value="">All workspaces</option>
     </select>
   </div>
+  <div id="freshness-bar"></div>
   <div id="timeline-content"></div>
   <div id="load-more-container"></div>
 <script>
@@ -309,24 +337,23 @@ export class TimelineViewProvider implements vscode.WebviewViewProvider {
     vscode.postMessage({ command: 'setFilter', filter: { source: src || undefined, workspacePath: ws || undefined } });
   }
 
-  function jumpToDate(val) {
+  function jumpToMonth(val) {
     if (!val) { return; }
-    const month = val.slice(0, 7);
-    // If the month is already in the DOM, scroll to it (or closest older one)
+    document.getElementById('jumpDate').value = '';
+    const month = val;
     const existing = document.querySelector('[data-month="' + month + '"]');
     if (existing) {
-      existing.querySelector('.month-header').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      const filterBarH = document.getElementById('filter-bar').offsetHeight;
+      const top = existing.getBoundingClientRect().top + window.scrollY - filterBarH;
+      window.scrollTo({ top: top, behavior: 'smooth' });
       return;
     }
-    // Check if the month is older than what's currently loaded
     const headers = Array.from(document.querySelectorAll('[data-month]'));
     const oldest = headers.length > 0 ? headers[headers.length - 1].dataset.month : null;
     if (oldest && month < oldest) {
-      // Request extension to load entries up to (and including) this month
       vscode.postMessage({ command: 'jumpToMonth', month: month });
       return;
     }
-    // Scroll to closest loaded month at or before target
     const target = headers.find(function(el) { return el.dataset.month <= month; });
     if (target) { target.querySelector('.month-header').scrollIntoView({ behavior: 'smooth', block: 'start' }); }
   }
@@ -341,7 +368,7 @@ export class TimelineViewProvider implements vscode.WebviewViewProvider {
     const badgeClass  = entry.source === 'copilot' ? 'cw-badge-copilot' : 'cw-badge-claude';
     const wsMeta      = entry.workspaceName || '(unknown workspace)';
     const promptText  = entry.firstPrompt   || '(no prompt)';
-    return '<div class="entry cw-fade-item"' + fadeAttr + ' data-sid="' + escHtml(entry.sessionId) + '">'
+    return '<div class="entry cw-fade-item"' + fadeAttr + ' role="button" tabindex="0" aria-label="' + escHtml(entry.sessionTitle) + '" data-sid="' + escHtml(entry.sessionId) + '">'
       + '<div class="entry-title">' + escHtml(entry.sessionTitle) + '<span class="' + badgeClass + '">' + escHtml(sourceLabel) + '</span></div>'
       + '<div class="entry-meta">' + escHtml(wsMeta) + ' \\u00b7 ' + entry.messageCount + ' messages \\u00b7 ' + entry.promptCount + ' prompts \\u00b7 ' + escHtml(entry.date) + '</div>'
       + '<div class="entry-prompt">' + escHtml(promptText) + '</div>'
@@ -389,6 +416,15 @@ export class TimelineViewProvider implements vscode.WebviewViewProvider {
     const allEntries = data.allEntries || [];
     const scrollTop  = window.scrollY;
 
+    // Rebuild jump-to dropdown from available months in allEntries
+    const jumpSelect = document.getElementById('jumpDate');
+    const availableMonths = [...new Set(allEntries.map(function(e) { return e.date.slice(0, 7); }))].sort().reverse();
+    let jumpOptHtml = '<option value="" disabled selected>Jump to month\u2026</option>';
+    availableMonths.forEach(function(ym) {
+      jumpOptHtml += '<option value="' + escHtml(ym) + '">' + monthLabel(ym) + '</option>';
+    });
+    jumpSelect.innerHTML = jumpOptHtml;
+
     // Rebuild workspace dropdown -- collect unique workspaces from allEntries
     const wsFilter  = document.getElementById('wsFilter');
     const savedWs   = wsFilter.value;
@@ -421,9 +457,23 @@ export class TimelineViewProvider implements vscode.WebviewViewProvider {
     // Render entries (full replace for filter change / initial load)
     const container = document.getElementById('timeline-content');
     if (entries.length === 0) {
-      container.innerHTML = '<div class="empty-state">No sessions found.</div>';
+      const hasFilter = !!(filter.source || filter.workspacePath);
+      container.innerHTML = hasFilter
+        ? '<div class="empty-state-guided"><p class="empty-state-title">No sessions match your filter.</p><p class="empty-state-body">Try clearing the source or workspace filter.</p></div>'
+        : '<div class="empty-state-guided"><p class="empty-state-title">No sessions indexed yet.</p><p class="empty-state-body">ChatWizard reads your Claude Code and GitHub Copilot chat history. Make sure the data paths are configured correctly.</p><div class="empty-state-actions"><button class="cw-btn" id="btn-tl-cfg">Configure Paths</button></div></div>';
+      if (!hasFilter) {
+        const btn = document.getElementById('btn-tl-cfg');
+        if (btn) { btn.addEventListener('click', function() { vscode.postMessage({ command: 'openSettings' }); }); }
+      }
     } else {
       container.innerHTML = buildMonthGroupsHtml(entries, 0);
+    }
+
+    // Update freshness bar
+    const fb = document.getElementById('freshness-bar');
+    if (fb && allEntries.length > 0) {
+      fb.style.display = '';
+      fb.textContent = allEntries.length + ' session' + (allEntries.length === 1 ? '' : 's') + ' indexed \u00b7 Updated ' + new Date().toLocaleTimeString();
     }
 
     setLoadMoreBtn(!!data.hasMore);
@@ -445,8 +495,12 @@ export class TimelineViewProvider implements vscode.WebviewViewProvider {
 
     // Scroll to requested month if specified
     if (data.scrollToMonth) {
-      const target = document.getElementById('month-' + data.scrollToMonth);
-      if (target) { target.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+      const group = document.querySelector('[data-month="' + data.scrollToMonth + '"]');
+      if (group) {
+        const filterBarH = document.getElementById('filter-bar').offsetHeight;
+        const top = group.getBoundingClientRect().top + window.scrollY - filterBarH;
+        window.scrollTo({ top: top, behavior: 'smooth' });
+      }
     }
   }
 
@@ -454,6 +508,16 @@ export class TimelineViewProvider implements vscode.WebviewViewProvider {
   document.addEventListener('click', function(e) {
     var entry = e.target && e.target.closest ? e.target.closest('.entry') : null;
     if (entry && entry.dataset.sid) {
+      vscode.postMessage({ command: 'openSession', sessionId: entry.dataset.sid });
+    }
+  });
+
+  // Keyboard activation for accessible entry navigation
+  document.addEventListener('keydown', function(e) {
+    if (e.key !== 'Enter' && e.key !== ' ') { return; }
+    var entry = e.target && e.target.closest ? e.target.closest('.entry') : null;
+    if (entry && entry.dataset.sid) {
+      e.preventDefault();
       vscode.postMessage({ command: 'openSession', sessionId: entry.dataset.sid });
     }
   });

@@ -40,7 +40,7 @@ export class CodeBlocksPanel {
             'chatwizardCodeBlocks',
             'Code Blocks',
             vscode.ViewColumn.One,
-            { enableScripts: true }
+            { enableScripts: true, retainContextWhenHidden: true }
         );
 
         CodeBlocksPanel._panel = panel;
@@ -55,6 +55,10 @@ export class CodeBlocksPanel {
             if (message.command === 'copy') {
                 void vscode.env.clipboard.writeText(message.text ?? '');
                 void vscode.window.showInformationMessage('Code block copied to clipboard.');
+            } else if (message.command === 'openSettings') {
+                void vscode.commands.executeCommand('workbench.action.openSettings', 'chatwizard');
+            } else if (message.command === 'rescan') {
+                void vscode.commands.executeCommand('chatwizard.rescan');
             } else if (message.type === 'ready') {
                 void panel.webview.postMessage({
                     type: 'update',
@@ -309,6 +313,34 @@ export class CodeBlocksPanel {
       font-style: italic;
       padding: 40px 16px;
     }
+
+    .empty-state-guided {
+      text-align: center;
+      padding: 40px 20px;
+    }
+
+    .empty-state-guided .empty-state-title {
+      font-size: 1.05em;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+
+    .empty-state-guided .empty-state-body {
+      opacity: 0.6;
+      margin-bottom: 16px;
+      font-size: 0.92em;
+    }
+
+    .empty-state-guided .empty-state-actions {
+      display: flex;
+      gap: 8px;
+      justify-content: center;
+    }
+
+    :focus-visible {
+      outline: 2px solid var(--vscode-focusBorder, #007fd4);
+      outline-offset: 2px;
+    }
   </style>
 </head>
 <body>
@@ -395,7 +427,17 @@ export class CodeBlocksPanel {
       const blocks = payload.blocks || [];
 
       if (blocks.length === 0) {
-        listEl.innerHTML = '<p class="empty-state">No code blocks found across all sessions.</p>';
+        listEl.innerHTML = '<div class="empty-state-guided">'
+          + '<p class="empty-state-title">No code blocks indexed yet.</p>'
+          + '<p class="empty-state-body">ChatWizard indexes code blocks from your AI chat sessions. Configure your data paths and rescan to see results.</p>'
+          + '<div class="empty-state-actions">'
+          + '<button class="copy-btn" id="btn-open-settings">Configure Paths</button>'
+          + '<button class="copy-btn" id="btn-rescan">Rescan</button>'
+          + '</div></div>';
+        var btnCfg = document.getElementById('btn-open-settings');
+        var btnScan = document.getElementById('btn-rescan');
+        if (btnCfg) { btnCfg.addEventListener('click', function() { vscode.postMessage({ command: 'openSettings' }); }); }
+        if (btnScan) { btnScan.addEventListener('click', function() { vscode.postMessage({ command: 'rescan' }); }); }
         countEl.textContent = '0 blocks';
         return;
       }
@@ -407,6 +449,7 @@ export class CodeBlocksPanel {
         const langLower    = lang.toLowerCase();
         const roleLabel    = block.messageRole === 'user' ? 'User' : 'AI';
         const sourceLabel  = block.sessionSource === 'copilot' ? 'Copilot' : 'Claude';
+        const sourceBadge  = block.sessionSource === 'copilot' ? 'cw-badge-copilot' : 'cw-badge-claude';
         const dateStr      = block.sessionUpdatedAt ? block.sessionUpdatedAt.slice(0, 10) : '';
         const wsPath       = block.sessionWorkspacePath || '';
         const wsName       = wsPath ? (wsPath.replace(/\\\\/g, '/').split('/').pop() || '') : '';
@@ -425,7 +468,7 @@ export class CodeBlocksPanel {
           + '\\n  <div class="card-header">'
           + '\\n    <span class="badge badge-lang" data-lang="' + escHtml(langLower) + '">' + escHtml(langDisplay) + '</span>'
           + '\\n    <span class="badge badge-role">' + escHtml(roleLabel) + '</span>'
-          + '\\n    <span class="source-label">' + escHtml(sourceLabel) + '</span>'
+          + '\\n    <span class="' + sourceBadge + '">' + escHtml(sourceLabel) + '</span>'
           + '\\n    <span class="session-title">' + escHtml(block.sessionTitle) + '</span>'
           + '\\n    <span class="session-date">' + escHtml(dateStr) + '</span>'
           + wsSpan

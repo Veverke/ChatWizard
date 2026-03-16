@@ -513,6 +513,7 @@ export class SessionWebviewPanel {
       border-radius: 3px; padding: 3px 6px; outline: none;
     }
     #search-input:focus { border-color: var(--vscode-focusBorder, #007fd4); }
+    :focus-visible { outline: 2px solid var(--vscode-focusBorder, #007fd4); outline-offset: 2px; }
     .search-counter { font-size: 0.8em; opacity: 0.6; white-space: nowrap; min-width: 56px; text-align: right; }
     #sel-ctx-menu {
       position: fixed; z-index: 9999;
@@ -574,13 +575,13 @@ export class SessionWebviewPanel {
 <body>
   <h1 id="session-title"></h1>
   <div class="toolbar">
-    <button id="export-excerpt-btn">Export Excerpt&#8230;</button>
     <div class="search-group">
-      <input id="search-input" type="text" placeholder="Search in messages&#8230;" autocomplete="off" />
-      <span class="search-counter" id="search-counter"></span>
-      <button id="search-prev" title="Previous (Shift+Enter)">&#9650;</button>
-      <button id="search-next" title="Next (Enter)">&#9660;</button>
+      <input id="search-input" type="text" placeholder="Search in messages&#8230;" autocomplete="off" aria-label="Search within session messages" />
+      <span class="search-counter" id="search-counter" aria-live="polite"></span>
+      <button id="search-prev" title="Previous (Shift+Enter)" aria-label="Previous match">&#9650;</button>
+      <button id="search-next" title="Next (Enter)" aria-label="Next match">&#9660;</button>
     </div>
+    <button id="export-excerpt-btn" style="opacity:0.7;" title="Export an excerpt of this session as Markdown">Export Excerpt&#8230;</button>
   </div>
   <div id="truncation-banner"></div>
   <button id="load-older-btn">&#8679; Load older messages</button>

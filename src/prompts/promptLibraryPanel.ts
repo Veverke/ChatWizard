@@ -27,7 +27,7 @@ export class PromptLibraryPanel {
             'chatwizardPromptLibrary',
             'Prompt Library',
             vscode.ViewColumn.One,
-            { enableScripts: true }
+            { enableScripts: true, retainContextWhenHidden: true }
         );
 
         PromptLibraryPanel._panel = panel;
@@ -41,6 +41,10 @@ export class PromptLibraryPanel {
             if (message.command === 'copy') {
                 void vscode.env.clipboard.writeText(message.text ?? '');
                 void vscode.window.showInformationMessage('Prompt copied to clipboard.');
+            } else if (message.command === 'openSettings') {
+                void vscode.commands.executeCommand('workbench.action.openSettings', 'chatwizard');
+            } else if (message.command === 'rescan') {
+                void vscode.commands.executeCommand('chatwizard.rescan');
             } else if (message.type === 'ready') {
                 void panel.webview.postMessage({
                     type: 'update',
@@ -263,6 +267,39 @@ export class PromptLibraryPanel {
       padding: 40px 16px;
     }
 
+    .empty-state-guided {
+      text-align: center;
+      padding: 40px 20px;
+    }
+
+    .empty-state-guided .empty-state-title {
+      font-size: 1.05em;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+
+    .empty-state-guided .empty-state-body {
+      opacity: 0.6;
+      margin-bottom: 16px;
+      font-size: 0.92em;
+    }
+
+    .empty-state-guided .empty-state-actions {
+      display: flex;
+      gap: 8px;
+      justify-content: center;
+    }
+
+    :focus-visible {
+      outline: 2px solid var(--vscode-focusBorder, #007fd4);
+      outline-offset: 2px;
+    }
+
+    .variants-summary:focus-visible {
+      outline: 2px solid var(--vscode-focusBorder, #007fd4);
+      outline-offset: 1px;
+    }
+
     #truncatedBanner {
       display: none;
       padding: 6px 16px;
@@ -327,7 +364,17 @@ export class PromptLibraryPanel {
       const savedQuery = searchInput.value;
 
       if (clusters.length === 0) {
-        listEl.innerHTML = '<p class="empty-state">No prompts found across all sessions.</p>';
+        listEl.innerHTML = '<div class="empty-state-guided">'
+          + '<p class="empty-state-title">No prompts indexed yet.</p>'
+          + '<p class="empty-state-body">ChatWizard reads your Claude Code and GitHub Copilot chat history. Make sure the data paths are configured correctly.</p>'
+          + '<div class="empty-state-actions">'
+          + '<button class="copy-btn" id="btn-open-settings">Configure Paths</button>'
+          + '<button class="copy-btn" id="btn-rescan">Rescan</button>'
+          + '</div></div>';
+        var btnCfg = document.getElementById('btn-open-settings');
+        var btnScan = document.getElementById('btn-rescan');
+        if (btnCfg) { btnCfg.addEventListener('click', function() { vscode.postMessage({ command: 'openSettings' }); }); }
+        if (btnScan) { btnScan.addEventListener('click', function() { vscode.postMessage({ command: 'rescan' }); }); }
         countEl.textContent = '0 prompts';
         searchInput.value = savedQuery;
         return;
