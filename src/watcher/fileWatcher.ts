@@ -23,56 +23,96 @@ export class ChatWizardWatcher implements vscode.Disposable {
         this.channel = channel;
     }
 
-    async start(): Promise<void> {
-        await this.buildInitialIndex();
+    // SEC-6: Symlink traversal guards — ensure resolved path stays within base directory.
 
-        // Watch Claude sessions
-        const claudeBaseDir = resolveClaudeProjectsPath();
-        const claudePattern = new vscode.RelativePattern(
-            vscode.Uri.file(claudeBaseDir),
-            '**/*.jsonl'
-        );
-        const claudeWatcher = vscode.workspace.createFileSystemWatcher(claudePattern);
-
-        claudeWatcher.onDidCreate((uri) => this.onFileChanged(uri, 'claude'));
-        claudeWatcher.onDidChange((uri) => this.onFileChanged(uri, 'claude'));
-        claudeWatcher.onDidDelete((uri) => {
-            const sessionId = path.basename(uri.fsPath, '.jsonl');
-            this.index.remove(sessionId);
-            this.channel.appendLine(`[live] removed session ${sessionId}`);
-        });
-
-        this.disposables.push(claudeWatcher);
-
-        // Watch Copilot sessions
-        let copilotWorkspaces: ReturnType<typeof discoverCopilotWorkspaces> = [];
+    /**
+     * Returns true if `filePath`, after resolving all symlinks, is contained within
+     * `resolvedBase`. Prevents symlink-based path traversal to files outside the
+     * expected session directories.
+     */
+    private static _isSafeFilePath(resolvedBase: string, filePath: string): boolean {
         try {
-            copilotWorkspaces = discoverCopilotWorkspaces();
-        } catch (err) {
-            this.channel.appendLine(`[error] Failed to discover Copilot workspaces for watching: ${err}`);
+            const realPath = fs.realpathSync(filePath);
+            return realPath.startsWith(resolvedBase + path.sep) || realPath === resolvedBase;
+        } catch {
+            return false; // Cannot resolve → skip
+        }
+    }
+
+    private static async _isSafeFilePathAsync(resolvedBase: string, filePath: string): Promise<boolean> {
+        try {
+            const realPath = await fs.promises.realpath(filePath);
+            return realPath.startsWith(resolvedBase + path.sep) || realPath === resolvedBase;
+        } catch {
+            return false;
+        }
+    }
+
+    async start(): Promise<void> {
+        const cfg = vscode.workspace.getConfiguration('chatwizard');
+        // SEC-10: per-source enable/disable settings
+        const enabled       = cfg.get<boolean>('enabled', true);
+        const indexClaude   = cfg.get<boolean>('indexClaude', true);
+        const indexCopilot  = cfg.get<boolean>('indexCopilot', true);
+
+        if (!enabled) {
+            this.channel.appendLine('[ChatWizard] Extension disabled via chatwizard.enabled setting — skipping indexing and file watching.');
+            return;
         }
 
-        for (const workspace of copilotWorkspaces) {
-            const chatSessionsDir = path.join(workspace.storageDir, 'chatSessions');
-            const copilotPattern = new vscode.RelativePattern(
-                vscode.Uri.file(chatSessionsDir),
-                '*.jsonl'
-            );
-            const copilotWatcher = vscode.workspace.createFileSystemWatcher(copilotPattern);
+        await this.buildInitialIndex(indexClaude, indexCopilot);
 
-            copilotWatcher.onDidCreate((uri) =>
-                this.onFileChanged(uri, 'copilot', workspace.workspaceId, workspace.workspacePath)
+        if (indexClaude) {
+            // Watch Claude sessions
+            const claudeBaseDir = resolveClaudeProjectsPath();
+            const claudePattern = new vscode.RelativePattern(
+                vscode.Uri.file(claudeBaseDir),
+                '**/*.jsonl'
             );
-            copilotWatcher.onDidChange((uri) =>
-                this.onFileChanged(uri, 'copilot', workspace.workspaceId, workspace.workspacePath)
-            );
-            copilotWatcher.onDidDelete((uri) => {
+            const claudeWatcher = vscode.workspace.createFileSystemWatcher(claudePattern);
+
+            claudeWatcher.onDidCreate((uri) => this.onFileChanged(uri, 'claude'));
+            claudeWatcher.onDidChange((uri) => this.onFileChanged(uri, 'claude'));
+            claudeWatcher.onDidDelete((uri) => {
                 const sessionId = path.basename(uri.fsPath, '.jsonl');
                 this.index.remove(sessionId);
                 this.channel.appendLine(`[live] removed session ${sessionId}`);
             });
 
-            this.disposables.push(copilotWatcher);
+            this.disposables.push(claudeWatcher);
+        }
+
+        if (indexCopilot) {
+            // Watch Copilot sessions
+            let copilotWorkspaces: ReturnType<typeof discoverCopilotWorkspaces> = [];
+            try {
+                copilotWorkspaces = discoverCopilotWorkspaces();
+            } catch (err) {
+                this.channel.appendLine(`[error] Failed to discover Copilot workspaces for watching: ${err}`);
+            }
+
+            for (const workspace of copilotWorkspaces) {
+                const chatSessionsDir = path.join(workspace.storageDir, 'chatSessions');
+                const copilotPattern = new vscode.RelativePattern(
+                    vscode.Uri.file(chatSessionsDir),
+                    '*.jsonl'
+                );
+                const copilotWatcher = vscode.workspace.createFileSystemWatcher(copilotPattern);
+
+                copilotWatcher.onDidCreate((uri) =>
+                    this.onFileChanged(uri, 'copilot', workspace.workspaceId, workspace.workspacePath)
+                );
+                copilotWatcher.onDidChange((uri) =>
+                    this.onFileChanged(uri, 'copilot', workspace.workspaceId, workspace.workspacePath)
+                );
+                copilotWatcher.onDidDelete((uri) => {
+                    const sessionId = path.basename(uri.fsPath, '.jsonl');
+                    this.index.remove(sessionId);
+                    this.channel.appendLine(`[live] removed session ${sessionId}`);
+                });
+
+                this.disposables.push(copilotWatcher);
+            }
         }
     }
 
@@ -83,7 +123,7 @@ export class ChatWizardWatcher implements vscode.Disposable {
         this.disposables = [];
     }
 
-    private async buildInitialIndex(): Promise<void> {
+    private async buildInitialIndex(indexClaude: boolean, indexCopilot: boolean): Promise<void> {
         await vscode.window.withProgress(
             {
                 location: vscode.ProgressLocation.Window,
@@ -96,8 +136,8 @@ export class ChatWizardWatcher implements vscode.Disposable {
                 };
 
                 const [claudeSessions, copilotSessions] = await Promise.all([
-                    this.collectClaudeSessionsAsync(onProgress),
-                    this.collectCopilotSessionsAsync(onProgress),
+                    indexClaude  ? this.collectClaudeSessionsAsync(onProgress)  : Promise.resolve([]),
+                    indexCopilot ? this.collectCopilotSessionsAsync(onProgress) : Promise.resolve([]),
                 ]);
 
                 const all = [...claudeSessions, ...copilotSessions];
@@ -116,6 +156,9 @@ export class ChatWizardWatcher implements vscode.Disposable {
             let exists = false;
             try { exists = (await fs.promises.stat(claudeProjectsDir)).isDirectory(); } catch { /* not found */ }
             if (!exists) { return []; }
+
+            // SEC-6: resolve base once so per-file containment check is accurate for symlinks
+            const resolvedBase = await fs.promises.realpath(claudeProjectsDir).catch(() => claudeProjectsDir);
 
             const projectDirEntries = await fs.promises.readdir(claudeProjectsDir, { withFileTypes: true });
             const dirEntries = projectDirEntries.filter(d => d.isDirectory());
@@ -138,7 +181,15 @@ export class ChatWizardWatcher implements vscode.Disposable {
             const dirResults = await Promise.all(fileLists.map(async ({ projectPath, files }) => {
                 const dirSessions: Session[] = [];
                 for (const file of files) {
-                    const session = this.parseFile(path.join(projectPath, file.name), 'claude');
+                    const filePath = path.join(projectPath, file.name);
+                    // SEC-6: skip files that resolve outside the projects base directory
+                    if (!await ChatWizardWatcher._isSafeFilePathAsync(resolvedBase, filePath)) {
+                        this.channel.appendLine(`[security] Skipping ${filePath}: resolves outside base directory`);
+                        current++;
+                        onProgress?.(current, total);
+                        continue;
+                    }
+                    const session = this.parseFile(filePath, 'claude');
                     if (session) { dirSessions.push(session); }
                     current++;
                     onProgress?.(current, total);
@@ -172,7 +223,15 @@ export class ChatWizardWatcher implements vscode.Disposable {
             const wsResults = await Promise.all(workspaces.map(async (workspace, idx) => {
                 const files = fileListsPerWorkspace[idx];
                 const wsSessions: Session[] = [];
+                // SEC-6: resolve base once per workspace for symlink containment check
+                const resolvedBase = await fs.promises.realpath(workspace.storageDir).catch(() => workspace.storageDir);
                 for (const filePath of files) {
+                    if (!await ChatWizardWatcher._isSafeFilePathAsync(resolvedBase, filePath)) {
+                        this.channel.appendLine(`[security] Skipping ${filePath}: resolves outside workspace storage`);
+                        current++;
+                        onProgress?.(current, total);
+                        continue;
+                    }
                     const session = this.parseFile(filePath, 'copilot', workspace.workspaceId, workspace.workspacePath);
                     if (session) { wsSessions.push(session); }
                     current++;
@@ -198,6 +257,9 @@ export class ChatWizardWatcher implements vscode.Disposable {
                 return sessions;
             }
 
+            // SEC-6: resolve base to defend against symlink traversal
+            const resolvedBase = (() => { try { return fs.realpathSync(claudeProjectsDir); } catch { return claudeProjectsDir; } })();
+
             const projectDirs = fs.readdirSync(claudeProjectsDir, { withFileTypes: true });
 
             for (const projectDir of projectDirs) {
@@ -211,7 +273,12 @@ export class ChatWizardWatcher implements vscode.Disposable {
                     for (const file of files) {
                         if (!file.isFile() || !file.name.endsWith('.jsonl')) { continue; }
 
-                        const session = this.parseFile(path.join(projectPath, file.name), 'claude');
+                        const filePath = path.join(projectPath, file.name);
+                        if (!ChatWizardWatcher._isSafeFilePath(resolvedBase, filePath)) {
+                            this.channel.appendLine(`[security] Skipping ${filePath}: resolves outside base directory`);
+                            continue;
+                        }
+                        const session = this.parseFile(filePath, 'claude');
                         if (session) { sessions.push(session); }
                     }
                 } catch (err) {
@@ -232,8 +299,14 @@ export class ChatWizardWatcher implements vscode.Disposable {
             const workspaces = discoverCopilotWorkspaces();
             for (const workspace of workspaces) {
                 try {
+                    // SEC-6: resolve base to defend against symlink traversal
+                    const resolvedBase = (() => { try { return fs.realpathSync(workspace.storageDir); } catch { return workspace.storageDir; } })();
                     const sessionFiles = listSessionFiles(workspace.storageDir);
                     for (const filePath of sessionFiles) {
+                        if (!ChatWizardWatcher._isSafeFilePath(resolvedBase, filePath)) {
+                            this.channel.appendLine(`[security] Skipping ${filePath}: resolves outside workspace storage`);
+                            continue;
+                        }
                         const session = this.parseFile(filePath, 'copilot', workspace.workspaceId, workspace.workspacePath);
                         if (session) { sessions.push(session); }
                     }

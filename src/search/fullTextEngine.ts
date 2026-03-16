@@ -13,6 +13,24 @@ const MAX_TOKEN_LENGTH = 50;
 /** Only promote tokens to the main index once they appear in this many distinct sessions. */
 const MIN_DOC_FREQ = 2;
 
+// SEC-5: ReDoS defenses
+/** Maximum length of a user-supplied regex pattern in characters. */
+const MAX_REGEX_LEN = 200;
+/** Abort regex search across sessions if this many milliseconds have elapsed. */
+const REGEX_SEARCH_TIMEOUT_MS = 1_000;
+/**
+ * Structural ReDoS detector. Checks for two common catastrophic patterns:
+ *   1. Nested quantifiers:  (a+)+, (a*)*, ([a-z]+)+
+ *   2. Quantified alternation: (a|b)+, (x|y|z)*
+ * This is a conservative heuristic — it may block some safe patterns but eliminates
+ * the main ReDoS attack vectors without requiring a full regex parser.
+ */
+const RE_REDOS_PATTERNS = /\([^()]*[+*{][^)]*\)\s*[+*?]|\([^)]*\|[^)]*\)\s*[+*?]/;
+
+function isReDoS(pattern: string): boolean {
+    return pattern.length > MAX_REGEX_LEN || RE_REDOS_PATTERNS.test(pattern);
+}
+
 function tokenize(text: string): string[] {
     return text
         .toLowerCase()
@@ -147,6 +165,10 @@ export class FullTextSearchEngine {
 
         if (query.isRegex) {
             // Linear scan across all sessions.
+            // SEC-5: reject ReDoS-prone patterns before compilation
+            if (isReDoS(query.text)) {
+                return { results: [], totalCount: 0 };
+            }
             let regex: RegExp;
             try {
                 regex = new RegExp(query.text);
@@ -154,7 +176,10 @@ export class FullTextSearchEngine {
                 return { results: [], totalCount: 0 };
             }
 
+            const searchStartMs = Date.now();
             for (const session of this.sessions.values()) {
+                // SEC-5: time-box per-session regex search to prevent worst-case backtracking
+                if (Date.now() - searchStartMs > REGEX_SEARCH_TIMEOUT_MS) { break; }
                 if (!this._sessionPassesFilter(session, filter)) {
                     continue;
                 }

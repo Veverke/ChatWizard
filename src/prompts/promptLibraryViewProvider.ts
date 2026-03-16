@@ -31,10 +31,15 @@ export class PromptLibraryViewProvider implements vscode.WebviewViewProvider {
             if (webviewView.visible) { void this._sendData(); }
         });
 
-        webviewView.webview.onDidReceiveMessage((message: { command?: string; type?: string; text?: string }) => {
+        webviewView.webview.onDidReceiveMessage((message: { command?: string; type?: string; text?: string; sessionId?: string; searchTerm?: string }) => {
             if (message.command === 'copy') {
                 void vscode.env.clipboard.writeText(message.text ?? '');
                 void vscode.window.showInformationMessage('Prompt copied to clipboard.');
+            } else if (message.command === 'openSession') {
+                const session = this._index.get(message.sessionId ?? '');
+                if (session) {
+                    void vscode.commands.executeCommand('chatwizard.openSession', session, message.searchTerm);
+                }
             } else if (message.type === 'ready') {
                 void this._sendData();
             }

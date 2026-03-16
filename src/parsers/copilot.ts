@@ -5,6 +5,17 @@ import * as path from 'path';
 import { Session, Message, CodeBlock, ParseResult, MessageRole } from '../types/index';
 
 // ---------------------------------------------------------------------------
+// Security constants (SEC-7)
+// ---------------------------------------------------------------------------
+
+/** Maximum size of a single JSONL line (characters) before it is skipped. */
+const MAX_LINE_CHARS = 1_000_000; // 1 MB
+/** Maximum key-path depth accepted in deepSet() to prevent stack exhaustion. */
+const MAX_DEEPSET_DEPTH = 64;
+/** Maximum numeric array index in deepSet() to prevent sparse-array memory explosion. */
+const MAX_ARRAY_INDEX = 100_000;
+
+// ---------------------------------------------------------------------------
 // Internal snapshot/patch shapes
 // ---------------------------------------------------------------------------
 
@@ -38,12 +49,18 @@ function msToIso(ms: number): string {
 /**
  * Applies a deep key-path update to `obj`.
  * e.g. deepSet(state, ['requests', 0, 'response'], [...])
+ *
+ * SEC-7: guarded against excessive key depth and sparse array explosion.
  */
 function deepSet(obj: unknown, keys: unknown[], value: unknown): void {
+    // SEC-7: reject implausibly deep or empty key paths
+    if (keys.length === 0 || keys.length > MAX_DEEPSET_DEPTH) { return; }
     let current: unknown = obj;
     for (let i = 0; i < keys.length - 1; i++) {
         const key = keys[i];
         if (Array.isArray(current) && typeof key === 'number') {
+            // SEC-7: reject large array indices to prevent sparse-array OOM
+            if (key < 0 || key > MAX_ARRAY_INDEX) { return; }
             current = (current as unknown[])[key];
         } else if (typeof current === 'object' && current !== null) {
             current = (current as Record<string, unknown>)[String(key)];
@@ -53,6 +70,8 @@ function deepSet(obj: unknown, keys: unknown[], value: unknown): void {
     }
     const lastKey = keys[keys.length - 1];
     if (Array.isArray(current) && typeof lastKey === 'number') {
+        // SEC-7: reject large array indices to prevent sparse-array OOM
+        if (lastKey < 0 || lastKey > MAX_ARRAY_INDEX) { return; }
         (current as unknown[])[lastKey] = value;
     } else if (typeof current === 'object' && current !== null) {
         (current as Record<string, unknown>)[String(lastKey)] = value;
@@ -134,6 +153,11 @@ export function parseCopilotSession(
     for (let i = 0; i < lines.length; i++) {
         const line = lines[i].trim();
         if (!line) { continue; }
+        // SEC-7: skip oversized lines to prevent memory/CPU exhaustion in JSON.parse
+        if (line.length > MAX_LINE_CHARS) {
+            errors.push(`Line ${i + 1}: skipped — length ${line.length} exceeds limit`);
+            continue;
+        }
         try {
             const obj = JSON.parse(line) as SnapshotLine | PatchLine;
             if (obj.kind === 0) {
