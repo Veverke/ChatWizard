@@ -405,6 +405,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                     description: current.maxMessages !== undefined ? `current: ${current.maxMessages}` : undefined,
                 },
                 {
+                    id: 'hideInterrupted',
+                    label: current.hideInterrupted
+                        ? '$(eye)  Show interrupted sessions'
+                        : '$(eye-closed)  Hide interrupted sessions',
+                    description: current.hideInterrupted ? 'currently hidden' : undefined,
+                },
+                {
                     id: '_clear',
                     label: '$(close)  Clear all filters',
                     alwaysShow: true,
@@ -484,6 +491,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 });
                 if (val === undefined) { return; }
                 newFilter.maxMessages = val.trim() ? parseInt(val.trim(), 10) : undefined;
+
+            } else if (pick.id === 'hideInterrupted') {
+                newFilter.hideInterrupted = !current.hideInterrupted || undefined;
             }
 
             provider.setFilter(newFilter);
