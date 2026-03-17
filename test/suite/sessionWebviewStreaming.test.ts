@@ -1,11 +1,10 @@
-// test/suite/sessionWebviewStreaming.test.ts
+﻿// test/suite/sessionWebviewStreaming.test.ts
 //
-// S7 — Session Webview Loads Entire Session Content at Once
+// S7 â€” Session Webview Loads Entire Session Content at Once
 // Verifies virtual windowing, setImmediate chunking, render cache, and the
 // large-session truncation banner.
 
 import * as assert from 'assert';
-import { suite, test } from 'mocha';
 import { Session, Message } from '../../src/types/index';
 import {
     VisibleMessage,
@@ -13,7 +12,7 @@ import {
     renderMessage,
 } from '../../src/views/sessionRenderer';
 
-// ── Fixture helpers ───────────────────────────────────────────────────────────
+// â”€â”€ Fixture helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 let _msgId = 0;
 
@@ -38,9 +37,9 @@ function makeSession(id: string, msgCount: number, updatedAt = '2024-01-01T00:00
     };
 }
 
-// ── _renderMessage ────────────────────────────────────────────────────────────
+// â”€â”€ _renderMessage â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-suite('S7 — _renderMessage', () => {
+suite('S7 â€” _renderMessage', () => {
     test('renders user message with correct role class', () => {
         const session = makeSession('s-render', 2);
         const visible = session.messages.map((msg, origIdx) => ({ msg, origIdx }));
@@ -106,9 +105,9 @@ suite('S7 — _renderMessage', () => {
     });
 });
 
-// ── _renderChunk ──────────────────────────────────────────────────────────────
+// â”€â”€ _renderChunk â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-suite('S7 — _renderChunk', () => {
+suite('S7 â€” _renderChunk', () => {
     test('renders a range of messages and stores results in renderedMessages cache', () => {
         const session = makeSession('s-chunk', 10);
         const visible = session.messages.map((msg, origIdx) => ({ msg, origIdx }));
@@ -137,7 +136,7 @@ suite('S7 — _renderChunk', () => {
         const sentinel = '<!-- cached -->';
         cache[0] = sentinel; cache[1] = sentinel; cache[2] = sentinel;
 
-        // Second render — must use cache, not re-render
+        // Second render â€” must use cache, not re-render
         const html2 = renderChunk(visible, cache, 0, 3, 'Claude', false);
         assert.ok(html2.includes(sentinel), 'second call uses cached value');
         assert.ok(!html1.includes(sentinel), 'first call did not have sentinel');
@@ -165,9 +164,9 @@ suite('S7 — _renderChunk', () => {
     });
 });
 
-// ── Virtual window computation ─────────────────────────────────────────────────
+// â”€â”€ Virtual window computation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-suite('S7 — Virtual window (initial window boundaries)', () => {
+suite('S7 â€” Virtual window (initial window boundaries)', () => {
     test('normal session (<=500 msgs): windowStart = max(0, total - 50)', () => {
         // Access the private render cache to verify window start indirectly
         // by checking that _renderCache only has slots for 100 messages
@@ -218,9 +217,9 @@ suite('S7 — Virtual window (initial window boundaries)', () => {
     });
 });
 
-// ── Render cache (_renderCache) ───────────────────────────────────────────────
+// â”€â”€ Render cache (_renderCache) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-suite('S7 — Render cache', () => {
+suite('S7 â€” Render cache', () => {
     test('_renderChunk populates cache for each rendered message', () => {
         const session = makeSession('s-rc-pop', 5);
         const visible = session.messages.map((msg, origIdx) => ({ msg, origIdx }));
@@ -253,9 +252,9 @@ suite('S7 — Render cache', () => {
     });
 });
 
-// ── Performance: 500-message session first content within 200 ms ──────────────
+// â”€â”€ Performance: 500-message session first content within 200 ms â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-suite('S7 — Performance', () => {
+suite('S7 â€” Performance', () => {
     test('rendering the initial chunk for a 500-message session completes in < 200 ms', function() {
         this.timeout(5_000);
 
@@ -279,7 +278,7 @@ suite('S7 — Performance', () => {
         assert.ok(html.length > 0,    'produced HTML');
         assert.ok(
             elapsed < 200,
-            `first chunk rendered in ${elapsed.toFixed(1)} ms — expected < 200 ms`
+            `first chunk rendered in ${elapsed.toFixed(1)} ms â€” expected < 200 ms`
         );
     });
 
@@ -302,13 +301,13 @@ suite('S7 — Performance', () => {
         renderChunk(visible, cache, windowStart, firstEnd, 'Claude', false);
         const elapsed = performance.now() - start;
 
-        assert.ok(elapsed < 5, `cache hit took ${elapsed.toFixed(2)} ms — expected < 5 ms`);
+        assert.ok(elapsed < 5, `cache hit took ${elapsed.toFixed(2)} ms â€” expected < 5 ms`);
     });
 });
 
-// ── Shell HTML structure ──────────────────────────────────────────────────────
+// â”€â”€ Shell HTML structure â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-suite('S7 — Shell HTML', () => {
+suite('S7 â€” Shell HTML', () => {
     test('renderChunk produces message divs with data-msg-idx attributes', () => {
         const session = makeSession('s-html-attrs', 4);
         const visible = session.messages.map((msg, origIdx) => ({ msg, origIdx }));
@@ -331,3 +330,4 @@ suite('S7 — Shell HTML', () => {
         assert.ok(html.includes('class="message assistant'), 'assistant message present');
     });
 });
+

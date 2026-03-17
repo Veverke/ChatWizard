@@ -347,7 +347,18 @@ export class CodeBlockTreeProvider implements vscode.TreeDataProvider<CodeBlockG
     // Description (shown below view title)
     // ------------------------------------------------------------------
     private _nonEmptyBlocks(): IndexedCodeBlock[] {
-        return this.index.getAllCodeBlocks().filter(b => b.content.trim().length > 0);
+        return this.index.getAllCodeBlocks().filter(b => {
+            if (b.content.trim().length === 0) { return false; }
+            // Exclude empty-language blocks whose every non-empty line looks like a markdown list
+            // (e.g. a bullet list accidentally wrapped in backtick fences).
+            if (b.language === '') {
+                const lines = b.content.trim().split('\n').filter(l => l.trim().length > 0);
+                if (lines.length > 0 && lines.every(l => /^\s*(?:[-*+]|\d+\.)\s+/.test(l))) {
+                    return false;
+                }
+            }
+            return true;
+        });
     }
 
     private _buildSortedGroups(): SessionCodeBlockGroup[] {

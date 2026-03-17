@@ -16,6 +16,8 @@ export interface CodeBlock {
     sessionId: string;
     /** Index of the message within the session */
     messageIndex: number;
+    /** 0-based index of this block among all fenced code blocks in the same message */
+    blockIndexInMessage?: number;
 }
 
 /** A single turn in a conversation */
@@ -68,6 +70,8 @@ export interface IndexedCodeBlock {
     sessionId: string;
     /** Index of the message within the session */
     messageIndex: number;
+    /** 0-based index of this block among all fenced code blocks in the same message */
+    blockIndexInMessage?: number;
     /** Whether this block came from a user or assistant message */
     messageRole: MessageRole;
     /** Human-readable session title */

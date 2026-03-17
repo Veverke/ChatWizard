@@ -1,11 +1,10 @@
-// test/suite/timelineBuilder.test.ts
+﻿// test/suite/timelineBuilder.test.ts
 
 import * as assert from 'assert';
-import { suite, test } from 'mocha';
 import { buildTimeline, TimelineEntry } from '../../src/timeline/timelineBuilder';
 import { Session, Message } from '../../src/types/index';
 
-// ── helpers ────────────────────────────────────────────────────────────────
+// â”€â”€ helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function makeMessage(
     role: 'user' | 'assistant',
@@ -29,18 +28,18 @@ function makeSession(overrides: Partial<Session> & { id: string }): Session {
     };
 }
 
-// ── suite ──────────────────────────────────────────────────────────────────
+// â”€â”€ suite â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 suite('buildTimeline', () => {
 
-    // ── empty input ────────────────────────────────────────────────────────
+    // â”€â”€ empty input â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     test('empty sessions array returns []', () => {
         const result = buildTimeline([]);
         assert.deepStrictEqual(result, []);
     });
 
-    // ── single session ─────────────────────────────────────────────────────
+    // â”€â”€ single session â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     test('single session returns one entry with correct fields', () => {
         const session = makeSession({
@@ -71,7 +70,7 @@ suite('buildTimeline', () => {
         assert.strictEqual(entry.promptCount, 1);
     });
 
-    // ── epoch-zero session skipped ─────────────────────────────────────────
+    // â”€â”€ epoch-zero session skipped â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     test('session with updatedAt resolving to epoch zero is skipped', () => {
         const session = makeSession({
@@ -103,7 +102,7 @@ suite('buildTimeline', () => {
         assert.deepStrictEqual(result, []);
     });
 
-    // ── zero-message session skipped ───────────────────────────────────────
+    // â”€â”€ zero-message session skipped â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     test('session with 0 messages is skipped', () => {
         const session = makeSession({
@@ -115,7 +114,7 @@ suite('buildTimeline', () => {
         assert.deepStrictEqual(result, []);
     });
 
-    // ── sorting ────────────────────────────────────────────────────────────
+    // â”€â”€ sorting â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     test('multiple sessions are sorted newest-first by timestamp', () => {
         const sessions = [
@@ -130,7 +129,7 @@ suite('buildTimeline', () => {
         assert.strictEqual(result[2].sessionId, 'older');
     });
 
-    // ── workspaceName extraction ───────────────────────────────────────────
+    // â”€â”€ workspaceName extraction â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     test('workspaceName from Windows-style path with backslashes', () => {
         const session = makeSession({
@@ -174,7 +173,7 @@ suite('buildTimeline', () => {
         assert.strictEqual(result[0].workspacePath, '');
     });
 
-    // ── firstPrompt from string content ────────────────────────────────────
+    // â”€â”€ firstPrompt from string content â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     test('firstPrompt is taken from the first user message (string content)', () => {
         const session = makeSession({
@@ -189,7 +188,7 @@ suite('buildTimeline', () => {
         assert.strictEqual(result[0].firstPrompt, 'What is TypeScript?');
     });
 
-    // ── firstPrompt from array content blocks ──────────────────────────────
+    // â”€â”€ firstPrompt from array content blocks â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     test('firstPrompt is extracted from first text block in array content', () => {
         const session = makeSession({
@@ -231,7 +230,7 @@ suite('buildTimeline', () => {
         assert.strictEqual(result[0].firstPrompt, 'First text block');
     });
 
-    // ── firstPrompt capped at 150 chars ────────────────────────────────────
+    // â”€â”€ firstPrompt capped at 150 chars â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     test('firstPrompt is capped at 150 chars with ellipsis appended when over 150', () => {
         const longText = 'a'.repeat(200);
@@ -251,10 +250,10 @@ suite('buildTimeline', () => {
         });
         const result = buildTimeline([session]);
         assert.strictEqual(result[0].firstPrompt, exactText);
-        assert.ok(!result[0].firstPrompt.endsWith('…'));
+        assert.ok(!result[0].firstPrompt.endsWith('â€¦'));
     });
 
-    // ── firstPrompt is empty when no user/human messages ──────────────────
+    // â”€â”€ firstPrompt is empty when no user/human messages â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     test('firstPrompt is empty string when no user messages exist', () => {
         const session = makeSession({
@@ -267,7 +266,7 @@ suite('buildTimeline', () => {
         assert.strictEqual(result[0].firstPrompt, '');
     });
 
-    // ── source propagation ─────────────────────────────────────────────────
+    // â”€â”€ source propagation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     test('source copilot is propagated correctly', () => {
         const session = makeSession({
@@ -289,7 +288,7 @@ suite('buildTimeline', () => {
         assert.strictEqual(result[0].source, 'claude');
     });
 
-    // ── promptCount ────────────────────────────────────────────────────────
+    // â”€â”€ promptCount â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     test('promptCount counts only user-role messages, not assistant', () => {
         const session = makeSession({
@@ -319,7 +318,7 @@ suite('buildTimeline', () => {
         assert.strictEqual(result[0].promptCount, 0);
     });
 
-    // ── mixed valid and invalid sessions ──────────────────────────────────
+    // â”€â”€ mixed valid and invalid sessions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     test('valid sessions are returned while invalid ones are filtered out', () => {
         const sessions = [
@@ -356,7 +355,7 @@ suite('buildTimeline', () => {
         assert.strictEqual(result[1].sessionId, 'valid-1');
     });
 
-    // ── date field ─────────────────────────────────────────────────────────
+    // â”€â”€ date field â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     test('date field is YYYY-MM-DD slice of updatedAt ISO string', () => {
         const session = makeSession({
@@ -368,3 +367,4 @@ suite('buildTimeline', () => {
         assert.strictEqual(result[0].date, '2025-11-28');
     });
 });
+

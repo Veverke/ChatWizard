@@ -97,7 +97,7 @@ export function extractCodeBlocks(
     while ((match = pattern.exec(content)) !== null) {
         const language = match[1].trim();
         const blockContent = match[2].trim();
-        blocks.push({ language, content: blockContent, sessionId, messageIndex });
+        blocks.push({ language, content: blockContent, sessionId, messageIndex, blockIndexInMessage: blocks.length });
     }
 
     return blocks;

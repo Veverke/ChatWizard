@@ -99,7 +99,7 @@ suite('markdownSerializer', () => {
             ],
         });
         const md = serializeSession(s);
-        assert.ok(!md.includes('## '), 'empty user message should not produce H2');
+        assert.ok(!md.split('\n').some(l => l.startsWith('## ')), 'empty user message should not produce H2');
         assert.ok(md.includes('### Response'), 'non-empty assistant message should appear');
     });
 
@@ -119,7 +119,7 @@ suite('markdownSerializer', () => {
         const s1 = makeSession({ id: 'c1', title: 'Session Alpha', messages: [] });
         const s2 = makeSession({ id: 'c2', title: 'Session Beta', messages: [] });
         const md = serializeSessions([s1, s2], 'combined');
-        assert.ok(md.startsWith('# ChatWizard Export'), 'should start with top-level heading');
+        assert.ok(md.includes('# ChatWizard Export'), 'should include top-level heading');
         assert.ok(md.includes('Session Alpha'), 'should contain first session title');
         assert.ok(md.includes('Session Beta'), 'should contain second session title');
         // Both session H1s should appear

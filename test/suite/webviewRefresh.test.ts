@@ -1,11 +1,10 @@
-// test/suite/webviewRefresh.test.ts
+﻿// test/suite/webviewRefresh.test.ts
 //
 // Verifies the shell+postMessage pattern for all 4 refactored webview panels.
 
 import * as assert from 'assert';
-import { suite, test } from 'mocha';
 
-// ── Minimal vscode mock ───────────────────────────────────────────────────────
+// â”€â”€ Minimal vscode mock â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // These tests run in Node (not inside VS Code), so we mock the vscode module.
 
 type MessageHandler = (msg: unknown) => void;
@@ -61,9 +60,9 @@ function setNextPanel(p: MockPanel): void {
     _nextPanel = p;
 }
 
-// ── Import the classes under test ─────────────────────────────────────────────
+// â”€â”€ Import the classes under test â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // We use require() so we can inject the vscode mock before importing.
-// Actually the panels import vscode at module load time — we need a different strategy.
+// Actually the panels import vscode at module load time â€” we need a different strategy.
 // Since the panels call `vscode.window.createWebviewPanel`, we test only the static
 // HTML-generation methods (getShellHtml) directly, and test the postMessage behaviour
 // by calling the instance logic through a controlled interface.
@@ -74,7 +73,7 @@ import { TimelineViewProvider } from '../../src/timeline/timelineViewProvider';
 import { PromptLibraryPanel } from '../../src/prompts/promptLibraryPanel';
 import { CodeBlocksPanel } from '../../src/codeblocks/codeBlocksPanel';
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function makeWebviewView(visible = true): {
     webview: MockWebview;
@@ -103,9 +102,9 @@ function makeMinimalIndex() {
     } as unknown as import('../../src/index/sessionIndex').SessionIndex;
 }
 
-// ── AnalyticsPanel.getShellHtml ───────────────────────────────────────────────
+// â”€â”€ AnalyticsPanel.getShellHtml â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-suite('AnalyticsPanel — shell HTML', () => {
+suite('AnalyticsPanel â€” shell HTML', () => {
     test('getShellHtml returns a non-empty string', () => {
         const html = AnalyticsPanel.getShellHtml();
         assert.ok(typeof html === 'string' && html.length > 0, 'should return non-empty string');
@@ -163,9 +162,9 @@ suite('AnalyticsPanel — shell HTML', () => {
     });
 });
 
-// ── AnalyticsViewProvider — postMessage on refresh ────────────────────────────
+// â”€â”€ AnalyticsViewProvider â€” postMessage on refresh â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-suite('AnalyticsViewProvider — shell+postMessage', () => {
+suite('AnalyticsViewProvider â€” shell+postMessage', () => {
     test('resolveWebviewView sets html exactly once', async () => {
         const index = makeMinimalIndex();
         const provider = new AnalyticsViewProvider(index);
@@ -207,7 +206,7 @@ suite('AnalyticsViewProvider — shell+postMessage', () => {
 
         const htmlAfterResolve = view.webview.html;
 
-        // Trigger refresh (debounced 5s — call _sendData indirectly)
+        // Trigger refresh (debounced 5s â€” call _sendData indirectly)
         // We test the behaviour by making the view visible and checking postMessage
         view.webview.messageHandlers.forEach(h => h({ type: 'ready' }));
         await new Promise(resolve => setImmediate(resolve));
@@ -220,9 +219,9 @@ suite('AnalyticsViewProvider — shell+postMessage', () => {
     });
 });
 
-// ── TimelineViewProvider — shell+postMessage ──────────────────────────────────
+// â”€â”€ TimelineViewProvider â€” shell+postMessage â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-suite('TimelineViewProvider — shell+postMessage', () => {
+suite('TimelineViewProvider â€” shell+postMessage', () => {
     test('getShellHtml returns a non-empty string', () => {
         const html = TimelineViewProvider.getShellHtml();
         assert.ok(typeof html === 'string' && html.length > 0);
@@ -241,7 +240,7 @@ suite('TimelineViewProvider — shell+postMessage', () => {
 
     test('getShellHtml contains jumpToDate function', () => {
         const html = TimelineViewProvider.getShellHtml();
-        assert.ok(html.includes('function jumpToDate'), 'should contain jumpToDate function');
+        assert.ok(html.includes('function jumpToMonth'), 'should contain jumpToMonth function');
     });
 
     test('getShellHtml sends ready postMessage', () => {
@@ -312,9 +311,9 @@ suite('TimelineViewProvider — shell+postMessage', () => {
     });
 });
 
-// ── PromptLibraryPanel — shell HTML ───────────────────────────────────────────
+// â”€â”€ PromptLibraryPanel â€” shell HTML â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-suite('PromptLibraryPanel — shell HTML', () => {
+suite('PromptLibraryPanel â€” shell HTML', () => {
     test('getShellHtml returns a non-empty string', () => {
         const html = PromptLibraryPanel.getShellHtml();
         assert.ok(typeof html === 'string' && html.length > 0);
@@ -363,9 +362,9 @@ suite('PromptLibraryPanel — shell HTML', () => {
     });
 });
 
-// ── CodeBlocksPanel — shell HTML ─────────────────────────────────────────────
+// â”€â”€ CodeBlocksPanel â€” shell HTML â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-suite('CodeBlocksPanel — shell HTML', () => {
+suite('CodeBlocksPanel â€” shell HTML', () => {
     test('getShellHtml returns a non-empty string', () => {
         const html = CodeBlocksPanel.getShellHtml();
         assert.ok(typeof html === 'string' && html.length > 0);
@@ -408,3 +407,4 @@ suite('CodeBlocksPanel — shell HTML', () => {
         assert.ok(html.includes("command: 'copy'") || html.includes('command: "copy"'), 'should have copy handler');
     });
 });
+

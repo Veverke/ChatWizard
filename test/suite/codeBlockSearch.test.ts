@@ -1,7 +1,6 @@
-// test/suite/codeBlockSearch.test.ts
+﻿// test/suite/codeBlockSearch.test.ts
 
 import * as assert from 'assert';
-import { suite, test } from 'mocha';
 import { CodeBlockSearchEngine } from '../../src/codeblocks/codeBlockSearchEngine';
 import { IndexedCodeBlock } from '../../src/types/index';
 
@@ -187,3 +186,4 @@ suite('CodeBlockSearchEngine', () => {
         assert.strictEqual(result.content, 'const x = 1');
     });
 });
+

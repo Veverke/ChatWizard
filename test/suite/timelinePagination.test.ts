@@ -1,11 +1,10 @@
-// test/suite/timelinePagination.test.ts
+﻿// test/suite/timelinePagination.test.ts
 
 import * as assert from 'assert';
-import { suite, test } from 'mocha';
 import { buildTimeline, TimelineOptions } from '../../src/timeline/timelineBuilder';
 import { Session, Message } from '../../src/types/index';
 
-// ── helpers ────────────────────────────────────────────────────────────────
+// â”€â”€ helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function makeMsg(role: 'user' | 'assistant', content: string): Message {
     return { id: Math.random().toString(), role, content, codeBlocks: [] };
@@ -38,9 +37,9 @@ const SESSIONS = [
     makeSession('jun-1',  '2025-06-30T00:00:00Z'),
 ];
 
-// ── buildTimeline — no options (backward compat) ───────────────────────────
+// â”€â”€ buildTimeline â€” no options (backward compat) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-suite('buildTimeline — S12 pagination options', () => {
+suite('buildTimeline â€” S12 pagination options', () => {
 
     test('no options returns all entries sorted newest-first (backward compat)', () => {
         const result = buildTimeline(SESSIONS);
@@ -49,7 +48,7 @@ suite('buildTimeline — S12 pagination options', () => {
         assert.strictEqual(result[result.length - 1].sessionId, 'jan-1');
     });
 
-    // ── monthCount ────────────────────────────────────────────────────────
+    // â”€â”€ monthCount â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     test('monthCount:1 returns only entries from the most recent month', () => {
         const result = buildTimeline(SESSIONS, { monthCount: 1 });
@@ -59,7 +58,7 @@ suite('buildTimeline — S12 pagination options', () => {
 
     test('monthCount:3 returns entries from the 3 most recent months', () => {
         const result = buildTimeline(SESSIONS, { monthCount: 3 });
-        // Jun, May, Apr → jun-1, may-1, apr-1, apr-2
+        // Jun, May, Apr â†’ jun-1, may-1, apr-1, apr-2
         assert.strictEqual(result.length, 4);
         const ids = result.map(e => e.sessionId);
         assert.ok(ids.includes('jun-1'));
@@ -79,7 +78,7 @@ suite('buildTimeline — S12 pagination options', () => {
         assert.strictEqual(result.length, 0);
     });
 
-    // ── before ────────────────────────────────────────────────────────────
+    // â”€â”€ before â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     test('before:Apr-1 excludes Apr and later', () => {
         const cutoff = new Date('2025-04-01T00:00:00Z');
@@ -103,13 +102,13 @@ suite('buildTimeline — S12 pagination options', () => {
         assert.strictEqual(result.length, 8);
     });
 
-    // ── before + monthCount combined ──────────────────────────────────────
+    // â”€â”€ before + monthCount combined â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     test('before + monthCount: load 3 months before April', () => {
         // Entries before Apr 1: Mar, Feb, Jan
         const cutoff = new Date('2025-04-01T00:00:00Z');
         const result = buildTimeline(SESSIONS, { before: cutoff, monthCount: 3 });
-        // Mar, Feb(×2), Jan
+        // Mar, Feb(Ã—2), Jan
         assert.strictEqual(result.length, 4);
         const ids = result.map(e => e.sessionId);
         assert.ok(ids.includes('mar-1'));
@@ -125,7 +124,7 @@ suite('buildTimeline — S12 pagination options', () => {
         assert.strictEqual(result[0].sessionId, 'mar-1');
     });
 
-    // ── result is still sorted newest-first after filtering ───────────────
+    // â”€â”€ result is still sorted newest-first after filtering â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     test('result remains sorted newest-first with monthCount applied', () => {
         const result = buildTimeline(SESSIONS, { monthCount: 3 });
@@ -142,10 +141,11 @@ suite('buildTimeline — S12 pagination options', () => {
         }
     });
 
-    // ── empty input ───────────────────────────────────────────────────────
+    // â”€â”€ empty input â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     test('empty sessions with options returns []', () => {
         assert.deepStrictEqual(buildTimeline([], { monthCount: 3 }), []);
         assert.deepStrictEqual(buildTimeline([], { before: new Date() }), []);
     });
 });
+

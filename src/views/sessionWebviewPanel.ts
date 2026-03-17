@@ -18,7 +18,7 @@ const CHUNK_SIZE      = 20;  // messages per setImmediate batch
 // ── Internal types ────────────────────────────────────────────────────────────
 interface ScrollInit {
     targetMsgIdx:      number | null;
-    targetBlockContent: string | null;
+    targetBlockIdx:    number | null;
     highlightColor:    string | null;
     shouldScroll:      boolean;
 }
@@ -52,7 +52,8 @@ export class SessionWebviewPanel {
         searchTerm?: string,
         scrollToCodeBlock?: boolean,
         targetBlockMessageIndex?: number,
-        targetBlockContent?: string
+        _targetBlockContent?: string,  // deprecated — kept for call-site compat, unused
+        targetBlockIdx?: number
     ): void {
         const config = vscode.workspace.getConfiguration('chatwizard');
         const userColor = config.get<string>('userMessageColor', '#007acc') || '#007acc';
@@ -96,10 +97,10 @@ export class SessionWebviewPanel {
         }
 
         const scrollInit: ScrollInit = {
-            targetMsgIdx:       targetBlockMessageIndex ?? null,
-            targetBlockContent: targetBlockContent ?? null,
-            highlightColor:     cbHighlightColor || null,
-            shouldScroll:       cbScroll,
+            targetMsgIdx:   targetBlockMessageIndex ?? null,
+            targetBlockIdx: targetBlockIdx ?? null,
+            highlightColor: cbHighlightColor || null,
+            shouldScroll:   cbScroll,
         };
 
         // ── Re-use existing panel ─────────────────────────────────────────────
@@ -725,10 +726,21 @@ ${cwInteractiveJs()}
     }
     return out;
   }
+  var _deHighlighted = false;
   function highlightAll() {
+    if (_deHighlighted) { return; } // don't overwrite de-highlighted state during active search
     document.querySelectorAll('pre code').forEach(function(block) {
       block.innerHTML = tokenize(block.textContent || '');
     });
+  }
+  function dehighlightCode() {
+    if (_deHighlighted) { return; }
+    document.querySelectorAll('pre code').forEach(function(block) {
+      var text = block.textContent || '';
+      while (block.firstChild) { block.removeChild(block.firstChild); }
+      block.appendChild(document.createTextNode(text));
+    });
+    _deHighlighted = true;
   }
 
   // ── Search ─────────────────────────────────────────────────────────────────
@@ -744,6 +756,7 @@ ${cwInteractiveJs()}
       if (p) { p.replaceChild(document.createTextNode(mk.textContent), mk); p.normalize(); }
     });
     cwMarks = []; cwIdx = -1;
+    if (_deHighlighted) { _deHighlighted = false; highlightAll(); }
   }
   function walkBody(root, rx) {
     var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
@@ -772,8 +785,18 @@ ${cwInteractiveJs()}
     srchCounter.textContent = cwMarks.length > 0 ? (idx + 1) + ' / ' + cwMarks.length : 'No matches';
   }
   function runSearch(query) {
-    clearMarks();
-    if (!query) { srchCounter.textContent = ''; return; }
+    // Inline mark removal without re-highlighting (avoids unnecessary highlight/de-highlight cycle)
+    cwMarks.forEach(function(mk) {
+      var p = mk.parentNode;
+      if (p) { p.replaceChild(document.createTextNode(mk.textContent), mk); p.normalize(); }
+    });
+    cwMarks = []; cwIdx = -1;
+    if (!query) {
+      if (_deHighlighted) { _deHighlighted = false; highlightAll(); }
+      srchCounter.textContent = '';
+      return;
+    }
+    dehighlightCode(); // flatten spans so multi-word searches work across tokens
     var rx = new RegExp(escRx(query), 'gi');
     document.querySelectorAll('.message-body').forEach(function(body) { walkBody(body, rx); });
     if (cwMarks.length === 0) { srchCounter.textContent = 'No matches'; return; }
@@ -805,22 +828,22 @@ ${cwInteractiveJs()}
     if (!p || (!p.highlightColor && !p.shouldScroll)) { return; }
     if (p.targetMsgIdx !== null && p.targetMsgIdx !== undefined) {
       var el = document.querySelector('[data-msg-idx="' + p.targetMsgIdx + '"]');
-      var msgPres = el ? Array.from(el.querySelectorAll('pre')) : [];
-      if (msgPres.length > 0) {
-        var target;
-        if (p.targetBlockContent && msgPres.length > 1) {
-          var needle = p.targetBlockContent.trim().slice(0, 60);
-          target = msgPres.find(function(pr) { return pr.textContent.trim().slice(0, 60) === needle; }) || msgPres[0];
-        } else {
-          target = msgPres[0];
+      if (el) {
+        // Use data-fence-idx to reliably locate the correct fenced code block
+        var fencedPres = Array.from(el.querySelectorAll('pre[data-fence-idx]'));
+        if (fencedPres.length > 0) {
+          var idx = (p.targetBlockIdx !== null && p.targetBlockIdx !== undefined) ? p.targetBlockIdx : 0;
+          var target = fencedPres[idx] || fencedPres[0];
+          if (p.highlightColor) { target.style.boxShadow = '0 0 0 2px ' + p.highlightColor; }
+          cwScrollTo(target);
+          return;
         }
-        if (p.highlightColor) { target.style.boxShadow = '0 0 0 2px ' + p.highlightColor; }
-        cwScrollTo(target);
-        return;
+        cwScrollTo(el); return;
       }
-      if (el) { cwScrollTo(el); return; }
     }
-    var pres = Array.from(document.querySelectorAll('pre'));
+    // Fallback: scroll to first fenced code block in the document (group-level click)
+    var pres = Array.from(document.querySelectorAll('pre[data-fence-idx]'));
+    if (pres.length === 0) { pres = Array.from(document.querySelectorAll('pre')); }
     if (p.highlightColor) { pres.forEach(function(x) { x.style.boxShadow = '0 0 0 2px ' + p.highlightColor; }); }
     if (p.shouldScroll && pres.length > 0) { cwScrollTo(pres[0]); }
   }

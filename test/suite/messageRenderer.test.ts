@@ -1,13 +1,12 @@
-// test/suite/messageRenderer.test.ts
+﻿// test/suite/messageRenderer.test.ts
 //
-// S8 — Markdown Renderer benchmark and correctness tests
+// S8 â€” Markdown Renderer benchmark and correctness tests
 // Verifies: pre-compiled regexes, MessageRenderer class, < 5ms for 10KB input.
 
 import * as assert from 'assert';
-import { suite, test } from 'mocha';
 import { MessageRenderer, markdownToHtml, escapeHtml } from '../../src/views/sessionRenderer';
 
-// ── Fixture: ~10 KB Markdown message ─────────────────────────────────────────
+// â”€â”€ Fixture: ~10 KB Markdown message â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function make10KbMarkdown(): string {
     const paragraph = 'Lorem ipsum dolor sit amet, consectetur adipiscing elit. ' +
@@ -36,9 +35,9 @@ function make10KbMarkdown(): string {
 
 const MARKDOWN_10KB = make10KbMarkdown();
 
-// ── Benchmark ─────────────────────────────────────────────────────────────────
+// â”€â”€ Benchmark â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-suite('S8 — MessageRenderer benchmark', () => {
+suite('S8 â€” MessageRenderer benchmark', () => {
     test('markdownToHtml renders 10 KB in < 5 ms', () => {
         // Warm up (JIT)
         markdownToHtml(MARKDOWN_10KB);
@@ -68,10 +67,10 @@ suite('S8 — MessageRenderer benchmark', () => {
     });
 });
 
-// ── Correctness ───────────────────────────────────────────────────────────────
+// â”€â”€ Correctness â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-suite('S8 — MessageRenderer correctness', () => {
-    test('headings h1–h6', () => {
+suite('S8 â€” MessageRenderer correctness', () => {
+    test('headings h1â€“h6', () => {
         for (let lvl = 1; lvl <= 6; lvl++) {
             const result = markdownToHtml(`${'#'.repeat(lvl)} Heading ${lvl}`);
             assert.ok(result.includes(`<h${lvl}>`), `h${lvl} tag present`);
@@ -143,15 +142,15 @@ suite('S8 — MessageRenderer correctness', () => {
     });
 
     test('non-ASCII characters encoded as HTML entities', () => {
-        const result = markdownToHtml('Café naïve résumé');
+        const result = markdownToHtml('CafÃ© naÃ¯ve rÃ©sumÃ©');
         // Non-ASCII encoded; no raw multi-byte chars
-        assert.ok(!result.includes('é'), 'é encoded');
+        assert.ok(!result.includes('Ã©'), 'Ã© encoded');
         assert.ok(result.includes('&#'), 'HTML entities present');
     });
 
     test('empty string returns empty output', () => {
         const result = markdownToHtml('');
-        assert.strictEqual(result.trim(), '', 'empty input → empty output');
+        assert.strictEqual(result.trim(), '', 'empty input â†’ empty output');
     });
 
     test('MessageRenderer class has all expected static methods', () => {
@@ -160,3 +159,4 @@ suite('S8 — MessageRenderer correctness', () => {
         assert.strictEqual(typeof MessageRenderer.renderChunk,    'function');
     });
 });
+

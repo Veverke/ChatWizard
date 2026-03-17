@@ -1,9 +1,8 @@
-import * as assert from 'assert';
-import { suite, test } from 'mocha';
+﻿import * as assert from 'assert';
 import { extractSnippet, findFirstMatch } from '../../src/search/snippetExtractor';
 
 suite('extractSnippet', () => {
-    test('match in the middle — snippet has context on both sides, offsets point to match', () => {
+    test('match in the middle â€” snippet has context on both sides, offsets point to match', () => {
         const content = 'The quick brown fox jumps over the lazy dog';
         // match: "fox" at offset 16, length 3
         const offset = content.indexOf('fox');
@@ -15,28 +14,28 @@ suite('extractSnippet', () => {
         assert.ok(result.snippet.includes('jumps'));
     });
 
-    test('match at the start — no leading ellipsis, matchStart = 0', () => {
+    test('match at the start â€” no leading ellipsis, matchStart = 0', () => {
         const content = 'Hello world, this is a test';
         // match: "Hello" at offset 0, length 5
         const result = extractSnippet(content, 0, 5, 10);
 
         assert.strictEqual(result.matchStart, 0);
         assert.strictEqual(result.matchEnd, 5);
-        assert.ok(!result.snippet.startsWith('…'));
+        assert.ok(!result.snippet.startsWith('â€¦'));
         assert.strictEqual(result.snippet.slice(result.matchStart, result.matchEnd), 'Hello');
     });
 
-    test('match at the end — no trailing ellipsis', () => {
+    test('match at the end â€” no trailing ellipsis', () => {
         const content = 'Hello world, this is a test ending';
         const matchWord = 'ending';
         const offset = content.indexOf(matchWord);
         const result = extractSnippet(content, offset, matchWord.length, 10);
 
-        assert.ok(!result.snippet.endsWith('…'));
+        assert.ok(!result.snippet.endsWith('â€¦'));
         assert.strictEqual(result.snippet.slice(result.matchStart, result.matchEnd), matchWord);
     });
 
-    test('content shorter than 2*contextChars — returns full content, offsets equal match position in content', () => {
+    test('content shorter than 2*contextChars â€” returns full content, offsets equal match position in content', () => {
         const content = 'Short text';
         const offset = content.indexOf('text');
         const result = extractSnippet(content, offset, 4, 100);
@@ -98,3 +97,4 @@ suite('findFirstMatch', () => {
         assert.strictEqual(result, undefined);
     });
 });
+

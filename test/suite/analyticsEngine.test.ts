@@ -1,7 +1,6 @@
-// test/suite/analyticsEngine.test.ts
+﻿// test/suite/analyticsEngine.test.ts
 
 import * as assert from 'assert';
-import { suite, test } from 'mocha';
 import { computeAnalytics } from '../../src/analytics/analyticsEngine';
 import { Session, Message } from '../../src/types/index';
 
@@ -28,7 +27,7 @@ function makeSession(overrides: Partial<Session> & { id: string }): Session {
 
 suite('computeAnalytics', () => {
 
-    // ── empty input ────────────────────────────────────────────────────────
+    // â”€â”€ empty input â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     test('empty sessions array returns all zeros and empty arrays', () => {
         const result = computeAnalytics([], countTokens);
@@ -47,7 +46,7 @@ suite('computeAnalytics', () => {
         assert.deepStrictEqual(result.longestByTokens, []);
     });
 
-    // ── single session ─────────────────────────────────────────────────────
+    // â”€â”€ single session â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     test('single session with one user + one assistant message returns correct counts', () => {
         const session = makeSession({
@@ -71,7 +70,7 @@ suite('computeAnalytics', () => {
         assert.strictEqual(result.copilotSessions, 0);
     });
 
-    // ── source counts ──────────────────────────────────────────────────────
+    // â”€â”€ source counts â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     test('copilotSessions and claudeSessions counts are correct', () => {
         const sessions = [
@@ -84,7 +83,7 @@ suite('computeAnalytics', () => {
         assert.strictEqual(result.claudeSessions, 1);
     });
 
-    // ── daily activity ─────────────────────────────────────────────────────
+    // â”€â”€ daily activity â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     test('multiple sessions on same day produce one dailyActivity entry', () => {
         const sessions = [
@@ -153,11 +152,11 @@ suite('computeAnalytics', () => {
         ];
         const result = computeAnalytics(sessions, countTokens);
         assert.strictEqual(result.dailyActivity.length, 1);
-        // s1: user=2, assistant=3 → 5; s2: user=4 → 4; total = 9
+        // s1: user=2, assistant=3 â†’ 5; s2: user=4 â†’ 4; total = 9
         assert.strictEqual(result.dailyActivity[0].tokenCount, 9);
     });
 
-    // ── project activity ───────────────────────────────────────────────────
+    // â”€â”€ project activity â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     test('sessions with same workspacePath are merged into one project entry', () => {
         const sessions = [
@@ -230,7 +229,7 @@ suite('computeAnalytics', () => {
         assert.strictEqual(result.projectActivity[2].workspacePath, '/proj/small');
     });
 
-    // ── top terms ──────────────────────────────────────────────────────────
+    // â”€â”€ top terms â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     test('stop words are excluded from topTerms', () => {
         const session = makeSession({
@@ -292,7 +291,7 @@ suite('computeAnalytics', () => {
         assert.ok(!terms.includes('python'), '"python" should not appear (assistant only)');
     });
 
-    // ── longestByMessages ──────────────────────────────────────────────────
+    // â”€â”€ longestByMessages â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     test('longestByMessages returns sessions sorted by totalMessageCount desc', () => {
         const sessions = [
@@ -319,7 +318,7 @@ suite('computeAnalytics', () => {
         assert.strictEqual(result.longestByMessages[0].totalMessageCount, 15);
     });
 
-    // ── longestByTokens ────────────────────────────────────────────────────
+    // â”€â”€ longestByTokens â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     test('longestByTokens returns sessions sorted by totalTokens desc', () => {
         const sessions = [
@@ -346,7 +345,7 @@ suite('computeAnalytics', () => {
         assert.strictEqual(result.longestByTokens[0].totalTokens, 15);
     });
 
-    // ── time span ─────────────────────────────────────────────────────────
+    // â”€â”€ time span â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     test('empty sessions yield empty oldestDate, newestDate and timeSpanDays=0', () => {
         const result = computeAnalytics([], countTokens);
@@ -387,10 +386,10 @@ suite('computeAnalytics', () => {
         const result = computeAnalytics(sessions, countTokens);
         assert.strictEqual(result.oldestDate, '2024-06-01');
         assert.strictEqual(result.newestDate, '2024-06-20');
-        assert.strictEqual(result.timeSpanDays, 20); // June 1–20 inclusive
+        assert.strictEqual(result.timeSpanDays, 20); // June 1â€“20 inclusive
     });
 
-    // ── SessionMetrics fields ──────────────────────────────────────────────
+    // â”€â”€ SessionMetrics fields â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     test('SessionMetrics fields are populated correctly', () => {
         const session = makeSession({
@@ -420,3 +419,4 @@ suite('computeAnalytics', () => {
         assert.strictEqual(m.totalTokens, 5);
     });
 });
+

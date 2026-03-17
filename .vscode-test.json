@@ -1,0 +1,8 @@
+{
+  "files": "out/test/suite/**/*.test.js",
+  "mocha": {
+    "ui": "tdd",
+    "color": true,
+    "timeout": 10000
+  }
+}

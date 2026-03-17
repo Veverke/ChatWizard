@@ -4,7 +4,8 @@
   "description": "Unified search and analytics for AI chat history (GitHub Copilot Chat, Claude Code)",
   "version": "1.0.0",
   "publisher": "Veverke",
-  "license": "MIT AND LicenseRef-CommonClause-1.0",
+  "icon": "images/icon.png",
+  "license": "SEE LICENSE IN LICENSE",
   "keywords": [
     "copilot",
     "claude",
@@ -20,6 +21,14 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/veverke/chatwizard.git"
+  },
+  "bugs": {
+    "url": "https://github.com/veverke/chatwizard/issues"
+  },
+  "homepage": "https://github.com/veverke/chatwizard#readme",
+  "galleryBanner": {
+    "color": "#16324f",
+    "theme": "dark"
   },
   "engines": {
     "vscode": "^1.85.0"
@@ -631,8 +640,12 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile && npm run lint",
-    "lint": "eslint src",
-    "test": "vscode-test"
+    "lint": "eslint \"src/**/*.ts\"",
+    "test": "vscode-test",
+    "package:vsix:win32-x64": "npx @vscode/vsce package --target win32-x64 --out chatwizard-win32-x64.vsix",
+    "package:vsix:linux-x64": "npx @vscode/vsce package --target linux-x64 --out chatwizard-linux-x64.vsix",
+    "package:vsix:darwin-x64": "npx @vscode/vsce package --target darwin-x64 --out chatwizard-darwin-x64.vsix",
+    "package:vsix:darwin-arm64": "npx @vscode/vsce package --target darwin-arm64 --out chatwizard-darwin-arm64.vsix"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.6",

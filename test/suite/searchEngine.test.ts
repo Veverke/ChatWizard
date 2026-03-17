@@ -1,12 +1,11 @@
-// test/suite/searchEngine.test.ts
+﻿// test/suite/searchEngine.test.ts
 
 import * as assert from 'assert';
-import { suite, test } from 'mocha';
 import { FullTextSearchEngine } from '../../src/search/fullTextEngine';
 import { Session, Message } from '../../src/types/index';
 import { SearchQuery } from '../../src/search/types';
 
-// ── Fixture builder ──────────────────────────────────────────────────────────
+// â”€â”€ Fixture builder â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 let _idCounter = 0;
 
@@ -46,12 +45,12 @@ function makeSession(
     };
 }
 
-// ── Tests ────────────────────────────────────────────────────────────────────
+// â”€â”€ Tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 suite('FullTextSearchEngine', () => {
 
-    // 1. Basic index + search: tokens must appear in ≥ 2 sessions to reach the main index (S11).
-    test('index and search plain text — tokens in ≥2 sessions are searchable', () => {
+    // 1. Basic index + search: tokens must appear in â‰¥ 2 sessions to reach the main index (S11).
+    test('index and search plain text â€” tokens in â‰¥2 sessions are searchable', () => {
         const engine = new FullTextSearchEngine();
         const session    = makeSession('s1',   [makeMessage('user', 'How do I implement a binary search tree?')]);
         const companion  = makeSession('s1-b', [makeMessage('user', 'binary search tree tutorial')]);
@@ -67,7 +66,7 @@ suite('FullTextSearchEngine', () => {
         assert.strictEqual(s1Result!.messageRole,  'user');
     });
 
-    // 2. Multi-token query — all tokens must be present.
+    // 2. Multi-token query â€” all tokens must be present.
     test('multi-token query excludes messages missing any token', () => {
         const engine = new FullTextSearchEngine();
 
@@ -79,7 +78,7 @@ suite('FullTextSearchEngine', () => {
         engine.index(sessionNoMatch);
         engine.index(companion);
 
-        // "lazy dog" — both tokens must appear; s-no-match must be excluded.
+        // "lazy dog" â€” both tokens must appear; s-no-match must be excluded.
         const { results } = engine.search({ text: 'lazy dog' });
 
         assert.ok(results.length >= 1);
@@ -87,7 +86,7 @@ suite('FullTextSearchEngine', () => {
         assert.ok(results.some(r => r.sessionId === 's-match'),     's-match must appear');
     });
 
-    // 3. Role filter — searchPrompts:false skips user messages.
+    // 3. Role filter â€” searchPrompts:false skips user messages.
     test('searchPrompts:false excludes user messages', () => {
         const engine = new FullTextSearchEngine();
         const session    = makeSession('s-roles',    [
@@ -112,7 +111,7 @@ suite('FullTextSearchEngine', () => {
         }
     });
 
-    // 4. Source filter — copilot session excluded when filter.source='claude'.
+    // 4. Source filter â€” copilot session excluded when filter.source='claude'.
     test('source filter excludes sessions from wrong source', () => {
         const engine = new FullTextSearchEngine();
         const copilotSession = makeSession('s-copilot', [
@@ -135,7 +134,7 @@ suite('FullTextSearchEngine', () => {
         }
     });
 
-    // 5. Workspace filter — different workspaceId is excluded.
+    // 5. Workspace filter â€” different workspaceId is excluded.
     test('workspaceId filter excludes sessions from other workspaces', () => {
         const engine = new FullTextSearchEngine();
         const wsA = makeSession('s-ws-a', [
@@ -158,7 +157,7 @@ suite('FullTextSearchEngine', () => {
         }
     });
 
-    // 6. Date filter — dateFrom / dateTo exclude sessions outside range.
+    // 6. Date filter â€” dateFrom / dateTo exclude sessions outside range.
     test('dateFrom and dateTo filter sessions by updatedAt', () => {
         const engine = new FullTextSearchEngine();
 
@@ -183,7 +182,7 @@ suite('FullTextSearchEngine', () => {
         }
     });
 
-    // 7. Regex search — pattern matches across content.
+    // 7. Regex search â€” pattern matches across content.
     test('regex search matches pattern spanning content', () => {
         const engine = new FullTextSearchEngine();
         const session = makeSession('s-regex', [
@@ -198,7 +197,7 @@ suite('FullTextSearchEngine', () => {
         assert.strictEqual(results[0].messageRole, 'assistant');
     });
 
-    // 8. remove — searching after removal returns no results for that session.
+    // 8. remove â€” searching after removal returns no results for that session.
     test('remove clears the session from search results', () => {
         const engine    = new FullTextSearchEngine();
         const session   = makeSession('s-remove',     [makeMessage('user', 'deploy application to production')]);
@@ -219,7 +218,7 @@ suite('FullTextSearchEngine', () => {
         assert.strictEqual(results.length, 1, 'companion still matches');
     });
 
-    // 9. index idempotency — indexing the same session twice does not duplicate results.
+    // 9. index idempotency â€” indexing the same session twice does not duplicate results.
     test('indexing the same session twice yields no duplicate results', () => {
         const engine    = new FullTextSearchEngine();
         const session   = makeSession('s-idem',     [makeMessage('user', 'write unit tests parser functions')]);
@@ -227,7 +226,7 @@ suite('FullTextSearchEngine', () => {
         const companion = makeSession('s-idem-cmp', [makeMessage('user', 'unit tests parser guide')]);
         engine.index(session);
         engine.index(companion);
-        engine.index(session);  // second call — should overwrite, not append.
+        engine.index(session);  // second call â€” should overwrite, not append.
 
         const { results } = engine.search({ text: 'unit tests parser' });
 
@@ -248,3 +247,4 @@ suite('FullTextSearchEngine', () => {
         assert.deepStrictEqual(response, { results: [], totalCount: 0 });
     });
 });
+

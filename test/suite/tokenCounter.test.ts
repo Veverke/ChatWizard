@@ -1,16 +1,15 @@
-// test/suite/tokenCounter.test.ts
+﻿// test/suite/tokenCounter.test.ts
 
 import * as assert from 'assert';
-import { suite, test } from 'mocha';
 import { countTokens } from '../../src/analytics/tokenCounter';
 
-suite('countTokens — claude source', () => {
+suite('countTokens â€” claude source', () => {
     test('empty string returns 0', () => {
         assert.strictEqual(countTokens('', 'claude'), 0);
     });
 
     test('short text uses char-based formula Math.ceil(length / 4)', () => {
-        const text = 'hello'; // length=5 → ceil(5/4) = 2
+        const text = 'hello'; // length=5 â†’ ceil(5/4) = 2
         assert.strictEqual(countTokens(text, 'claude'), Math.ceil(text.length / 4));
     });
 
@@ -19,18 +18,18 @@ suite('countTokens — claude source', () => {
         assert.strictEqual(countTokens(text, 'claude'), Math.ceil(text.length / 4));
     });
 
-    test('whitespace-only text — length still counted by char formula', () => {
-        const text = '     '; // length=5 → ceil(5/4) = 2
+    test('whitespace-only text â€” length still counted by char formula', () => {
+        const text = '     '; // length=5 â†’ ceil(5/4) = 2
         assert.strictEqual(countTokens(text, 'claude'), Math.ceil(text.length / 4));
     });
 
     test('punctuation-only text uses char-based formula', () => {
-        const text = '!!!???...'; // length=9 → ceil(9/4) = 3
+        const text = '!!!???...'; // length=9 â†’ ceil(9/4) = 3
         assert.strictEqual(countTokens(text, 'claude'), Math.ceil(text.length / 4));
     });
 });
 
-suite('countTokens — copilot source', () => {
+suite('countTokens â€” copilot source', () => {
     test('empty string returns 0', () => {
         assert.strictEqual(countTokens('', 'copilot'), 0);
     });
@@ -40,7 +39,7 @@ suite('countTokens — copilot source', () => {
     });
 
     test('multi-word text uses word-based formula Math.ceil(words * 1.3)', () => {
-        const text = 'the quick brown fox'; // 4 words → ceil(4 * 1.3) = 6
+        const text = 'the quick brown fox'; // 4 words â†’ ceil(4 * 1.3) = 6
         assert.strictEqual(countTokens(text, 'copilot'), Math.ceil(4 * 1.3));
     });
 
@@ -64,7 +63,7 @@ suite('countTokens — copilot source', () => {
     });
 });
 
-suite('countTokens — formula verification', () => {
+suite('countTokens â€” formula verification', () => {
     test('copilot result matches Math.ceil(wordCount * 1.3) exactly', () => {
         const cases: [string, number][] = [
             ['one', 1],
@@ -101,3 +100,4 @@ suite('countTokens — formula verification', () => {
         assert.ok(claudeTokens > 0, 'claude tokens should be > 0');
     });
 });
+

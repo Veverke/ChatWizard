@@ -185,18 +185,19 @@ function applyInline(text: string): string {
 export function markdownToHtml(markdown: string): string {
     // Strip non-printable control characters (keep \t \n \r)
     markdown = markdown.replace(RE_CONTROL, '');
-    // Encode non-ASCII as HTML entities
-    markdown = markdown.replace(RE_NON_ASCII, c => `&#${c.codePointAt(0)};`);
 
     const codeBlocks: string[] = [];
     let text = markdown.replace(RE_FENCE, (_m, lang, code) => {
         const esc = code.replace(RE_AMP, '&amp;').replace(RE_LT, '&lt;').replace(RE_GT, '&gt;');
         const attr = lang.trim() ? ` class="language-${lang.trim()}"` : '';
-        codeBlocks.push(`<pre><code${attr}>${esc}</code></pre>`);
+        const fenceIdx = codeBlocks.length;
+        codeBlocks.push(`<pre data-fence-idx="${fenceIdx}"><code${attr}>${esc}</code></pre>`);
         return `\x00CB${codeBlocks.length - 1}\x00`;
     });
 
     text = text.replace(RE_AMP, '&amp;').replace(RE_LT, '&lt;').replace(RE_GT, '&gt;');
+    // Encode non-ASCII as HTML entities (after AMP escaping to avoid double-encoding)
+    text = text.replace(RE_NON_ASCII, c => `&#${c.codePointAt(0)};`);
 
     const inlineCodes: string[] = [];
     text = text.replace(RE_INLINE_CODE, (_m, code) => {

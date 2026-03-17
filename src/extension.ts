@@ -648,8 +648,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             // Parent (group) click: just open, no scroll. Leaf click: scroll to specific block.
             const isLeaf = ref.blocks.length === 1;
             const targetMsgIdx = isLeaf ? ref.blocks[0].messageIndex : undefined;
-            const targetBlockContent = isLeaf ? ref.blocks[0].content.slice(0, 100).trim() : undefined;
-            SessionWebviewPanel.show(context, session, undefined, isLeaf, targetMsgIdx, targetBlockContent);
+            const targetBlockIdx = isLeaf ? (ref.blocks[0].blockIndexInMessage ?? 0) : undefined;
+            SessionWebviewPanel.show(context, session, undefined, isLeaf, targetMsgIdx, undefined, targetBlockIdx);
         })
     );
 

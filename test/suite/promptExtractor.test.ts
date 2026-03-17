@@ -1,12 +1,11 @@
-// test/suite/promptExtractor.test.ts
+﻿// test/suite/promptExtractor.test.ts
 
 import * as assert from 'assert';
-import { suite, test } from 'mocha';
 import { buildPromptLibrary, normalizePromptText } from '../../src/prompts/promptExtractor';
 import { SessionIndex } from '../../src/index/sessionIndex';
 import { Session, Message } from '../../src/types/index';
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 let _idCounter = 0;
 
@@ -33,7 +32,7 @@ function makeSession(
     };
 }
 
-// ── normalizePromptText ────────────────────────────────────────────────────────
+// â”€â”€ normalizePromptText â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 suite('normalizePromptText', () => {
     test('trims leading and trailing whitespace', () => {
@@ -57,7 +56,7 @@ suite('normalizePromptText', () => {
     });
 });
 
-// ── buildPromptLibrary ────────────────────────────────────────────────────────
+// â”€â”€ buildPromptLibrary â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 suite('buildPromptLibrary', () => {
     test('empty index returns empty array', () => {
@@ -80,7 +79,7 @@ suite('buildPromptLibrary', () => {
         const index = new SessionIndex();
         index.upsert(makeSession('s-dup', [
             makeMsg('user', 'Explain async/await'),
-            makeMsg('assistant', 'Sure…'),
+            makeMsg('assistant', 'Sureâ€¦'),
             makeMsg('user', 'Explain async/await'),
         ]));
         const result = buildPromptLibrary(index);
@@ -205,14 +204,14 @@ suite('buildPromptLibrary', () => {
         const index = new SessionIndex();
         index.upsert(makeSession('s-asst', [
             makeMsg('user', 'My prompt'),
-            makeMsg('assistant', 'My prompt'),  // same text but assistant role — should not count
+            makeMsg('assistant', 'My prompt'),  // same text but assistant role â€” should not count
         ]));
         const result = buildPromptLibrary(index);
         assert.strictEqual(result.length, 1);
         assert.strictEqual(result[0].frequency, 1);
     });
 
-    // ── sessionMeta ──────────────────────────────────────────────────────────
+    // â”€â”€ sessionMeta â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     test('sessionMeta contains one entry for a single-session prompt', () => {
         const index = new SessionIndex();
@@ -238,7 +237,7 @@ suite('buildPromptLibrary', () => {
 
     test('sessionMeta deduplicates: same session appearing multiple times has one meta entry', () => {
         const index = new SessionIndex();
-        // Same prompt asked 3 times in the same session → only one meta entry
+        // Same prompt asked 3 times in the same session â†’ only one meta entry
         index.upsert(makeSession('s-dedup', [
             makeMsg('user', 'Optimize this query'),
             makeMsg('user', 'Optimize this query'),
@@ -268,3 +267,4 @@ suite('buildPromptLibrary', () => {
         assert.strictEqual(result[0].sessionMeta[0].updatedAt, customDate);
     });
 });
+

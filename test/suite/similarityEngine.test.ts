@@ -1,7 +1,6 @@
-// test/suite/similarityEngine.test.ts
+﻿// test/suite/similarityEngine.test.ts
 
 import * as assert from 'assert';
-import { suite, test } from 'mocha';
 import {
     trigramSimilarity,
     clusterPrompts,
@@ -16,7 +15,7 @@ function makeEntry(text: string, frequency = 1, projectIds: string[] = []): Prom
     return { text, frequency, sessionIds: [], projectIds, firstSeen: undefined, sessionMeta: [] };
 }
 
-// ── trigramSimilarity ─────────────────────────────────────────────────────────
+// â”€â”€ trigramSimilarity â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 suite('trigramSimilarity', () => {
     test('identical strings return 1.0', () => {
@@ -92,13 +91,13 @@ suite('trigramSimilarity', () => {
 
     test('strings sharing a long prefix have similarity > 0.5', () => {
         // 'typescript linting rules' vs 'typescript linting config' share most trigrams;
-        // actual Jaccard ≈ 0.607
+        // actual Jaccard â‰ˆ 0.607
         const sim = trigramSimilarity('typescript linting rules', 'typescript linting config');
         assert.ok(sim > 0.5, `expected > 0.5 for shared-prefix strings, got ${sim}`);
     });
 
     test('unicode characters do not crash and result is in [0, 1]', () => {
-        const sim = trigramSimilarity('café au lait', 'café con leche');
+        const sim = trigramSimilarity('cafÃ© au lait', 'cafÃ© con leche');
         assert.ok(sim >= 0.0 && sim <= 1.0, `expected value in [0,1], got ${sim}`);
     });
 
@@ -125,7 +124,7 @@ suite('trigramSimilarity', () => {
     });
 });
 
-// ── clusterPrompts ────────────────────────────────────────────────────────────
+// â”€â”€ clusterPrompts â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 suite('clusterPrompts', () => {
     test('empty input returns empty array', () => {
@@ -187,7 +186,7 @@ suite('clusterPrompts', () => {
         const c = makeEntry('refactor this function', 1);   // exact match to a
 
         const clusters = clusterPrompts([a, b, c], 1.0);
-        // a and c are identical → merged; b is only similar → own cluster
+        // a and c are identical â†’ merged; b is only similar â†’ own cluster
         assert.strictEqual(clusters.length, 2);
 
         const texts = clusters.map(cl => cl.canonical.text);
@@ -255,7 +254,7 @@ suite('clusterPrompts', () => {
         const b = makeEntry('refactor the function',  2);
         const sim = trigramSimilarity(a.text, b.text);
         assert.ok(sim >= 0.6, `precondition: sim ${sim} < 0.6`);
-        // Cluster at exactly that threshold value — they must merge
+        // Cluster at exactly that threshold value â€” they must merge
         const clusters = clusterPrompts([a, b], sim);
         assert.strictEqual(clusters.length, 1, `expected 1 cluster at threshold ${sim}, got ${clusters.length}`);
         // Just above the threshold by a tiny amount they should still merge
@@ -268,7 +267,7 @@ suite('clusterPrompts', () => {
 
     test('greedy three-way cluster: c compares against canonical a, not b', () => {
         // a and b are similar, so b joins a's cluster.
-        // c is similar to b but NOT to a — greedy algorithm checks a first,
+        // c is similar to b but NOT to a â€” greedy algorithm checks a first,
         // so c should form its own cluster.
         const a = makeEntry('write unit tests for parser module', 5);
         const b = makeEntry('write unit tests for parser component', 4);
@@ -381,7 +380,7 @@ suite('clusterPrompts', () => {
     });
 });
 
-// ── clusterPromptsExt ─────────────────────────────────────────────────────────
+// â”€â”€ clusterPromptsExt â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 suite('clusterPromptsExt', () => {
     setup(() => clearClusterCache());
@@ -475,7 +474,7 @@ suite('clusterPromptsExt', () => {
     });
 });
 
-// ── clusterPromptsAsync ───────────────────────────────────────────────────────
+// â”€â”€ clusterPromptsAsync â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 suite('clusterPromptsAsync', () => {
     setup(() => clearClusterCache());
@@ -515,3 +514,4 @@ suite('clusterPromptsAsync', () => {
         assert.strictEqual(truncated, true);
     });
 });
+

@@ -15,9 +15,10 @@ export function extractSnippet(
     const prependEllipsis = windowStart > 0;
     const appendEllipsis = windowEnd < content.length;
 
+    const ellipsisOffset = prependEllipsis ? 1 : 0; // '…' is a single character
     const snippet = (prependEllipsis ? '…' : '') + raw + (appendEllipsis ? '…' : '');
 
-    return { snippet, matchStart, matchEnd };
+    return { snippet, matchStart: matchStart + ellipsisOffset, matchEnd: matchEnd + ellipsisOffset };
 }
 
 export function findFirstMatch(

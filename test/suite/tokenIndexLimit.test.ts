@@ -1,12 +1,11 @@
-// test/suite/tokenIndexLimit.test.ts
+﻿// test/suite/tokenIndexLimit.test.ts
 // S11: No limit on inverted index token count
 
 import * as assert from 'assert';
-import { suite, test } from 'mocha';
 import { FullTextSearchEngine } from '../../src/search/fullTextEngine';
 import { Session, Message } from '../../src/types/index';
 
-// ── Fixture helpers ───────────────────────────────────────────────────────────
+// â”€â”€ Fixture helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 let _id = 0;
 
@@ -27,9 +26,9 @@ function session(id: string, content: string): Session {
     };
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
+// â”€â”€ Tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-suite('S11 — Token Index Limit', () => {
+suite('S11 â€” Token Index Limit', () => {
 
     // 1. Max token length: tokens > 50 chars must not appear in the index or hapax store.
     test('tokens longer than 50 chars are discarded', () => {
@@ -67,12 +66,12 @@ suite('S11 — Token Index Limit', () => {
         assert.strictEqual(stats.indexedTokenCount, 0, 'nothing promoted yet');
         assert.strictEqual(stats.hapaxTokenCount, 2);
 
-        // Search must return empty — hapax tokens are intentionally unsearchable.
+        // Search must return empty â€” hapax tokens are intentionally unsearchable.
         assert.strictEqual(engine.search({ text: 'uniqueXYZ' }).results.length, 0);
     });
 
-    // 4. Tokens in ≥2 sessions are promoted to main index and ARE searchable.
-    test('tokens in ≥2 sessions are promoted and searchable', () => {
+    // 4. Tokens in â‰¥2 sessions are promoted to main index and ARE searchable.
+    test('tokens in â‰¥2 sessions are promoted and searchable', () => {
         const engine = new FullTextSearchEngine();
         engine.index(session('s-promo-1', 'sharedterm context'));
         engine.index(session('s-promo-2', 'sharedterm other'));
@@ -156,3 +155,4 @@ suite('S11 — Token Index Limit', () => {
         assert.strictEqual(engine.size, 0);
     });
 });
+

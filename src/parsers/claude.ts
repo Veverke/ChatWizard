@@ -49,6 +49,7 @@ export function extractCodeBlocks(
             content: match[2].trim(),
             sessionId,
             messageIndex,
+            blockIndexInMessage: blocks.length,
         });
     }
 

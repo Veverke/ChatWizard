@@ -1,12 +1,11 @@
-// test/suite/invertedIndexRemoval.test.ts
+﻿// test/suite/invertedIndexRemoval.test.ts
 // S5: Inverted index removal is O(session_tokens), not O(total_tokens)
 
 import * as assert from 'assert';
-import { suite, test } from 'mocha';
 import { FullTextSearchEngine } from '../../src/search/fullTextEngine';
 import { Session, Message } from '../../src/types/index';
 
-// ── Fixture builders ──────────────────────────────────────────────────────────
+// â”€â”€ Fixture builders â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 let _idCounter = 0;
 
@@ -32,9 +31,9 @@ function uniqueWords(prefix: string, count: number): string[] {
     return Array.from({ length: count }, (_, i) => `${prefix}word${i}`);
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
+// â”€â”€ Tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-suite('S5 — InvertedIndex O(session_tokens) Removal', () => {
+suite('S5 â€” InvertedIndex O(session_tokens) Removal', () => {
 
     test('removing a session from a 10,000-session index completes in < 5 ms', function() {
         this.timeout(30_000); // generous wall-clock limit for index build
@@ -59,7 +58,7 @@ suite('S5 — InvertedIndex O(session_tokens) Removal', () => {
         assert.strictEqual(engine.size, SESSION_COUNT - 1, 'session was removed');
         assert.ok(
             elapsed < 5,
-            `removal took ${elapsed.toFixed(2)} ms — expected < 5 ms`
+            `removal took ${elapsed.toFixed(2)} ms â€” expected < 5 ms`
         );
     });
 
@@ -133,3 +132,4 @@ suite('S5 — InvertedIndex O(session_tokens) Removal', () => {
         assert.strictEqual(engine.size, 1, 'existing session unaffected');
     });
 });
+

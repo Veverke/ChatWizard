@@ -1,10 +1,9 @@
-// test/suite/timelineViewProvider.test.ts
+﻿// test/suite/timelineViewProvider.test.ts
 
 import * as assert from 'assert';
-import { suite, test } from 'mocha';
 import { TimelineViewProvider } from '../../src/timeline/timelineViewProvider';
 
-// ── getShellHtml — structure ───────────────────────────────────────────────────
+// â”€â”€ getShellHtml â€” structure â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 suite('TimelineViewProvider.getShellHtml', () => {
 
@@ -101,3 +100,4 @@ suite('TimelineViewProvider.getShellHtml', () => {
         assert.ok(html.includes('cw-tl-skeleton') || html.includes('cw-skeleton'), 'should have skeleton placeholder');
     });
 });
+

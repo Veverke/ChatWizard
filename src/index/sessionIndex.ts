@@ -188,6 +188,7 @@ export class SessionIndex {
                         content: block.content,
                         sessionId: block.sessionId,
                         messageIndex: block.messageIndex,
+                        blockIndexInMessage: block.blockIndexInMessage,
                         messageRole: message.role,
                         sessionTitle: session.title,
                         sessionSource: session.source,

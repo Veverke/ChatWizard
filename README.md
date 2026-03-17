@@ -25,7 +25,7 @@ Opening any session launches a VS Code webview panel rendering the full conversa
 For very large sessions (500+ messages) only the most-recent messages are shown initially, with a banner to load earlier content on demand. Rendering is streamed in small batches so the panel is interactive immediately. When opened from the Code Blocks panel, the reader can auto-scroll to and highlight the specific block that was clicked.
 
 ### Unified Full-Text Search
-Press `Ctrl+Shift+H` (`Cmd+Shift+H` on macOS) to open an instant QuickPick panel covering all messages in all sessions across all workspaces. Results appear as you type, powered by an in-memory inverted index with no external dependencies.
+Open **ChatWizard: Search** from the Command Palette to launch an instant QuickPick panel covering all messages in all sessions across all workspaces. Results appear as you type, powered by an in-memory inverted index with no external dependencies.
 
 - **Regex mode** — prefix the query with `/` to switch to regular-expression matching.
 - **Source filter** — toggle between All / Copilot only / Claude only with an in-panel toolbar button.
@@ -172,7 +172,7 @@ Capabilities not available in the built-in GitHub Copilot Chat panel or the Clau
 
 | Command | Title | Where to invoke |
 |---------|-------|------------------|
-| `chatwizard.search` | Search | `Ctrl+Shift+H` / `Cmd+Shift+H` or Command Palette |
+| `chatwizard.search` | Search | Command Palette |
 | `chatwizard.openSession` | Open Session | Click session in Sessions panel |
 | `chatwizard.openSessionFromCodeBlock` | Open Session from Code Block | Click entry in Code Blocks panel |
 | `chatwizard.filterSessions` | Filter Sessions… | Sessions view toolbar |

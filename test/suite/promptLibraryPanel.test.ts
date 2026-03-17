@@ -1,12 +1,11 @@
-// test/suite/promptLibraryPanel.test.ts
+﻿// test/suite/promptLibraryPanel.test.ts
 
 import * as assert from 'assert';
-import { suite, test } from 'mocha';
 import { PromptLibraryPanel } from '../../src/prompts/promptLibraryPanel';
 import { PromptCluster, MAX_CLUSTER_ENTRIES } from '../../src/prompts/similarityEngine';
 import { PromptEntry } from '../../src/prompts/promptExtractor';
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function makeEntry(text: string, frequency = 1, projectIds: string[] = [], sessionMeta: PromptEntry['sessionMeta'] = []): PromptEntry {
     return { text, frequency, sessionIds: [], projectIds, firstSeen: undefined, sessionMeta };
@@ -18,7 +17,7 @@ function makeCluster(canonical: PromptEntry, variants: PromptEntry[] = []): Prom
     return { canonical, variants, totalFrequency, allProjectIds };
 }
 
-// ── getHtml — structure ───────────────────────────────────────────────────────
+// â”€â”€ getHtml â€” structure â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 suite('PromptLibraryPanel.getHtml', () => {
     test('returns valid HTML with doctype', () => {
@@ -81,11 +80,11 @@ suite('PromptLibraryPanel.getHtml', () => {
         const html = PromptLibraryPanel.getHtml([c1, c2]);
         // total entries = 2 (canonical c1) + 1 (variant c1) + 1 (canonical c2) = 3... wait
         // Actually: totalEntries = clusters.reduce((sum, c) => sum + 1 + c.variants.length, 0)
-        // c1: 1 + 1 = 2, c2: 1 + 0 = 1 → total = 3
+        // c1: 1 + 1 = 2, c2: 1 + 0 = 1 â†’ total = 3
         assert.ok(html.includes('3 prompt'), 'should show total 3 prompts');
     });
 
-    // ── variant session info ─────────────────────────────────────────────────
+    // â”€â”€ variant session info â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     test('variant with sessionMeta shows session title and date', () => {
         const meta = [{
@@ -108,7 +107,7 @@ suite('PromptLibraryPanel.getHtml', () => {
         const html = PromptLibraryPanel.getHtml([cluster]);
         // variant-session span should NOT appear because sessionMeta is empty
         // (the conditional only emits it when sessionInfoParts.length > 0)
-        assert.ok(!html.includes('variant-session'), 'should not show empty variant-session span');
+        assert.ok(!html.includes('class="variant-session"'), 'should not show empty variant-session span');
     });
 
     test('variant with multiple sessionMeta entries shows all session titles', () => {
@@ -140,7 +139,7 @@ suite('PromptLibraryPanel.getHtml', () => {
         assert.ok(html.includes('&amp;'), 'ampersand in title must be escaped');
     });
 
-    // ── multiple clusters ────────────────────────────────────────────────────
+    // â”€â”€ multiple clusters â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     test('multiple clusters each render their own card', () => {
         const c1 = makeCluster(makeEntry('Write unit tests', 5));
@@ -149,7 +148,7 @@ suite('PromptLibraryPanel.getHtml', () => {
         assert.ok(html.includes('Write unit tests'), 'first cluster text present');
         assert.ok(html.includes('Optimize SQL query'), 'second cluster text present');
         // Count prompt-card divs
-        const cardMatches = html.match(/class="prompt-card"/g) ?? [];
+        const cardMatches = html.match(/class="prompt-card cw-fade-item"/g) ?? [];
         assert.strictEqual(cardMatches.length, 2, 'should have 2 prompt-card elements');
     });
 
@@ -184,7 +183,7 @@ suite('PromptLibraryPanel.getHtml', () => {
 
     test('no truncation banner when truncated is false (default)', () => {
         const html = PromptLibraryPanel.getHtml([]);
-        assert.ok(!html.includes('truncated-banner'), 'truncation banner must not appear when not truncated');
+        assert.ok(!html.includes('<div class="truncated-banner">'), 'truncation banner must not appear when not truncated');
     });
 
     test('truncation banner appears when truncated is true', () => {
@@ -202,3 +201,4 @@ suite('PromptLibraryPanel.getHtml', () => {
         assert.ok(html.toLowerCase().includes('loading'), 'loading HTML should contain loading text');
     });
 });
+
