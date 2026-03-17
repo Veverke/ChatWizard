@@ -186,7 +186,9 @@ export function parseClaudeSession(filePath: string): ParseResult {
         title = summaryText;
     } else {
         const firstUserMessage = messages.find((m) => m.role === 'user');
-        title = firstUserMessage ? firstUserMessage.content.slice(0, 60) : resolvedId;
+        const raw = firstUserMessage?.content ?? '';
+        const firstLine = raw.split('\n')[0];
+        title = firstUserMessage ? (firstLine.length > 120 ? firstLine.slice(0, 120) + '…' : firstLine || raw.slice(0, 120)) : resolvedId;
     }
 
     let fallbackTime: string | undefined;
