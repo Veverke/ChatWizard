@@ -405,6 +405,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                     description: current.maxMessages !== undefined ? `current: ${current.maxMessages}` : undefined,
                 },
                 {
+                    id: 'hideInterrupted',
+                    label: current.hideInterrupted
+                        ? '$(eye)  Show interrupted sessions'
+                        : '$(eye-closed)  Hide interrupted sessions',
+                    description: current.hideInterrupted ? 'currently hidden' : undefined,
+                },
+                {
                     id: '_clear',
                     label: '$(close)  Clear all filters',
                     alwaysShow: true,
@@ -484,6 +491,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 });
                 if (val === undefined) { return; }
                 newFilter.maxMessages = val.trim() ? parseInt(val.trim(), 10) : undefined;
+
+            } else if (pick.id === 'hideInterrupted') {
+                newFilter.hideInterrupted = !current.hideInterrupted || undefined;
             }
 
             provider.setFilter(newFilter);
@@ -625,14 +635,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // Other commands
     // ------------------------------------------------------------------
     context.subscriptions.push(
-        vscode.commands.registerCommand('chatwizard.openSession', (summary, searchTerm?: string) => {
+        vscode.commands.registerCommand('chatwizard.openSession', (summary, searchTerm?: string, highlightContainer?: boolean) => {
             const session = index.get(summary.id);
             if (!session) {
                 vscode.window.showErrorMessage(`Session not found: ${summary.id}`);
                 return;
             }
             telemetry.record('session.opened', { source: session.source });
-            SessionWebviewPanel.show(context, session, searchTerm);
+            SessionWebviewPanel.show(context, session, searchTerm, false, undefined, undefined, undefined, highlightContainer);
         })
     );
 

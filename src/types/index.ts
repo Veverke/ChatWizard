@@ -111,6 +111,8 @@ export interface SessionSummary {
     assistantMessageCount: number;
     createdAt: string;
     updatedAt: string;
+    /** True when the last message is a user turn with no following assistant reply */
+    interrupted?: boolean;
 }
 
 /** Result of parsing a raw JSONL file */

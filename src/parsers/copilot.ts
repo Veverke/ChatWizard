@@ -235,8 +235,15 @@ export function parseCopilotSession(
 
     // Title: prefer explicit customTitle, then first user message, then fallback
     const firstUserMsg = messages.find(m => m.role === 'user');
-    const title = customTitle
-        ?? (firstUserMsg ? firstUserMsg.content.slice(0, 60) : 'Untitled Session');
+    let title: string;
+    if (customTitle) {
+        title = customTitle;
+    } else if (firstUserMsg) {
+        const fl = firstUserMsg.content.split('\n')[0];
+        title = fl.length > 120 ? fl.slice(0, 120) + '…' : fl || firstUserMsg.content.slice(0, 120);
+    } else {
+        title = 'Untitled Session';
+    }
 
     let fileSizeBytes: number | undefined;
     let fileBirthtime: string | undefined;

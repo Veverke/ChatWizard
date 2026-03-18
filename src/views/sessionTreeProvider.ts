@@ -28,6 +28,7 @@ export class SessionTreeItem extends vscode.TreeItem {
         const modelLine = summary.model ? `\n\n**Model:** ${summary.model}` : '';
         const sizeLine = sizeKb ? `\n\n**Size:** ${msgCount} messages · ${sizeKb}` : `\n\n**Size:** ${msgCount} messages`;
         const pinnedLine = pinned ? `\n\n📌 *Pinned*` : '';
+        const interruptedLine = summary.interrupted ? `\n\n⚠ *Response not available — cancelled or incomplete*` : '';
 
         const config = vscode.workspace.getConfiguration('chatwizard');
         const labelColor = config.get<string>('tooltipLabelColor', '');
@@ -44,7 +45,7 @@ export class SessionTreeItem extends vscode.TreeItem {
                 `\n\n${lbl('Updated:')} ${summary.updatedAt.slice(0, 16).replace('T', ' ')}` +
                 `\n\n${lbl('Size:')} ${sizeText}` +
                 `\n\n${summary.userMessageCount} prompts · ${summary.assistantMessageCount} responses` +
-                pinnedLine
+                pinnedLine + interruptedLine
             );
             tooltip.isTrusted = true;
             tooltip.supportHtml = true;
@@ -56,16 +57,23 @@ export class SessionTreeItem extends vscode.TreeItem {
                 `**Updated:** ${summary.updatedAt.slice(0, 16).replace('T', ' ')}` +
                 sizeLine + `\n\n` +
                 `${summary.userMessageCount} prompts · ${summary.assistantMessageCount} responses` +
-                pinnedLine
+                pinnedLine + interruptedLine
             );
         }
         this.tooltip = tooltip;
 
-        this.iconPath = pinned
-            ? new vscode.ThemeIcon('pinned')
-            : (summary.source === 'copilot'
+        if (pinned) {
+            this.iconPath = new vscode.ThemeIcon('pinned');
+        } else if (summary.interrupted) {
+            const red = new vscode.ThemeColor('list.errorForeground');
+            this.iconPath = summary.source === 'copilot'
+                ? new vscode.ThemeIcon('github', red)
+                : new vscode.ThemeIcon('hubot', red);
+        } else {
+            this.iconPath = summary.source === 'copilot'
                 ? new vscode.ThemeIcon('github')
-                : new vscode.ThemeIcon('hubot'));
+                : new vscode.ThemeIcon('hubot');
+        }
 
         this.contextValue = pinned ? 'session.pinned' : 'session';
 
@@ -74,6 +82,14 @@ export class SessionTreeItem extends vscode.TreeItem {
             title: 'Open Session',
             arguments: [summary],
         };
+    }
+}
+
+export class LoadingTreeItem extends vscode.TreeItem {
+    constructor() {
+        super('Indexing sessions…', vscode.TreeItemCollapsibleState.None);
+        this.iconPath = new vscode.ThemeIcon('loading~spin');
+        this.contextValue = 'loading';
     }
 }
 
@@ -144,6 +160,7 @@ export interface SessionFilter {
     model?: string;        // case-insensitive substring
     minMessages?: number;
     maxMessages?: number;
+    hideInterrupted?: boolean; // when true, hide sessions whose last message has no assistant reply
 }
 
 // ---------------------------------------------------------------------------
@@ -177,8 +194,8 @@ function compareBy(key: SortKey, a: SessionSummary, b: SessionSummary): number {
 // Provider
 // ---------------------------------------------------------------------------
 
-export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeItem | LoadMoreTreeItem> {
-    private _onDidChangeTreeData = new vscode.EventEmitter<SessionTreeItem | LoadMoreTreeItem | undefined | void>();
+export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeItem | LoadMoreTreeItem | LoadingTreeItem> {
+    private _onDidChangeTreeData = new vscode.EventEmitter<SessionTreeItem | LoadMoreTreeItem | LoadingTreeItem | undefined | void>();
     readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
     private sortStack: SortStack = [{ key: 'date', direction: 'desc' }];
@@ -190,9 +207,12 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeI
     private _sortedCache: SessionSummary[] | null = null;
     private _visibleCount = 200;
     private _filterDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+    /** True until the first change event fires (initial batch index complete) */
+    private _loading = true;
 
     constructor(private readonly index: SessionIndex) {
         index.addChangeListener(() => {
+            this._loading = false;
             this._sortedCache = null;
             this.refresh();
         });
@@ -293,7 +313,8 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeI
     hasActiveFilter(): boolean {
         const f = this._filter;
         return !!(f.title || f.dateFrom || f.dateTo || f.model ||
-                  f.minMessages !== undefined || f.maxMessages !== undefined);
+                  f.minMessages !== undefined || f.maxMessages !== undefined ||
+                  f.hideInterrupted);
     }
 
     private _matchesFilter(s: SessionSummary): boolean {
@@ -307,6 +328,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeI
         }
         if (f.minMessages !== undefined && s.messageCount < f.minMessages) { return false; }
         if (f.maxMessages !== undefined && s.messageCount > f.maxMessages) { return false; }
+        if (f.hideInterrupted && s.interrupted) { return false; }
         return true;
     }
 
@@ -319,6 +341,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeI
         if (f.minMessages !== undefined || f.maxMessages !== undefined) {
             parts.push(`msgs:${f.minMessages ?? 0}–${f.maxMessages ?? '∞'}`);
         }
+        if (f.hideInterrupted) { parts.push('hide:interrupted'); }
         return parts.length > 0 ? `⊘ ${parts.join(' · ')}` : '';
     }
 
@@ -367,10 +390,10 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeI
 
     refresh(): void { this._onDidChangeTreeData.fire(); }
 
-    getTreeItem(element: SessionTreeItem | LoadMoreTreeItem): vscode.TreeItem { return element; }
+    getTreeItem(element: SessionTreeItem | LoadMoreTreeItem | LoadingTreeItem): vscode.TreeItem { return element; }
 
     // Required by VS Code for treeView.reveal() to work — all items are root-level, so no parent.
-    getParent(_element: SessionTreeItem | LoadMoreTreeItem): undefined { return undefined; }
+    getParent(_element: SessionTreeItem | LoadMoreTreeItem | LoadingTreeItem): undefined { return undefined; }
 
     private _buildOrderedSummaries(): SessionSummary[] {
         if (this._sortedCache !== null) {
@@ -413,7 +436,10 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeI
         return this._sortedCache;
     }
 
-    getChildren(): (SessionTreeItem | LoadMoreTreeItem)[] {
+    getChildren(): (SessionTreeItem | LoadMoreTreeItem | LoadingTreeItem)[] {
+        if (this._loading) {
+            return [new LoadingTreeItem()];
+        }
         const pinnedSet = new Set(this._pinnedIds);
         const all = this._buildOrderedSummaries();
         const visible = all.slice(0, this._visibleCount);

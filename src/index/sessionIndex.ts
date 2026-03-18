@@ -14,6 +14,8 @@ export type SessionIndexEvent =
 export function toSummary(session: Session): SessionSummary {
     const userMessageCount = session.messages.filter(m => m.role === 'user').length;
     const assistantMessageCount = session.messages.filter(m => m.role === 'assistant').length;
+    const lastMsg = session.messages[session.messages.length - 1];
+    const interrupted = lastMsg?.role === 'user' ? true : undefined;
 
     return {
         id: session.id,
@@ -29,6 +31,7 @@ export function toSummary(session: Session): SessionSummary {
         assistantMessageCount,
         createdAt: session.createdAt,
         updatedAt: session.updatedAt,
+        interrupted,
     };
 }
 

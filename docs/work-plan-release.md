@@ -188,11 +188,11 @@ node_modules/**/*.map
 - [x] ~~`npm run compile` — must exit 0 with no errors.~~
 - [x] ~~`npm run lint` — must exit 0 with no errors.~~
 - [x] ~~`npm test` — all suites green.~~ 498/498 passing.
-- [ ] Manual smoke test in Extension Development Host:
-  - Sessions panel loads and shows sessions.
-  - Search (`Ctrl+Shift+H`) opens QuickPick.
-  - Code Blocks, Prompt Library, Analytics, Timeline tabs all render.
-  - Export a single session to Markdown.
+- [x] ~~Manual smoke test in Extension Development Host:~~
+  - ~~Sessions panel loads and shows sessions.~~
+  - ~~Search (`Ctrl+Shift+H`) opens QuickPick.~~
+  - ~~Code Blocks, Prompt Library, Analytics, Timeline tabs all render.~~
+  - ~~Export a single session to Markdown.~~
 
 ---
 
