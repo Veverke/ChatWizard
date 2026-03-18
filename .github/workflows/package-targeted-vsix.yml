@@ -21,6 +21,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Bundle extension (esbuild)
+        run: npm run bundle        
+
       - name: Verify tag version matches package.json
         run: |
           TAG_VERSION="${GITHUB_REF#refs/tags/v}"
@@ -29,7 +32,7 @@ jobs:
             echo "Tag version ($TAG_VERSION) does not match package.json version ($PKG_VERSION)"
             exit 1
           fi
-
+          
       - name: Install vsce
         run: npm install -g @vscode/vsce
 
