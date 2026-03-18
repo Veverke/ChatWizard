@@ -196,7 +196,7 @@ node_modules/**/*.map
 
 ---
 
-## 7. Package & Validate
+## ~~7. Package & Validate~~
 
 ```bash
 # Preview what will be included — check for unexpected large files
@@ -210,8 +210,8 @@ ls -lh *.vsix
 ```
 
 Install locally to verify:
-- Command Palette → "Extensions: Install from VSIX…" → select the `.vsix`
-- Reload VS Code and confirm the extension activates correctly.
+- [x] ~~Command Palette → "Extensions: Install from VSIX…" → select the `.vsix`~~
+- [x] ~~Reload VS Code and confirm the extension activates correctly.~~
 
 ---
 
