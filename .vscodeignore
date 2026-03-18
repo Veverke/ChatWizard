@@ -15,5 +15,10 @@ node_modules/.bin/**
 node_modules/**/test/**
 node_modules/**/tests/**
 node_modules/**/*.md
+
+# REMOVE old output folder
+# !out/**
+
+# KEEP ONLY the bundled output
 !dist/**
 !images/**
