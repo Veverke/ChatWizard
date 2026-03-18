@@ -245,7 +245,7 @@ Sort commands (`chatwizard.sortByDate`, `chatwizard.sortByDate.asc`, `chatwizard
 
 ## Release Notes
 
-### 1.0.0
+### 1.0.4
 
 Initial release. All nine development phases complete:
 
