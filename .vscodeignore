@@ -15,5 +15,5 @@ node_modules/.bin/**
 node_modules/**/test/**
 node_modules/**/tests/**
 node_modules/**/*.md
-!out/**
+!dist/**
 !images/**

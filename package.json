@@ -40,7 +40,7 @@
   "activationEvents": [
     "onStartupFinished"
   ],
-  "main": "./out/src/extension.js",
+  "main": "./dist/extension.js",
   "contributes": {
     "viewsContainers": {
       "activitybar": [
@@ -642,6 +642,7 @@
     "pretest": "npm run compile && npm run lint",
     "lint": "eslint \"src/**/*.ts\"",
     "test": "vscode-test",
+    "bundle": "esbuild src/extension.ts --bundle --platform=node --external:vscode --outfile=dist/extension.js",
     "package:vsix:win32-x64": "npx @vscode/vsce package --target win32-x64 --out chatwizard-win32-x64.vsix",
     "package:vsix:linux-x64": "npx @vscode/vsce package --target linux-x64 --out chatwizard-linux-x64.vsix",
     "package:vsix:darwin-x64": "npx @vscode/vsce package --target darwin-x64 --out chatwizard-darwin-x64.vsix",
@@ -655,6 +656,7 @@
     "@typescript-eslint/parser": "^7.0.0",
     "@vscode/test-cli": "^0.0.6",
     "@vscode/test-electron": "^2.3.8",
+    "esbuild": "^0.27.4",
     "eslint": "^8.56.0",
     "typescript": "^5.3.3"
   },
