@@ -2,7 +2,36 @@
 
 [![License: MIT + Commons Clause](https://img.shields.io/badge/license-MIT%20%2B%20Commons%20Clause-blue.svg)](LICENSE)
 
+Insipired by https://github.com/Veverke/bAInder, I decided to make a VS Code extension, with a developer perspective in mind.
 Unified search, analytics, and history browser for your GitHub Copilot Chat and Claude Code sessions.
+
+---
+
+## Demos
+
+### Search — Search Bar & Search Command
+
+![Search demo: search bar and search command](images/demos/search.gif)
+
+### Export to Markdown — Full Session & Excerpt
+
+![Export to Markdown demo: full session and excerpt](images/demos/export-to-markup.gif)
+
+### Session Filters
+
+![Session Filters](images/demos/session-filters.gif)
+
+### Prompt Library
+
+![Prompt Library](images/demos/prompt-library.gif)
+
+### Code Blocks (snippets)
+
+![Code Blocks](images/demos/code-blocks.gif)
+
+### Analytics
+
+![Analytics](images/demos/analytics.gif)
 
 ---
 

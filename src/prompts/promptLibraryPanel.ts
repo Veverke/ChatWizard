@@ -556,6 +556,7 @@ export class PromptLibraryPanel {
     // ---- Session hover overlay ----
     var overlay   = document.getElementById('sessionOverlay');
     var hideTimer = null;
+    var showTimer = null;
     var activeEl  = null;
 
     // Returns the canonical .prompt-text element under the event target (for overlay),
@@ -587,6 +588,7 @@ export class PromptLibraryPanel {
 
     function showOverlay(el) {
       clearTimeout(hideTimer);
+      clearTimeout(showTimer);
       var raw = el.dataset.sessions;
       if (!raw) { return; }
       var sessions;
@@ -650,23 +652,28 @@ export class PromptLibraryPanel {
       if (el === activeEl) { hideOverlay(); } else { showOverlay(el); }
     });
 
-    // Hover: show overlay only for multi-session elements (single-session ones navigate on click)
+    // Hover: show overlay only after a short dwell (tooltip-style) for multi-session elements
     document.addEventListener('mouseover', function(e) {
       var el = getInteractable(e.target);
       if (!el || el.dataset.direct) { return; }
-      if (el !== activeEl) { showOverlay(el); }
+      if (el !== activeEl) {
+        clearTimeout(showTimer);
+        clearTimeout(hideTimer);
+        showTimer = setTimeout(function() { showOverlay(el); }, 500);
+      }
     });
 
     document.addEventListener('mouseout', function(e) {
       var el = getInteractable(e.target);
       if (!el) { return; }
+      clearTimeout(showTimer);
       var toEl = e.relatedTarget;
       if (!(toEl && (toEl === overlay || overlay.contains(toEl)))) {
         scheduleHide();
       }
     });
 
-    overlay.addEventListener('mouseenter', function() { clearTimeout(hideTimer); });
+    overlay.addEventListener('mouseenter', function() { clearTimeout(hideTimer); clearTimeout(showTimer); });
     overlay.addEventListener('mouseleave', scheduleHide);
 
     // Click on a session row in the overlay
