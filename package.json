@@ -2,7 +2,7 @@
   "name": "chatwizard",
   "displayName": "Chat Wizard",
   "description": "Unified search and analytics for AI chat history (GitHub Copilot Chat, Claude Code)",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "publisher": "Veverke",
   "icon": "images/icon.png",
   "license": "SEE LICENSE IN LICENSE",
