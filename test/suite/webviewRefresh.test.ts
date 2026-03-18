@@ -72,6 +72,7 @@ import { AnalyticsViewProvider } from '../../src/analytics/analyticsViewProvider
 import { TimelineViewProvider } from '../../src/timeline/timelineViewProvider';
 import { PromptLibraryPanel } from '../../src/prompts/promptLibraryPanel';
 import { CodeBlocksPanel } from '../../src/codeblocks/codeBlocksPanel';
+import { SessionWebviewPanel } from '../../src/views/sessionWebviewPanel';
 
 // â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -405,6 +406,31 @@ suite('CodeBlocksPanel â€” shell HTML', () => {
         const html = CodeBlocksPanel.getShellHtml();
         // copy command should be sent via event delegation, not per-card listeners
         assert.ok(html.includes("command: 'copy'") || html.includes('command: "copy"'), 'should have copy handler');
+    });
+});
+
+// ── SessionWebviewPanel — Shell skeleton placeholders ────────────────────────
+
+suite('SessionWebviewPanel — Shell skeleton placeholders', () => {
+    test('shell HTML contains 5 skeleton message blocks in messages-container', () => {
+        const html = (SessionWebviewPanel as any)._getShellHtml();
+        assert.ok(html.includes('id="messages-container"'), 'messages container present');
+        const skeletonMessages = (html.match(/class="message (user|assistant) cw-fade-item"/g) || []);
+        assert.strictEqual(skeletonMessages.length, 5, 'should have 5 skeleton messages');
+    });
+
+    test('skeleton messages alternate user and assistant roles', () => {
+        const html = (SessionWebviewPanel as any)._getShellHtml();
+        const roles = (html.match(/class="message (user|assistant) cw-fade-item"/g) || [])
+            .map((m: string) => m.includes('user') ? 'user' : 'assistant');
+        assert.deepStrictEqual(roles, ['user', 'assistant', 'user', 'assistant', 'user'],
+            'roles should alternate starting with user');
+    });
+
+    test('session title contains a skeleton placeholder', () => {
+        const html = (SessionWebviewPanel as any)._getShellHtml();
+        const titleMatch = html.match(/id="session-title"[^>]*>.*?cw-skeleton/s);
+        assert.ok(titleMatch, 'title h1 should contain a cw-skeleton element');
     });
 });
 

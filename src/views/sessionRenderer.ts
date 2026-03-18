@@ -146,13 +146,13 @@ export function renderMessage(
   <div class="message-header">
     <span class="role-label">${label}</span>${timestamp}
   </div>
-  <div class="message-body">${renderedContent}</div>
+  <div class="message-body" data-raw="${escapeHtml(msg.content)}">${renderedContent}</div>
 </div>`;
 
     // Aborted-response placeholder: user msg with no following assistant reply
     const nextEntry = visibleMessages[visibleIdx + 1];
     if (msg.role === 'user' && (!nextEntry || nextEntry.msg.role === 'user')) {
-        html += `\n<div class="message aborted">
+        html += `\n<div class="message assistant cw-role-response aborted">
   <div class="message-header"><span class="role-label">${assistantLabel}</span></div>
   <div class="message-body aborted-notice">&#9888; Response not available &mdash; cancelled or incomplete</div>
 </div>`;

@@ -13,7 +13,8 @@ export class PromptLibraryViewProvider implements vscode.WebviewViewProvider {
     static readonly viewType = 'chatwizardPromptLibrary';
 
     private _view?: vscode.WebviewView;
-    private _cacheVersion = 0;
+    private _lastIndexVersion = -1;
+    private _refreshTimer: ReturnType<typeof setTimeout> | null = null;
 
     constructor(private readonly _index: SessionIndex) {}
 
@@ -31,10 +32,12 @@ export class PromptLibraryViewProvider implements vscode.WebviewViewProvider {
             if (webviewView.visible) { void this._sendData(); }
         });
 
-        webviewView.webview.onDidReceiveMessage((message: { command?: string; type?: string; text?: string }) => {
+        webviewView.webview.onDidReceiveMessage((message: { command?: string; type?: string; text?: string; sessionId?: string; searchTerm?: string; highlightContainer?: boolean }) => {
             if (message.command === 'copy') {
                 void vscode.env.clipboard.writeText(message.text ?? '');
                 void vscode.window.showInformationMessage('Prompt copied to clipboard.');
+            } else if (message.command === 'openSession' && message.sessionId) {
+                void vscode.commands.executeCommand('chatwizard.openSession', { id: message.sessionId }, message.searchTerm, message.highlightContainer);
             } else if (message.command === 'openSettings') {
                 void vscode.commands.executeCommand('workbench.action.openSettings', 'chatwizard');
             } else if (message.command === 'rescan') {
@@ -47,18 +50,23 @@ export class PromptLibraryViewProvider implements vscode.WebviewViewProvider {
         void this._sendData();
     }
 
-    /** Re-render the view when the session index changes. No-op if the view is not visible. */
+    /** Re-render the view when the session index changes. Debounced 2 s. No-op if not visible or index unchanged. */
     refresh(): void {
-        if (this._view?.visible) {
-            this._cacheVersion++;
-            void this._sendData();
-        }
+        if (!this._view?.visible) { return; }
+        if (this._refreshTimer) { clearTimeout(this._refreshTimer); }
+        this._refreshTimer = setTimeout(() => {
+            this._refreshTimer = null;
+            if (this._view?.visible && this._index.version !== this._lastIndexVersion) {
+                void this._sendData();
+            }
+        }, 2_000);
     }
 
     private async _sendData(): Promise<void> {
         if (!this._view) { return; }
+        this._lastIndexVersion = this._index.version;
         const entries = buildPromptLibrary(this._index);
-        const result = await clusterPromptsAsync(entries, 0.6, String(this._cacheVersion));
+        const result = await clusterPromptsAsync(entries, 0.6, String(this._lastIndexVersion));
         if (this._view) {
             void this._view.webview.postMessage({
                 type: 'update',

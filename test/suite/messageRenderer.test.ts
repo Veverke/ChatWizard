@@ -91,7 +91,7 @@ suite('S8 â€” MessageRenderer correctness', () => {
 
     test('fenced code block preserved', () => {
         const result = markdownToHtml('```js\nconsole.log("hi");\n```');
-        assert.ok(result.includes('<pre><code'), 'pre+code present');
+        assert.ok(result.includes('<pre') && result.includes('<code'), 'pre+code present');
         assert.ok(result.includes('console.log'), 'code content present');
     });
 

@@ -635,14 +635,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // Other commands
     // ------------------------------------------------------------------
     context.subscriptions.push(
-        vscode.commands.registerCommand('chatwizard.openSession', (summary, searchTerm?: string) => {
+        vscode.commands.registerCommand('chatwizard.openSession', (summary, searchTerm?: string, highlightContainer?: boolean) => {
             const session = index.get(summary.id);
             if (!session) {
                 vscode.window.showErrorMessage(`Session not found: ${summary.id}`);
                 return;
             }
             telemetry.record('session.opened', { source: session.source });
-            SessionWebviewPanel.show(context, session, searchTerm);
+            SessionWebviewPanel.show(context, session, searchTerm, false, undefined, undefined, undefined, highlightContainer);
         })
     );
 

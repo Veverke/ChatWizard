@@ -8,6 +8,8 @@ import { clusterPrompts, PromptCluster, MAX_CLUSTER_ENTRIES } from './similarity
 
 export class PromptLibraryPanel {
     private static _panel: vscode.WebviewPanel | undefined;
+    private static _refreshTimer: ReturnType<typeof setTimeout> | null = null;
+    private static _lastIndexVersion = -1;
 
     static show(context: vscode.ExtensionContext, index: SessionIndex): void {
         const entries = buildPromptLibrary(index);
@@ -37,10 +39,12 @@ export class PromptLibraryPanel {
             PromptLibraryPanel._panel = undefined;
         }, null, context.subscriptions);
 
-        panel.webview.onDidReceiveMessage((message: { type?: string; command?: string; text?: string }) => {
+        panel.webview.onDidReceiveMessage((message: { type?: string; command?: string; text?: string; sessionId?: string; searchTerm?: string; highlightContainer?: boolean }) => {
             if (message.command === 'copy') {
                 void vscode.env.clipboard.writeText(message.text ?? '');
                 void vscode.window.showInformationMessage('Prompt copied to clipboard.');
+            } else if (message.command === 'openSession' && message.sessionId) {
+                void vscode.commands.executeCommand('chatwizard.openSession', { id: message.sessionId }, message.searchTerm, message.highlightContainer);
             } else if (message.command === 'openSettings') {
                 void vscode.commands.executeCommand('workbench.action.openSettings', 'chatwizard');
             } else if (message.command === 'rescan') {
@@ -56,12 +60,19 @@ export class PromptLibraryPanel {
 
     static refresh(index: SessionIndex): void {
         if (!PromptLibraryPanel._panel) { return; }
-        const entries = buildPromptLibrary(index);
-        const clusters = clusterPrompts(entries);
-        void PromptLibraryPanel._panel.webview.postMessage({
-            type: 'update',
-            data: { clusters, truncated: false },
-        });
+        if (PromptLibraryPanel._refreshTimer) { clearTimeout(PromptLibraryPanel._refreshTimer); }
+        PromptLibraryPanel._refreshTimer = setTimeout(() => {
+            PromptLibraryPanel._refreshTimer = null;
+            if (!PromptLibraryPanel._panel) { return; }
+            if (index.version === PromptLibraryPanel._lastIndexVersion) { return; }
+            PromptLibraryPanel._lastIndexVersion = index.version;
+            const entries = buildPromptLibrary(index);
+            const clusters = clusterPrompts(entries);
+            void PromptLibraryPanel._panel.webview.postMessage({
+                type: 'update',
+                data: { clusters, truncated: false },
+            });
+        }, 2_000);
     }
 
     private static _escapeHtml(text: string): string {
@@ -197,6 +208,7 @@ export class PromptLibraryPanel {
       white-space: pre-wrap;
       word-break: break-word;
       font-size: 0.95em;
+      cursor: pointer;
     }
 
     .variants-details {
@@ -229,6 +241,8 @@ export class PromptLibraryPanel {
       border-top: 1px solid var(--cw-border);
       font-size: 0.88em;
     }
+    .variant-item[data-sessions] { cursor: pointer; }
+    .variant-item[data-sessions]:hover { background: var(--cw-surface-subtle); border-radius: 3px; }
 
     .variant-body {
       flex: 1;
@@ -282,6 +296,84 @@ export class PromptLibraryPanel {
     .empty-state-guided .empty-state-title { font-size: 1.05em; font-weight: 600; margin-bottom: 8px; }
     .empty-state-guided .empty-state-body { opacity: 0.6; margin-bottom: 16px; font-size: 0.92em; }
     .empty-state-guided .empty-state-actions { display: flex; gap: 8px; justify-content: center; }
+
+    /* Session hover overlay — styled as a distinct floating popup */
+    #sessionOverlay {
+      display: none;
+      position: fixed;
+      z-index: 1000;
+      /* Use quickInput palette: the same widget VS Code uses for command palette / quick open */
+      background: var(--vscode-quickInput-background, #1e1e1e);
+      color: var(--vscode-quickInput-foreground, #d4d4d4);
+      border: 2px solid var(--cw-accent, #007acc);
+      border-radius: 6px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.7), 0 0 0 1px rgba(0,0,0,0.4);
+      min-width: 240px;
+      max-width: 340px;
+      max-height: 260px;
+      overflow-y: auto;
+      padding: 0;
+      font-size: 0.88em;
+      /* Slightly offset from the panel so it reads as a layer above */
+      backdrop-filter: none;
+    }
+    #sessionOverlay.visible { display: block; }
+    .overlay-header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.7em;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--cw-accent, #007acc);
+      padding: 7px 10px 5px;
+      background: var(--vscode-quickInput-background, #1e1e1e);
+      border-bottom: 1px solid var(--cw-accent, #007acc);
+      position: sticky;
+      top: 0;
+    }
+    .overlay-header::before {
+      content: '\\25BA';
+      font-size: 0.8em;
+      opacity: 0.7;
+    }
+    .overlay-session-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      cursor: pointer;
+      border-left: 3px solid transparent;
+      transition: border-color 0.1s, background 0.1s;
+    }
+    .overlay-session-row:hover {
+      background: var(--vscode-quickInputList-focusBackground, rgba(0,122,204,0.2));
+      border-left-color: var(--cw-accent, #007acc);
+    }
+    .overlay-session-body {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+      min-width: 0;
+    }
+    .overlay-session-title {
+      font-size: 0.92em;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .overlay-session-meta {
+      font-size: 0.74em;
+      opacity: 0.45;
+      white-space: nowrap;
+    }
+    .overlay-session-icon {
+      font-size: 0.8em;
+      opacity: 0.4;
+      flex-shrink: 0;
+    }
   </style>
 </head>
 <body>
@@ -291,6 +383,7 @@ export class PromptLibraryPanel {
   </div>
   <div id="truncatedBanner"></div>
   <div class="prompts-list" id="promptsList"></div>
+  <div id="sessionOverlay"></div>
   <script>
     const vscode = acquireVsCodeApi();
 
@@ -301,6 +394,12 @@ export class PromptLibraryPanel {
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;');
+    }
+
+    var MAX_PROMPT_DISPLAY = 300;
+    function truncateDisplay(text, max) {
+      if (text.length <= max) { return text; }
+      return text.substring(0, max) + '\u2026';
     }
 
     const searchInput  = document.getElementById('searchInput');
@@ -323,6 +422,9 @@ export class PromptLibraryPanel {
 
     searchInput.addEventListener('input', applyFilter);
 
+    // Hash guard: skip DOM rebuild if cluster data hasn't changed
+    var _lastClustersJson = '';
+
     // Copy via event delegation -- survives DOM rebuilds
     document.addEventListener('click', function(e) {
       const btn = e.target && e.target.closest ? e.target.closest('.copy-btn') : null;
@@ -333,6 +435,10 @@ export class PromptLibraryPanel {
     });
 
     function renderClusters(clusters) {
+      var newJson = JSON.stringify(clusters);
+      if (newJson === _lastClustersJson) { return; }
+      _lastClustersJson = newJson;
+
       const scrollTop = window.scrollY;
       const savedQuery = searchInput.value;
 
@@ -368,26 +474,34 @@ export class PromptLibraryPanel {
           + (projectCount > 0 ? ' across ' + projectCount + ' project' + (projectCount === 1 ? '' : 's') : '');
 
         const escapedText      = escHtml(canonical.text);
+        const displayText      = escHtml(truncateDisplay(canonical.text, MAX_PROMPT_DISPLAY));
         const escapedTextLower = escHtml(canonical.text.toLowerCase());
 
         let variantsHtml = '';
         if (variants.length > 0) {
           const variantItems = variants.map(function(v) {
-            const escapedV = escHtml(v.text);
-            const sessionInfoParts = (v.sessionMeta || []).map(function(m) {
+            const escapedV      = escHtml(v.text);
+            const displayV      = escHtml(truncateDisplay(v.text, MAX_PROMPT_DISPLAY));
+            const vMeta = v.sessionMeta || [];
+            const vSessionsAttr = escHtml(JSON.stringify(vMeta));
+            const vDirectAttr = vMeta.length === 1 ? (' data-direct="' + escHtml(vMeta[0].sessionId) + '"') : '';
+            const vTitleAttr = vMeta.length === 1
+              ? (' title="Click to open \u201c' + escHtml(vMeta[0].title) + '\u201d"')
+              : (vMeta.length > 1 ? ' title="Hover or click to pick a session"' : '');
+            const sessionInfoParts = vMeta.map(function(m) {
               const date = m.updatedAt ? m.updatedAt.substring(0, 10) : '';
-              return escHtml(m.title + (date ? ' \\u00b7 ' + date : ''));
+              return escHtml(m.title + (date ? ' \u00b7 ' + date : ''));
             });
             const sessionInfoHtml = sessionInfoParts.length > 0
               ? '<span class="variant-session">' + sessionInfoParts.join(', ') + '</span>'
               : '';
-            return '<li class="variant-item">'
+            return '<li class="variant-item" data-sessions="' + vSessionsAttr + '" data-prompt="' + escapedV + '"' + vDirectAttr + vTitleAttr + '>'
               + '<div class="variant-body">'
-              + '<span class="variant-text">' + escapedV + '</span>'
+              + '<span class="variant-text">' + displayV + '</span>'
               + sessionInfoHtml
               + '</div>'
-              + '<span class="variant-freq">' + v.frequency + '\\u00d7</span>'
-              + '<button class="copy-btn copy-btn-sm" data-text="' + escHtml(v.text) + '" title="Copy variant">Copy</button>'
+              + '<span class="variant-freq">' + v.frequency + '\u00d7</span>'
+              + '<button class="copy-btn copy-btn-sm" data-text="' + escapedV + '" title="Copy variant">Copy</button>'
               + '</li>';
           }).join('');
           variantsHtml = '<details class="variants-details">'
@@ -397,6 +511,13 @@ export class PromptLibraryPanel {
         }
 
         const fadeAttr = i < 15 ? ' style="--cw-i:' + i + '"' : '';
+        const sessionMeta = cluster.canonical.sessionMeta || [];
+        const canonicalSessionsAttr = escHtml(JSON.stringify(sessionMeta));
+        const canonicalDirectAttr = sessionMeta.length === 1 ? (' data-direct="' + escHtml(sessionMeta[0].sessionId) + '"') : '';
+        const canonicalTitleAttr = sessionMeta.length === 1
+          ? (' title="Click to open \u201c' + escHtml(sessionMeta[0].title) + '\u201d"')
+          : (sessionMeta.length > 1 ? ' title="Hover or click to pick a session"' : '');
+        const promptTextAttr = escapedText;
         cardsHtml +=
           '<div class="prompt-card cw-fade-item"' + fadeAttr + ' data-text="' + escapedTextLower + '">'
           + '\\n  <div class="card-header">'
@@ -404,7 +525,7 @@ export class PromptLibraryPanel {
           + '\\n    <span class="stats-label">' + escHtml(statsLabel) + '</span>'
           + '\\n    <button class="copy-btn" data-text="' + escapedText + '" title="Copy prompt">Copy</button>'
           + '\\n  </div>'
-          + '\\n  <div class="prompt-text">' + escapedText + '</div>'
+          + '\\n  <div class="prompt-text" data-sessions="' + canonicalSessionsAttr + '" data-prompt="' + promptTextAttr + '"' + canonicalDirectAttr + canonicalTitleAttr + '>' + displayText + '</div>'
           + variantsHtml
           + '\\n</div>';
       });
@@ -430,6 +551,132 @@ export class PromptLibraryPanel {
           bannerEl.style.display = 'none';
         }
       }
+    });
+
+    // ---- Session hover overlay ----
+    var overlay   = document.getElementById('sessionOverlay');
+    var hideTimer = null;
+    var activeEl  = null;
+
+    // Returns the canonical .prompt-text element under the event target (for overlay),
+    // or null if the target is a copy button, a variant-item, or unrelated element.
+    // Variant items are intentionally excluded — they navigate directly on click.
+    function getInteractable(target) {
+      if (!target || !target.closest) { return null; }
+      if (target.closest('.copy-btn')) { return null; }
+      if (target.closest('.variants-list')) { return null; }
+      return target.closest('.prompt-text[data-sessions]');
+    }
+
+    function positionOverlay(el) {
+      var rect  = el.getBoundingClientRect();
+      var ovW   = 340;
+      var gap   = 12;
+      var left  = rect.right + gap;
+      if (left + ovW > window.innerWidth - 4) {
+        left = rect.left - ovW - gap;
+        if (left < 4) { left = 4; }
+      }
+      var top = rect.top;
+      var ovH = Math.min(260, overlay.scrollHeight || 160);
+      if (top + ovH > window.innerHeight - 4) { top = window.innerHeight - ovH - 4; }
+      if (top < 4) { top = 4; }
+      overlay.style.left = left + 'px';
+      overlay.style.top  = top  + 'px';
+    }
+
+    function showOverlay(el) {
+      clearTimeout(hideTimer);
+      var raw = el.dataset.sessions;
+      if (!raw) { return; }
+      var sessions;
+      try { sessions = JSON.parse(raw); } catch(e) { return; }
+      if (!sessions || sessions.length === 0) { return; }
+      var promptText = el.dataset.prompt || '';
+      activeEl = el;
+
+      var rows = sessions.map(function(m) {
+        var date = m.updatedAt ? m.updatedAt.substring(0, 10) : '';
+        var srcLabel = m.source === 'copilot' ? 'Copilot' : 'Claude';
+        return '<div class="overlay-session-row" data-sid="' + escHtml(m.sessionId) + '" data-prompt="' + escHtml(promptText) + '">'
+          + '<span class="overlay-session-icon">\\u27A4</span>'
+          + '<div class="overlay-session-body">'
+          + '<span class="overlay-session-title">' + escHtml(m.title || m.sessionId) + '</span>'
+          + '<span class="overlay-session-meta">' + escHtml(srcLabel + (date ? ' \\u00b7 ' + date : '')) + '</span>'
+          + '</div>'
+          + '</div>';
+      }).join('');
+
+      overlay.innerHTML = '<div class="overlay-header">Open in session</div>' + rows;
+      positionOverlay(el);
+      overlay.classList.add('visible');
+    }
+
+    function hideOverlay() {
+      overlay.classList.remove('visible');
+      activeEl = null;
+    }
+
+    function scheduleHide() {
+      hideTimer = setTimeout(hideOverlay, 200);
+    }
+
+    // Click on a variant item: always navigate directly (no overlay), first session if multi-session
+    document.addEventListener('click', function(e) {
+      if (e.target && e.target.closest && e.target.closest('.copy-btn')) { return; }
+      var vi = e.target && e.target.closest ? e.target.closest('.variant-item[data-sessions]') : null;
+      if (!vi) { return; }
+      var sid = vi.dataset.direct;
+      if (!sid) {
+        try {
+          var sess = JSON.parse(vi.dataset.sessions);
+          if (sess && sess.length > 0) { sid = sess[0].sessionId; }
+        } catch (_) {}
+      }
+      if (!sid) { return; }
+      hideOverlay();
+      vscode.postMessage({ command: 'openSession', sessionId: sid, searchTerm: vi.dataset.prompt || '', highlightContainer: true });
+    });
+
+    // Click on canonical prompt-text: direct navigation (single session) or toggle overlay (multiple sessions)
+    document.addEventListener('click', function(e) {
+      var el = getInteractable(e.target);
+      if (!el) { return; }
+      if (el.dataset.direct) {
+        hideOverlay();
+        vscode.postMessage({ command: 'openSession', sessionId: el.dataset.direct, searchTerm: el.dataset.prompt || '', highlightContainer: true });
+        return;
+      }
+      if (el === activeEl) { hideOverlay(); } else { showOverlay(el); }
+    });
+
+    // Hover: show overlay only for multi-session elements (single-session ones navigate on click)
+    document.addEventListener('mouseover', function(e) {
+      var el = getInteractable(e.target);
+      if (!el || el.dataset.direct) { return; }
+      if (el !== activeEl) { showOverlay(el); }
+    });
+
+    document.addEventListener('mouseout', function(e) {
+      var el = getInteractable(e.target);
+      if (!el) { return; }
+      var toEl = e.relatedTarget;
+      if (!(toEl && (toEl === overlay || overlay.contains(toEl)))) {
+        scheduleHide();
+      }
+    });
+
+    overlay.addEventListener('mouseenter', function() { clearTimeout(hideTimer); });
+    overlay.addEventListener('mouseleave', scheduleHide);
+
+    // Click on a session row in the overlay
+    overlay.addEventListener('click', function(e) {
+      var row = e.target && e.target.closest ? e.target.closest('.overlay-session-row') : null;
+      if (!row) { return; }
+      var sid    = row.dataset.sid || '';
+      var prompt = row.dataset.prompt || '';
+      hideOverlay();
+      vscode.postMessage({ command: 'openSession', sessionId: sid, searchTerm: prompt, highlightContainer: true });
     });
 
     // Signal ready
@@ -618,6 +865,7 @@ export class PromptLibraryPanel {
       white-space: pre-wrap;
       word-break: break-word;
       font-size: 0.95em;
+      cursor: pointer;
     }
 
     .variants-details {

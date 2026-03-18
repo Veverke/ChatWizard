@@ -10,9 +10,7 @@ import {
 } from './sessionRenderer';
 
 // ── Streaming constants ───────────────────────────────────────────────────────
-const INITIAL_WINDOW = 50;   // messages shown in initial render (normal sessions)
-const LARGE_THRESHOLD = 500; // sessions above this get a truncation banner
-const LARGE_INITIAL   = 200; // initial window for large sessions
+const INITIAL_WINDOW = 50;   // messages shown in initial render
 const CHUNK_SIZE      = 20;  // messages per setImmediate batch
 
 // ── Internal types ────────────────────────────────────────────────────────────
@@ -29,7 +27,6 @@ interface PanelMsgState {
     renderedMessages: (string | null)[]; // null = not yet rendered
     windowStart:      number;            // first index currently in webview
     windowEnd:        number;            // exclusive end currently in webview
-    isTruncated:      boolean;
     streamVersion:    number;            // bumped to abort stale streams
     assistantLabel:   string;
     panel:            vscode.WebviewPanel;
@@ -53,7 +50,8 @@ export class SessionWebviewPanel {
         scrollToCodeBlock?: boolean,
         targetBlockMessageIndex?: number,
         _targetBlockContent?: string,  // deprecated — kept for call-site compat, unused
-        targetBlockIdx?: number
+        targetBlockIdx?: number,
+        highlightContainer?: boolean
     ): void {
         const config = vscode.workspace.getConfiguration('chatwizard');
         const userColor = config.get<string>('userMessageColor', '#007acc') || '#007acc';
@@ -72,21 +70,20 @@ export class SessionWebviewPanel {
             .filter(({ msg }) => msg.content.trim() !== '');
 
         const total     = visibleMessages.length;
-        const isLarge   = total > LARGE_THRESHOLD;
-        const initialSz = isLarge ? LARGE_INITIAL : INITIAL_WINDOW;
+        const initialSz = INITIAL_WINDOW;
 
-        // Default window = last N messages; adjust if targeting a specific message
-        let windowStart = Math.max(0, total - initialSz);
+        // Always start from the beginning; the webview auto-loads more
+        // batches if a navigation target (prompt, code block) is beyond
+        // the initial window.
+        let windowStart = 0;
         if (targetBlockMessageIndex !== undefined) {
             const targetVisibleIdx = visibleMessages.findIndex(
                 vm => vm.origIdx === targetBlockMessageIndex
             );
-            if (targetVisibleIdx >= 0 && targetVisibleIdx < windowStart) {
-                // Ensure target is visible with a few messages of context above it
+            if (targetVisibleIdx >= 0) {
                 windowStart = Math.max(0, targetVisibleIdx - 3);
             }
         }
-        const isTruncated = isLarge && windowStart > 0;
 
         // Render cache keyed on sessionId + updatedAt
         const cacheKey = `${session.id}::${session.updatedAt}`;
@@ -103,6 +100,8 @@ export class SessionWebviewPanel {
             shouldScroll:   cbScroll,
         };
 
+        const initialWindowEnd = Math.min(windowStart + initialSz, total);
+
         // ── Re-use existing panel ─────────────────────────────────────────────
         const existing = SessionWebviewPanel._panels.get(session.id);
         if (existing) {
@@ -111,12 +110,12 @@ export class SessionWebviewPanel {
             const newVersion = (prev?.streamVersion ?? 0) + 1;
             SessionWebviewPanel._panelState.set(session.id, {
                 session, visibleMessages, renderedMessages,
-                windowStart, windowEnd: total,
-                isTruncated, streamVersion: newVersion,
+                windowStart, windowEnd: initialWindowEnd,
+                streamVersion: newVersion,
                 assistantLabel, panel: existing,
             });
             void SessionWebviewPanel._startStream(
-                session.id, newVersion, userColor, searchTerm, scrollInit
+                session.id, newVersion, userColor, searchTerm, scrollInit, highlightContainer
             );
             return;
         }
@@ -132,8 +131,8 @@ export class SessionWebviewPanel {
 
         SessionWebviewPanel._panelState.set(session.id, {
             session, visibleMessages, renderedMessages,
-            windowStart, windowEnd: total,
-            isTruncated, streamVersion: 0,
+            windowStart, windowEnd: initialWindowEnd,
+            streamVersion: 0,
             assistantLabel, panel,
         });
         SessionWebviewPanel._panels.set(session.id, panel);
@@ -143,12 +142,10 @@ export class SessionWebviewPanel {
                 if (msg.type === 'ready') {
                     const st = SessionWebviewPanel._panelState.get(session.id);
                     void SessionWebviewPanel._startStream(
-                        session.id, st?.streamVersion ?? 0, userColor, searchTerm, scrollInit
+                        session.id, st?.streamVersion ?? 0, userColor, searchTerm, scrollInit, highlightContainer
                     );
                 } else if (msg.type === 'loadMoreMessages') {
-                    void SessionWebviewPanel._loadMoreMessages(session.id, msg.direction ?? 'older');
-                } else if (msg.type === 'loadAll') {
-                    void SessionWebviewPanel._loadAll(session.id, userColor);
+                    void SessionWebviewPanel._loadMoreMessages(session.id);
                 } else if (msg.command === 'exportExcerpt') {
                     void vscode.commands.executeCommand('chatwizard.exportExcerpt', session.id);
                 } else if (msg.command === 'exportSelection' && msg.text) {
@@ -168,20 +165,22 @@ export class SessionWebviewPanel {
     // ── Streaming pipeline ────────────────────────────────────────────────────
 
     static async _startStream(
-        panelId:    string,
-        myVersion:  number,
-        userColor:  string,
-        searchTerm: string | undefined,
-        scrollInit: ScrollInit
+        panelId:          string,
+        myVersion:        number,
+        userColor:        string,
+        searchTerm:       string | undefined,
+        scrollInit:       ScrollInit,
+        highlightContainer?: boolean
     ): Promise<void> {
         const state = SessionWebviewPanel._panelState.get(panelId);
         if (!state || state.streamVersion !== myVersion) { return; }
 
-        const { visibleMessages, renderedMessages, windowStart, isTruncated, assistantLabel, panel, session } = state;
-        const total = visibleMessages.length;
+        const { visibleMessages, renderedMessages, windowStart, assistantLabel, panel, session } = state;
+        const total      = visibleMessages.length;
+        const windowEnd  = state.windowEnd;   // already capped at windowStart + initialSz
 
         // ── First chunk: rendered synchronously so first content appears immediately ──
-        const firstEnd = Math.min(windowStart + CHUNK_SIZE, total);
+        const firstEnd = Math.min(windowStart + CHUNK_SIZE, windowEnd);
         const firstHtml = SessionWebviewPanel._renderChunk(
             visibleMessages, renderedMessages, windowStart, firstEnd, assistantLabel, true
         );
@@ -191,6 +190,7 @@ export class SessionWebviewPanel {
         void panel.webview.postMessage({
             type: 'render',
             title:        session.title,
+            source:       session.source,
             userColor,
             term:         searchTerm ?? null,
             scrollInit:   null, // scroll sent separately after all chunks via cwScroll
@@ -198,18 +198,16 @@ export class SessionWebviewPanel {
             windowStart,
             windowEnd:    firstEnd,
             total,
-            hasOlder:     windowStart > 0,
-            hasNewer:     firstEnd < total,
-            isTruncated,
+            hasMore:      windowEnd < total,
         });
 
         // ── Stream remaining initial window via setImmediate ──────────────────
         let cursor = firstEnd;
-        while (cursor < total) {
+        while (cursor < windowEnd) {
             await new Promise<void>(resolve => setImmediate(resolve));
             if (SessionWebviewPanel._panelState.get(panelId)?.streamVersion !== myVersion) { return; }
 
-            const chunkEnd  = Math.min(cursor + CHUNK_SIZE, total);
+            const chunkEnd  = Math.min(cursor + CHUNK_SIZE, windowEnd);
             const chunkHtml = SessionWebviewPanel._renderChunk(
                 visibleMessages, renderedMessages, cursor, chunkEnd, assistantLabel, false
             );
@@ -218,31 +216,33 @@ export class SessionWebviewPanel {
                 type:           'appendChunk',
                 messagesHtml:   chunkHtml,
                 position:       'end',
-                newWindowStart: state.windowStart,
                 newWindowEnd:   chunkEnd,
-                hasOlder:       state.windowStart > 0,
-                hasNewer:       false,
+                hasMore:        windowEnd < total,
             });
             cursor = chunkEnd;
         }
 
-        // ── Send scroll command after all initial chunks are posted ───────────
-        // cwScroll arrives in the webview AFTER all appendChunk messages, so
-        // the target element is guaranteed to be in the DOM at that point.
-        if (scrollInit.highlightColor || scrollInit.shouldScroll) {
-            if (SessionWebviewPanel._panelState.get(panelId)?.streamVersion === myVersion) {
+        // ── Send search + scroll commands after all initial chunks are posted ─
+        // Both messages arrive in the webview AFTER all appendChunk messages, so
+        // the full initial window is guaranteed to be in the DOM at that point.
+        if (SessionWebviewPanel._panelState.get(panelId)?.streamVersion === myVersion) {
+            if (searchTerm) {
+                const msgType = highlightContainer ? 'cwHighlightMsg' : 'cwSearch';
+                void panel.webview.postMessage({ type: msgType, term: searchTerm });
+            }
+            if (scrollInit.highlightColor || scrollInit.shouldScroll) {
                 void panel.webview.postMessage({ type: 'cwScroll', ...scrollInit });
             }
         }
 
-        // ── Background pre-render older messages for fast load-more ──────────
-        let bgCursor = windowStart - 1;
-        while (bgCursor >= 0) {
+        // ── Background pre-render newer messages for fast load-more ──────────
+        let bgCursor = windowEnd;
+        while (bgCursor < total) {
             await new Promise<void>(resolve => setImmediate(resolve));
             if (SessionWebviewPanel._panelState.get(panelId)?.streamVersion !== myVersion) { return; }
 
-            const bgStart = Math.max(0, bgCursor - CHUNK_SIZE + 1);
-            for (let i = bgStart; i <= bgCursor; i++) {
+            const bgEnd = Math.min(bgCursor + CHUNK_SIZE, total);
+            for (let i = bgCursor; i < bgEnd; i++) {
                 if (renderedMessages[i] === null) {
                     renderedMessages[i] = renderMessage(
                         visibleMessages[i].msg, visibleMessages[i].origIdx,
@@ -250,33 +250,18 @@ export class SessionWebviewPanel {
                     );
                 }
             }
-            bgCursor = bgStart - 1;
+            bgCursor = bgEnd;
         }
     }
 
-    static async _loadMoreMessages(panelId: string, direction: 'older' | 'newer'): Promise<void> {
+    static async _loadMoreMessages(panelId: string): Promise<void> {
         const state = SessionWebviewPanel._panelState.get(panelId);
         if (!state) { return; }
 
         const { visibleMessages, renderedMessages, assistantLabel, panel } = state;
         const total = visibleMessages.length;
 
-        if (direction === 'older' && state.windowStart > 0) {
-            const newStart  = Math.max(0, state.windowStart - CHUNK_SIZE);
-            const chunkHtml = SessionWebviewPanel._renderChunk(
-                visibleMessages, renderedMessages, newStart, state.windowStart, assistantLabel, false
-            );
-            state.windowStart = newStart;
-            void panel.webview.postMessage({
-                type:           'appendChunk',
-                messagesHtml:   chunkHtml,
-                position:       'start',
-                newWindowStart: newStart,
-                newWindowEnd:   state.windowEnd,
-                hasOlder:       newStart > 0,
-                hasNewer:       state.windowEnd < total,
-            });
-        } else if (direction === 'newer' && state.windowEnd < total) {
+        if (state.windowEnd < total) {
             const newEnd    = Math.min(total, state.windowEnd + CHUNK_SIZE);
             const chunkHtml = SessionWebviewPanel._renderChunk(
                 visibleMessages, renderedMessages, state.windowEnd, newEnd, assistantLabel, false
@@ -286,61 +271,9 @@ export class SessionWebviewPanel {
                 type:           'appendChunk',
                 messagesHtml:   chunkHtml,
                 position:       'end',
-                newWindowStart: state.windowStart,
                 newWindowEnd:   newEnd,
-                hasOlder:       state.windowStart > 0,
-                hasNewer:       newEnd < total,
+                hasMore:        newEnd < total,
             });
-        }
-    }
-
-    static async _loadAll(panelId: string, userColor: string): Promise<void> {
-        const state = SessionWebviewPanel._panelState.get(panelId);
-        if (!state) { return; }
-        const myVersion = ++state.streamVersion;
-
-        const { visibleMessages, renderedMessages, assistantLabel, panel, session } = state;
-        const total = visibleMessages.length;
-
-        let cursor = 0;
-        while (cursor < total) {
-            if (SessionWebviewPanel._panelState.get(panelId)?.streamVersion !== myVersion) { return; }
-
-            const chunkEnd  = Math.min(cursor + CHUNK_SIZE, total);
-            const chunkHtml = SessionWebviewPanel._renderChunk(
-                visibleMessages, renderedMessages, cursor, chunkEnd, assistantLabel, cursor === 0
-            );
-
-            if (cursor === 0) {
-                void panel.webview.postMessage({
-                    type:         'render',
-                    title:        session.title,
-                    userColor,
-                    term:         null,
-                    scrollInit:   null,
-                    messagesHtml: chunkHtml,
-                    windowStart:  0,
-                    windowEnd:    chunkEnd,
-                    total,
-                    hasOlder:     false,
-                    hasNewer:     chunkEnd < total,
-                    isTruncated:  false,
-                });
-            } else {
-                void panel.webview.postMessage({
-                    type:           'appendChunk',
-                    messagesHtml:   chunkHtml,
-                    position:       'end',
-                    newWindowStart: 0,
-                    newWindowEnd:   chunkEnd,
-                    hasOlder:       false,
-                    hasNewer:       chunkEnd < total,
-                });
-            }
-            state.windowStart = 0;
-            state.windowEnd   = chunkEnd;
-            cursor = chunkEnd;
-            await new Promise<void>(resolve => setImmediate(resolve));
         }
     }
 
@@ -505,6 +438,15 @@ export class SessionWebviewPanel {
       background-color: var(--vscode-editor-findMatchBackground, rgba(234,92,0,0.8));
       outline: 1px solid rgba(234,92,0,0.9);
     }
+    .cw-msg-hl {
+      outline: 2px solid var(--vscode-editor-findMatchHighlightBorder, rgba(234,92,0,0.5));
+      border-radius: 4px;
+    }
+    .cw-msg-hl-active {
+      outline: 2px solid var(--vscode-focusBorder, #007acc);
+      border-radius: 4px;
+      background: var(--vscode-editor-findMatchHighlightBackground, rgba(234,92,0,0.12));
+    }
     #search-input {
       flex: 1;
       font-family: var(--vscode-font-family, sans-serif);
@@ -532,28 +474,7 @@ export class SessionWebviewPanel {
       background: var(--vscode-menu-selectionBackground, #094771);
       color: var(--vscode-menu-selectionForeground, #fff);
     }
-    #truncation-banner {
-      display: none;
-      background: var(--vscode-inputValidation-warningBackground, rgba(255,200,0,0.12));
-      border: 1px solid var(--vscode-inputValidation-warningBorder, rgba(255,200,0,0.4));
-      border-radius: var(--cw-radius-xs);
-      padding: 6px 14px;
-      margin-bottom: 12px;
-      font-size: 0.85em;
-      display: none;
-      align-items: center;
-      gap: 10px;
-    }
-    #truncation-banner button {
-      background: none;
-      border: 1px solid currentColor;
-      border-radius: var(--cw-radius-xs);
-      padding: 2px 8px;
-      cursor: pointer;
-      font-size: 0.9em;
-      white-space: nowrap;
-    }
-    #load-older-btn, #load-newer-btn {
+    #load-more-btn {
       display: none;
       width: 100%;
       margin: 6px 0;
@@ -566,15 +487,27 @@ export class SessionWebviewPanel {
       font-size: 0.82em;
       font-family: var(--vscode-font-family, sans-serif);
     }
-    #load-older-btn:hover, #load-newer-btn:hover {
+    #load-more-btn:hover {
       background: var(--cw-accent);
       color: var(--cw-accent-text);
       border-color: var(--cw-accent);
     }
+    .cw-filter-label {
+      display: flex;
+      align-items: center;
+      gap: 3px;
+      font-size: 0.82em;
+      opacity: 0.7;
+      white-space: nowrap;
+      cursor: pointer;
+      user-select: none;
+    }
+    .cw-filter-label:hover { opacity: 1; }
+    .cw-filter-label input { margin: 0; cursor: pointer; }
   </style>
 </head>
 <body>
-  <h1 id="session-title"></h1>
+  <h1 id="session-title"><span class="cw-skeleton" style="display:inline-block;height:1.1em;width:50%;vertical-align:middle"></span></h1>
   <div class="toolbar">
     <div class="search-group">
       <input id="search-input" type="text" placeholder="Search in messages&#8230;" autocomplete="off" aria-label="Search within session messages" />
@@ -583,11 +516,32 @@ export class SessionWebviewPanel {
       <button id="search-next" title="Next (Enter)" aria-label="Next match">&#9660;</button>
     </div>
     <button id="export-excerpt-btn" style="opacity:0.7;" title="Export an excerpt of this session as Markdown">Export Excerpt&#8230;</button>
+    <label class="cw-filter-label" title="Show only your messages"><input type="checkbox" id="filter-prompts" /> You</label>
+    <label class="cw-filter-label" title="Show only assistant responses"><input type="checkbox" id="filter-responses" /> <span id="filter-responses-label">Responses</span></label>
   </div>
-  <div id="truncation-banner"></div>
-  <button id="load-older-btn">&#8679; Load older messages</button>
-  <div id="messages-container"></div>
-  <button id="load-newer-btn">&#8681; Load newer messages</button>
+  <div id="messages-container">
+    <div class="message user cw-fade-item" style="--cw-i:0">
+      <div class="message-header"><span class="cw-skeleton" style="display:inline-block;height:11px;width:32px"></span><span class="cw-skeleton" style="display:inline-block;height:10px;width:100px;margin-left:10px"></span></div>
+      <div class="message-body"><div class="cw-skeleton" style="height:13px;width:72%;margin:6px 0"></div></div>
+    </div>
+    <div class="message assistant cw-fade-item" style="--cw-i:1">
+      <div class="message-header"><span class="cw-skeleton" style="display:inline-block;height:11px;width:48px"></span><span class="cw-skeleton" style="display:inline-block;height:10px;width:110px;margin-left:10px"></span></div>
+      <div class="message-body"><div class="cw-skeleton" style="height:13px;width:96%;margin:5px 0"></div><div class="cw-skeleton" style="height:13px;width:84%;margin:5px 0"></div><div class="cw-skeleton" style="height:13px;width:62%;margin:5px 0"></div></div>
+    </div>
+    <div class="message user cw-fade-item" style="--cw-i:2">
+      <div class="message-header"><span class="cw-skeleton" style="display:inline-block;height:11px;width:32px"></span><span class="cw-skeleton" style="display:inline-block;height:10px;width:90px;margin-left:10px"></span></div>
+      <div class="message-body"><div class="cw-skeleton" style="height:13px;width:88%;margin:6px 0"></div><div class="cw-skeleton" style="height:13px;width:55%;margin:5px 0"></div></div>
+    </div>
+    <div class="message assistant cw-fade-item" style="--cw-i:3">
+      <div class="message-header"><span class="cw-skeleton" style="display:inline-block;height:11px;width:48px"></span><span class="cw-skeleton" style="display:inline-block;height:10px;width:105px;margin-left:10px"></span></div>
+      <div class="message-body"><div class="cw-skeleton" style="height:13px;width:92%;margin:5px 0"></div><div class="cw-skeleton" style="height:13px;width:78%;margin:5px 0"></div><div class="cw-skeleton" style="height:60px;width:100%;margin:8px 0;border-radius:var(--cw-radius-sm)"></div><div class="cw-skeleton" style="height:13px;width:70%;margin:5px 0"></div></div>
+    </div>
+    <div class="message user cw-fade-item" style="--cw-i:4">
+      <div class="message-header"><span class="cw-skeleton" style="display:inline-block;height:11px;width:32px"></span><span class="cw-skeleton" style="display:inline-block;height:10px;width:95px;margin-left:10px"></span></div>
+      <div class="message-body"><div class="cw-skeleton" style="height:13px;width:65%;margin:6px 0"></div></div>
+    </div>
+  </div>
+  <button id="load-more-btn">Load more messages&#8230;</button>
   <button class="cw-back-top" id="backToTop" title="Back to top">&#8593;</button>
   <div id="sel-ctx-menu">
     <div class="ctx-item" id="ctx-export-sel">Export selection as Markdown&#8230;</div>
@@ -598,18 +552,13 @@ ${cwInteractiveJs()}
   var vscode = acquireVsCodeApi();
 
   // ── State ──────────────────────────────────────────────────────────────────
-  var _hasOlder    = false;
-  var _hasNewer    = false;
+  var _hasMore     = false;
   var _loadingMore = false;
 
   // ── Back to top ────────────────────────────────────────────────────────────
   var backTopBtn = document.getElementById('backToTop');
   window.addEventListener('scroll', function() {
     backTopBtn.classList.toggle('visible', window.scrollY > 300);
-    if (!_loadingMore && _hasOlder && window.scrollY < 300) {
-      _loadingMore = true;
-      vscode.postMessage({ type: 'loadMoreMessages', direction: 'older' });
-    }
   });
   backTopBtn.addEventListener('click', function() { window.scrollTo({ top: 0, behavior: 'smooth' }); });
 
@@ -618,22 +567,43 @@ ${cwInteractiveJs()}
     vscode.postMessage({ command: 'exportExcerpt' });
   });
 
-  // ── Load older/newer buttons ───────────────────────────────────────────────
-  document.getElementById('load-older-btn').addEventListener('click', function() {
-    if (_loadingMore || !_hasOlder) { return; }
+  // ── Load more button ────────────────────────────────────────────────────────
+  var loadMoreBtn = document.getElementById('load-more-btn');
+  loadMoreBtn.addEventListener('click', function() {
+    if (_loadingMore || !_hasMore) { return; }
     _loadingMore = true;
-    vscode.postMessage({ type: 'loadMoreMessages', direction: 'older' });
-  });
-  document.getElementById('load-newer-btn').addEventListener('click', function() {
-    if (_loadingMore || !_hasNewer) { return; }
-    _loadingMore = true;
-    vscode.postMessage({ type: 'loadMoreMessages', direction: 'newer' });
+    vscode.postMessage({ type: 'loadMoreMessages' });
   });
 
-  function updateLoadMoreButtons() {
-    document.getElementById('load-older-btn').style.display = _hasOlder ? 'block' : 'none';
-    document.getElementById('load-newer-btn').style.display = _hasNewer ? 'block' : 'none';
+  function updateLoadMoreButton() {
+    loadMoreBtn.style.display = _hasMore ? 'block' : 'none';
   }
+
+  // ── Role filter checkboxes ──────────────────────────────────────────────────
+  var filterPromptsEl   = document.getElementById('filter-prompts');
+  var filterResponsesEl = document.getElementById('filter-responses');
+  function applyRoleFilter() {
+    var showPromptsOnly   = filterPromptsEl.checked;
+    var showResponsesOnly = filterResponsesEl.checked;
+    // If both or neither checked, show everything
+    if (showPromptsOnly === showResponsesOnly) {
+      container.querySelectorAll('.message').forEach(function(el) { el.style.display = ''; });
+      return;
+    }
+    container.querySelectorAll('.message').forEach(function(el) {
+      var isUser = el.classList.contains('user');
+      if (showPromptsOnly)   { el.style.display = isUser ? '' : 'none'; }
+      if (showResponsesOnly) { el.style.display = isUser ? 'none' : ''; }
+    });
+  }
+  filterPromptsEl.addEventListener('change', function() {
+    if (filterPromptsEl.checked && filterResponsesEl.checked) { filterResponsesEl.checked = false; }
+    applyRoleFilter();
+  });
+  filterResponsesEl.addEventListener('change', function() {
+    if (filterResponsesEl.checked && filterPromptsEl.checked) { filterPromptsEl.checked = false; }
+    applyRoleFilter();
+  });
 
   // ── Context menu ───────────────────────────────────────────────────────────
   var ctxMenu = document.getElementById('sel-ctx-menu');
@@ -745,11 +715,19 @@ ${cwInteractiveJs()}
 
   // ── Search ─────────────────────────────────────────────────────────────────
   var cwMarks = [], cwIdx = -1;
+  // Message-level marks for multi-line (stage-2) search
+  var cwMsgMarks = [], cwMsgIdx = -1;
+  // Pending prompt-library highlight: auto-loads more batches until the target is in DOM
+  var _pendingHighlight = null;
   var srchInput   = document.getElementById('search-input');
   var srchCounter = document.getElementById('search-counter');
   var srchPrev    = document.getElementById('search-prev');
   var srchNext    = document.getElementById('search-next');
   function escRx(s) { return s.replace(/[.*+?^{}()|$[\]\\]/g, '\\$&'); }
+  function clearMsgMarks() {
+    cwMsgMarks.forEach(function(el) { el.classList.remove('cw-msg-hl', 'cw-msg-hl-active'); });
+    cwMsgMarks = []; cwMsgIdx = -1;
+  }
   function clearMarks() {
     cwMarks.forEach(function(mk) {
       var p = mk.parentNode;
@@ -757,6 +735,17 @@ ${cwInteractiveJs()}
     });
     cwMarks = []; cwIdx = -1;
     if (_deHighlighted) { _deHighlighted = false; highlightAll(); }
+    clearMsgMarks();
+  }
+  function setActiveMsg(idx) {
+    cwMsgMarks.forEach(function(el, ii) {
+      el.classList.toggle('cw-msg-hl-active', ii === idx);
+      el.classList.toggle('cw-msg-hl', ii !== idx);
+    });
+    if (cwMsgMarks[idx]) { cwScrollTo(cwMsgMarks[idx]); }
+    srchCounter.textContent = cwMsgMarks.length > 0
+      ? (idx + 1) + ' / ' + cwMsgMarks.length + ' message' + (cwMsgMarks.length === 1 ? '' : 's')
+      : 'No matches';
   }
   function walkBody(root, rx) {
     var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
@@ -791,21 +780,42 @@ ${cwInteractiveJs()}
       if (p) { p.replaceChild(document.createTextNode(mk.textContent), mk); p.normalize(); }
     });
     cwMarks = []; cwIdx = -1;
+    clearMsgMarks();
     if (!query) {
       if (_deHighlighted) { _deHighlighted = false; highlightAll(); }
       srchCounter.textContent = '';
       return;
     }
     dehighlightCode(); // flatten spans so multi-word searches work across tokens
+
+    // Stage 1: exact regex match within text nodes (works for single-line content)
     var rx = new RegExp(escRx(query), 'gi');
     document.querySelectorAll('.message-body').forEach(function(body) { walkBody(body, rx); });
-    if (cwMarks.length === 0) { srchCounter.textContent = 'No matches'; return; }
-    cwIdx = 0; setActive(cwIdx);
+    if (cwMarks.length > 0) { cwIdx = 0; setActive(cwIdx); return; }
+
+    // Stage 2: whitespace-collapse match — uses the raw source content stored in data-raw
+    // (avoids markdown rendering artefacts such as list markers lost from innerText).
+    // Both query and content are normalised to single spaces before comparing.
+    var normQuery = query.trim().replace(/\\s+/g, ' ').toLowerCase();
+    document.querySelectorAll('.message-body').forEach(function(body) {
+      var raw = (body.dataset && body.dataset.raw !== undefined)
+        ? body.dataset.raw
+        : (body.innerText !== undefined ? body.innerText : (body.textContent || ''));
+      var normBody = raw.replace(/\\s+/g, ' ').trim().toLowerCase();
+      if (normBody.indexOf(normQuery) !== -1) { cwMsgMarks.push(body); }
+    });
+    if (cwMsgMarks.length > 0) { cwMsgIdx = 0; setActiveMsg(cwMsgIdx); return; }
+
+    srchCounter.textContent = 'No matches';
   }
   function navSearch(dir) {
-    if (cwMarks.length === 0) { return; }
-    cwIdx = (cwIdx + dir + cwMarks.length) % cwMarks.length;
-    setActive(cwIdx);
+    if (cwMarks.length > 0) {
+      cwIdx = (cwIdx + dir + cwMarks.length) % cwMarks.length;
+      setActive(cwIdx);
+    } else if (cwMsgMarks.length > 0) {
+      cwMsgIdx = (cwMsgIdx + dir + cwMsgMarks.length) % cwMsgMarks.length;
+      setActiveMsg(cwMsgIdx);
+    }
   }
   srchInput.addEventListener('input',   function() { runSearch(srchInput.value); });
   srchPrev.addEventListener('click',    function() { navSearch(-1); });
@@ -856,22 +866,39 @@ ${cwInteractiveJs()}
     tmp.innerHTML = html;
     while (tmp.firstChild) { container.appendChild(tmp.firstChild); }
     highlightAll();
+    applyRoleFilter();
   }
 
-  function prependHtml(html) {
-    var prevScrollY   = window.scrollY;
-    var prevHeight    = document.body.scrollHeight;
-    var tmp = document.createElement('div');
-    tmp.innerHTML = html;
-    // Insert children in reverse order so their DOM order is preserved
-    var kids = Array.from(tmp.childNodes).reverse();
-    kids.forEach(function(child) {
-      container.insertBefore(child, container.firstChild);
+  // Try to find and highlight the pending prompt in the DOM.
+  // If not found and more messages are available, request another batch.
+  function tryHighlightMsg() {
+    if (!_pendingHighlight) { return; }
+    var needle = _pendingHighlight.replace(/\\s+/g, ' ').trim().toLowerCase();
+    var matchEl = null;
+    document.querySelectorAll('.message.user').forEach(function(msgEl) {
+      if (matchEl) { return; }
+      var body = msgEl.querySelector('.message-body');
+      var raw = body ? ((body.dataset && body.dataset.raw !== undefined)
+        ? body.dataset.raw
+        : (body.innerText !== undefined ? body.innerText : (body.textContent || ''))) : '';
+      var normBody = raw.replace(/\\s+/g, ' ').trim().toLowerCase();
+      if (normBody.indexOf(needle) !== -1) { matchEl = msgEl; }
     });
-    highlightAll();
-    // Compensate scroll so the viewport doesn't jump
-    var delta = document.body.scrollHeight - prevHeight;
-    if (delta > 0) { window.scrollTo(0, prevScrollY + delta); }
+    if (matchEl) {
+      _pendingHighlight = null;
+      clearMsgMarks();
+      matchEl.classList.add('cw-msg-hl-active');
+      cwMsgMarks.push(matchEl);
+      cwMsgIdx = 0;
+      cwScrollTo(matchEl);
+    } else if (_hasMore) {
+      // Target not yet loaded — request next batch
+      _loadingMore = true;
+      vscode.postMessage({ type: 'loadMoreMessages' });
+    } else {
+      // All messages loaded, target not found
+      _pendingHighlight = null;
+    }
   }
 
   // ── Message handler ────────────────────────────────────────────────────────
@@ -881,46 +908,53 @@ ${cwInteractiveJs()}
     if (data.type === 'render') {
       document.getElementById('session-title').textContent = data.title;
       document.documentElement.style.setProperty('--cw-user-color', data.userColor || '#007acc');
+      if (data.source) {
+        var srcLabel = data.source === 'copilot' ? 'GitHub Copilot' : 'Claude';
+        var respLabelEl = document.getElementById('filter-responses-label');
+        if (respLabelEl) { respLabelEl.textContent = srcLabel; }
+      }
       container.innerHTML = data.messagesHtml;
       highlightAll();
 
-      // Truncation banner
-      var banner = document.getElementById('truncation-banner');
-      if (data.isTruncated) {
-        var shown = data.total - data.windowStart;
-        banner.innerHTML =
-          'Showing last <strong>' + shown + '</strong> of <strong>' + data.total +
-          '</strong> messages. <button id="load-all-btn">Load all</button>';
-        banner.style.display = 'flex';
-        document.getElementById('load-all-btn').addEventListener('click', function() {
-          vscode.postMessage({ type: 'loadAll' });
-          banner.style.display = 'none';
-        });
-      } else {
-        banner.style.display = 'none';
-      }
-
-      _hasOlder    = !!data.hasOlder;
-      _hasNewer    = !!data.hasNewer;
+      _hasMore     = !!data.hasMore;
       _loadingMore = false;
-      updateLoadMoreButtons();
+      updateLoadMoreButton();
 
       clearMarks();
-      if (data.term) { srchInput.value = data.term; runSearch(data.term); }
+      // Pre-fill the input now so the user sees the pending term immediately;
+      // runSearch() is deferred to the cwSearch message which arrives after all
+      // appendChunk messages have been processed (full window in DOM).
+      if (data.term) { srchInput.value = data.term; srchCounter.textContent = ''; }
       else           { srchInput.value = ''; srchCounter.textContent = ''; }
 
     }
 
+    if (data.type === 'cwSearch') {
+      // Arrives after all initial appendChunk messages — full window is in DOM.
+      if (data.term) { srchInput.value = data.term; runSearch(data.term); }
+    }
+
+    if (data.type === 'cwHighlightMsg') {
+      // Highlight the full user message container (no text marks) — used when opening from Prompt Library.
+      // If the target is not yet in the DOM (beyond the initial batch), auto-load more batches.
+      clearMarks();
+      if (!data.term) { return; }
+      // Prefill search bar with a truncated version for context
+      var displayTerm = data.term.replace(/\\s+/g, ' ').trim();
+      if (displayTerm.length > 80) { displayTerm = displayTerm.substring(0, 80) + '\\u2026'; }
+      srchInput.value = displayTerm;
+      srchCounter.textContent = '';
+      _pendingHighlight = data.term;
+      tryHighlightMsg();
+    }
+
     if (data.type === 'appendChunk') {
-      if (data.position === 'start') {
-        prependHtml(data.messagesHtml);
-      } else {
-        appendHtml(data.messagesHtml);
-      }
-      _hasOlder    = !!data.hasOlder;
-      _hasNewer    = !!data.hasNewer;
+      appendHtml(data.messagesHtml);
+      _hasMore     = !!data.hasMore;
       _loadingMore = false;
-      updateLoadMoreButtons();
+      updateLoadMoreButton();
+      // Re-try pending highlight after new messages are in DOM
+      if (_pendingHighlight) { tryHighlightMsg(); }
     }
 
     if (data.type === 'cwScroll') {
