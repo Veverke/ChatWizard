@@ -1,49 +1,49 @@
-name: Package Targeted VSIX
+name: Release (tag-based)
 
 on:
-  workflow_dispatch: {}
   push:
     tags:
-      - "v*"
+      - 'v*.*.*'
 
 jobs:
-  package:
-    name: ${{ matrix.target }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            target: win32-x64
-          - os: ubuntu-latest
-            target: linux-x64
-          - os: macos-13
-            target: darwin-x64
-          - os: macos-14
-            target: darwin-arm64
+  build-and-publish:
+    runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Use Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Compile
-        run: npm run compile
+      - name: Verify tag version matches package.json
+        run: |
+          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "Tag version ($TAG_VERSION) does not match package.json version ($PKG_VERSION)"
+            exit 1
+          fi
 
-      - name: Package VSIX
-        run: npx @vscode/vsce package --target ${{ matrix.target }} --out chatwizard-${{ matrix.target }}.vsix
+      - name: Install vsce
+        run: npm install -g @vscode/vsce
 
-      - name: Upload VSIX artifact
+      - name: Build extension for all targets
+        run: |
+          vsce package --target win32-x64
+          vsce package --target linux-x64
+          vsce package --target darwin-x64
+
+      - name: Upload VSIX artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: chatwizard-${{ matrix.target }}
-          path: chatwizard-${{ matrix.target }}.vsix
+          name: vsix-files
+          path: "*.vsix"
+
+      - name: Publish to VS Code Marketplace
+        run: vsce publish -p ${{ secrets.VSCE_TOKEN }}
