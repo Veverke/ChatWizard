@@ -285,6 +285,12 @@
         "icon": "$(refresh)"
       },
       {
+        "command": "chatwizard.manageWatchedWorkspaces",
+        "title": "Manage Watched Workspaces",
+        "category": "ChatWizard",
+        "icon": "$(folder-library)"
+      },
+      {
         "command": "chatwizard.cbSortByDate",
         "title": "Sort by Date",
         "category": "ChatWizard",
@@ -631,6 +637,21 @@
           "type": "boolean",
           "default": false,
           "description": "Enable local usage telemetry. Events are recorded to a local JSONL file in the extension's global storage directory. No data ever leaves your machine."
+        },
+        "chatwizard.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable or disable the ChatWizard extension. When false, no sessions are indexed and all file watching is skipped."
+        },
+        "chatwizard.indexClaude": {
+          "type": "boolean",
+          "default": true,
+          "description": "Index Claude Code chat sessions from ~/.claude/projects/ (or the configured custom path)."
+        },
+        "chatwizard.indexCopilot": {
+          "type": "boolean",
+          "default": true,
+          "description": "Index GitHub Copilot Chat sessions from VS Code workspace storage."
         }
       }
     }

@@ -147,6 +147,14 @@ export async function discoverCopilotWorkspacesAsync(): Promise<CopilotWorkspace
             }
             const workspacePath = await readWorkspaceJsonAsync(storageDir);
             if (workspacePath === undefined) { return null; }
+
+            // Skip workspaces whose path no longer exists on disk (deleted / renamed folders).
+            try {
+                await fs.promises.access(workspacePath);
+            } catch {
+                return null;
+            }
+
             return { workspaceId: entry, workspacePath, storageDir } satisfies CopilotWorkspaceInfo;
         }));
 

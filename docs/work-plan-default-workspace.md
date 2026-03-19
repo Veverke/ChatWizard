@@ -192,29 +192,29 @@ Still no visible change — the filter is wired into the collector function but 
 
 ---
 
-### Phase 4 — Command implementation
+### Phase 4 — Command implementation ✅ COMPLETED
 
 **Files changed:**
 - `src/commands/manageWorkspaces.ts` — new file
 - `src/extension.ts` — register command
 
 **Tasks:**
-- [ ] Implement `registerManageWorkspacesCommand(context, scopeManager, watcher, channel)` in `src/commands/manageWorkspaces.ts`.
-- [ ] Build QuickPick items. Each item:
+- [x] Implement `registerManageWorkspacesCommand(context, scopeManager, watcher, channel)` in `src/commands/manageWorkspaces.ts`.
+- [x] Build QuickPick items. Each item:
   ```
   label      : path.basename(ws.workspacePath)   // folder name only
   description: ws.workspacePath                   // full path for disambiguation
   detail     : "X.XX MB  •  <source>"            // size + copilot/claude badge
   picked     : scopeManager.getSelectedIds().includes(ws.id)
   ```
-- [ ] Add a **non-selectable separator/description item** at the top of the list (or in `title`) showing the total MB of all currently selected workspaces. Use a `vscode.QuickPickItem` with `kind: vscode.QuickPickItemKind.Separator` labelled e.g. `"Selected total: X.XX MB"`. Update this label reactively if the API allows it, or recalculate on confirm.
-- [ ] After `showQuickPick` resolves:
+- [x] Add a **non-selectable separator/description item** at the top of the list (or in `title`) showing the total MB of all currently selected workspaces. Use a `vscode.QuickPickItem` with `kind: vscode.QuickPickItemKind.Separator` labelled e.g. `"Selected total: X.XX MB"`. Update this label reactively if the API allows it, or recalculate on confirm.
+- [x] After `showQuickPick` resolves:
   - If `undefined` (cancelled) → no-op.
   - If empty array → show `vscode.window.showWarningMessage('At least one workspace must remain selected.')` → no-op.
   - If unchanged → no-op.
   - Else → `scopeManager.setSelectedIds(selected.map(i => i.id))` → `await watcher.restart()`.
-- [ ] Register in `extension.ts` and in `package.json` as `chatwizard.manageWatchedWorkspaces`.
-- [ ] Unit tests in `test/suite/manageWorkspacesCommand.test.ts`:
+- [x] Register in `extension.ts` and in `package.json` as `chatwizard.manageWatchedWorkspaces`.
+- [x] Unit tests in `test/suite/manageWorkspacesCommand.test.ts`:
   - Empty selection is rejected.
   - Single-workspace selection with no deselection of the currently open workspace passes.
   - Scope manager is not updated on cancel.

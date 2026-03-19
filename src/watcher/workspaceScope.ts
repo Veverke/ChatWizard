@@ -135,6 +135,38 @@ export class WorkspaceScopeManager {
 }
 
 /**
+ * Returns the total size in **bytes** of all `.jsonl` session files for a workspace.
+ * Same scanning rules as `calcWorkspaceSizeMb`. Returns `0` on any I/O error.
+ */
+export async function calcWorkspaceSizeBytes(
+    storageDir: string,
+    source: 'copilot' | 'claude'
+): Promise<number> {
+    try {
+        const dir =
+            source === 'copilot' ? path.join(storageDir, 'chatSessions') : storageDir;
+
+        const entries = await fs.promises.readdir(dir);
+        const jsonlFiles = entries.filter(e => e.endsWith('.jsonl'));
+
+        const sizes = await Promise.all(
+            jsonlFiles.map(async f => {
+                try {
+                    const stat = await fs.promises.stat(path.join(dir, f));
+                    return stat.size;
+                } catch {
+                    return 0;
+                }
+            })
+        );
+
+        return sizes.reduce((acc, s) => acc + s, 0);
+    } catch {
+        return 0;
+    }
+}
+
+/**
  * Calculates the total size in MB of all `.jsonl` session files for a workspace.
  *
  * - **Copilot**: scans `<storageDir>/chatSessions/*.jsonl`
@@ -166,6 +198,28 @@ export async function calcWorkspaceSizeMb(
 
         const totalBytes = sizes.reduce((acc, s) => acc + s, 0);
         return Math.round((totalBytes / (1024 * 1024)) * 100) / 100;
+    } catch {
+        return 0;
+    }
+}
+
+/**
+ * Counts the number of `.jsonl` session files for a workspace (from disk).
+ *
+ * - **Copilot**: counts `<storageDir>/chatSessions/*.jsonl`
+ * - **Claude**:  counts `<storageDir>/*.jsonl`
+ *
+ * Returns 0 on any I/O error.
+ */
+export async function countWorkspaceSessions(
+    storageDir: string,
+    source: 'copilot' | 'claude'
+): Promise<number> {
+    try {
+        const dir =
+            source === 'copilot' ? path.join(storageDir, 'chatSessions') : storageDir;
+        const entries = await fs.promises.readdir(dir);
+        return entries.filter(e => e.endsWith('.jsonl')).length;
     } catch {
         return 0;
     }

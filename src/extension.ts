@@ -29,6 +29,7 @@ import { AnalyticsPanel } from './analytics/analyticsPanel';
 import { AnalyticsViewProvider } from './analytics/analyticsViewProvider';
 import { TimelineViewProvider } from './timeline/timelineViewProvider';
 import { TelemetryRecorder } from './telemetry/telemetryRecorder';
+import { registerManageWorkspacesCommand } from './commands/manageWorkspaces';
 
 let watcher: ChatWizardWatcher | undefined;
 
@@ -755,6 +756,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     // Build the workspace scope manager (persists scope across VS Code restarts).
     const scopeManager = new WorkspaceScopeManager(context);
+
+    // Register the manage-workspaces command (scope changes take effect via watcher.restart()).
+    registerManageWorkspacesCommand(context, scopeManager, () => watcher, channel, index);
 
     // Yield for webview IPC round-trips, then start the file watcher in the background.
     // activate() returns immediately so VS Code is never blocked — the tree view is already
