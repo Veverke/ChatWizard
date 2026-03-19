@@ -1,7 +1,10 @@
 import * as vscode from 'vscode';
 import { SessionIndex } from './index/sessionIndex';
-import { Session } from './types/index';
+import { Session, ScopedWorkspace } from './types/index';
 import { ChatWizardWatcher, startWatcher } from './watcher/fileWatcher';
+import { WorkspaceScopeManager } from './watcher/workspaceScope';
+import { discoverCopilotWorkspacesAsync } from './readers/copilotWorkspace';
+import { discoverClaudeWorkspacesAsync } from './readers/claudeWorkspace';
 import {
     SessionTreeProvider,
     SessionTreeItem,
@@ -78,6 +81,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 `postings: ${stats.postingCount.toLocaleString()}, ` +
                 `~${stats.memoryEstimateKB} KB`
             );
+        } else if (event.type === 'clear') {
+            engine.clear();
         }
     });
     context.subscriptions.push(searchIndexListener);
@@ -748,11 +753,39 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         )
     );
 
+    // Build the workspace scope manager (persists scope across VS Code restarts).
+    const scopeManager = new WorkspaceScopeManager(context);
+
     // Yield for webview IPC round-trips, then start the file watcher in the background.
     // activate() returns immediately so VS Code is never blocked — the tree view is already
     // registered (empty) and will populate when batchUpsert() fires the change listeners.
     await new Promise<void>(resolve => setTimeout(resolve, 200));
-    void startWatcher(index, channel).then(w => {
+    void (async () => {
+        // Discover all available workspaces to initialise the default scope.
+        const [copilotWs, claudeWs] = await Promise.all([
+            discoverCopilotWorkspacesAsync().then(list =>
+                list.map(ws => ({
+                    id: ws.workspaceId,
+                    source: 'copilot' as const,
+                    workspacePath: ws.workspacePath,
+                    storageDir: ws.storageDir,
+                }) satisfies ScopedWorkspace)
+            ).catch(() => [] as ScopedWorkspace[]),
+            discoverClaudeWorkspacesAsync().catch(() => [] as ScopedWorkspace[]),
+        ]);
+        const allAvailable: ScopedWorkspace[] = [...copilotWs, ...claudeWs];
+        channel.appendLine(
+            `[ChatWizard] Discovered ${allAvailable.length} workspace(s) for scope detection: ` +
+            allAvailable.map(ws => `${ws.source}:${ws.id} (${ws.workspacePath})`).join(', ')
+        );
+        await scopeManager.initDefault(allAvailable);
+
+        const selectedIds = scopeManager.getSelectedIds();
+        channel.appendLine(
+            `[ChatWizard] Workspace scope initialised — ${selectedIds.length} workspace(s) selected: ${selectedIds.join(', ')}`
+        );
+
+        const w = await startWatcher(index, channel, scopeManager);
         watcher = w;
         context.subscriptions.push(w);
         const copilotCount = index.getSummariesBySource('copilot').length;
@@ -761,7 +794,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             `ChatWizard activated — ${index.size} sessions indexed (${copilotCount} Copilot, ${claudeCount} Claude)`
         );
         telemetry.record('extension.activated', { sessionCount: index.size });
-    }).catch(err => channel.appendLine(`[error] Watcher init failed: ${err}`));
+    })().catch(err => channel.appendLine(`[error] Watcher init failed: ${err}`));
 }
 
 export function deactivate(): void {

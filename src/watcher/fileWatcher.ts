@@ -12,15 +12,18 @@ import {
 } from '../readers/copilotWorkspace';
 import { Session, SessionSource } from '../types/index';
 import { resolveClaudeProjectsPath } from './configPaths';
+import { WorkspaceScopeManager } from './workspaceScope';
 
 export class ChatWizardWatcher implements vscode.Disposable {
     private disposables: vscode.Disposable[] = [];
     private index: SessionIndex;
     private channel: vscode.OutputChannel;
+    private scopeManager: WorkspaceScopeManager;
 
-    constructor(index: SessionIndex, channel: vscode.OutputChannel) {
+    constructor(index: SessionIndex, channel: vscode.OutputChannel, scopeManager: WorkspaceScopeManager) {
         this.index = index;
         this.channel = channel;
+        this.scopeManager = scopeManager;
     }
 
     // SEC-6: Symlink traversal guards — ensure resolved path stays within base directory.
@@ -86,7 +89,11 @@ export class ChatWizardWatcher implements vscode.Disposable {
             // Watch Copilot sessions
             let copilotWorkspaces: ReturnType<typeof discoverCopilotWorkspaces> = [];
             try {
-                copilotWorkspaces = discoverCopilotWorkspaces();
+                const all = discoverCopilotWorkspaces();
+                const selectedIds = this.scopeManager.getSelectedIds();
+                copilotWorkspaces = selectedIds.length > 0
+                    ? all.filter(ws => selectedIds.includes(ws.workspaceId))
+                    : all;
             } catch (err) {
                 this.channel.appendLine(`[error] Failed to discover Copilot workspaces for watching: ${err}`);
             }
@@ -116,6 +123,16 @@ export class ChatWizardWatcher implements vscode.Disposable {
         }
     }
 
+    /**
+     * Stops all active file watchers, clears the session index, and re-runs the full
+     * discovery + indexing flow. Used when the workspace scope changes.
+     */
+    async restart(): Promise<void> {
+        this.dispose();
+        this.index.clear();
+        await this.start();
+    }
+
     dispose(): void {
         for (const disposable of this.disposables) {
             disposable.dispose();
@@ -135,9 +152,16 @@ export class ChatWizardWatcher implements vscode.Disposable {
                     progress.report({ message: `${current}/${total}` });
                 };
 
+                const selectedIds = this.scopeManager.getSelectedIds();
+                const effectiveIds = selectedIds.length > 0 ? selectedIds : undefined;
+                if (selectedIds.length === 0) {
+                    this.channel.appendLine('[ChatWizard] Scope manager has no selected IDs — falling back to all workspaces.');
+                } else {
+                    this.channel.appendLine(`[ChatWizard] Building index with scope filter: [${selectedIds.join(', ')}]`);
+                }
                 const [claudeSessions, copilotSessions] = await Promise.all([
-                    indexClaude  ? this.collectClaudeSessionsAsync(onProgress)  : Promise.resolve([]),
-                    indexCopilot ? this.collectCopilotSessionsAsync(onProgress) : Promise.resolve([]),
+                    indexClaude  ? this.collectClaudeSessionsAsync(onProgress, effectiveIds)  : Promise.resolve([]),
+                    indexCopilot ? this.collectCopilotSessionsAsync(onProgress, effectiveIds) : Promise.resolve([]),
                 ]);
 
                 const all = [...claudeSessions, ...copilotSessions];
@@ -147,11 +171,19 @@ export class ChatWizardWatcher implements vscode.Disposable {
         );
     }
 
-    /** Async: parse all Claude sessions using non-blocking directory reads. */
+    /** Async: parse all Claude sessions using non-blocking directory reads.
+     *
+     * @param onProgress           Optional progress callback.
+     * @param selectedIds          When provided, only project directories whose name appears in
+     *                             this list are processed (used for workspace scope filtering).
+     * @param _claudeBaseDirOverride  Test-only: override the Claude projects base directory.
+     */
     async collectClaudeSessionsAsync(
-        onProgress?: (current: number, total: number) => void
+        onProgress?: (current: number, total: number) => void,
+        selectedIds?: string[],
+        _claudeBaseDirOverride?: string
     ): Promise<Session[]> {
-        const claudeProjectsDir = resolveClaudeProjectsPath();
+        const claudeProjectsDir = resolveClaudeProjectsPath(_claudeBaseDirOverride);
         try {
             let exists = false;
             try { exists = (await fs.promises.stat(claudeProjectsDir)).isDirectory(); } catch { /* not found */ }
@@ -161,7 +193,11 @@ export class ChatWizardWatcher implements vscode.Disposable {
             const resolvedBase = await fs.promises.realpath(claudeProjectsDir).catch(() => claudeProjectsDir);
 
             const projectDirEntries = await fs.promises.readdir(claudeProjectsDir, { withFileTypes: true });
-            const dirEntries = projectDirEntries.filter(d => d.isDirectory());
+            const allDirEntries = projectDirEntries.filter(d => d.isDirectory());
+            // Apply scope filter when selectedIds are provided
+            const dirEntries = selectedIds
+                ? allDirEntries.filter(d => selectedIds.includes(d.name))
+                : allDirEntries;
 
             // Collect all file lists in parallel
             const fileLists = await Promise.all(dirEntries.map(async (d) => {
@@ -206,10 +242,22 @@ export class ChatWizardWatcher implements vscode.Disposable {
 
     /** Async: parse all Copilot sessions using non-blocking discovery + parallel workspace reads. */
     async collectCopilotSessionsAsync(
-        onProgress?: (current: number, total: number) => void
+        onProgress?: (current: number, total: number) => void,
+        selectedIds?: string[]
     ): Promise<Session[]> {
         try {
-            const workspaces = await discoverCopilotWorkspacesAsync();
+            const all = await discoverCopilotWorkspacesAsync();
+            const workspaces = selectedIds
+                ? all.filter(ws => selectedIds.includes(ws.workspaceId))
+                : all;
+
+            if (selectedIds && workspaces.length === 0 && all.length > 0) {
+                this.channel.appendLine(
+                    `[ChatWizard] Copilot scope filter produced 0 matches from ${all.length} discovered workspace(s). ` +
+                    `Filter IDs: [${selectedIds.join(', ')}]. ` +
+                    `Discovered: [${all.map(ws => ws.workspaceId).join(', ')}]`
+                );
+            }
 
             // Discover all session file paths across workspaces in parallel
             const fileListsPerWorkspace = await Promise.all(
@@ -391,10 +439,19 @@ export class ChatWizardWatcher implements vscode.Disposable {
 
 export async function startWatcher(
     index: SessionIndex,
-    channel?: vscode.OutputChannel
+    channel?: vscode.OutputChannel,
+    scopeManager?: WorkspaceScopeManager
 ): Promise<ChatWizardWatcher> {
     const ch = channel ?? vscode.window.createOutputChannel('ChatWizard');
-    const watcher = new ChatWizardWatcher(index, ch);
+    // When no scope manager is provided (legacy / tests), create a no-op instance
+    // whose empty selection triggers the all-workspace fallback inside start().
+    const mgr = scopeManager ?? new WorkspaceScopeManager({
+        globalState: {
+            get: () => undefined,
+            update: (_key: string, _value: unknown) => Promise.resolve(),
+        },
+    });
+    const watcher = new ChatWizardWatcher(index, ch, mgr);
     await watcher.start();
     return watcher;
 }
