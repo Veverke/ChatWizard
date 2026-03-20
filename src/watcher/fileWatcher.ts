@@ -60,6 +60,8 @@ export class ChatWizardWatcher implements vscode.Disposable {
 
         if (!enabled) {
             this.channel.appendLine('[ChatWizard] Extension disabled via chatwizard.enabled setting — skipping indexing and file watching.');
+            // Fire an empty batch so tree providers clear their _loading state and show empty-state UI.
+            this.index.batchUpsert([]);
             return;
         }
 

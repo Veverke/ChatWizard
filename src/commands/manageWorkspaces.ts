@@ -193,6 +193,7 @@ export function registerManageWorkspacesCommand(
                 qp.onDidChangeSelection(selected => {
                     if (pendingDeferred) {
                         pendingDeferred = false;
+                        lastNonEmpty = selected as WorkspaceItem[];
                         return;
                     }
 

@@ -238,20 +238,21 @@ Still no visible change — the filter is wired into the collector function but 
 
 ---
 
-### Phase 5 — `package.json` registration
+### Phase 5 — `package.json` registration ✅ COMPLETED
 
 **Files changed:** `package.json`
 
 **Tasks:**
-- [ ] Add command contribution:
+- [x] Add command contribution:
   ```json
   {
     "command": "chatwizard.manageWatchedWorkspaces",
     "title": "ChatWizard: Manage Watched Workspaces"
   }
   ```
-- [ ] Add `chatwizard.enabled`, `chatwizard.indexClaude`, `chatwizard.indexCopilot` to `contributes.configuration` (they are read in code today but missing from the manifest).
-- [ ] Verify `activationEvents` covers the new command if the extension uses explicit activation events.
+  (Implemented as `"title": "Manage Watched Workspaces"` + `"category": "ChatWizard"`, which produces the same display.)
+- [x] Add `chatwizard.enabled`, `chatwizard.indexClaude`, `chatwizard.indexCopilot` to `contributes.configuration` (all three are present with descriptions and defaults).
+- [x] Verify `activationEvents` covers the new command — `"onStartupFinished"` in `activationEvents` activates the extension on startup, covering all registered commands.
 
 **Deliverables:**
 - `package.json` — `chatwizard.manageWatchedWorkspaces` command declared under `contributes.commands`

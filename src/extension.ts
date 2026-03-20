@@ -147,10 +147,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // Create code blocks tree provider (before the listener so it can reference both)
     const codeBlockProvider = new CodeBlockTreeProvider(index, codeBlockEngine);
 
+    /** Build the standard tree-view empty-state message (matches the webview panels' empty-state UI). */
+    function makeEmptyStateMsg(noun: string): string {
+        return (
+            `No ${noun} indexed yet.\n\n` +
+            `ChatWizard reads your Claude Code and GitHub Copilot chat history. ` +
+            `Make sure the data paths are configured correctly.`
+        );
+    }
+
     const codeBlockListener = index.addChangeListener(() => {
         codeBlockEngine.index(index.getAllCodeBlocks());
         CodeBlocksPanel.refresh(index, codeBlockEngine);
         codeBlockTreeView.description = codeBlockProvider.getDescription();
+        codeBlockTreeView.message = index.getAllCodeBlocks().length === 0 ? makeEmptyStateMsg('code blocks') : undefined;
     });
     context.subscriptions.push(codeBlockListener);
 
@@ -246,6 +256,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // Keep treeView description (session count + sort) fresh when index changes
     const sessionDescListener = index.addChangeListener(() => {
         treeView.description = provider.getDescription();
+        treeView.message = index.size === 0 ? makeEmptyStateMsg('sessions') : undefined;
     });
     context.subscriptions.push(sessionDescListener);
 
@@ -254,6 +265,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         canSelectMany: false,
     });
     codeBlockTreeView.description = codeBlockProvider.getDescription();
+    // Show rich empty-state message initially (no data yet); cleared once code blocks are indexed.
+    codeBlockTreeView.message = makeEmptyStateMsg('code blocks');
     context.subscriptions.push(codeBlockTreeView);
 
     /** Apply a single-key primary sort (toolbar buttons). */
