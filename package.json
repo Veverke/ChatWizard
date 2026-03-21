@@ -46,7 +46,7 @@
       "activitybar": [
         {
           "id": "chatwizard",
-          "title": "ChatWizard",
+          "title": "Chat Wizard",
           "icon": "$(comment-discussion)"
         }
       ]
@@ -82,302 +82,302 @@
       {
         "command": "chatwizard.openSession",
         "title": "Open Session",
-        "category": "ChatWizard"
+        "category": "Chat Wizard"
       },
       {
         "command": "chatwizard.openSessionFromCodeBlock",
         "title": "Open Session from Code Block",
-        "category": "ChatWizard"
+        "category": "Chat Wizard"
       },
       {
         "command": "chatwizard.search",
         "title": "Search",
-        "category": "ChatWizard",
+        "category": "Chat Wizard",
         "icon": "$(search)"
       },
       {
         "command": "chatwizard.filterSessions",
         "title": "Filter Sessions…",
-        "category": "ChatWizard",
+        "category": "Chat Wizard",
         "icon": "$(filter)"
       },
       {
         "command": "chatwizard.filterCodeBlocks",
         "title": "Filter Code Blocks…",
-        "category": "ChatWizard",
+        "category": "Chat Wizard",
         "icon": "$(filter)"
       },
       {
         "command": "chatwizard.configureSortOrder",
         "title": "Configure Sort Order…",
-        "category": "ChatWizard",
+        "category": "Chat Wizard",
         "icon": "$(settings-gear)"
       },
       {
         "command": "chatwizard.sortByDate",
         "title": "Sort by Date",
-        "category": "ChatWizard",
+        "category": "Chat Wizard",
         "icon": "$(calendar)"
       },
       {
         "command": "chatwizard.sortByDate.asc",
         "title": "Sort by Date ↑",
-        "category": "ChatWizard",
+        "category": "Chat Wizard",
         "icon": "$(arrow-up)"
       },
       {
         "command": "chatwizard.sortByDate.desc",
         "title": "Sort by Date ↓",
-        "category": "ChatWizard",
+        "category": "Chat Wizard",
         "icon": "$(arrow-down)"
       },
       {
         "command": "chatwizard.sortByWorkspace",
         "title": "Sort by Workspace",
-        "category": "ChatWizard",
+        "category": "Chat Wizard",
         "icon": "$(folder)"
       },
       {
         "command": "chatwizard.sortByWorkspace.asc",
         "title": "Sort by Workspace ↑",
-        "category": "ChatWizard",
+        "category": "Chat Wizard",
         "icon": "$(arrow-up)"
       },
       {
         "command": "chatwizard.sortByWorkspace.desc",
         "title": "Sort by Workspace ↓",
-        "category": "ChatWizard",
+        "category": "Chat Wizard",
         "icon": "$(arrow-down)"
       },
       {
         "command": "chatwizard.sortByLength",
         "title": "Sort by Length",
-        "category": "ChatWizard",
+        "category": "Chat Wizard",
         "icon": "$(list-ordered)"
       },
       {
         "command": "chatwizard.sortByLength.asc",
         "title": "Sort by Length ↑",
-        "category": "ChatWizard",
+        "category": "Chat Wizard",
         "icon": "$(arrow-up)"
       },
       {
         "command": "chatwizard.sortByLength.desc",
         "title": "Sort by Length ↓",
-        "category": "ChatWizard",
+        "category": "Chat Wizard",
         "icon": "$(arrow-down)"
       },
       {
         "command": "chatwizard.sortByTitle",
         "title": "Sort Alphabetically",
-        "category": "ChatWizard",
+        "category": "Chat Wizard",
         "icon": "$(case-sensitive)"
       },
       {
         "command": "chatwizard.sortByTitle.asc",
         "title": "Sort Alphabetically ↑",
-        "category": "ChatWizard",
+        "category": "Chat Wizard",
         "icon": "$(arrow-up)"
       },
       {
         "command": "chatwizard.sortByTitle.desc",
         "title": "Sort Alphabetically ↓",
-        "category": "ChatWizard",
+        "category": "Chat Wizard",
         "icon": "$(arrow-down)"
       },
       {
         "command": "chatwizard.sortByModel",
         "title": "Sort by Model",
-        "category": "ChatWizard",
+        "category": "Chat Wizard",
         "icon": "$(symbol-event)"
       },
       {
         "command": "chatwizard.sortByModel.asc",
         "title": "Sort by Model ↑",
-        "category": "ChatWizard",
+        "category": "Chat Wizard",
         "icon": "$(arrow-up)"
       },
       {
         "command": "chatwizard.sortByModel.desc",
         "title": "Sort by Model ↓",
-        "category": "ChatWizard",
+        "category": "Chat Wizard",
         "icon": "$(arrow-down)"
       },
       {
         "command": "chatwizard.pinSession",
         "title": "Pin Session",
-        "category": "ChatWizard",
+        "category": "Chat Wizard",
         "icon": "$(pin)"
       },
       {
         "command": "chatwizard.unpinSession",
         "title": "Unpin Session",
-        "category": "ChatWizard",
+        "category": "Chat Wizard",
         "icon": "$(pinned)"
       },
       {
         "command": "chatwizard.loadMoreSessions",
         "title": "Load More Sessions",
-        "category": "ChatWizard"
+        "category": "Chat Wizard"
       },
       {
         "command": "chatwizard.loadMoreCodeBlocks",
         "title": "Load More Code Blocks",
-        "category": "ChatWizard"
+        "category": "Chat Wizard"
       },
       {
         "command": "chatwizard.exportSession",
         "title": "Export Session to Markdown",
-        "category": "ChatWizard",
+        "category": "Chat Wizard",
         "icon": "$(export)"
       },
       {
         "command": "chatwizard.exportAll",
         "title": "Export All Sessions…",
-        "category": "ChatWizard",
+        "category": "Chat Wizard",
         "icon": "$(files)"
       },
       {
         "command": "chatwizard.exportSelected",
         "title": "Export Selected Sessions…",
-        "category": "ChatWizard",
+        "category": "Chat Wizard",
         "icon": "$(checklist)"
       },
       {
         "command": "chatwizard.exportExcerpt",
         "title": "Export Session Excerpt…",
-        "category": "ChatWizard"
+        "category": "Chat Wizard"
       },
       {
         "command": "chatwizard.exportFromTreeSelection",
         "title": "Export Selected…",
-        "category": "ChatWizard",
+        "category": "Chat Wizard",
         "icon": "$(export)"
       },
       {
         "command": "chatwizard.showCodeBlocks",
         "title": "Show Code Blocks",
-        "category": "ChatWizard",
+        "category": "Chat Wizard",
         "icon": "$(code)"
       },
       {
         "command": "chatwizard.showPromptLibrary",
         "title": "Show Prompt Library",
-        "category": "ChatWizard",
+        "category": "Chat Wizard",
         "icon": "$(book)"
       },
       {
         "command": "chatwizard.showAnalytics",
         "title": "Show Analytics Dashboard",
-        "category": "ChatWizard",
+        "category": "Chat Wizard",
         "icon": "$(graph)"
       },
       {
         "command": "chatwizard.showTimeline",
         "title": "Show Timeline",
-        "category": "ChatWizard",
+        "category": "Chat Wizard",
         "icon": "$(history)"
       },
       {
         "command": "chatwizard.rescan",
         "title": "Rescan Sessions",
-        "category": "ChatWizard",
+        "category": "Chat Wizard",
         "icon": "$(refresh)"
       },
       {
         "command": "chatwizard.manageWatchedWorkspaces",
         "title": "Manage Watched Workspaces",
-        "category": "ChatWizard",
+        "category": "Chat Wizard",
         "icon": "$(folder-library)"
       },
       {
         "command": "chatwizard.cbSortByDate",
         "title": "Sort by Date",
-        "category": "ChatWizard",
+        "category": "Chat Wizard",
         "icon": "$(calendar)"
       },
       {
         "command": "chatwizard.cbSortByDate.asc",
         "title": "Sort by Date ↑",
-        "category": "ChatWizard",
+        "category": "Chat Wizard",
         "icon": "$(arrow-up)"
       },
       {
         "command": "chatwizard.cbSortByDate.desc",
         "title": "Sort by Date ↓",
-        "category": "ChatWizard",
+        "category": "Chat Wizard",
         "icon": "$(arrow-down)"
       },
       {
         "command": "chatwizard.cbSortByWorkspace",
         "title": "Sort by Workspace",
-        "category": "ChatWizard",
+        "category": "Chat Wizard",
         "icon": "$(folder)"
       },
       {
         "command": "chatwizard.cbSortByWorkspace.asc",
         "title": "Sort by Workspace ↑",
-        "category": "ChatWizard",
+        "category": "Chat Wizard",
         "icon": "$(arrow-up)"
       },
       {
         "command": "chatwizard.cbSortByWorkspace.desc",
         "title": "Sort by Workspace ↓",
-        "category": "ChatWizard",
+        "category": "Chat Wizard",
         "icon": "$(arrow-down)"
       },
       {
         "command": "chatwizard.cbSortByLength",
         "title": "Sort by Length",
-        "category": "ChatWizard",
+        "category": "Chat Wizard",
         "icon": "$(list-ordered)"
       },
       {
         "command": "chatwizard.cbSortByLength.asc",
         "title": "Sort by Length ↑",
-        "category": "ChatWizard",
+        "category": "Chat Wizard",
         "icon": "$(arrow-up)"
       },
       {
         "command": "chatwizard.cbSortByLength.desc",
         "title": "Sort by Length ↓",
-        "category": "ChatWizard",
+        "category": "Chat Wizard",
         "icon": "$(arrow-down)"
       },
       {
         "command": "chatwizard.cbSortByTitle",
         "title": "Sort by Session Title",
-        "category": "ChatWizard",
+        "category": "Chat Wizard",
         "icon": "$(case-sensitive)"
       },
       {
         "command": "chatwizard.cbSortByTitle.asc",
         "title": "Sort by Session Title ↑",
-        "category": "ChatWizard",
+        "category": "Chat Wizard",
         "icon": "$(arrow-up)"
       },
       {
         "command": "chatwizard.cbSortByTitle.desc",
         "title": "Sort by Session Title ↓",
-        "category": "ChatWizard",
+        "category": "Chat Wizard",
         "icon": "$(arrow-down)"
       },
       {
         "command": "chatwizard.cbSortByLanguage",
         "title": "Sort by Language",
-        "category": "ChatWizard",
+        "category": "Chat Wizard",
         "icon": "$(symbol-event)"
       },
       {
         "command": "chatwizard.cbSortByLanguage.asc",
         "title": "Sort by Language ↑",
-        "category": "ChatWizard",
+        "category": "Chat Wizard",
         "icon": "$(arrow-up)"
       },
       {
         "command": "chatwizard.cbSortByLanguage.desc",
         "title": "Sort by Language ↓",
-        "category": "ChatWizard",
+        "category": "Chat Wizard",
         "icon": "$(arrow-down)"
       }
     ],
@@ -598,7 +598,7 @@
       ]
     },
     "configuration": {
-      "title": "ChatWizard",
+      "title": "Chat Wizard",
       "properties": {
         "chatwizard.userMessageColor": {
           "type": "string",
@@ -641,7 +641,7 @@
         "chatwizard.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Enable or disable the ChatWizard extension. When false, no sessions are indexed and all file watching is skipped."
+          "description": "Enable or disable the Chat Wizard extension. When false, no sessions are indexed and all file watching is skipped."
         },
         "chatwizard.indexClaude": {
           "type": "boolean",

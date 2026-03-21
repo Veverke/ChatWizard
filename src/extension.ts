@@ -34,7 +34,7 @@ import { registerManageWorkspacesCommand } from './commands/manageWorkspaces';
 let watcher: ChatWizardWatcher | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
-    const channel = vscode.window.createOutputChannel('ChatWizard');
+    const channel = vscode.window.createOutputChannel('Chat Wizard');
     context.subscriptions.push(channel);
 
     // Local telemetry recorder (opt-in, no external calls)
@@ -76,7 +76,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             for (const session of event.sessions) { engine.index(session); }
             const stats = engine.indexStats();
             channel.appendLine(
-                `[ChatWizard] Search index ready — ` +
+                `[Chat Wizard] Search index ready — ` +
                 `indexed tokens: ${stats.indexedTokenCount.toLocaleString()}, ` +
                 `hapax (single-session): ${stats.hapaxTokenCount.toLocaleString()}, ` +
                 `postings: ${stats.postingCount.toLocaleString()}, ` +
@@ -151,7 +151,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     function makeEmptyStateMsg(noun: string): string {
         return (
             `No ${noun} indexed yet.\n\n` +
-            `ChatWizard reads your Claude Code and GitHub Copilot chat history. ` +
+            `Chat Wizard reads your Claude Code and GitHub Copilot chat history. ` +
             `Make sure the data paths are configured correctly.`
         );
     }
@@ -716,7 +716,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     context.subscriptions.push(
         vscode.commands.registerCommand('chatwizard.rescan', () => {
             void vscode.window.showInformationMessage(
-                'ChatWizard indexes sessions automatically via file system events. ' +
+                'Chat Wizard indexes sessions automatically via file system events. ' +
                 'If sessions are missing, reload the window to trigger a fresh scan.',
                 'Reload Window'
             ).then(action => {
@@ -738,7 +738,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 e.affectsConfiguration('chatwizard.claudeProjectsPath') ||
                 e.affectsConfiguration('chatwizard.copilotStoragePath')
             ) {
-                channel.appendLine('[ChatWizard] Data path setting changed — re-discovering workspaces and restarting index...');
+                channel.appendLine('[Chat Wizard] Data path setting changed — re-discovering workspaces and restarting index...');
                 void (async () => {
                     // Re-discover available workspaces under the new paths.
                     const [copilotWs, claudeWs] = await Promise.all([
@@ -760,12 +760,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
                     const selectedIds = scopeManager.getSelectedIds();
                     channel.appendLine(
-                        `[ChatWizard] Scope reset after path change — ${selectedIds.length} workspace(s): ${selectedIds.join(', ')}`
+                        `[Chat Wizard] Scope reset after path change — ${selectedIds.length} workspace(s): ${selectedIds.join(', ')}`
                     );
 
                     if (watcher) {
                         await watcher.restart();
-                        channel.appendLine('[ChatWizard] Watcher restarted after path change.');
+                        channel.appendLine('[Chat Wizard] Watcher restarted after path change.');
                     }
                 })().catch(err => channel.appendLine(`[error] Path-change restart failed: ${err}`));
             }
@@ -773,9 +773,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 e.affectsConfiguration('chatwizard.oldestSessionDate') ||
                 e.affectsConfiguration('chatwizard.maxSessions')
             ) {
-                channel.appendLine('[ChatWizard] Session filter setting changed — restarting index...');
+                channel.appendLine('[Chat Wizard] Session filter setting changed — restarting index...');
                 void watcher?.restart()
-                    .then(() => channel.appendLine('[ChatWizard] Watcher restarted after filter change.'))
+                    .then(() => channel.appendLine('[Chat Wizard] Watcher restarted after filter change.'))
                     .catch(err => channel.appendLine(`[error] Filter-change restart failed: ${err}`));
             }
         })
@@ -823,14 +823,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         ]);
         const allAvailable: ScopedWorkspace[] = [...copilotWs, ...claudeWs];
         channel.appendLine(
-            `[ChatWizard] Discovered ${allAvailable.length} workspace(s) for scope detection: ` +
+            `[Chat Wizard] Discovered ${allAvailable.length} workspace(s) for scope detection: ` +
             allAvailable.map(ws => `${ws.source}:${ws.id} (${ws.workspacePath})`).join(', ')
         );
         await scopeManager.initDefault(allAvailable);
 
         const selectedIds = scopeManager.getSelectedIds();
         channel.appendLine(
-            `[ChatWizard] Workspace scope initialised — ${selectedIds.length} workspace(s) selected: ${selectedIds.join(', ')}`
+            `[Chat Wizard] Workspace scope initialised — ${selectedIds.length} workspace(s) selected: ${selectedIds.join(', ')}`
         );
 
         const w = await startWatcher(index, channel, scopeManager);
@@ -839,7 +839,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         const copilotCount = index.getSummariesBySource('copilot').length;
         const claudeCount = index.getSummariesBySource('claude').length;
         channel.appendLine(
-            `ChatWizard activated — ${index.size} sessions indexed (${copilotCount} Copilot, ${claudeCount} Claude)`
+            `Chat Wizard activated — ${index.size} sessions indexed (${copilotCount} Copilot, ${claudeCount} Claude)`
         );
         telemetry.record('extension.activated', { sessionCount: index.size });
     })().catch(err => channel.appendLine(`[error] Watcher init failed: ${err}`));

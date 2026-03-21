@@ -406,7 +406,7 @@ export class CodeBlocksPanel {
       if (blocks.length === 0) {
         listEl.innerHTML = '<div class="empty-state-guided">'
           + '<p class="empty-state-title">No code blocks indexed yet.</p>'
-          + '<p class="empty-state-body">ChatWizard indexes code blocks from your AI chat sessions. Configure your data paths and rescan to see results.</p>'
+          + '<p class="empty-state-body">Chat Wizard indexes code blocks from your AI chat sessions. Configure your data paths and rescan to see results.</p>'
           + '<div class="empty-state-actions">'
           + '<button class="copy-btn" id="btn-open-settings">Configure Paths</button>'
           + '<button class="copy-btn" id="btn-rescan">Rescan</button>'

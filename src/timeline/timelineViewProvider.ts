@@ -492,7 +492,7 @@ export class TimelineViewProvider implements vscode.WebviewViewProvider {
         container.innerHTML =
           '<div class="empty-state-guided">'
           + '<p class="empty-state-title">No sessions indexed yet.</p>'
-          + '<p class="empty-state-body">ChatWizard reads your Claude Code and GitHub Copilot chat history. Make sure the data paths are configured correctly.</p>'
+          + '<p class="empty-state-body">Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure the data paths are configured correctly.</p>'
           + '<div class="empty-state-actions">'
           + '<button class="cw-btn" id="btn-cfg">Configure Paths</button>'
           + '</div></div>';

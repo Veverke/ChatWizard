@@ -5,7 +5,7 @@ import { SessionIndex } from '../index/sessionIndex';
 import { AnalyticsPanel } from './analyticsPanel';
 
 /**
- * Provides the Analytics Dashboard as a sidebar WebviewView tab in the ChatWizard panel.
+ * Provides the Analytics Dashboard as a sidebar WebviewView tab in the Chat Wizard panel.
  */
 export class AnalyticsViewProvider implements vscode.WebviewViewProvider {
     static readonly viewType = 'chatwizardAnalytics';

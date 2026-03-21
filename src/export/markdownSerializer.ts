@@ -26,7 +26,7 @@ function sanitizeForExport(text: string): string {
 }
 
 // SEC-9: Export file preamble so renderers and users understand what the file is.
-const EXPORT_HEADER = '<!-- ChatWizard export — AI-generated content. ' +
+const EXPORT_HEADER = '<!-- Chat Wizard export — AI-generated content. ' +
     'Render in a trusted environment only. -->\n\n';
 
 /** Serialize a single session to a Markdown string.
@@ -76,7 +76,7 @@ export function serializeSessions(sessions: Session[], _mode: 'combined', saniti
     const parts: string[] = [];
     // SEC-9: preamble warns renderers that content is AI-generated
     parts.push(EXPORT_HEADER);
-    parts.push('# ChatWizard Export');
+    parts.push('# Chat Wizard Export');
     parts.push('');
     parts.push('## Table of Contents');
     parts.push('');

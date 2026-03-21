@@ -445,7 +445,7 @@ export class PromptLibraryPanel {
       if (clusters.length === 0) {
         listEl.innerHTML = '<div class="empty-state-guided">'
           + '<p class="empty-state-title">No prompts indexed yet.</p>'
-          + '<p class="empty-state-body">ChatWizard reads your Claude Code and GitHub Copilot chat history. Make sure the data paths are configured correctly.</p>'
+          + '<p class="empty-state-body">Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure the data paths are configured correctly.</p>'
           + '<div class="empty-state-actions">'
           + '<button class="copy-btn" id="btn-open-settings">Configure Paths</button>'
           + '<button class="copy-btn" id="btn-rescan">Rescan</button>'

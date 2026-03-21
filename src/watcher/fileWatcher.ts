@@ -59,7 +59,7 @@ export class ChatWizardWatcher implements vscode.Disposable {
         const indexCopilot  = cfg.get<boolean>('indexCopilot', true);
 
         if (!enabled) {
-            this.channel.appendLine('[ChatWizard] Extension disabled via chatwizard.enabled setting — skipping indexing and file watching.');
+            this.channel.appendLine('[Chat Wizard] Extension disabled via chatwizard.enabled setting — skipping indexing and file watching.');
             // Fire an empty batch so tree providers clear their _loading state and show empty-state UI.
             this.index.batchUpsert([]);
             return;
@@ -145,7 +145,7 @@ export class ChatWizardWatcher implements vscode.Disposable {
         await vscode.window.withProgress(
             {
                 location: vscode.ProgressLocation.Window,
-                title: 'ChatWizard: indexing sessions…',
+                title: 'Chat Wizard: indexing sessions…',
                 cancellable: false,
             },
             async (progress) => {
@@ -155,9 +155,9 @@ export class ChatWizardWatcher implements vscode.Disposable {
 
                 const selectedIds = this.scopeManager.getSelectedIds();
                 if (selectedIds.length === 0) {
-                    this.channel.appendLine('[ChatWizard] Scope is empty — no sessions will be indexed.');
+                    this.channel.appendLine('[Chat Wizard] Scope is empty — no sessions will be indexed.');
                 } else {
-                    this.channel.appendLine(`[ChatWizard] Building index with scope filter: [${selectedIds.join(', ')}]`);
+                    this.channel.appendLine(`[Chat Wizard] Building index with scope filter: [${selectedIds.join(', ')}]`);
                 }
                 const [claudeSessions, copilotSessions] = await Promise.all([
                     // Always pass selectedIds (even empty array) — empty = index nothing, no fallback to all.
@@ -255,7 +255,7 @@ export class ChatWizardWatcher implements vscode.Disposable {
 
             if (selectedIds && workspaces.length === 0 && all.length > 0) {
                 this.channel.appendLine(
-                    `[ChatWizard] Copilot scope filter produced 0 matches from ${all.length} discovered workspace(s). ` +
+                    `[Chat Wizard] Copilot scope filter produced 0 matches from ${all.length} discovered workspace(s). ` +
                     `Filter IDs: [${selectedIds.join(', ')}]. ` +
                     `Discovered: [${all.map(ws => ws.workspaceId).join(', ')}]`
                 );
@@ -462,9 +462,9 @@ function applySessionFilters(
         const before = result.length;
         result = result.filter(s => s.updatedAt.slice(0, 10) >= oldestDate);
         const dropped = before - result.length;
-        channel.appendLine(`[ChatWizard] Date filter (>= ${oldestDate}): kept ${result.length}, dropped ${dropped} session(s).`);
+        channel.appendLine(`[Chat Wizard] Date filter (>= ${oldestDate}): kept ${result.length}, dropped ${dropped} session(s).`);
     } else {
-        channel.appendLine(`[ChatWizard] Date filter: not set, all ${result.length} session(s) kept.`);
+        channel.appendLine(`[Chat Wizard] Date filter: not set, all ${result.length} session(s) kept.`);
     }
 
     if (maxSessions > 0 && result.length > maxSessions) {
@@ -473,7 +473,7 @@ function applySessionFilters(
             .slice()
             .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
             .slice(0, maxSessions);
-        channel.appendLine(`[ChatWizard] Session cap (${maxSessions}) applied — retained ${result.length} session(s).`);
+        channel.appendLine(`[Chat Wizard] Session cap (${maxSessions}) applied — retained ${result.length} session(s).`);
     }
 
     return result;
@@ -484,7 +484,7 @@ export async function startWatcher(
     channel?: vscode.OutputChannel,
     scopeManager?: WorkspaceScopeManager
 ): Promise<ChatWizardWatcher> {
-    const ch = channel ?? vscode.window.createOutputChannel('ChatWizard');
+    const ch = channel ?? vscode.window.createOutputChannel('Chat Wizard');
     // When no scope manager is provided (legacy / tests), create a no-op instance
     // whose empty selection triggers the all-workspace fallback inside start().
     const mgr = scopeManager ?? new WorkspaceScopeManager({
