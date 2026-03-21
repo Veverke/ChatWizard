@@ -75,6 +75,15 @@ export class FullTextSearchEngine {
         return this.sessions.size;
     }
 
+    /** Remove all indexed sessions and clear every internal map. */
+    clear(): void {
+        this.sessions.clear();
+        this.invertedIndex.clear();
+        this.sessionTokens.clear();
+        this.tokenDocSessions.clear();
+        this.hapaxStore.clear();
+    }
+
     index(session: Session): void {
         // Idempotency: remove previous entries for this session first.
         if (this.sessions.has(session.id)) {

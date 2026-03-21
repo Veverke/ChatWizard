@@ -1,7 +1,10 @@
 import * as vscode from 'vscode';
 import { SessionIndex } from './index/sessionIndex';
-import { Session } from './types/index';
+import { Session, ScopedWorkspace } from './types/index';
 import { ChatWizardWatcher, startWatcher } from './watcher/fileWatcher';
+import { WorkspaceScopeManager } from './watcher/workspaceScope';
+import { discoverCopilotWorkspacesAsync } from './readers/copilotWorkspace';
+import { discoverClaudeWorkspacesAsync } from './readers/claudeWorkspace';
 import {
     SessionTreeProvider,
     SessionTreeItem,
@@ -26,6 +29,7 @@ import { AnalyticsPanel } from './analytics/analyticsPanel';
 import { AnalyticsViewProvider } from './analytics/analyticsViewProvider';
 import { TimelineViewProvider } from './timeline/timelineViewProvider';
 import { TelemetryRecorder } from './telemetry/telemetryRecorder';
+import { registerManageWorkspacesCommand } from './commands/manageWorkspaces';
 
 let watcher: ChatWizardWatcher | undefined;
 
@@ -78,6 +82,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 `postings: ${stats.postingCount.toLocaleString()}, ` +
                 `~${stats.memoryEstimateKB} KB`
             );
+        } else if (event.type === 'clear') {
+            engine.clear();
         }
     });
     context.subscriptions.push(searchIndexListener);
@@ -141,10 +147,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // Create code blocks tree provider (before the listener so it can reference both)
     const codeBlockProvider = new CodeBlockTreeProvider(index, codeBlockEngine);
 
+    /** Build the standard tree-view empty-state message (matches the webview panels' empty-state UI). */
+    function makeEmptyStateMsg(noun: string): string {
+        return (
+            `No ${noun} indexed yet.\n\n` +
+            `ChatWizard reads your Claude Code and GitHub Copilot chat history. ` +
+            `Make sure the data paths are configured correctly.`
+        );
+    }
+
     const codeBlockListener = index.addChangeListener(() => {
         codeBlockEngine.index(index.getAllCodeBlocks());
         CodeBlocksPanel.refresh(index, codeBlockEngine);
         codeBlockTreeView.description = codeBlockProvider.getDescription();
+        codeBlockTreeView.message = index.getAllCodeBlocks().length === 0 ? makeEmptyStateMsg('code blocks') : undefined;
     });
     context.subscriptions.push(codeBlockListener);
 
@@ -240,6 +256,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // Keep treeView description (session count + sort) fresh when index changes
     const sessionDescListener = index.addChangeListener(() => {
         treeView.description = provider.getDescription();
+        treeView.message = index.size === 0 ? makeEmptyStateMsg('sessions') : undefined;
     });
     context.subscriptions.push(sessionDescListener);
 
@@ -248,6 +265,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         canSelectMany: false,
     });
     codeBlockTreeView.description = codeBlockProvider.getDescription();
+    // Show rich empty-state message initially (no data yet); cleared once code blocks are indexed.
+    codeBlockTreeView.message = makeEmptyStateMsg('code blocks');
     context.subscriptions.push(codeBlockTreeView);
 
     /** Apply a single-key primary sort (toolbar buttons). */
@@ -719,14 +738,45 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 e.affectsConfiguration('chatwizard.claudeProjectsPath') ||
                 e.affectsConfiguration('chatwizard.copilotStoragePath')
             ) {
-                void vscode.window.showInformationMessage(
-                    'ChatWizard: data source path changed — reload the window to apply.',
-                    'Reload Window'
-                ).then(action => {
-                    if (action === 'Reload Window') {
-                        void vscode.commands.executeCommand('workbench.action.reloadWindow');
+                channel.appendLine('[ChatWizard] Data path setting changed — re-discovering workspaces and restarting index...');
+                void (async () => {
+                    // Re-discover available workspaces under the new paths.
+                    const [copilotWs, claudeWs] = await Promise.all([
+                        discoverCopilotWorkspacesAsync().then(list =>
+                            list.map(ws => ({
+                                id: ws.workspaceId,
+                                source: 'copilot' as const,
+                                workspacePath: ws.workspacePath,
+                                storageDir: ws.storageDir,
+                            }) satisfies ScopedWorkspace)
+                        ).catch(() => [] as ScopedWorkspace[]),
+                        discoverClaudeWorkspacesAsync().catch(() => [] as ScopedWorkspace[]),
+                    ]);
+                    const allAvailable: ScopedWorkspace[] = [...copilotWs, ...claudeWs];
+
+                    // Reset to default so initDefault() re-detects from the new path.
+                    scopeManager.resetToDefault();
+                    await scopeManager.initDefault(allAvailable);
+
+                    const selectedIds = scopeManager.getSelectedIds();
+                    channel.appendLine(
+                        `[ChatWizard] Scope reset after path change — ${selectedIds.length} workspace(s): ${selectedIds.join(', ')}`
+                    );
+
+                    if (watcher) {
+                        await watcher.restart();
+                        channel.appendLine('[ChatWizard] Watcher restarted after path change.');
                     }
-                });
+                })().catch(err => channel.appendLine(`[error] Path-change restart failed: ${err}`));
+            }
+            if (
+                e.affectsConfiguration('chatwizard.oldestSessionDate') ||
+                e.affectsConfiguration('chatwizard.maxSessions')
+            ) {
+                channel.appendLine('[ChatWizard] Session filter setting changed — restarting index...');
+                void watcher?.restart()
+                    .then(() => channel.appendLine('[ChatWizard] Watcher restarted after filter change.'))
+                    .catch(err => channel.appendLine(`[error] Filter-change restart failed: ${err}`));
             }
         })
     );
@@ -748,11 +798,42 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         )
     );
 
+    // Build the workspace scope manager (persists scope across VS Code restarts).
+    const scopeManager = new WorkspaceScopeManager(context);
+
+    // Register the manage-workspaces command (scope changes take effect via watcher.restart()).
+    registerManageWorkspacesCommand(context, scopeManager, () => watcher, channel, index);
+
     // Yield for webview IPC round-trips, then start the file watcher in the background.
     // activate() returns immediately so VS Code is never blocked — the tree view is already
     // registered (empty) and will populate when batchUpsert() fires the change listeners.
     await new Promise<void>(resolve => setTimeout(resolve, 200));
-    void startWatcher(index, channel).then(w => {
+    void (async () => {
+        // Discover all available workspaces to initialise the default scope.
+        const [copilotWs, claudeWs] = await Promise.all([
+            discoverCopilotWorkspacesAsync().then(list =>
+                list.map(ws => ({
+                    id: ws.workspaceId,
+                    source: 'copilot' as const,
+                    workspacePath: ws.workspacePath,
+                    storageDir: ws.storageDir,
+                }) satisfies ScopedWorkspace)
+            ).catch(() => [] as ScopedWorkspace[]),
+            discoverClaudeWorkspacesAsync().catch(() => [] as ScopedWorkspace[]),
+        ]);
+        const allAvailable: ScopedWorkspace[] = [...copilotWs, ...claudeWs];
+        channel.appendLine(
+            `[ChatWizard] Discovered ${allAvailable.length} workspace(s) for scope detection: ` +
+            allAvailable.map(ws => `${ws.source}:${ws.id} (${ws.workspacePath})`).join(', ')
+        );
+        await scopeManager.initDefault(allAvailable);
+
+        const selectedIds = scopeManager.getSelectedIds();
+        channel.appendLine(
+            `[ChatWizard] Workspace scope initialised — ${selectedIds.length} workspace(s) selected: ${selectedIds.join(', ')}`
+        );
+
+        const w = await startWatcher(index, channel, scopeManager);
         watcher = w;
         context.subscriptions.push(w);
         const copilotCount = index.getSummariesBySource('copilot').length;
@@ -761,7 +842,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             `ChatWizard activated — ${index.size} sessions indexed (${copilotCount} Copilot, ${claudeCount} Claude)`
         );
         telemetry.record('extension.activated', { sessionCount: index.size });
-    }).catch(err => channel.appendLine(`[error] Watcher init failed: ${err}`));
+    })().catch(err => channel.appendLine(`[error] Watcher init failed: ${err}`));
 }
 
 export function deactivate(): void {

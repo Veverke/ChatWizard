@@ -127,3 +127,15 @@ export interface CopilotWorkspaceInfo {
     workspacePath: string;
     storageDir: string;
 }
+
+/** A unified descriptor covering both Copilot and Claude workspace origins */
+export interface ScopedWorkspace {
+    /** Unique per source — Copilot storage hash or Claude project directory name */
+    id: string;
+    /** Which AI extension produced this workspace */
+    source: 'copilot' | 'claude';
+    /** Human-readable absolute path to the workspace root */
+    workspacePath: string;
+    /** Physical directory containing the session files */
+    storageDir: string;
+}

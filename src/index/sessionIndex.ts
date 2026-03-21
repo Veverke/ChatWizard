@@ -5,7 +5,8 @@ import { Session, SessionSummary, Prompt, SessionSource, IndexedCodeBlock } from
 export type SessionIndexEvent =
     | { type: 'upsert'; session: Session }
     | { type: 'remove'; sessionId: string }
-    | { type: 'batch'; sessions: Session[] };
+    | { type: 'batch'; sessions: Session[] }
+    | { type: 'clear' };
 
 /**
  * Convert a full Session to a lightweight SessionSummary.
@@ -222,9 +223,13 @@ export class SessionIndex {
         return this.sessions.size;
     }
 
-    /** Remove all sessions from the index. */
+    /** Remove all sessions from the index. Fires a typed 'clear' event and a plain change notification. */
     clear(): void {
         this.sessions.clear();
+        this._version++;
+        this._invalidateCaches();
+        this._notifyTyped({ type: 'clear' });
+        this._notifyListeners();
     }
 
     /**

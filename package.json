@@ -40,7 +40,7 @@
   "activationEvents": [
     "onStartupFinished"
   ],
-  "main": "./dist/extension.js",
+  "main": "./out/src/extension.js",
   "contributes": {
     "viewsContainers": {
       "activitybar": [
@@ -283,6 +283,12 @@
         "title": "Rescan Sessions",
         "category": "ChatWizard",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "chatwizard.manageWatchedWorkspaces",
+        "title": "Manage Watched Workspaces",
+        "category": "ChatWizard",
+        "icon": "$(folder-library)"
       },
       {
         "command": "chatwizard.cbSortByDate",
@@ -631,6 +637,34 @@
           "type": "boolean",
           "default": false,
           "description": "Enable local usage telemetry. Events are recorded to a local JSONL file in the extension's global storage directory. No data ever leaves your machine."
+        },
+        "chatwizard.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable or disable the ChatWizard extension. When false, no sessions are indexed and all file watching is skipped."
+        },
+        "chatwizard.indexClaude": {
+          "type": "boolean",
+          "default": true,
+          "description": "Index Claude Code chat sessions from ~/.claude/projects/ (or the configured custom path)."
+        },
+        "chatwizard.indexCopilot": {
+          "type": "boolean",
+          "default": true,
+          "description": "Index GitHub Copilot Chat sessions from VS Code workspace storage."
+        },
+        "chatwizard.oldestSessionDate": {
+          "type": "string",
+          "default": "",
+          "pattern": "^(\\d{4}-\\d{2}-\\d{2})?$",
+          "patternErrorMessage": "Use YYYY-MM-DD format, e.g. 2025-01-01, or leave empty for no date limit.",
+          "description": "Only load sessions created on or after this date (YYYY-MM-DD). Leave empty to load all sessions regardless of date."
+        },
+        "chatwizard.maxSessions": {
+          "type": "integer",
+          "default": 0,
+          "minimum": 0,
+          "description": "Maximum number of sessions to load. When set to a value greater than 0, only the N most recently updated sessions are kept after all other filters are applied. Set to 0 for no limit."
         }
       }
     }
