@@ -41,19 +41,6 @@ async function writeTempFile(dir: string, name: string, sizeBytes: number): Prom
 
 suite('WorkspaceScopeManager', () => {
 
-    test('isDefault() is true when no state has been persisted', () => {
-        const { context } = makeContext();
-        const mgr = new WorkspaceScopeManager(context);
-        assert.strictEqual(mgr.isDefault(), true);
-    });
-
-    test('isDefault() is false when state is already in globalState', () => {
-        const { context, store } = makeContext();
-        store.set('chatwizard.selectedWorkspaceIds', ['ws-abc']);
-        const mgr = new WorkspaceScopeManager(context);
-        assert.strictEqual(mgr.isDefault(), false);
-    });
-
     test('getSelectedIds() returns empty array when nothing persisted', () => {
         const { context } = makeContext();
         const mgr = new WorkspaceScopeManager(context);
@@ -82,7 +69,7 @@ suite('WorkspaceScopeManager', () => {
         assert.deepStrictEqual(mgr.getSelectedIds(), ['c']);
     });
 
-    test('initDefault() selects all available IDs when vscode is unavailable (test host)', async () => {
+    test('initDefault() sets scope to empty when no VS Code workspace is open (test host)', async () => {
         const { context } = makeContext();
         const mgr = new WorkspaceScopeManager(context);
         const available = [
@@ -90,17 +77,11 @@ suite('WorkspaceScopeManager', () => {
             makeWorkspace('ws-2', '/projects/bar'),
         ];
         await mgr.initDefault(available);
-        assert.deepStrictEqual(mgr.getSelectedIds().sort(), ['ws-1', 'ws-2']);
+        // No vscode.workspace.workspaceFolders in test host → empty scope
+        assert.deepStrictEqual(mgr.getSelectedIds(), []);
     });
 
-    test('initDefault() sets isDefault() to false after running', async () => {
-        const { context } = makeContext();
-        const mgr = new WorkspaceScopeManager(context);
-        await mgr.initDefault([makeWorkspace('ws-1', '/projects/foo')]);
-        assert.strictEqual(mgr.isDefault(), false);
-    });
-
-    test('initDefault() is a no-op when state is already persisted and all IDs are still valid', async () => {
+    test('initDefault() always overwrites previously stored IDs', async () => {
         const { context, store } = makeContext();
         store.set('chatwizard.selectedWorkspaceIds', ['ws-original']);
         const mgr = new WorkspaceScopeManager(context);
@@ -109,8 +90,8 @@ suite('WorkspaceScopeManager', () => {
             makeWorkspace('ws-new', '/projects/bar'),
         ];
         await mgr.initDefault(available);
-        // Should not have changed the persisted selection
-        assert.deepStrictEqual(mgr.getSelectedIds(), ['ws-original']);
+        // Always re-detects from open workspace; no workspace in test host → empty
+        assert.deepStrictEqual(mgr.getSelectedIds(), []);
     });
 
     test('initDefault() with empty available list persists empty array', async () => {
@@ -120,45 +101,41 @@ suite('WorkspaceScopeManager', () => {
         assert.deepStrictEqual(mgr.getSelectedIds(), []);
     });
 
-    test('second initDefault() with same workspace IDs is a no-op', async () => {
+    test('second initDefault() call produces same result (idempotent in test host)', async () => {
         const { context } = makeContext();
         const mgr = new WorkspaceScopeManager(context);
         const available = [makeWorkspace('ws-1', '/projects/foo')];
         await mgr.initDefault(available);
         const firstResult = mgr.getSelectedIds().slice();
 
-        // Same available — second call should be a true no-op
         await mgr.initDefault([makeWorkspace('ws-1', '/projects/foo')]);
         assert.deepStrictEqual(mgr.getSelectedIds(), firstResult);
     });
 
-    test('initDefault() removes stale IDs that are no longer in available', async () => {
+    test('initDefault() does not preserve stale IDs across calls', async () => {
         const { context, store } = makeContext();
         store.set('chatwizard.selectedWorkspaceIds', ['ws-old', 'ws-keep']);
         const mgr = new WorkspaceScopeManager(context);
-        // ws-old no longer exists; ws-keep and ws-new remain
         const available = [
             makeWorkspace('ws-keep', '/projects/keep'),
             makeWorkspace('ws-new', '/projects/new'),
         ];
         await mgr.initDefault(available);
-        // ws-old should be dropped; ws-keep preserved; ws-new NOT auto-added
-        assert.deepStrictEqual(mgr.getSelectedIds(), ['ws-keep']);
+        // Always re-detects; no workspace open in test host → empty
+        assert.deepStrictEqual(mgr.getSelectedIds(), []);
     });
 
-    test('initDefault() re-detects when all stored IDs are stale (no open workspace in test host)', async () => {
+    test('initDefault() sets empty scope when previously stored IDs are all stale', async () => {
         const { context, store } = makeContext();
         store.set('chatwizard.selectedWorkspaceIds', ['stale-1', 'stale-2']);
         const mgr = new WorkspaceScopeManager(context);
-        // Neither stale ID is in available — and no VS Code workspace folders
-        // (vscode unavailable in test host) so initDefault falls back to _all_ available IDs
         const available = [
             makeWorkspace('ws-a', '/projects/a'),
             makeWorkspace('ws-b', '/projects/b'),
         ];
         await mgr.initDefault(available);
-        // All-stale → re-detect → no open workspace → select all available
-        assert.deepStrictEqual(mgr.getSelectedIds().sort(), ['ws-a', 'ws-b']);
+        // Always re-detects from open workspace; no workspace open in test host → empty
+        assert.deepStrictEqual(mgr.getSelectedIds(), []);
     });
 });
 

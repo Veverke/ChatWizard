@@ -11,6 +11,7 @@ import { discoverClaudeWorkspacesAsync } from '../readers/claudeWorkspace';
 /** One row in the QuickPick — represents a workspace folder regardless of how many sources it has. */
 type WorkspaceItem = vscode.QuickPickItem & {
     wsIds: string[];
+    workspacePath: string;
     /** Combined size in bytes across all sources in this folder. */
     totalBytes: number;
     /**
@@ -144,6 +145,7 @@ export function registerManageWorkspacesCommand(
                     : `${sessionCount.toLocaleString()} session${sessionCount !== 1 ? 's' : ''}`;
                 workspaceItems.push({
                     wsIds: allIds,
+                    workspacePath: representative.workspacePath,
                     totalBytes: groupBytes,
                     sessionCount,
                     sessionCountApprox: approx,
@@ -166,12 +168,8 @@ export function registerManageWorkspacesCommand(
             }
 
             // 5. Show multi-select QuickPick.
-            //    The native top-left "select-all" checkbox is used for toggle-all.
-            //    When the user deselects all (native or manually), we snap back to the
-            //    last non-empty selection via setImmediate so the write runs outside
-            //    the synchronous event-handler tick — preventing re-render cascades.
-            //    qp.keepScrollPosition = true ensures re-renders don't jump the list.
             const picked = await new Promise<WorkspaceItem[] | undefined>((resolve) => {
+                let accepted = false;
                 const initialReal = workspaceItems.filter(i => i.picked);
 
                 const qp = vscode.window.createQuickPick<WorkspaceItem>();
@@ -182,53 +180,41 @@ export function registerManageWorkspacesCommand(
                 qp.title = makeTitle(initialReal);
                 qp.placeholder = 'Select workspaces to index';
 
-                let lastNonEmpty: readonly WorkspaceItem[] = initialReal;
-                // Track whether all workspaces are currently selected so that
-                // native deselect-all rolls back to the pre-select-all state
-                // instead of snapping back to "all selected" again.
-                let allWasSelected = initialReal.length === workspaceItems.length;
-                let preAllSelection: readonly WorkspaceItem[] = allWasSelected ? initialReal : [];
-                let pendingDeferred = false;
+                // Compute open-workspace items once, used for auto-restore on de-select-all.
+                const openPaths = new Set(
+                    (vscode.workspace.workspaceFolders ?? [])
+                        .map(f => path.normalize(f.uri.fsPath).toLowerCase())
+                );
+                const currentWsItems = workspaceItems.filter(item =>
+                    openPaths.has(path.normalize(item.workspacePath).toLowerCase())
+                );
 
                 qp.onDidChangeSelection(selected => {
-                    if (pendingDeferred) {
-                        pendingDeferred = false;
-                        lastNonEmpty = selected as WorkspaceItem[];
-                        return;
-                    }
-
                     if (selected.length === 0) {
-                        // Native deselect-all or last item manually unchecked.
-                        // Roll back to preAllSelection if we just came from "all selected",
-                        // otherwise snap back to the last non-empty selection.
-                        const restore = (allWasSelected && preAllSelection.length > 0)
-                            ? [...preAllSelection] as WorkspaceItem[]
-                            : [...lastNonEmpty] as WorkspaceItem[];
-                        allWasSelected = false;
-                        preAllSelection = [];
-                        pendingDeferred = true;
-                        setImmediate(() => { qp.selectedItems = restore; });
+                        // Immediately restore the currently open workspace to prevent an
+                        // empty-scope state from becoming visible until Accept is clicked.
+                        const restore = currentWsItems.length > 0 ? currentWsItems : workspaceItems;
+                        // setImmediate ensures the assignment runs after VS Code's own
+                        // selection-change processing completes, avoiding a re-render race.
+                        setImmediate(() => {
+                            qp.selectedItems = restore;
+                            qp.title = makeTitle(restore);
+                        });
                         return;
                     }
-
-                    // Entering "all selected" state — save current selection for rollback.
-                    if (selected.length === workspaceItems.length && !allWasSelected) {
-                        preAllSelection = [...lastNonEmpty];
-                        allWasSelected = true;
-                    } else if (selected.length < workspaceItems.length && allWasSelected) {
-                        allWasSelected = false;
-                        preAllSelection = [];
-                    }
-
-                    lastNonEmpty = selected as WorkspaceItem[];
                     qp.title = makeTitle(selected as WorkspaceItem[]);
                 });
 
-                let accepted = false;
                 qp.onDidAccept(() => {
                     const result = [...qp.selectedItems] as WorkspaceItem[];
                     if (result.length === 0) {
-                        qp.title = '⚠ Select at least one workspace';
+                        // Auto-select items matching the currently open VS Code workspace.
+                        if (currentWsItems.length > 0) {
+                            qp.selectedItems = currentWsItems;
+                            qp.title = makeTitle(currentWsItems);
+                        } else {
+                            qp.title = '⚠ Select at least one workspace';
+                        }
                         return;
                     }
                     accepted = true;

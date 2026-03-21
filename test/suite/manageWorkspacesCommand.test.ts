@@ -78,9 +78,8 @@ suite('manageWorkspacesCommand — empty-selection guard', () => {
 
     test('null (cancelled) → scope manager not updated', async () => {
         const ctx = makeContext();
-        const ws = makeScopedWorkspace('ws-a');
         const mgr = new WorkspaceScopeManager(ctx);
-        await mgr.initDefault([ws]);
+        mgr.setSelectedIds(['ws-a']); // simulate prior state
 
         const result = simulateSelectionCommit(mgr, undefined);
 
@@ -91,9 +90,8 @@ suite('manageWorkspacesCommand — empty-selection guard', () => {
 
     test('empty array (accept blocked, treated same as cancel) → scope manager not updated', async () => {
         const ctx = makeContext();
-        const ws = makeScopedWorkspace('ws-a');
         const mgr = new WorkspaceScopeManager(ctx);
-        await mgr.initDefault([ws]);
+        mgr.setSelectedIds(['ws-a']); // simulate prior state
 
         const result = simulateSelectionCommit(mgr, []);
 
@@ -156,9 +154,8 @@ suite('manageWorkspacesCommand — unchanged selection', () => {
 
     test('confirming the same selection returns null (no-op)', async () => {
         const ctx = makeContext();
-        const ws = makeScopedWorkspace('ws-x');
         const mgr = new WorkspaceScopeManager(ctx);
-        await mgr.initDefault([ws]);
+        mgr.setSelectedIds(['ws-x']); // simulate prior state
 
         const idsBefore = mgr.getSelectedIds().slice();
         const result = simulateSelectionCommit(mgr, [{ wsIds: ['ws-x'] }]);

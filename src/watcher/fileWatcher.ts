@@ -93,9 +93,8 @@ export class ChatWizardWatcher implements vscode.Disposable {
             try {
                 const all = discoverCopilotWorkspaces();
                 const selectedIds = this.scopeManager.getSelectedIds();
-                copilotWorkspaces = selectedIds.length > 0
-                    ? all.filter(ws => selectedIds.includes(ws.workspaceId))
-                    : all;
+                // Empty selectedIds means no workspace in scope — watch nothing.
+                copilotWorkspaces = all.filter(ws => selectedIds.includes(ws.workspaceId));
             } catch (err) {
                 this.channel.appendLine(`[error] Failed to discover Copilot workspaces for watching: ${err}`);
             }
@@ -155,18 +154,19 @@ export class ChatWizardWatcher implements vscode.Disposable {
                 };
 
                 const selectedIds = this.scopeManager.getSelectedIds();
-                const effectiveIds = selectedIds.length > 0 ? selectedIds : undefined;
                 if (selectedIds.length === 0) {
-                    this.channel.appendLine('[ChatWizard] Scope manager has no selected IDs — falling back to all workspaces.');
+                    this.channel.appendLine('[ChatWizard] Scope is empty — no sessions will be indexed.');
                 } else {
                     this.channel.appendLine(`[ChatWizard] Building index with scope filter: [${selectedIds.join(', ')}]`);
                 }
                 const [claudeSessions, copilotSessions] = await Promise.all([
-                    indexClaude  ? this.collectClaudeSessionsAsync(onProgress, effectiveIds)  : Promise.resolve([]),
-                    indexCopilot ? this.collectCopilotSessionsAsync(onProgress, effectiveIds) : Promise.resolve([]),
+                    // Always pass selectedIds (even empty array) — empty = index nothing, no fallback to all.
+                    indexClaude  ? this.collectClaudeSessionsAsync(onProgress, selectedIds)  : Promise.resolve([]),
+                    indexCopilot ? this.collectCopilotSessionsAsync(onProgress, selectedIds) : Promise.resolve([]),
                 ]);
 
-                const all = [...claudeSessions, ...copilotSessions];
+                const cfg = vscode.workspace.getConfiguration('chatwizard');
+                const all = applySessionFilters([...claudeSessions, ...copilotSessions], cfg, this.channel);
                 this.index.batchUpsert(all);
                 this.channel.appendLine(`[init] Batch indexed ${all.length} sessions`);
             }
@@ -437,6 +437,46 @@ export class ChatWizardWatcher implements vscode.Disposable {
         const verb = this.index.size > before ? 'added' : 'updated';
         this.channel.appendLine(`[live] ${verb} session ${sessionId} (${source})`);
     }
+}
+
+/**
+ * Applies the `chatwizard.oldestSessionDate` and `chatwizard.maxSessions` settings
+ * to a collected batch of sessions, returning the filtered/trimmed list.
+ *
+ * - `oldestSessionDate` (YYYY-MM-DD): sessions whose `createdAt` date portion is
+ *   strictly before this date are excluded. Time is ignored; comparison is by date only.
+ * - `maxSessions` (positive integer): after the date filter, only the N most recently
+ *   updated sessions are kept. 0 or negative = no limit.
+ */
+function applySessionFilters(
+    sessions: Session[],
+    cfg: vscode.WorkspaceConfiguration,
+    channel: vscode.OutputChannel
+): Session[] {
+    const oldestDate = cfg.get<string>('oldestSessionDate', '').trim();
+    const maxSessions = cfg.get<number>('maxSessions', 0);
+
+    let result = sessions;
+
+    if (oldestDate) {
+        const before = result.length;
+        result = result.filter(s => s.updatedAt.slice(0, 10) >= oldestDate);
+        const dropped = before - result.length;
+        channel.appendLine(`[ChatWizard] Date filter (>= ${oldestDate}): kept ${result.length}, dropped ${dropped} session(s).`);
+    } else {
+        channel.appendLine(`[ChatWizard] Date filter: not set, all ${result.length} session(s) kept.`);
+    }
+
+    if (maxSessions > 0 && result.length > maxSessions) {
+        // Keep the N most recently updated sessions.
+        result = result
+            .slice()
+            .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+            .slice(0, maxSessions);
+        channel.appendLine(`[ChatWizard] Session cap (${maxSessions}) applied — retained ${result.length} session(s).`);
+    }
+
+    return result;
 }
 
 export async function startWatcher(

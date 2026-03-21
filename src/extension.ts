@@ -738,14 +738,45 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 e.affectsConfiguration('chatwizard.claudeProjectsPath') ||
                 e.affectsConfiguration('chatwizard.copilotStoragePath')
             ) {
-                void vscode.window.showInformationMessage(
-                    'ChatWizard: data source path changed — reload the window to apply.',
-                    'Reload Window'
-                ).then(action => {
-                    if (action === 'Reload Window') {
-                        void vscode.commands.executeCommand('workbench.action.reloadWindow');
+                channel.appendLine('[ChatWizard] Data path setting changed — re-discovering workspaces and restarting index...');
+                void (async () => {
+                    // Re-discover available workspaces under the new paths.
+                    const [copilotWs, claudeWs] = await Promise.all([
+                        discoverCopilotWorkspacesAsync().then(list =>
+                            list.map(ws => ({
+                                id: ws.workspaceId,
+                                source: 'copilot' as const,
+                                workspacePath: ws.workspacePath,
+                                storageDir: ws.storageDir,
+                            }) satisfies ScopedWorkspace)
+                        ).catch(() => [] as ScopedWorkspace[]),
+                        discoverClaudeWorkspacesAsync().catch(() => [] as ScopedWorkspace[]),
+                    ]);
+                    const allAvailable: ScopedWorkspace[] = [...copilotWs, ...claudeWs];
+
+                    // Reset to default so initDefault() re-detects from the new path.
+                    scopeManager.resetToDefault();
+                    await scopeManager.initDefault(allAvailable);
+
+                    const selectedIds = scopeManager.getSelectedIds();
+                    channel.appendLine(
+                        `[ChatWizard] Scope reset after path change — ${selectedIds.length} workspace(s): ${selectedIds.join(', ')}`
+                    );
+
+                    if (watcher) {
+                        await watcher.restart();
+                        channel.appendLine('[ChatWizard] Watcher restarted after path change.');
                     }
-                });
+                })().catch(err => channel.appendLine(`[error] Path-change restart failed: ${err}`));
+            }
+            if (
+                e.affectsConfiguration('chatwizard.oldestSessionDate') ||
+                e.affectsConfiguration('chatwizard.maxSessions')
+            ) {
+                channel.appendLine('[ChatWizard] Session filter setting changed — restarting index...');
+                void watcher?.restart()
+                    .then(() => channel.appendLine('[ChatWizard] Watcher restarted after filter change.'))
+                    .catch(err => channel.appendLine(`[error] Filter-change restart failed: ${err}`));
             }
         })
     );

@@ -247,10 +247,12 @@ export function parseCopilotSession(
 
     let fileSizeBytes: number | undefined;
     let fileBirthtime: string | undefined;
+    let fileMtime: string | undefined;
     try {
         const stat = fs.statSync(filePath);
         fileSizeBytes = stat.size;
         fileBirthtime = stat.birthtime.toISOString();
+        fileMtime = stat.mtime.toISOString();
     } catch {
         // ignore — optional fields
     }
@@ -259,8 +261,18 @@ export function parseCopilotSession(
         ? msToIso(creationDateMs)
         : (fileBirthtime ?? new Date().toISOString());
 
-    const lastMsg = messages[messages.length - 1];
-    const updatedAt = lastMsg?.timestamp ?? createdAt;
+    // Use the timestamp of the last message that actually carries one.
+    // Assistant replies share their turn's timestamp with the preceding user message;
+    // if a turn has no timestamp the messages get `undefined`, so we scan backwards
+    // to find the most-recent timestamped message rather than only checking the tail.
+    // Final fallback: file mtime (= last write = last turn appended), then createdAt.
+    let updatedAt = fileMtime ?? createdAt;
+    for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i].timestamp !== undefined) {
+            updatedAt = messages[i].timestamp!;
+            break;
+        }
+    }
 
     return {
         session: {
