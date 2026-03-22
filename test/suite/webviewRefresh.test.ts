@@ -236,7 +236,7 @@ suite('TimelineViewProvider â€” shell+postMessage', () => {
     test('getShellHtml contains filter bar selects', () => {
         const html = TimelineViewProvider.getShellHtml();
         assert.ok(html.includes('id="srcFilter"'), 'should contain srcFilter');
-        assert.ok(html.includes('id="wsFilter"'), 'should contain wsFilter');
+        assert.ok(!html.includes('id="wsFilter"'), 'should not contain wsFilter (workspace managed elsewhere)');
     });
 
     test('getShellHtml contains jumpToDate function', () => {
@@ -254,7 +254,8 @@ suite('TimelineViewProvider â€” shell+postMessage', () => {
 
     test('resolveWebviewView sets html exactly once', async () => {
         const index = makeMinimalIndex();
-        const provider = new TimelineViewProvider(index);
+        const mockCtx = { globalState: { get: () => ({}), update: async () => {} } } as unknown as import('vscode').ExtensionContext;
+        const provider = new TimelineViewProvider(index, mockCtx);
         const view = makeWebviewView(true);
 
         provider.resolveWebviewView(
@@ -283,7 +284,8 @@ suite('TimelineViewProvider â€” shell+postMessage', () => {
 
     test('refresh() calls postMessage not html reassignment', async () => {
         const index = makeMinimalIndex();
-        const provider = new TimelineViewProvider(index);
+        const mockCtx2 = { globalState: { get: () => ({}), update: async () => {} } } as unknown as import('vscode').ExtensionContext;
+        const provider = new TimelineViewProvider(index, mockCtx2);
         const view = makeWebviewView(true);
 
         provider.resolveWebviewView(

@@ -13,6 +13,8 @@ export interface TimelineEntry {
     firstPrompt: string;     // text of first user/human message, trimmed; capped at 150 chars with '…'
     messageCount: number;    // total messages in session
     promptCount: number;     // count of user/human messages
+    /** True when the chronologically previous session (within 30 min) used a different source. */
+    toolSwitchHighlight?: boolean;
 }
 
 /**
@@ -127,6 +129,16 @@ export function buildTimeline(sessions: Session[], options?: TimelineOptions): T
 
     // Sort newest first
     entries.sort((a, b) => b.timestamp - a.timestamp);
+
+    // Annotate tool-switch highlights (newest-first: next element is chronologically older)
+    const SWITCH_WINDOW_MS = 30 * 60 * 1000;
+    for (let i = 0; i < entries.length - 1; i++) {
+        const newer = entries[i];
+        const older = entries[i + 1];
+        if (newer.source !== older.source && newer.timestamp - older.timestamp < SWITCH_WINDOW_MS) {
+            newer.toolSwitchHighlight = true;
+        }
+    }
 
     // Apply before filter
     let result: TimelineEntry[] = entries;

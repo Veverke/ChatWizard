@@ -65,7 +65,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         vscode.window.registerWebviewViewProvider(ModelUsageViewProvider.viewType, modelUsageViewProvider)
     );
 
-    const timelineViewProvider = new TimelineViewProvider(index);
+    const timelineViewProvider = new TimelineViewProvider(index, context);
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider(TimelineViewProvider.viewType, timelineViewProvider)
     );

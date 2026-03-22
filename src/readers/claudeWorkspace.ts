@@ -63,13 +63,6 @@ export async function discoverClaudeWorkspacesAsync(override?: string): Promise<
             const workspacePath = resolveClaudeWorkspacePath(entry.name);
             if (workspacePath === undefined) { continue; }
 
-            // Skip workspaces whose decoded path no longer exists on disk.
-            try {
-                await fs.promises.access(workspacePath);
-            } catch {
-                continue;
-            }
-
             results.push({
                 id: entry.name,
                 source: 'claude',
