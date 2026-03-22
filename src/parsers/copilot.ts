@@ -188,8 +188,12 @@ export function parseCopilotSession(
     const sessionId = (state.sessionId as string | undefined) ?? fallbackId;
     const customTitle = state.customTitle as string | undefined;
     const creationDateMs = state.creationDate as number | undefined;
-    const selectedModel = state.selectedModel as { metadata?: { name?: string } } | undefined;
-    const model = selectedModel?.metadata?.name;
+    // Model is stored under inputState.selectedModel in current Copilot Chat versions;
+    // fall back to top-level selectedModel for older file formats.
+    type SelectedModelShape = { metadata?: { name?: string } } | undefined;
+    const inputState = state.inputState as { selectedModel?: SelectedModelShape } | undefined;
+    const model = (inputState?.selectedModel as SelectedModelShape)?.metadata?.name
+        ?? (state.selectedModel as SelectedModelShape)?.metadata?.name;
 
     // Conversation turns: null/undefined kind = actual user+AI exchange
     const allRequests = (state.requests as RequestTurn[] | undefined) ?? [];

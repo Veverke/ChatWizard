@@ -400,7 +400,7 @@ export class AnalyticsPanel {
           document.getElementById('summary-row').innerHTML =
             '<div class="empty-state-guided">'
             + '<p class="empty-state-title">No sessions indexed yet.</p>'
-            + '<p class="empty-state-body">ChatWizard reads your Claude Code and GitHub Copilot chat history. Make sure the data paths are configured correctly.</p>'
+            + '<p class="empty-state-body">Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure the data paths are configured correctly.</p>'
             + '<div class="empty-state-actions">'
             + '<button class="cw-action-btn" id="btn-cfg-paths">Configure Paths</button>'
             + '<button class="cw-action-btn" id="btn-rescan">Rescan</button>'

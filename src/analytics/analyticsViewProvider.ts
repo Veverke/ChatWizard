@@ -5,7 +5,7 @@ import { SessionIndex } from '../index/sessionIndex';
 import { AnalyticsPanel } from './analyticsPanel';
 
 /**
- * Provides the Analytics Dashboard as a sidebar WebviewView tab in the ChatWizard panel.
+ * Provides the Analytics Dashboard as a sidebar WebviewView tab in the Chat Wizard panel.
  */
 export class AnalyticsViewProvider implements vscode.WebviewViewProvider {
     static readonly viewType = 'chatwizardAnalytics';
@@ -28,8 +28,11 @@ export class AnalyticsViewProvider implements vscode.WebviewViewProvider {
         webviewView.webview.html = AnalyticsPanel.getShellHtml();
 
         // When the webview signals ready, send the initial data
-        webviewView.webview.onDidReceiveMessage((msg: { type: string }) => {
+        webviewView.webview.onDidReceiveMessage((msg: { type?: string; command?: string; sessionId?: string }) => {
             if (msg.type === 'ready') { this._sendData(); }
+            else if (msg.command === 'openSession' && msg.sessionId) {
+                void vscode.commands.executeCommand('chatwizard.openSession', { id: msg.sessionId });
+            }
         });
 
         webviewView.onDidChangeVisibility(() => {

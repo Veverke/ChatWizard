@@ -57,7 +57,7 @@ export function registerManageWorkspacesCommand(
 
             if (allAvailable.length === 0) {
                 void vscode.window.showInformationMessage(
-                    'ChatWizard: No Copilot or Claude workspaces found to manage.'
+                    'Chat Wizard: No Copilot or Claude workspaces found to manage.'
                 );
                 return;
             }
@@ -107,6 +107,17 @@ export function registerManageWorkspacesCommand(
                 const group = pathGroups.get(key) ?? [];
                 group.push(ws);
                 pathGroups.set(key, group);
+            }
+
+            // Remove any path that is a strict ancestor of another discovered workspace path.
+            // e.g. if both "C:\Repos\Personal" and "C:\Repos\Personal\ChatWizard" are found,
+            // the parent is not a real workspace and should be hidden.
+            const allKeys = [...pathGroups.keys()];
+            for (const key of allKeys) {
+                const prefix = key.endsWith(path.sep) ? key : key + path.sep;
+                if (allKeys.some(other => other !== key && other.startsWith(prefix))) {
+                    pathGroups.delete(key);
+                }
             }
 
             // 3. Determine currently selected IDs.
@@ -159,7 +170,7 @@ export function registerManageWorkspacesCommand(
             // Persist updated cache (fire-and-forget).
             void context.globalState.update('cwSessionCountCache', updatedCache);
 
-            const TITLE_BASE = 'ChatWizard: Manage Watched Workspaces';
+            const TITLE_BASE = 'Chat Wizard: Manage Watched Workspaces';
 
             function makeTitle(selectedItems: readonly WorkspaceItem[]): string {
                 const bytes = selectedItems.reduce((sum, item) => sum + item.totalBytes, 0);
@@ -254,15 +265,15 @@ export function registerManageWorkspacesCommand(
             // 8. Persist the new scope and restart the watcher.
             scopeManager.setSelectedIds(newIds);
             channel.appendLine(
-                `[ChatWizard] Workspace scope updated — ${newIds.length} workspace(s) selected: ${newIds.join(', ')}`
+                `[Chat Wizard] Workspace scope updated — ${newIds.length} workspace(s) selected: ${newIds.join(', ')}`
             );
 
             const watcher = getWatcher();
             if (watcher) {
                 await watcher.restart();
-                channel.appendLine('[ChatWizard] Watcher restarted after scope change.');
+                channel.appendLine('[Chat Wizard] Watcher restarted after scope change.');
             } else {
-                channel.appendLine('[ChatWizard] Scope persisted — watcher not yet started, will use new scope on next start.');
+                channel.appendLine('[Chat Wizard] Scope persisted — watcher not yet started, will use new scope on next start.');
             }
         })
     );

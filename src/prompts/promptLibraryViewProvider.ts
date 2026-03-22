@@ -7,7 +7,7 @@ import { clusterPromptsAsync } from './similarityEngine';
 import { PromptLibraryPanel } from './promptLibraryPanel';
 
 /**
- * Provides the Prompt Library as a sidebar WebviewView tab in the ChatWizard panel.
+ * Provides the Prompt Library as a sidebar WebviewView tab in the Chat Wizard panel.
  */
 export class PromptLibraryViewProvider implements vscode.WebviewViewProvider {
     static readonly viewType = 'chatwizardPromptLibrary';

@@ -139,8 +139,21 @@ export function renderMessage(
     const timestamp = msg.timestamp
         ? `<span class="timestamp">${escapeHtml(new Date(msg.timestamp).toLocaleString())}</span>`
         : '';
-    const renderedContent = markdownToHtml(msg.content);
     const fadeStyle = (fadeIdx !== undefined && fadeIdx < 16) ? ` style="--cw-i:${fadeIdx}"` : '';
+
+    // Skipped-line placeholder: show a notice instead of normal message content.
+    if (msg.skipped) {
+        const sizeKb  = msg.skippedLineLength !== undefined ? Math.round(msg.skippedLineLength / 1024) : '?';
+        const limitKb = msg.skippedLineLimit  !== undefined ? Math.round(msg.skippedLineLimit  / 1024) : '?';
+        return `<div class="message ${roleClass} cw-fade-item"${fadeStyle} data-msg-idx="${origIdx}">
+  <div class="message-header">
+    <span class="role-label">${label}</span>${timestamp}
+  </div>
+  <div class="message-body skipped-notice">&#9888; Message not shown &mdash; source line is ${sizeKb}&nbsp;KB, exceeding the ${limitKb}&nbsp;KB limit. Raise <code>chatwizard.maxLineLengthChars</code> in settings to include it.</div>
+</div>`;
+    }
+
+    const renderedContent = markdownToHtml(msg.content);
 
     let html = `<div class="message ${roleClass} cw-fade-item"${fadeStyle} data-msg-idx="${origIdx}">
   <div class="message-header">

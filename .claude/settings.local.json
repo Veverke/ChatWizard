@@ -20,7 +20,14 @@
       "Bash(node -e \"const d=require\\(''''fs''''\\).readFileSync\\(''''/dev/stdin'''',''''utf8''''\\); const p=JSON.parse\\(d\\); console.log\\(''''main:'''', p.main\\); console.log\\(''''scripts:'''', JSON.stringify\\(p.scripts,null,2\\)\\);\")",
       "Bash(node -e \"const p=require\\(''./package.json''\\); console.log\\(''main:'', p.main\\); console.log\\(''scripts:'', JSON.stringify\\(p.scripts,null,2\\)\\);\")",
       "Bash(grep -n \"backtick\\\\|[\\\\`]\" \"c:/Repos/Personal/ChatWizard/src/webview/cwTheme.ts\")",
-      "Read(//c/Users/avrei/AppData/Local/Temp/**)"
+      "Read(//c/Users/avrei/AppData/Local/Temp/**)",
+      "Bash(git stash:*)",
+      "Read(//c/Repos/Personal/ChatWizard/$APPDATA/Code/User/**)",
+      "Read(//c/Users/avrei/.claude/projects/**)",
+      "Bash(grep -l synthetic ~/.claude/projects/**/*.jsonl)",
+      "Read(//c/Users/avrei/AppData/Roaming/Code/User/workspaceStorage/07718e26f3dbf465c3c4bdc6420c9012/chatSessions/**)",
+      "Read(//c/Users/avrei/AppData/Roaming/Code/User/workspaceStorage/086280346ce316c04e4777b21174979b/chatSessions/**)",
+      "Bash(python3 -c \"import sys,json; data=json.load\\(sys.stdin\\); print\\(json.dumps\\(data[''''v''''][''''inputState''''][''''selectedModel''''], indent=2\\)\\)\")"
     ],
     "additionalDirectories": [
       "c:\\Users\\avrei\\.claude\\projects\\c--Repos-Personal-ChatWizard\\memory"

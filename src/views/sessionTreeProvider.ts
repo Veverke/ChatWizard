@@ -29,6 +29,7 @@ export class SessionTreeItem extends vscode.TreeItem {
         const sizeLine = sizeKb ? `\n\n**Size:** ${msgCount} messages · ${sizeKb}` : `\n\n**Size:** ${msgCount} messages`;
         const pinnedLine = pinned ? `\n\n📌 *Pinned*` : '';
         const interruptedLine = summary.interrupted ? `\n\n⚠ *Response not available — cancelled or incomplete*` : '';
+        const parseErrorsLine = summary.hasParseErrors ? `\n\n⚠ *This session has parse errors — some lines could not be read*` : '';
 
         const config = vscode.workspace.getConfiguration('chatwizard');
         const labelColor = config.get<string>('tooltipLabelColor', '');
@@ -45,7 +46,7 @@ export class SessionTreeItem extends vscode.TreeItem {
                 `\n\n${lbl('Updated:')} ${summary.updatedAt.slice(0, 16).replace('T', ' ')}` +
                 `\n\n${lbl('Size:')} ${sizeText}` +
                 `\n\n${summary.userMessageCount} prompts · ${summary.assistantMessageCount} responses` +
-                pinnedLine + interruptedLine
+                pinnedLine + interruptedLine + parseErrorsLine
             );
             tooltip.isTrusted = true;
             tooltip.supportHtml = true;
@@ -57,7 +58,7 @@ export class SessionTreeItem extends vscode.TreeItem {
                 `**Updated:** ${summary.updatedAt.slice(0, 16).replace('T', ' ')}` +
                 sizeLine + `\n\n` +
                 `${summary.userMessageCount} prompts · ${summary.assistantMessageCount} responses` +
-                pinnedLine + interruptedLine
+                pinnedLine + interruptedLine + parseErrorsLine
             );
         }
         this.tooltip = tooltip;
@@ -69,10 +70,20 @@ export class SessionTreeItem extends vscode.TreeItem {
             this.iconPath = summary.source === 'copilot'
                 ? new vscode.ThemeIcon('github', red)
                 : new vscode.ThemeIcon('hubot', red);
+        } else if (summary.hasParseErrors) {
+            const yellow = new vscode.ThemeColor('list.warningForeground');
+            this.iconPath = summary.source === 'copilot'
+                ? new vscode.ThemeIcon('github', yellow)
+                : new vscode.ThemeIcon('hubot', yellow);
         } else {
             this.iconPath = summary.source === 'copilot'
                 ? new vscode.ThemeIcon('github')
                 : new vscode.ThemeIcon('hubot');
+        }
+
+        if (summary.hasParseErrors) {
+            // Synthetic URI lets the FileDecorationProvider add a ⚠ badge overlay on the icon
+            this.resourceUri = vscode.Uri.from({ scheme: 'chatwizard-warn', path: '/' + summary.id });
         }
 
         this.contextValue = pinned ? 'session.pinned' : 'session';
@@ -160,7 +171,8 @@ export interface SessionFilter {
     model?: string;        // case-insensitive substring
     minMessages?: number;
     maxMessages?: number;
-    hideInterrupted?: boolean; // when true, hide sessions whose last message has no assistant reply
+    hideInterrupted?: boolean;   // when true, hide sessions whose last message has no assistant reply
+    onlyWithWarnings?: boolean;  // when true, show only sessions that have parse errors / skipped turns
 }
 
 // ---------------------------------------------------------------------------
@@ -187,6 +199,28 @@ function compareBy(key: SortKey, a: SessionSummary, b: SessionSummary): number {
         }
         case 'source':
             return a.source.localeCompare(b.source);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Parse-warning file decoration provider
+// ---------------------------------------------------------------------------
+
+/**
+ * Adds a ⚠ badge and yellow colour to tree items whose session has parse errors.
+ * Register via vscode.window.registerFileDecorationProvider() in extension.ts.
+ * Works alongside the yellow icon set on SessionTreeItem when hasParseErrors is true.
+ */
+export class SessionParseWarningDecorationProvider implements vscode.FileDecorationProvider {
+    provideFileDecoration(uri: vscode.Uri): vscode.FileDecoration | undefined {
+        if (uri.scheme === 'chatwizard-warn') {
+            return {
+                badge: '⚠',
+                color: new vscode.ThemeColor('list.warningForeground'),
+                tooltip: 'This session has parse errors',
+                propagate: false,
+            };
+        }
     }
 }
 
@@ -314,7 +348,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeI
         const f = this._filter;
         return !!(f.title || f.dateFrom || f.dateTo || f.model ||
                   f.minMessages !== undefined || f.maxMessages !== undefined ||
-                  f.hideInterrupted);
+                  f.hideInterrupted || f.onlyWithWarnings);
     }
 
     private _matchesFilter(s: SessionSummary): boolean {
@@ -329,6 +363,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeI
         if (f.minMessages !== undefined && s.messageCount < f.minMessages) { return false; }
         if (f.maxMessages !== undefined && s.messageCount > f.maxMessages) { return false; }
         if (f.hideInterrupted && s.interrupted) { return false; }
+        if (f.onlyWithWarnings && !s.hasParseErrors) { return false; }
         return true;
     }
 
@@ -342,6 +377,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeI
             parts.push(`msgs:${f.minMessages ?? 0}–${f.maxMessages ?? '∞'}`);
         }
         if (f.hideInterrupted) { parts.push('hide:interrupted'); }
+        if (f.onlyWithWarnings) { parts.push('warnings only'); }
         return parts.length > 0 ? `⊘ ${parts.join(' · ')}` : '';
     }
 
