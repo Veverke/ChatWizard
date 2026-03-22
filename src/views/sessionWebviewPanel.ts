@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { Session } from '../types/index';
 import { cwThemeCss, syntaxHighlighterCss, cwInteractiveJs } from '../webview/cwTheme';
+import { friendlyModelName } from '../analytics/modelNames';
 import {
     VisibleMessage,
     renderChunk,
@@ -67,7 +68,7 @@ export class SessionWebviewPanel {
         // Compute visible messages (non-empty content)
         const visibleMessages: VisibleMessage[] = session.messages
             .map((msg, origIdx) => ({ msg, origIdx }))
-            .filter(({ msg }) => msg.content.trim() !== '');
+            .filter(({ msg }) => msg.content.trim() !== '' || !!msg.skipped);
 
         const total     = visibleMessages.length;
         const initialSz = INITIAL_WINDOW;
@@ -189,16 +190,20 @@ export class SessionWebviewPanel {
 
         void panel.webview.postMessage({
             type: 'render',
-            title:        session.title,
-            source:       session.source,
+            title:            session.title,
+            source:           session.source,
             userColor,
-            term:         searchTerm ?? null,
-            scrollInit:   null, // scroll sent separately after all chunks via cwScroll
-            messagesHtml: firstHtml,
+            term:             searchTerm ?? null,
+            scrollInit:       null, // scroll sent separately after all chunks via cwScroll
+            messagesHtml:     firstHtml,
             windowStart,
-            windowEnd:    firstEnd,
+            windowEnd:        firstEnd,
             total,
-            hasMore:      windowEnd < total,
+            hasMore:          windowEnd < total,
+            userRequestCount: session.messages.filter(m => m.role === 'user').length,
+            model:            friendlyModelName(session.model),
+            parseErrors:      session.parseErrors ?? [],
+            filePath:         session.filePath,
         });
 
         // ── Stream remaining initial window via setImmediate ──────────────────
@@ -317,9 +322,21 @@ export class SessionWebviewPanel {
     }
     h1 {
       font-size: 1.4em;
-      margin-bottom: 8px;
+      margin-bottom: 4px;
+      padding-bottom: 8px;
+      border-bottom: none;
+    }
+    .session-meta {
+      display: none;
+      font-size: 0.82em;
+      opacity: 0.7;
       padding-bottom: 8px;
       border-bottom: 1px solid var(--vscode-textBlockQuote-background, #444);
+      margin-bottom: 8px;
+    }
+    .session-meta span {
+      font-weight: 600;
+      opacity: 1;
     }
     .toolbar {
       position: sticky;
@@ -430,6 +447,20 @@ export class SessionWebviewPanel {
       opacity: 0.7;
     }
     .aborted-notice { font-style: italic; color: var(--vscode-errorForeground, #f48771); }
+    .parse-errors-banner {
+      background: rgba(200, 160, 0, 0.08);
+      border: 1px solid rgba(200, 160, 0, 0.35);
+      border-left: 3px solid #c8a800;
+      border-radius: var(--cw-radius);
+      padding: 10px 14px;
+      margin-bottom: 14px;
+      font-size: 0.85em;
+      color: var(--vscode-editorWarning-foreground, #c8a800);
+    }
+    .parse-errors-banner ul { margin: 6px 0 0; padding-left: 1.5em; }
+    .parse-errors-banner li { margin: 3px 0; font-family: var(--vscode-editor-font-family, monospace); font-size: 0.9em; }
+    .parse-error-path { word-break: break-all; font-family: var(--vscode-editor-font-family, monospace); opacity: 0.8; }
+    .skipped-notice { font-style: italic; color: var(--vscode-editorWarning-foreground, #c8a800); }
     mark {
       background-color: var(--vscode-editor-findMatchHighlightBackground, rgba(234,92,0,0.33));
       color: inherit; border-radius: 2px; padding: 0 1px;
@@ -508,6 +539,11 @@ export class SessionWebviewPanel {
 </head>
 <body>
   <h1 id="session-title"><span class="cw-skeleton" style="display:inline-block;height:1.1em;width:50%;vertical-align:middle"></span></h1>
+  <div class="session-meta" id="session-meta">
+    <span id="session-model-field" style="display:none">Model: <span id="session-model"></span></span>
+    <span class="meta-sep" id="session-meta-sep" style="display:none"> &nbsp;·&nbsp; </span>
+    <span id="session-req-field" style="display:none">User Requests: <span id="session-user-req"></span></span>
+  </div>
   <div class="toolbar">
     <div class="search-group">
       <input id="search-input" type="text" placeholder="Search in messages&#8230;" autocomplete="off" aria-label="Search within session messages" />
@@ -913,7 +949,42 @@ ${cwInteractiveJs()}
         var respLabelEl = document.getElementById('filter-responses-label');
         if (respLabelEl) { respLabelEl.textContent = srcLabel; }
       }
+      var metaEl      = document.getElementById('session-meta');
+      var modelField  = document.getElementById('session-model-field');
+      var modelEl     = document.getElementById('session-model');
+      var reqField    = document.getElementById('session-req-field');
+      var reqEl       = document.getElementById('session-user-req');
+      var sepEl       = document.getElementById('session-meta-sep');
+      var showModel   = data.model && data.model !== 'Unknown';
+      var showReq     = data.userRequestCount !== undefined;
+      if (metaEl && (showModel || showReq)) {
+        if (showModel && modelField && modelEl) {
+          modelEl.textContent = data.model;
+          modelField.style.display = 'inline';
+        }
+        if (showReq && reqField && reqEl) {
+          reqEl.textContent = data.userRequestCount;
+          reqField.style.display = 'inline';
+        }
+        if (showModel && showReq && sepEl) { sepEl.style.display = 'inline'; }
+        metaEl.style.display = 'block';
+      }
       container.innerHTML = data.messagesHtml;
+
+      // Parse-errors banner — prepended before messages when the session has read errors
+      if (data.parseErrors && data.parseErrors.length > 0) {
+        var banner = document.createElement('div');
+        banner.className = 'parse-errors-banner';
+        var errItems = data.parseErrors.map(function(e) {
+          return '<li>' + escH(e) + '</li>';
+        }).join('');
+        banner.innerHTML =
+          '&#9888; <strong>Parse errors in this session</strong>' +
+          (data.filePath ? ' &mdash; <span class="parse-error-path">' + escH(data.filePath) + '</span>' : '') +
+          '<ul>' + errItems + '</ul>';
+        container.insertBefore(banner, container.firstChild);
+      }
+
       highlightAll();
 
       _hasMore     = !!data.hasMore;

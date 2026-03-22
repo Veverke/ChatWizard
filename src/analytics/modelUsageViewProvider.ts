@@ -4,6 +4,7 @@ import * as vscode from 'vscode';
 import { SessionIndex } from '../index/sessionIndex';
 import { computeModelUsage } from './modelUsageEngine';
 import { cwThemeCss } from '../webview/cwTheme';
+import { SessionWebviewPanel } from '../views/sessionWebviewPanel';
 
 function toIsoDate(d: Date): string {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -45,11 +46,16 @@ export class ModelUsageViewProvider implements vscode.WebviewViewProvider {
         // Set shell HTML once — never reassigned
         webviewView.webview.html = this.getShellHtml(webviewView.webview);
 
-        webviewView.webview.onDidReceiveMessage((msg: { type: string; from?: string; to?: string }) => {
+        webviewView.webview.onDidReceiveMessage((msg: { type: string; from?: string; to?: string; sessionId?: string }) => {
             if (msg.type === 'ready') {
                 this._sendUpdate(webviewView);
             } else if (msg.type === 'setDateRange') {
                 this._handleSetDateRange(msg.from, msg.to, webviewView);
+            } else if (msg.type === 'openSession' && msg.sessionId) {
+                const session = this._index.get(msg.sessionId);
+                if (session) {
+                    void SessionWebviewPanel.show(this._context, session);
+                }
             }
         });
 
@@ -216,6 +222,71 @@ export class ModelUsageViewProvider implements vscode.WebviewViewProvider {
       background: var(--cw-surface-subtle);
     }
 
+    .data-table tbody tr[data-sessions]:hover {
+      background: var(--cw-surface-raised);
+      cursor: default;
+    }
+
+    /* -- Session hover overlay ------------------------------------ */
+    #session-overlay {
+      position: fixed;
+      z-index: 9999;
+      background: var(--vscode-menu-background, #252526);
+      border: 1px solid var(--vscode-menu-border, #454545);
+      border-radius: 5px;
+      padding: 8px 0;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+      display: none;
+      min-width: 280px;
+      max-width: 420px;
+      max-height: 320px;
+      overflow-y: auto;
+      font-size: 0.88em;
+    }
+
+    .session-overlay-item {
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
+      padding: 5px 14px;
+      cursor: pointer;
+      color: var(--vscode-menu-foreground, inherit);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .session-overlay-item:hover {
+      background: var(--vscode-menu-selectionBackground, #094771);
+      color: var(--vscode-menu-selectionForeground, #fff);
+    }
+
+    .session-overlay-item:hover .sess-link {
+      color: var(--vscode-menu-selectionForeground, #fff);
+    }
+
+    .sess-idx {
+      opacity: 0.5;
+      font-size: 0.85em;
+      min-width: 18px;
+      text-align: right;
+      flex-shrink: 0;
+    }
+
+    .sess-req {
+      color: var(--cw-accent);
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+
+    .sess-link {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: var(--vscode-editor-foreground);
+      text-decoration: none;
+      flex: 1;
+    }
+
     /* -- Account section headings --------------------------------- */
     .account-section { display: none; } /* shown by JS when data exists */
 
@@ -315,6 +386,9 @@ export class ModelUsageViewProvider implements vscode.WebviewViewProvider {
     </table>
   </div>
 </div>
+
+<!-- Session breakdown overlay -->
+<div id="session-overlay"></div>
 
 <script>
 (function() {
@@ -560,7 +634,8 @@ export class ModelUsageViewProvider implements vscode.WebviewViewProvider {
       return rows.map(function(m, i) {
         // Only show the badge on the first row of each account group
         var badge = i === 0 ? accountBadge(m.source) : '';
-        return '<tr>'
+        var sessData = m.sessionBreakdown ? escHtml(JSON.stringify(m.sessionBreakdown)) : '';
+        return '<tr' + (sessData ? ' data-sessions="' + sessData + '"' : '') + '>'
           + '<td>' + badge + '</td>'
           + '<td title="' + escHtml(m.model) + '">' + escHtml(m.model) + '</td>'
           + '<td class="num">' + m.sessionCount.toLocaleString() + '</td>'
@@ -579,6 +654,74 @@ export class ModelUsageViewProvider implements vscode.WebviewViewProvider {
       + '<td class="num"><strong>100%</strong></td>'
       + '</tr>';
   }
+
+  // -- Session hover overlay -------------------------------------
+  var overlay = document.getElementById('session-overlay');
+  var overlayHideTimer = null;
+
+  function showOverlay(sessions, anchorRect) {
+    if (!sessions || sessions.length === 0) { return; }
+    var html = '';
+    sessions.forEach(function(s, i) {
+      html += '<div class="session-overlay-item" data-session-id="' + escHtml(s.sessionId) + '">'
+        + '<span class="sess-idx">' + (i + 1) + '.</span>'
+        + '<span class="sess-req">Requests: ' + s.userRequests + '</span>'
+        + '<span class="sess-link" title="' + escHtml(s.sessionTitle) + '">' + escHtml(s.sessionTitle) + '</span>'
+        + '</div>';
+    });
+    overlay.innerHTML = html;
+
+    // Position: prefer below-left of the row, flip if off-screen
+    var top = anchorRect.bottom + window.scrollY + 2;
+    var left = anchorRect.left + window.scrollX;
+    overlay.style.display = 'block';
+    overlay.style.left = '0';
+    overlay.style.top = '0';
+
+    var ow = overlay.offsetWidth;
+    var oh = overlay.offsetHeight;
+    if (left + ow > window.innerWidth) { left = Math.max(0, window.innerWidth - ow - 8); }
+    if (top + oh > window.innerHeight + window.scrollY) { top = anchorRect.top + window.scrollY - oh - 2; }
+    overlay.style.left = left + 'px';
+    overlay.style.top  = top  + 'px';
+  }
+
+  function hideOverlay() {
+    overlay.style.display = 'none';
+    overlay.innerHTML = '';
+  }
+
+  function scheduleHide() {
+    overlayHideTimer = setTimeout(hideOverlay, 200);
+  }
+
+  function cancelHide() {
+    if (overlayHideTimer) { clearTimeout(overlayHideTimer); overlayHideTimer = null; }
+  }
+
+  document.getElementById('summary-tbody').addEventListener('mouseover', function(e) {
+    var tr = e.target.closest('tr[data-sessions]');
+    if (!tr) { scheduleHide(); return; }
+    cancelHide();
+    try {
+      var sessions = JSON.parse(tr.getAttribute('data-sessions'));
+      showOverlay(sessions, tr.getBoundingClientRect());
+    } catch (err) { /* ignore */ }
+  });
+
+  document.getElementById('summary-tbody').addEventListener('mouseleave', function() {
+    scheduleHide();
+  });
+
+  overlay.addEventListener('mouseenter', cancelHide);
+  overlay.addEventListener('mouseleave', scheduleHide);
+
+  overlay.addEventListener('click', function(e) {
+    var item = e.target.closest('.session-overlay-item');
+    if (!item) { return; }
+    var sid = item.getAttribute('data-session-id');
+    if (sid) { vscode.postMessage({ type: 'openSession', sessionId: sid }); }
+  });
 
   // -- Message handler -------------------------------------------
   window.addEventListener('message', function(e) {

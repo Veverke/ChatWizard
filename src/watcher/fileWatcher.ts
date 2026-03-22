@@ -3,7 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { SessionIndex } from '../index/sessionIndex';
 import { parseCopilotSession } from '../parsers/copilot';
-import { parseClaudeSession } from '../parsers/claude';
+import { parseClaudeSession, DEFAULT_MAX_LINE_CHARS } from '../parsers/claude';
 import {
     discoverCopilotWorkspaces,
     discoverCopilotWorkspacesAsync,
@@ -386,9 +386,28 @@ export class ChatWizardWatcher implements vscode.Disposable {
     ): Session | null {
         try {
             if (source === 'claude') {
-                const result = parseClaudeSession(filePath);
+                const maxLineChars = vscode.workspace.getConfiguration('chatwizard')
+                    .get<number>('maxLineLengthChars', DEFAULT_MAX_LINE_CHARS);
+                const result = parseClaudeSession(filePath, maxLineChars);
                 if (result.errors.length > 0) {
                     this.channel.appendLine(`[warn] Parse errors in ${filePath}: ${result.errors.join('; ')}`);
+                }
+                // Build session.parseErrors:
+                //   - Actual JSON/read errors → listed verbatim in the banner.
+                //   - Skipped-line entries → already represented as inline placeholder Messages;
+                //     add a single summary line so the warning icon and banner appear too.
+                const realErrors    = result.errors.filter(e => !e.includes('skipped — length'));
+                const skippedErrors = result.errors.filter(e =>  e.includes('skipped — length'));
+                const sessionErrors = [...realErrors];
+                if (skippedErrors.length > 0) {
+                    sessionErrors.push(
+                        `${skippedErrors.length} message(s) were not shown because their source lines exceed ` +
+                        `the size limit (chatwizard.maxLineLengthChars). ` +
+                        `Inline notices mark their position in the conversation.`
+                    );
+                }
+                if (sessionErrors.length > 0) {
+                    result.session.parseErrors = sessionErrors;
                 }
                 if (result.session.messages.length === 0 || result.session.createdAt === new Date(0).toISOString()) {
                     return null;

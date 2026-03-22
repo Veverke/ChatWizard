@@ -670,6 +670,12 @@
           "default": 0,
           "minimum": 0,
           "description": "Maximum number of sessions to load. When set to a value greater than 0, only the N most recently updated sessions are kept after all other filters are applied. Set to 0 for no limit."
+        },
+        "chatwizard.maxLineLengthChars": {
+          "type": "integer",
+          "default": 1000000,
+          "minimum": 10000,
+          "description": "Maximum character length of a single JSONL line when parsing Claude sessions. Lines exceeding this limit are shown as a notice placeholder in the session viewer instead of being silently dropped. Increase this if large messages are being truncated; lower it to reduce memory usage when indexing."
         }
       }
     }

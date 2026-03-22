@@ -1,6 +1,6 @@
 // src/analytics/modelUsageEngine.ts
 
-import { SessionSummary, SessionSource, ModelEntry, ModelUsageData, WorkspaceUsage } from '../types/index';
+import { SessionSummary, SessionSource, ModelEntry, ModelUsageData, WorkspaceUsage, SessionUsage } from '../types/index';
 import { friendlyModelName } from './modelNames';
 
 function toDateStr(d: Date): string {
@@ -22,6 +22,7 @@ export function computeModelUsage(
         sessionCount: number;
         userRequests: number;
         wsMap: Map<string, number>;  // workspace label → userRequests
+        sessionMap: Map<string, { title: string; userRequests: number }>;  // sessionId → {title, userRequests}
     }>();
     let totalSessions = 0;
     let totalUserRequests = 0;
@@ -34,7 +35,7 @@ export function computeModelUsage(
         const key = `${s.source}::${model}`;
         let entry = modelMap.get(key);
         if (!entry) {
-            entry = { source: s.source, model, sessionCount: 0, userRequests: 0, wsMap: new Map() };
+            entry = { source: s.source, model, sessionCount: 0, userRequests: 0, wsMap: new Map(), sessionMap: new Map() };
             modelMap.set(key, entry);
         }
         entry.sessionCount++;
@@ -44,12 +45,19 @@ export function computeModelUsage(
 
         const wsLabel = s.workspacePath ?? s.workspaceId;
         entry.wsMap.set(wsLabel, (entry.wsMap.get(wsLabel) ?? 0) + s.userMessageCount);
+
+        const prevSess = entry.sessionMap.get(s.id);
+        if (prevSess) { prevSess.userRequests += s.userMessageCount; }
+        else { entry.sessionMap.set(s.id, { title: s.title, userRequests: s.userMessageCount }); }
     }
 
     const models: ModelEntry[] = [...modelMap.values()]
         .map((e) => {
             const workspaceBreakdown: WorkspaceUsage[] = [...e.wsMap.entries()]
                 .map(([workspace, userRequests]) => ({ workspace, userRequests }))
+                .sort((a, b) => b.userRequests - a.userRequests);
+            const sessionBreakdown: SessionUsage[] = [...e.sessionMap.entries()]
+                .map(([sessionId, v]) => ({ sessionId, sessionTitle: v.title, userRequests: v.userRequests }))
                 .sort((a, b) => b.userRequests - a.userRequests);
             return {
                 model: e.model,
@@ -60,6 +68,7 @@ export function computeModelUsage(
                     ? 0
                     : Math.round((e.userRequests / totalUserRequests) * 10000) / 100,
                 workspaceBreakdown,
+                sessionBreakdown,
             };
         })
         .sort((a, b) => b.userRequests - a.userRequests);

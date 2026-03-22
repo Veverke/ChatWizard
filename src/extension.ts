@@ -15,6 +15,7 @@ import {
     SortStack,
     SORT_KEY_LABELS,
     SessionFilter,
+    SessionParseWarningDecorationProvider,
 } from './views/sessionTreeProvider';
 import { CodeBlockTreeProvider, CodeBlockFilter, CbSortMode, CodeBlockSessionRef } from './views/codeBlockTreeProvider';
 import { SessionWebviewPanel } from './views/sessionWebviewPanel';
@@ -67,6 +68,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const timelineViewProvider = new TimelineViewProvider(index);
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider(TimelineViewProvider.viewType, timelineViewProvider)
+    );
+
+    context.subscriptions.push(
+        vscode.window.registerFileDecorationProvider(new SessionParseWarningDecorationProvider())
     );
 
     // Build full-text search engine — populated lazily via the typed change listener.
@@ -437,6 +442,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                     description: current.hideInterrupted ? 'currently hidden' : undefined,
                 },
                 {
+                    id: 'onlyWithWarnings',
+                    label: current.onlyWithWarnings
+                        ? '$(warning)  Show all sessions'
+                        : '$(warning)  Show only sessions with warnings',
+                    description: current.onlyWithWarnings ? 'currently active' : undefined,
+                },
+                {
                     id: '_clear',
                     label: '$(close)  Clear all filters',
                     alwaysShow: true,
@@ -519,6 +531,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
             } else if (pick.id === 'hideInterrupted') {
                 newFilter.hideInterrupted = !current.hideInterrupted || undefined;
+
+            } else if (pick.id === 'onlyWithWarnings') {
+                newFilter.onlyWithWarnings = !current.onlyWithWarnings || undefined;
             }
 
             provider.setFilter(newFilter);
