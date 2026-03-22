@@ -38,6 +38,10 @@ Unified search, analytics, and history browser for your GitHub Copilot Chat and 
 
 ![Analytics](images/demos/analytics.gif)
 
+### Model Usage
+
+![Model Usage](images/demos/model-usage.gif)
+
 ---
 
 ## Features

@@ -3,6 +3,7 @@
 .vscode-test.*
 src/**
 test/**
+out/**
 docs/**
 .github/**
 .claude/**
@@ -11,14 +12,9 @@ docs/**
 tsconfig.json
 **/*.map
 **/*.ts
-node_modules/.bin/**
-node_modules/**/test/**
-node_modules/**/tests/**
-node_modules/**/*.md
 
-# REMOVE old output folder
-# !out/**
+node_modules/**
 
-# KEEP ONLY the bundled output
+# Keep bundled output and assets
 !dist/**
 !images/**
