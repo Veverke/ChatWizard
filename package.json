@@ -72,6 +72,11 @@
           "type": "webview"
         },
         {
+          "id": "chatwizardModelUsage",
+          "name": "Model Usage",
+          "type": "webview"
+        },
+        {
           "id": "chatwizardTimeline",
           "name": "Timeline",
           "type": "webview"

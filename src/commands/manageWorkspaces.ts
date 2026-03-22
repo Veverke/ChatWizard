@@ -109,6 +109,17 @@ export function registerManageWorkspacesCommand(
                 pathGroups.set(key, group);
             }
 
+            // Remove any path that is a strict ancestor of another discovered workspace path.
+            // e.g. if both "C:\Repos\Personal" and "C:\Repos\Personal\ChatWizard" are found,
+            // the parent is not a real workspace and should be hidden.
+            const allKeys = [...pathGroups.keys()];
+            for (const key of allKeys) {
+                const prefix = key.endsWith(path.sep) ? key : key + path.sep;
+                if (allKeys.some(other => other !== key && other.startsWith(prefix))) {
+                    pathGroups.delete(key);
+                }
+            }
+
             // 3. Determine currently selected IDs.
             const currentSelectedIds = scopeManager.getSelectedIds();
 

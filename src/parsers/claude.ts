@@ -142,7 +142,7 @@ export function parseClaudeSession(filePath: string): ParseResult {
             workspacePath = entry.cwd;
         }
 
-        if (entry.type === 'assistant' && entry.message?.model && !model) {
+        if (entry.type === 'assistant' && entry.message?.model && entry.message.model !== '<synthetic>' && !model) {
             model = entry.message.model;
         }
 

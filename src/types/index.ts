@@ -115,6 +115,31 @@ export interface SessionSummary {
     interrupted?: boolean;
 }
 
+/** Per-workspace request count within a ModelEntry */
+export interface WorkspaceUsage {
+    workspace: string;   // workspacePath, or workspaceId when no path is known
+    userRequests: number;
+}
+
+/** Per-model usage entry for the Model Usage view */
+export interface ModelEntry {
+    model: string;               // e.g. "GPT-4o", "Claude Sonnet 4", "Unknown"
+    source: SessionSource;       // which account/service produced these sessions
+    sessionCount: number;
+    userRequests: number;        // sum of SessionSummary.userMessageCount
+    percentage: number;          // (userRequests / totalUserRequests) * 100, rounded 2dp
+    workspaceBreakdown: WorkspaceUsage[];  // sorted by userRequests desc
+}
+
+/** Top-level output for the Model Usage view */
+export interface ModelUsageData {
+    from: string;                // ISO date string YYYY-MM-DD
+    to: string;                  // ISO date string YYYY-MM-DD
+    totalSessions: number;
+    totalUserRequests: number;
+    models: ModelEntry[];        // sorted by userRequests desc
+}
+
 /** Result of parsing a raw JSONL file */
 export interface ParseResult {
     session: Session;

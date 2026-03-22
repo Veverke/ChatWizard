@@ -27,6 +27,7 @@ import { PromptLibraryPanel } from './prompts/promptLibraryPanel';
 import { PromptLibraryViewProvider } from './prompts/promptLibraryViewProvider';
 import { AnalyticsPanel } from './analytics/analyticsPanel';
 import { AnalyticsViewProvider } from './analytics/analyticsViewProvider';
+import { ModelUsageViewProvider } from './analytics/modelUsageViewProvider';
 import { TimelineViewProvider } from './timeline/timelineViewProvider';
 import { TelemetryRecorder } from './telemetry/telemetryRecorder';
 import { registerManageWorkspacesCommand } from './commands/manageWorkspaces';
@@ -56,6 +57,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const analyticsViewProvider = new AnalyticsViewProvider(index);
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider(AnalyticsViewProvider.viewType, analyticsViewProvider)
+    );
+
+    const modelUsageViewProvider = new ModelUsageViewProvider(context, index);
+    context.subscriptions.push(
+        vscode.window.registerWebviewViewProvider(ModelUsageViewProvider.viewType, modelUsageViewProvider)
     );
 
     const timelineViewProvider = new TimelineViewProvider(index);
