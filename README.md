@@ -1,9 +1,14 @@
 # ChatWizard
 
+[![VS Code Marketplace](https://img.shields.io/visual-studio-marketplace/v/Veverke.chatwizard?label=VS%20Code%20Marketplace&logo=visual-studio-code)](https://marketplace.visualstudio.com/items?itemName=Veverke.chatwizard)
+[![Installs](https://img.shields.io/visual-studio-marketplace/i/Veverke.chatwizard)](https://marketplace.visualstudio.com/items?itemName=Veverke.chatwizard)
+[![Rating](https://img.shields.io/visual-studio-marketplace/r/Veverke.chatwizard)](https://marketplace.visualstudio.com/items?itemName=Veverke.chatwizard)
 [![License: MIT + Commons Clause](https://img.shields.io/badge/license-MIT%20%2B%20Commons%20Clause-blue.svg)](LICENSE)
 
-Insipired by https://github.com/Veverke/bAInder, I decided to make a VS Code extension, with a developer perspective in mind.
+Inspired by https://github.com/Veverke/bAInder, I decided to make a VS Code extension, with a developer perspective in mind.
 Unified search, analytics, and history browser for your GitHub Copilot Chat and Claude Code sessions.
+
+> **Tags:** AI chat history · Copilot history viewer · Claude conversation browser · chat history viewer · prompt library · code block search · token usage analytics · LLM productivity · VS Code AI tools · conversation history manager
 
 ---
 
@@ -103,12 +108,31 @@ A Chart.js-powered webview with live aggregate statistics across all sessions:
 
 Token counts are local approximations (Claude: characters ÷ 4; Copilot/GPT: words × 1.3). No external tokeniser or network call is required. The dashboard refreshes automatically as new sessions are indexed. Open via `ChatWizard: Show Analytics Dashboard` or the **Analytics** sidebar tab.
 
+### Workspace Management
+Control exactly which workspaces ChatWizard indexes and watches. Open **Chat Wizard: Manage Watched Workspaces** from the Command Palette to get a multi-select QuickPick listing every discovered Copilot and Claude workspace on your machine.
+
+Each row shows the workspace folder name, full path, combined data size (KB / MB), and session count. The currently open VS Code workspace is pre-selected and cannot be fully deselected. Confirming a changed selection persists the new scope and restarts the file watcher so only the chosen workspaces are indexed. The session count shown uses live index data when available, falls back to a persistent cache for workspaces that were previously indexed, and uses an approximate disk count for workspaces that have never been loaded.
+
+### Model Usage Panel
+A date-range–scoped dashboard showing how many user requests were sent to each AI model. Open via the **Model Usage** sidebar tab.
+
+- **Date range picker** — set a from/to date range; the panel defaults to the current calendar month.
+- **Model breakdown** — models are ranked by request count and shown with a percentage share of total requests.
+- **Workspace and session drill-down** — expand any model row to see which workspaces and individual sessions drove the most requests.
+- **Friendly model names** — raw API model identifiers are normalised to readable names (e.g. `claude-sonnet-4-6` → `Claude Sonnet 4.6`).
+- Auto-refreshes as new sessions are indexed.
+
 ### Timeline View (Timeline Panel)
 A chronological month-grouped feed of all sessions across all workspaces. Each card shows project name, session title, first prompt, message count, and date.
 
 - **Jump to date** — type a `YYYY-MM` value to scroll instantly to any month in history.
-- **Filters** — sticky workspace and source dropdowns narrow the feed without a full reload.
+- **Filters** — source dropdown narrows the feed without a full reload.
 - **Pagination** — loads 3 months at a time; a **Load More** button fetches the next batch.
+- **Search** — filter the feed to entries whose title or first prompt match a keyword.
+- **Activity heat map** — a calendar grid colour-coded by session density; click any day to filter the feed to that date.
+- **Work bursts** — sessions within a 2-hour window are clustered into focused work-burst cards, showing duration, source mix, and total messages.
+- **Topic drift ribbon** — displays the top 3 keywords from your prompts for each ISO week, letting you see how your focus shifts over time.
+- **Stats bar** — at-a-glance counters: active days this week, total sessions, current daily streak, longest streak, and "on this day last month" sessions.
 - Clicking any card opens the session reader.
 
 ### Live File Watching
@@ -125,11 +149,12 @@ Click the ChatWizard icon in the VS Code activity bar to open five sidebar panel
 
 | Panel | Also openable via Command Palette | Key toolbar actions |
 |-------|----------------------------------|---------------------|
-| **Sessions** | — | Filter, Configure Sort Order, sort buttons (Date / Workspace / Length / Title / Model ↑↓), Export All, Export Selected |
+| **Sessions** | — | Filter, Configure Sort Order, sort buttons (Date / Workspace / Length / Title / Model ↑↓), Export All, Export Selected, Manage Watched Workspaces |
 | **Prompt Library** | `ChatWizard: Show Prompt Library` | Keyword search, Copy prompt, Merge duplicate cluster |
 | **Code Blocks** | `ChatWizard: Show Code Blocks` | Filter (language / content / source / role), sort buttons (Date / Workspace / Length / Title / Language ↑↓), Copy code block, Load More |
 | **Analytics** | `ChatWizard: Show Analytics Dashboard` | (no toolbar; auto-refreshes) |
-| **Timeline** | `ChatWizard: Show Timeline` | Workspace filter, Source filter, Jump-to-Date input, Load More |
+| **Model Usage** | — | Date range from/to pickers; auto-refreshes |
+| **Timeline** | `ChatWizard: Show Timeline` | Source filter, Search, Jump-to-Date input, Load More; heat map + work bursts + topic drift + stats bar inline |
 
 ---
 
@@ -154,6 +179,9 @@ Capabilities not available in the built-in GitHub Copilot Chat panel or the Clau
 | Near-duplicate prompt detection & merge | ✅ | ❌ | ❌ |
 | Token-usage analytics & daily activity charts | ✅ | ❌ | ❌ |
 | Chronological timeline with jump-to-date | ✅ | ❌ | ❌ |
+| Timeline heat map, work bursts & topic drift | ✅ | ❌ | ❌ |
+| Per-model request usage dashboard | ✅ | ❌ | ❌ |
+| Selective workspace indexing & scope management | ✅ | ❌ | ❌ |
 | Live auto-refresh when sessions change | ✅ | ✅ current session | ✅ current session |
 | 100% local — no external network calls | ✅ | ✅ | ✅ |
 
@@ -220,6 +248,7 @@ Capabilities not available in the built-in GitHub Copilot Chat panel or the Clau
 | `chatwizard.showTimeline` | Show Timeline | Command Palette |
 | `chatwizard.loadMoreSessions` | Load More Sessions | "Load more" item at bottom of Sessions panel |
 | `chatwizard.loadMoreCodeBlocks` | Load More Code Blocks | "Load more" item at bottom of Code Blocks panel |
+| `chatwizard.manageWatchedWorkspaces` | Manage Watched Workspaces | Command Palette / Sessions view toolbar |
 
 Sort commands (`chatwizard.sortByDate`, `chatwizard.sortByDate.asc`, `chatwizard.sortByDate.desc`, and equivalents for workspace, length, title, and model) are available in the Sessions view toolbar. Matching commands prefixed `chatwizard.cb` (date, workspace, length, title, language) are available in the Code Blocks view toolbar.
 
@@ -244,6 +273,12 @@ Sort commands (`chatwizard.sortByDate`, `chatwizard.sortByDate.asc`, `chatwizard
 ---
 
 ## Release Notes
+
+### 1.1.0
+
+- **Workspace Management** — new `Manage Watched Workspaces` command lets you select exactly which Copilot and Claude workspaces to index; shows size and session count per workspace; persists selection and restarts the watcher.
+- **Model Usage panel** — new sidebar tab showing per-model user request counts over a configurable date range, with workspace and session drill-down and friendly model name normalisation.
+- **Timeline enhancements** — added activity heat map (click a day to filter), work burst clustering (2-hour window), per-week topic drift ribbon, summary stats bar (streak, active days, on-this-day), and inline keyword search.
 
 ### 1.0.4
 

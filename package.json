@@ -1,8 +1,8 @@
 {
   "name": "chatwizard",
   "displayName": "Chat Wizard",
-  "description": "Unified search and analytics for AI chat history (GitHub Copilot Chat, Claude Code)",
-  "version": "1.0.4",
+  "description": "Browse, search, and analyze your GitHub Copilot Chat and Claude Code conversation history. Chat history viewer, prompt library, code block browser, token analytics, and timeline — all in one extension.",
+  "version": "1.1.0",
   "publisher": "Veverke",
   "icon": "images/icon.png",
   "license": "SEE LICENSE IN LICENSE",
@@ -16,7 +16,13 @@
     "analytics",
     "prompt-library",
     "code-blocks",
-    "timeline"
+    "timeline",
+    "chat-history",
+    "conversation-history",
+    "history-viewer",
+    "token-usage",
+    "ai-productivity",
+    "llm"
   ],
   "repository": {
     "type": "git",
@@ -34,7 +40,7 @@
     "vscode": "^1.85.0"
   },
   "categories": [
-    "Other",
+    "Machine Learning",
     "Visualization"
   ],
   "activationEvents": [
