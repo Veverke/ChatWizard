@@ -2,7 +2,7 @@
   "name": "chatwizard",
   "displayName": "Chat Wizard",
   "description": "Browse, search, and analyze your GitHub Copilot Chat and Claude Code conversation history. Chat history viewer, prompt library, code block browser, token analytics, and timeline — all in one extension.",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "publisher": "Veverke",
   "icon": "images/icon.png",
   "license": "SEE LICENSE IN LICENSE",
