@@ -11,8 +11,12 @@ import {
     listSessionFilesAsync,
 } from '../readers/copilotWorkspace';
 import { Session, SessionSource } from '../types/index';
-import { resolveClaudeProjectsPath } from './configPaths';
+import { resolveClaudeProjectsPath, resolveClineStoragePath, resolveRooCodeStoragePath, resolveCursorStoragePath } from './configPaths';
 import { WorkspaceScopeManager } from './workspaceScope';
+import { discoverClineTasksAsync, discoverRooCodeTasksAsync } from '../readers/clineWorkspace';
+import { parseClineTask } from '../parsers/cline';
+import { discoverCursorWorkspacesAsync } from '../readers/cursorWorkspace';
+import { parseCursorWorkspace } from '../parsers/cursor';
 
 export class ChatWizardWatcher implements vscode.Disposable {
     private disposables: vscode.Disposable[] = [];
@@ -57,6 +61,9 @@ export class ChatWizardWatcher implements vscode.Disposable {
         const enabled       = cfg.get<boolean>('enabled', true);
         const indexClaude   = cfg.get<boolean>('indexClaude', true);
         const indexCopilot  = cfg.get<boolean>('indexCopilot', true);
+        const indexCline    = cfg.get<boolean>('indexCline', true);
+        const indexRooCode  = cfg.get<boolean>('indexRooCode', true);
+        const indexCursor   = cfg.get<boolean>('indexCursor', true);
 
         if (!enabled) {
             this.channel.appendLine('[Chat Wizard] Extension disabled via chatwizard.enabled setting — skipping indexing and file watching.');
@@ -65,7 +72,7 @@ export class ChatWizardWatcher implements vscode.Disposable {
             return;
         }
 
-        await this.buildInitialIndex(indexClaude, indexCopilot);
+        await this.buildInitialIndex(indexClaude, indexCopilot, indexCline, indexRooCode, indexCursor);
 
         if (indexClaude) {
             // Watch Claude sessions
@@ -122,6 +129,69 @@ export class ChatWizardWatcher implements vscode.Disposable {
                 this.disposables.push(copilotWatcher);
             }
         }
+
+        if (indexCline) {
+            // Watch Cline task files
+            const clineRoot = resolveClineStoragePath();
+            const clinePattern = new vscode.RelativePattern(
+                vscode.Uri.file(clineRoot),
+                '**/api_conversation_history.json'
+            );
+            const clineWatcher = vscode.workspace.createFileSystemWatcher(clinePattern);
+
+            clineWatcher.onDidCreate((uri) => this.onClineFileChanged(uri));
+            clineWatcher.onDidChange((uri) => this.onClineFileChanged(uri));
+            clineWatcher.onDidDelete((uri) => {
+                // Task directory name is the parent of the changed file.
+                const taskId = path.basename(path.dirname(uri.fsPath));
+                this.index.remove(taskId);
+                this.channel.appendLine(`[live] removed cline session ${taskId}`);
+            });
+
+            this.disposables.push(clineWatcher);
+        }
+
+        if (indexRooCode) {
+            // Watch Roo Code task files
+            const rooCodeRoot = resolveRooCodeStoragePath();
+            const rooCodePattern = new vscode.RelativePattern(
+                vscode.Uri.file(rooCodeRoot),
+                '**/api_conversation_history.json'
+            );
+            const rooCodeWatcher = vscode.workspace.createFileSystemWatcher(rooCodePattern);
+
+            rooCodeWatcher.onDidCreate((uri) => this.onRooCodeFileChanged(uri));
+            rooCodeWatcher.onDidChange((uri) => this.onRooCodeFileChanged(uri));
+            rooCodeWatcher.onDidDelete((uri) => {
+                const taskId = path.basename(path.dirname(uri.fsPath));
+                this.index.remove(taskId);
+                this.channel.appendLine(`[live] removed roocode session ${taskId}`);
+            });
+
+            this.disposables.push(rooCodeWatcher);
+        }
+
+        if (indexCursor) {
+            // Watch Cursor state.vscdb files
+            const cursorRoot = resolveCursorStoragePath();
+            const cursorPattern = new vscode.RelativePattern(
+                vscode.Uri.file(cursorRoot),
+                '**/state.vscdb'
+            );
+            const cursorWatcher = vscode.workspace.createFileSystemWatcher(cursorPattern);
+
+            cursorWatcher.onDidCreate((uri) => this.onCursorFileChanged(uri));
+            cursorWatcher.onDidChange((uri) => this.onCursorFileChanged(uri));
+            cursorWatcher.onDidDelete((uri) => {
+                // When a state.vscdb is deleted, we can't know which composerIds were in it.
+                // Best effort: remove sessions whose filePath matches this vscdb.
+                const vscdbPath = uri.fsPath;
+                this.channel.appendLine(`[live] cursor state.vscdb deleted: ${vscdbPath}`);
+                // Sessions keyed by composerId — log only; index cleanup happens on next rescan.
+            });
+
+            this.disposables.push(cursorWatcher);
+        }
     }
 
     /**
@@ -141,7 +211,7 @@ export class ChatWizardWatcher implements vscode.Disposable {
         this.disposables = [];
     }
 
-    private async buildInitialIndex(indexClaude: boolean, indexCopilot: boolean): Promise<void> {
+    private async buildInitialIndex(indexClaude: boolean, indexCopilot: boolean, indexCline: boolean, indexRooCode: boolean = true, indexCursor: boolean = true): Promise<void> {
         await vscode.window.withProgress(
             {
                 location: vscode.ProgressLocation.Window,
@@ -159,14 +229,17 @@ export class ChatWizardWatcher implements vscode.Disposable {
                 } else {
                     this.channel.appendLine(`[Chat Wizard] Building index with scope filter: [${selectedIds.join(', ')}]`);
                 }
-                const [claudeSessions, copilotSessions] = await Promise.all([
+                const [claudeSessions, copilotSessions, clineSessions, rooCodeSessions, cursorSessions] = await Promise.all([
                     // Always pass selectedIds (even empty array) — empty = index nothing, no fallback to all.
-                    indexClaude  ? this.collectClaudeSessionsAsync(onProgress, selectedIds)  : Promise.resolve([]),
-                    indexCopilot ? this.collectCopilotSessionsAsync(onProgress, selectedIds) : Promise.resolve([]),
+                    indexClaude   ? this.collectClaudeSessionsAsync(onProgress, selectedIds)  : Promise.resolve([]),
+                    indexCopilot  ? this.collectCopilotSessionsAsync(onProgress, selectedIds) : Promise.resolve([]),
+                    indexCline    ? this.collectClineTasksAsync(onProgress)                   : Promise.resolve([]),
+                    indexRooCode  ? this.collectRooCodeTasksAsync(onProgress)                 : Promise.resolve([]),
+                    indexCursor   ? this.collectCursorSessionsAsync(onProgress)               : Promise.resolve([]),
                 ]);
 
                 const cfg = vscode.workspace.getConfiguration('chatwizard');
-                const all = applySessionFilters([...claudeSessions, ...copilotSessions], cfg, this.channel);
+                const all = applySessionFilters([...claudeSessions, ...copilotSessions, ...clineSessions, ...rooCodeSessions, ...cursorSessions], cfg, this.channel);
                 this.index.batchUpsert(all);
                 this.channel.appendLine(`[init] Batch indexed ${all.length} sessions`);
             }
@@ -293,6 +366,110 @@ export class ChatWizardWatcher implements vscode.Disposable {
             return wsResults.flat();
         } catch (err) {
             this.channel.appendLine(`[error] Failed to collect Copilot sessions: ${err}`);
+            return [];
+        }
+    }
+
+    /** Async: parse all Cline tasks using non-blocking directory reads. */
+    async collectClineTasksAsync(
+        onProgress?: (current: number, total: number) => void,
+        _clineRootOverride?: string
+    ): Promise<Session[]> {
+        const root = _clineRootOverride ?? resolveClineStoragePath();
+        try {
+            const tasks = await discoverClineTasksAsync(root);
+            const total = tasks.length;
+            let current = 0;
+
+            const results = await Promise.all(tasks.map(async (task) => {
+                const result = await parseClineTask(task.storageDir);
+                current++;
+                onProgress?.(current, total);
+                if (result.errors.length > 0) {
+                    this.channel.appendLine(`[warn] Cline parse errors in ${task.storageDir}: ${result.errors.join('; ')}`);
+                }
+                if (result.session.messages.length === 0 ||
+                    result.session.createdAt === new Date(0).toISOString()) {
+                    return null;
+                }
+                return result.session;
+            }));
+
+            return results.filter((s): s is Session => s !== null);
+        } catch (err) {
+            this.channel.appendLine(`[error] Failed to collect Cline tasks: ${err}`);
+            return [];
+        }
+    }
+
+    /** Async: parse all Roo Code tasks using non-blocking directory reads. */
+    async collectRooCodeTasksAsync(
+        onProgress?: (current: number, total: number) => void,
+        _rooCodeRootOverride?: string
+    ): Promise<Session[]> {
+        const root = _rooCodeRootOverride ?? resolveRooCodeStoragePath();
+        try {
+            const tasks = await discoverRooCodeTasksAsync(root);
+            const total = tasks.length;
+            let current = 0;
+
+            const results = await Promise.all(tasks.map(async (task) => {
+                const result = await parseClineTask(task.storageDir, undefined, 'roocode');
+                current++;
+                onProgress?.(current, total);
+                if (result.errors.length > 0) {
+                    this.channel.appendLine(`[warn] Roo Code parse errors in ${task.storageDir}: ${result.errors.join('; ')}`);
+                }
+                if (result.session.messages.length === 0 ||
+                    result.session.createdAt === new Date(0).toISOString()) {
+                    return null;
+                }
+                return result.session;
+            }));
+
+            return results.filter((s): s is Session => s !== null);
+        } catch (err) {
+            this.channel.appendLine(`[error] Failed to collect Roo Code tasks: ${err}`);
+            return [];
+        }
+    }
+
+    /** Async: parse all Cursor sessions by reading state.vscdb files across discovered workspaces. */
+    async collectCursorSessionsAsync(
+        onProgress?: (current: number, total: number) => void,
+        _cursorRootOverride?: string
+    ): Promise<Session[]> {
+        const root = _cursorRootOverride ?? resolveCursorStoragePath();
+        try {
+            const workspaces = await discoverCursorWorkspacesAsync(root);
+            const total = workspaces.length;
+            let current = 0;
+
+            const wsResults = await Promise.all(workspaces.map(async (ws) => {
+                const vscdbPath = require('path').join(ws.storageDir, 'state.vscdb');
+                const parseResults = await parseCursorWorkspace(vscdbPath, ws.id, ws.workspacePath);
+                current++;
+                onProgress?.(current, total);
+
+                const sessions: Session[] = [];
+                for (const result of parseResults) {
+                    if (result.errors.length > 0) {
+                        this.channel.appendLine(
+                            `[warn] Cursor parse errors in ${vscdbPath}: ${result.errors.join('; ')}`
+                        );
+                    }
+                    if (result.session.messages.length === 0 ||
+                        result.session.createdAt === new Date(0).toISOString()) {
+                        continue;
+                    }
+                    sessions.push(result.session);
+                }
+                return sessions;
+            }));
+
+            return wsResults.flat();
+        } catch (err) {
+            this.channel.appendLine(`[error] Failed to collect Cursor sessions: ${err}`);
             return [];
         }
     }
@@ -442,6 +619,82 @@ export class ChatWizardWatcher implements vscode.Disposable {
         } else {
             this.channel.appendLine(`[skip] empty/epoch session ${filePath}`);
         }
+    }
+
+    private async onClineFileChanged(uri: vscode.Uri): Promise<void> {
+        // The watched file is api_conversation_history.json; its parent is the task dir.
+        const taskDir = path.dirname(uri.fsPath);
+        const taskId = path.basename(taskDir);
+        const result = await parseClineTask(taskDir);
+        if (result.errors.length > 0) {
+            this.channel.appendLine(`[warn] Cline parse errors in ${taskDir}: ${result.errors.join('; ')}`);
+        }
+        if (result.session.messages.length === 0 ||
+            result.session.createdAt === new Date(0).toISOString()) {
+            this.channel.appendLine(`[skip] empty/epoch cline session ${taskId}`);
+            return;
+        }
+        const before = this.index.size;
+        this.index.upsert(result.session);
+        const verb = this.index.size > before ? 'added' : 'updated';
+        this.channel.appendLine(`[live] ${verb} cline session ${taskId}`);
+    }
+
+    private async onRooCodeFileChanged(uri: vscode.Uri): Promise<void> {
+        const taskDir = path.dirname(uri.fsPath);
+        const taskId = path.basename(taskDir);
+        const result = await parseClineTask(taskDir, undefined, 'roocode');
+        if (result.errors.length > 0) {
+            this.channel.appendLine(`[warn] Roo Code parse errors in ${taskDir}: ${result.errors.join('; ')}`);
+        }
+        if (result.session.messages.length === 0 ||
+            result.session.createdAt === new Date(0).toISOString()) {
+            this.channel.appendLine(`[skip] empty/epoch roocode session ${taskId}`);
+            return;
+        }
+        const before = this.index.size;
+        this.index.upsert(result.session);
+        const verb = this.index.size > before ? 'added' : 'updated';
+        this.channel.appendLine(`[live] ${verb} roocode session ${taskId}`);
+    }
+
+    private async onCursorFileChanged(uri: vscode.Uri): Promise<void> {
+        const vscdbPath = uri.fsPath;
+        // workspaceId is the hash directory name (parent of state.vscdb)
+        const workspaceId = path.basename(path.dirname(vscdbPath));
+        // Try to resolve workspacePath from workspace.json in the same directory
+        let workspacePath: string | undefined;
+        try {
+            const wsJson = path.join(path.dirname(vscdbPath), 'workspace.json');
+            const raw = require('fs').readFileSync(wsJson, 'utf8');
+            const parsed = JSON.parse(raw);
+            if (parsed.folder) {
+                let decoded = decodeURIComponent(parsed.folder.replace('file://', ''));
+                if (process.platform === 'win32' && decoded.startsWith('/')) {
+                    decoded = decoded.slice(1);
+                }
+                workspacePath = decoded;
+            }
+        } catch {
+            // workspace.json missing or unreadable — workspacePath stays undefined
+        }
+
+        const parseResults = await parseCursorWorkspace(vscdbPath, workspaceId, workspacePath);
+        let upsertCount = 0;
+        for (const result of parseResults) {
+            if (result.errors.length > 0) {
+                this.channel.appendLine(
+                    `[warn] Cursor parse errors in ${vscdbPath}: ${result.errors.join('; ')}`
+                );
+            }
+            if (result.session.messages.length === 0 ||
+                result.session.createdAt === new Date(0).toISOString()) {
+                continue;
+            }
+            this.index.upsert(result.session);
+            upsertCount++;
+        }
+        this.channel.appendLine(`[live] cursor updated ${upsertCount} session(s) from ${vscdbPath}`);
     }
 
     private onFileChanged(

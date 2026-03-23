@@ -1,0 +1,17 @@
+[
+  {
+    "role": "user",
+    "content": "Help me write a utility function for Roo Code"
+  },
+  {
+    "role": "assistant",
+    "content": [
+      { "type": "text", "text": "Here is a utility function:\n\n```typescript\nfunction formatDate(date: Date): string {\n  return date.toISOString().slice(0, 10);\n}\n```\n\nThis formats a Date as YYYY-MM-DD." },
+      { "type": "tool_use", "id": "tool1", "name": "read_file", "input": { "path": "src/utils.ts" } }
+    ]
+  },
+  {
+    "role": "user",
+    "content": "Can you add error handling to it?"
+  }
+]

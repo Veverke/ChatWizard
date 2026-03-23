@@ -2,6 +2,7 @@
 // Pure helper functions for Timeline tab features (no vscode dependency).
 
 import { TimelineEntry } from './timelineBuilder';
+import { SessionSource } from '../types/index';
 
 // ── Interfaces ────────────────────────────────────────────────────────────────
 
@@ -17,7 +18,7 @@ export interface WorkBurst {
     endTimestamp: number;     // ms epoch of newest session
     durationMinutes: number;  // endTimestamp - startTimestamp in minutes
     sessionIds: string[];     // ordered oldest-first
-    sources: Array<'copilot' | 'claude'>;  // deduped
+    sources: Array<SessionSource>;  // deduped
     totalMessages: number;
     sessionCount: number;
 }
@@ -131,7 +132,7 @@ function makeBurst(entries: TimelineEntry[]): WorkBurst {
     const startTs = entries[0].timestamp;
     const endTs = entries[entries.length - 1].timestamp;
     const durationMinutes = Math.round((endTs - startTs) / 60000);
-    const sources: Array<'copilot' | 'claude'> = [...new Set(entries.map(e => e.source))];
+    const sources: Array<SessionSource> = [...new Set(entries.map(e => e.source))];
     const totalMessages = entries.reduce((s, e) => s + e.messageCount, 0);
     return {
         burstId: `burst-${startTs}`,

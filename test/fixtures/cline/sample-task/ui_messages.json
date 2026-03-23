@@ -1,0 +1,22 @@
+[
+  {
+    "ts": 1700000000000,
+    "type": "say",
+    "say": "task",
+    "text": "Help me refactor this function to be more readable",
+    "cwd": "/home/user/projects/my-app",
+    "model": "claude-sonnet-4-5"
+  },
+  {
+    "ts": 1700000060000,
+    "type": "say",
+    "say": "text",
+    "text": "Sure, here is a cleaner version..."
+  },
+  {
+    "ts": 1700000120000,
+    "type": "say",
+    "say": "task",
+    "text": "Thanks! Can you also add a test for it?"
+  }
+]

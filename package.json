@@ -682,25 +682,61 @@
           "default": 1000000,
           "minimum": 10000,
           "description": "Maximum character length of a single JSONL line when parsing Claude sessions. Lines exceeding this limit are shown as a notice placeholder in the session viewer instead of being silently dropped. Increase this if large messages are being truncated; lower it to reduce memory usage when indexing."
+        },
+        "chatwizard.indexCline": {
+          "type": "boolean",
+          "default": true,
+          "description": "Index Cline (saoudrizwan.claude-dev) task history."
+        },
+        "chatwizard.clineStoragePath": {
+          "type": "string",
+          "default": "",
+          "description": "Override the Cline globalStorage path. Leave empty to use the default OS location (%APPDATA%/Code/User/globalStorage/saoudrizwan.claude-dev/tasks on Windows)."
+        },
+        "chatwizard.indexRooCode": {
+          "type": "boolean",
+          "default": true,
+          "description": "Index Roo Code (rooveterinaryinc.roo-cline) task history."
+        },
+        "chatwizard.rooCodeStoragePath": {
+          "type": "string",
+          "default": "",
+          "description": "Override the Roo Code globalStorage path. Leave empty to use the default OS location (%APPDATA%/Code/User/globalStorage/rooveterinaryinc.roo-cline/tasks on Windows)."
+        },
+        "chatwizard.indexCursor": {
+          "type": "boolean",
+          "default": true,
+          "description": "Index Cursor chat sessions from the Cursor workspaceStorage directory."
+        },
+        "chatwizard.cursorStoragePath": {
+          "type": "string",
+          "default": "",
+          "description": "Override the Cursor workspaceStorage path. Leave empty to use the default OS location (%APPDATA%/Cursor/User/workspaceStorage on Windows)."
         }
       }
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run bundle",
+    "vscode:prepublish": "npm run rebuild:native && npm run bundle",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile && npm run lint",
     "lint": "eslint \"src/**/*.ts\"",
     "test": "vscode-test",
-    "bundle": "esbuild src/extension.ts --bundle --platform=node --external:vscode --outfile=dist/extension.js",
-    "bundle:watch": "esbuild src/extension.ts --bundle --platform=node --external:vscode --outfile=dist/extension.js --sourcemap --watch",
-    "package:vsix:win32-x64": "npx @vscode/vsce package --target win32-x64 --out chatwizard-win32-x64.vsix",
-    "package:vsix:linux-x64": "npx @vscode/vsce package --target linux-x64 --out chatwizard-linux-x64.vsix",
-    "package:vsix:darwin-x64": "npx @vscode/vsce package --target darwin-x64 --out chatwizard-darwin-x64.vsix",
-    "package:vsix:darwin-arm64": "npx @vscode/vsce package --target darwin-arm64 --out chatwizard-darwin-arm64.vsix"
+    "rebuild:native": "node scripts/rebuild-native.js",
+    "bundle": "esbuild src/extension.ts --bundle --platform=node --external:vscode --external:better-sqlite3 --outfile=dist/extension.js",
+    "bundle:watch": "esbuild src/extension.ts --bundle --platform=node --external:vscode --external:better-sqlite3 --outfile=dist/extension.js --sourcemap --watch",
+    "package:vsix:win32-x64": "npm run rebuild:native && npm run bundle && npx @vscode/vsce package --target win32-x64 --out chatwizard-win32-x64.vsix",
+    "package:vsix:linux-x64": "npm run rebuild:native && npm run bundle && npx @vscode/vsce package --target linux-x64 --out chatwizard-linux-x64.vsix",
+    "package:vsix:darwin-x64": "npm run rebuild:native && npm run bundle && npx @vscode/vsce package --target darwin-x64 --out chatwizard-darwin-x64.vsix",
+    "package:vsix:darwin-arm64": "npm run rebuild:native && npm run bundle && npx @vscode/vsce package --target darwin-arm64 --out chatwizard-darwin-arm64.vsix"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.8.0"
   },
   "devDependencies": {
+    "@electron/rebuild": "^4.0.3",
+    "@types/better-sqlite3": "^7.6.8",
     "@types/mocha": "^10.0.6",
     "@types/node": "18.x",
     "@types/vscode": "^1.85.0",

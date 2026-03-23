@@ -1,11 +1,11 @@
 // src/timeline/timelineBuilder.ts
 
-import { Session } from '../types/index';
+import { Session, SessionSource } from '../types/index';
 
 export interface TimelineEntry {
     sessionId: string;
     sessionTitle: string;
-    source: 'copilot' | 'claude';
+    source: SessionSource;
     workspacePath: string;
     workspaceName: string;   // basename of workspacePath (last path segment, or '' if empty)
     date: string;            // YYYY-MM-DD derived from session updatedAt

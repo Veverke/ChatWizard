@@ -8,9 +8,10 @@ import {
     HeatMapCell, WorkBurst, WeekTerms, TimelineStats,
 } from './timelineFeatures';
 import { cwThemeCss, cwInteractiveJs } from '../webview/cwTheme';
+import { SessionSource } from '../types/index';
 
 export interface TimelineFilter {
-    source?: 'copilot' | 'claude'; // filter by source
+    source?: SessionSource; // filter by source
 }
 
 const INITIAL_MONTHS = 3;

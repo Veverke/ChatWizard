@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { IndexedCodeBlock } from '../types/index';
+import { IndexedCodeBlock, SessionSource } from '../types/index';
 import { SessionIndex } from '../index/sessionIndex';
 import { CodeBlockSearchEngine } from '../codeblocks/codeBlockSearchEngine';
 
@@ -25,7 +25,7 @@ const CB_DEFAULT_DIRECTION: Record<CbSortMode, CbSortDirection> = {
 interface SessionCodeBlockGroup {
     sessionId: string;
     sessionTitle: string;
-    sessionSource: 'copilot' | 'claude';
+    sessionSource: SessionSource;
     sessionUpdatedAt: string;
     sessionWorkspacePath?: string;
     blocks: IndexedCodeBlock[];

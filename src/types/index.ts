@@ -1,7 +1,7 @@
 // src/types/index.ts
 
 /** Which AI chat extension produced the session */
-export type SessionSource = 'copilot' | 'claude';
+export type SessionSource = 'copilot' | 'claude' | 'cline' | 'roocode' | 'cursor';
 
 /** Role of a message participant */
 export type MessageRole = 'user' | 'assistant';
@@ -159,6 +159,16 @@ export interface ModelUsageData {
     models: ModelEntry[];        // sorted by userRequests desc
 }
 
+/** Descriptor for a discovered Cline task directory */
+export interface ClineTaskInfo {
+    /** Directory name (UUID-like task ID) */
+    taskId: string;
+    /** Absolute path to the task directory */
+    storageDir: string;
+    /** Absolute path to api_conversation_history.json */
+    conversationFile: string;
+}
+
 /** Result of parsing a raw JSONL file */
 export interface ParseResult {
     session: Session;
@@ -177,7 +187,7 @@ export interface ScopedWorkspace {
     /** Unique per source — Copilot storage hash or Claude project directory name */
     id: string;
     /** Which AI extension produced this workspace */
-    source: 'copilot' | 'claude';
+    source: 'copilot' | 'claude' | 'cline' | 'cursor';
     /** Human-readable absolute path to the workspace root */
     workspacePath: string;
     /** Physical directory containing the session files */

@@ -6,7 +6,7 @@
 [![License: MIT + Commons Clause](https://img.shields.io/badge/license-MIT%20%2B%20Commons%20Clause-blue.svg)](LICENSE)
 
 Inspired by https://github.com/Veverke/bAInder, I decided to make a VS Code extension, with a developer perspective in mind.
-Unified search, analytics, and history browser for your GitHub Copilot Chat and Claude Code sessions.
+Unified search, analytics, and history browser for your GitHub Copilot Chat, Claude Code, Cline, Roo Code, and Cursor sessions.
 
 > **Tags:** AI chat history · Copilot history viewer · Claude conversation browser · chat history viewer · prompt library · code block search · token usage analytics · LLM productivity · VS Code AI tools · conversation history manager
 
@@ -197,6 +197,9 @@ Capabilities not available in the built-in GitHub Copilot Chat panel or the Clau
 |-----------|-------------|
 | **GitHub Copilot Chat** | Per-workspace JSONL operation logs at `%APPDATA%/Code/User/workspaceStorage/<hash>/chatSessions/` plus workspace metadata from `state.vscdb` (SQLite) |
 | **Claude Code** | Conversation JSONL files at `~/.claude/projects/**/*.jsonl` |
+| **Cline** (`saoudrizwan.claude-dev`) | Per-task JSON files at `%APPDATA%/Code/User/globalStorage/saoudrizwan.claude-dev/tasks/<taskId>/` |
+| **Roo Code** (`rooveterinaryinc.roo-cline`) | Per-task JSON files at `%APPDATA%/Code/User/globalStorage/rooveterinaryinc.roo-cline/tasks/<taskId>/` (Cline-compatible format) |
+| **Cursor** | SQLite `state.vscdb` at `%APPDATA%/Cursor/User/workspaceStorage/<hash>/` — chat history stored under the `composer.composerData` key. Requires `better-sqlite3` (pre-built native module bundled with the extension). |
 
 ---
 
@@ -225,6 +228,12 @@ Capabilities not available in the built-in GitHub Copilot Chat panel or the Clau
 | `chatwizard.scrollToFirstCodeBlock` | `true` | Auto-scroll to first code block when opening a session from the Code Blocks view |
 | `chatwizard.claudeProjectsPath` | `` | Custom path to the Claude Code projects directory (empty = default `~/.claude/projects`) |
 | `chatwizard.copilotStoragePath` | `` | Custom path to the Copilot Chat workspace storage directory (empty = platform default) |
+| `chatwizard.indexCline` | `true` | Index Cline (`saoudrizwan.claude-dev`) task history |
+| `chatwizard.clineStoragePath` | `` | Custom path to the Cline globalStorage tasks directory (empty = platform default) |
+| `chatwizard.indexRooCode` | `true` | Index Roo Code (`rooveterinaryinc.roo-cline`) task history |
+| `chatwizard.rooCodeStoragePath` | `` | Custom path to the Roo Code globalStorage tasks directory (empty = platform default) |
+| `chatwizard.indexCursor` | `true` | Index Cursor chat sessions |
+| `chatwizard.cursorStoragePath` | `` | Custom path to the Cursor workspaceStorage directory (empty = platform default `%APPDATA%/Cursor/User/workspaceStorage`) |
 | `chatwizard.enableTelemetry` | `false` | Enable local-only usage telemetry written to the extension's global storage directory (no external data transmission) |
 
 ---

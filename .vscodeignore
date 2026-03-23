@@ -18,3 +18,19 @@ node_modules/**
 # Keep bundled output and assets
 !dist/**
 !images/**
+
+# better-sqlite3: include the compiled native addon and its runtime JS wrapper.
+# The native binary (better_sqlite3.node) is platform-specific and MUST be compiled
+# on the same OS as the target VSIX platform (see scripts/rebuild-native.js).
+!node_modules/better-sqlite3/lib/**
+!node_modules/better-sqlite3/build/Release/better_sqlite3.node
+!node_modules/better-sqlite3/package.json
+
+# bindings + file-uri-to-path: runtime deps used by better-sqlite3 to locate the .node file
+!node_modules/bindings/bindings.js
+!node_modules/bindings/package.json
+!node_modules/file-uri-to-path/index.js
+!node_modules/file-uri-to-path/package.json
+
+# scripts dir: not needed in the extension package
+scripts/**

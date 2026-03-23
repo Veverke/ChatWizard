@@ -1,7 +1,7 @@
 // src/watcher/workspaceScope.ts
 import * as fs from 'fs';
 import * as path from 'path';
-import { ScopedWorkspace } from '../types/index';
+import { ScopedWorkspace, SessionSource } from '../types/index';
 
 const STORAGE_KEY = 'chatwizard.selectedWorkspaceIds';
 /** Legacy key — cleared on first run of resetToDefault() to avoid confusion. */
@@ -100,7 +100,7 @@ export class WorkspaceScopeManager {
  */
 export async function calcWorkspaceSizeBytes(
     storageDir: string,
-    source: 'copilot' | 'claude'
+    source: SessionSource
 ): Promise<number> {
     try {
         const dir =
@@ -136,7 +136,7 @@ export async function calcWorkspaceSizeBytes(
  */
 export async function calcWorkspaceSizeMb(
     storageDir: string,
-    source: 'copilot' | 'claude'
+    source: SessionSource
 ): Promise<number> {
     try {
         const dir =
@@ -173,7 +173,7 @@ export async function calcWorkspaceSizeMb(
  */
 export async function countWorkspaceSessions(
     storageDir: string,
-    source: 'copilot' | 'claude'
+    source: SessionSource
 ): Promise<number> {
     try {
         const dir =

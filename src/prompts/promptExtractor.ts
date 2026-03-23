@@ -1,13 +1,14 @@
 // src/prompts/promptExtractor.ts
 
 import { SessionIndex } from '../index/sessionIndex';
+import { SessionSource } from '../types/index';
 
 /** Session metadata attached to each PromptEntry occurrence */
 export interface PromptSessionMeta {
     sessionId: string;
     title: string;
     updatedAt: string;
-    source: 'copilot' | 'claude';
+    source: SessionSource;
 }
 
 /** A deduplicated, aggregated entry in the Prompt Library. */

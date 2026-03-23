@@ -67,6 +67,11 @@ export function friendlyModelName(raw: string | undefined | null): string {
     if (/^o3$/i.test(s))         { return 'o3'; }
     if (/^o4-mini$/i.test(s))    { return 'o4 mini'; }
 
+    // ── Cursor-native models ───────────────────────────────────────────────────
+
+    if (/^cursor-fast$/i.test(s))  { return 'Cursor Fast'; }
+    if (/^cursor-small$/i.test(s)) { return 'Cursor Small'; }
+
     // ── Google Gemini ──────────────────────────────────────────────────────────
 
     // Versioned: gemini-{major.minor}-{variant} e.g. gemini-2.0-flash, gemini-1.5-pro
