@@ -276,8 +276,8 @@ var SessionIndex = class {
 
 // src/watcher/fileWatcher.ts
 var vscode = __toESM(require("vscode"));
-var path6 = __toESM(require("path"));
-var fs5 = __toESM(require("fs"));
+var path12 = __toESM(require("path"));
+var fs11 = __toESM(require("fs"));
 
 // src/parsers/copilot.ts
 var fs = __toESM(require("fs"));
@@ -774,8 +774,293 @@ async function listSessionFilesAsync(storageHashDir) {
 }
 
 // src/watcher/configPaths.ts
+var path7 = __toESM(require("path"));
+var os5 = __toESM(require("os"));
+
+// src/readers/clineWorkspace.ts
+var fs4 = __toESM(require("fs"));
 var path4 = __toESM(require("path"));
 var os2 = __toESM(require("os"));
+var MAX_TASK_DIRS = 1e4;
+function getClineStorageRoot() {
+  return getClineCompatStorageRoot("saoudrizwan.claude-dev");
+}
+function getClineCompatStorageRoot(extensionId) {
+  const platform = process.platform;
+  let globalStorageBase;
+  if (platform === "win32") {
+    globalStorageBase = path4.join(
+      process.env["APPDATA"] || os2.homedir(),
+      "Code",
+      "User",
+      "globalStorage"
+    );
+  } else if (platform === "darwin") {
+    globalStorageBase = path4.join(
+      os2.homedir(),
+      "Library",
+      "Application Support",
+      "Code",
+      "User",
+      "globalStorage"
+    );
+  } else {
+    globalStorageBase = path4.join(
+      process.env["XDG_CONFIG_HOME"] || path4.join(os2.homedir(), ".config"),
+      "Code",
+      "User",
+      "globalStorage"
+    );
+  }
+  return path4.join(globalStorageBase, extensionId, "tasks");
+}
+function getRooCodeStorageRoot() {
+  return getClineCompatStorageRoot("rooveterinaryinc.roo-cline");
+}
+async function discoverClineTasksAsync(override) {
+  const root = override !== void 0 && override !== "" ? override : getClineStorageRoot();
+  let entries;
+  try {
+    entries = await fs4.promises.readdir(root, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  if (entries.length > MAX_TASK_DIRS) {
+    console.warn(
+      `[Chat Wizard] Cline: found ${entries.length} task directories \u2014 only the first ${MAX_TASK_DIRS} will be scanned.`
+    );
+    entries = entries.slice(0, MAX_TASK_DIRS);
+  }
+  const results = await Promise.all(entries.map(async (entry) => {
+    if (!entry.isDirectory()) {
+      return null;
+    }
+    const taskDir = path4.join(root, entry.name);
+    try {
+      const lstat = await fs4.promises.lstat(taskDir);
+      if (lstat.isSymbolicLink()) {
+        return null;
+      }
+    } catch {
+      return null;
+    }
+    const conversationFile = path4.join(taskDir, "api_conversation_history.json");
+    try {
+      const stat = await fs4.promises.stat(conversationFile);
+      if (!stat.isFile()) {
+        return null;
+      }
+    } catch {
+      return null;
+    }
+    return { taskId: entry.name, storageDir: taskDir, conversationFile };
+  }));
+  return results.filter((r) => r !== null);
+}
+async function discoverRooCodeTasksAsync(override) {
+  const root = override !== void 0 && override !== "" ? override : getRooCodeStorageRoot();
+  return discoverClineTasksAsync(root);
+}
+
+// src/readers/cursorWorkspace.ts
+var fs5 = __toESM(require("fs"));
+var path5 = __toESM(require("path"));
+var os3 = __toESM(require("os"));
+var MAX_VSCDB_BYTES = 500 * 1024 * 1024;
+function getCursorStorageRoot() {
+  const platform = process.platform;
+  if (platform === "win32") {
+    return path5.join(
+      process.env["APPDATA"] || os3.homedir(),
+      "Cursor",
+      "User",
+      "workspaceStorage"
+    );
+  } else if (platform === "darwin") {
+    return path5.join(
+      os3.homedir(),
+      "Library",
+      "Application Support",
+      "Cursor",
+      "User",
+      "workspaceStorage"
+    );
+  } else {
+    return path5.join(
+      process.env["XDG_CONFIG_HOME"] || path5.join(os3.homedir(), ".config"),
+      "Cursor",
+      "User",
+      "workspaceStorage"
+    );
+  }
+}
+async function readWorkspaceJsonAsync2(storageHashDir) {
+  try {
+    const workspaceJsonPath = path5.join(storageHashDir, "workspace.json");
+    const raw = await fs5.promises.readFile(workspaceJsonPath, "utf8");
+    const parsed = JSON.parse(raw);
+    const folder = parsed.folder;
+    if (!folder) {
+      return void 0;
+    }
+    let decoded = decodeURIComponent(folder.replace("file://", ""));
+    if (process.platform === "win32" && decoded.startsWith("/")) {
+      decoded = decoded.slice(1);
+    }
+    return decoded;
+  } catch {
+    return void 0;
+  }
+}
+async function discoverCursorWorkspacesAsync(override) {
+  const root = override !== void 0 && override !== "" ? override : getCursorStorageRoot();
+  let entries;
+  try {
+    entries = await fs5.promises.readdir(root);
+  } catch {
+    return [];
+  }
+  const results = await Promise.all(entries.map(async (entry) => {
+    const storageDir = path5.join(root, entry);
+    try {
+      const lstat = await fs5.promises.lstat(storageDir);
+      if (!lstat.isDirectory() || lstat.isSymbolicLink()) {
+        return null;
+      }
+    } catch {
+      return null;
+    }
+    const vscdbPath = path5.join(storageDir, "state.vscdb");
+    try {
+      const lstat = await fs5.promises.lstat(vscdbPath);
+      if (!lstat.isFile() || lstat.isSymbolicLink()) {
+        return null;
+      }
+      if (lstat.size > MAX_VSCDB_BYTES) {
+        return null;
+      }
+    } catch {
+      return null;
+    }
+    const workspacePath = await readWorkspaceJsonAsync2(storageDir);
+    if (workspacePath === void 0) {
+      return null;
+    }
+    try {
+      await fs5.promises.access(workspacePath);
+    } catch {
+      return null;
+    }
+    return {
+      id: entry,
+      source: "cursor",
+      workspacePath,
+      storageDir
+    };
+  }));
+  return results.filter((r) => r !== null);
+}
+
+// src/readers/windsurfWorkspace.ts
+var fs6 = __toESM(require("fs"));
+var path6 = __toESM(require("path"));
+var os4 = __toESM(require("os"));
+var MAX_VSCDB_BYTES2 = 500 * 1024 * 1024;
+function getWindsurfStorageRoot() {
+  const platform = process.platform;
+  if (platform === "win32") {
+    return path6.join(
+      process.env["APPDATA"] || os4.homedir(),
+      "Windsurf",
+      "User",
+      "workspaceStorage"
+    );
+  } else if (platform === "darwin") {
+    return path6.join(
+      os4.homedir(),
+      "Library",
+      "Application Support",
+      "Windsurf",
+      "User",
+      "workspaceStorage"
+    );
+  } else {
+    return path6.join(
+      process.env["XDG_CONFIG_HOME"] || path6.join(os4.homedir(), ".config"),
+      "Windsurf",
+      "User",
+      "workspaceStorage"
+    );
+  }
+}
+async function readWorkspaceJsonAsync3(storageHashDir) {
+  try {
+    const workspaceJsonPath = path6.join(storageHashDir, "workspace.json");
+    const raw = await fs6.promises.readFile(workspaceJsonPath, "utf8");
+    const parsed = JSON.parse(raw);
+    const folder = parsed.folder;
+    if (!folder) {
+      return void 0;
+    }
+    let decoded = decodeURIComponent(folder.replace("file://", ""));
+    if (process.platform === "win32" && decoded.startsWith("/")) {
+      decoded = decoded.slice(1);
+    }
+    return decoded;
+  } catch {
+    return void 0;
+  }
+}
+async function discoverWindsurfWorkspacesAsync(override) {
+  const root = override !== void 0 && override !== "" ? override : getWindsurfStorageRoot();
+  let entries;
+  try {
+    entries = await fs6.promises.readdir(root);
+  } catch {
+    return [];
+  }
+  const results = await Promise.all(entries.map(async (entry) => {
+    const storageDir = path6.join(root, entry);
+    try {
+      const lstat = await fs6.promises.lstat(storageDir);
+      if (!lstat.isDirectory() || lstat.isSymbolicLink()) {
+        return null;
+      }
+    } catch {
+      return null;
+    }
+    const vscdbPath = path6.join(storageDir, "state.vscdb");
+    try {
+      const lstat = await fs6.promises.lstat(vscdbPath);
+      if (!lstat.isFile() || lstat.isSymbolicLink()) {
+        return null;
+      }
+      if (lstat.size > MAX_VSCDB_BYTES2) {
+        return null;
+      }
+    } catch {
+      return null;
+    }
+    const workspacePath = await readWorkspaceJsonAsync3(storageDir);
+    if (workspacePath === void 0) {
+      return null;
+    }
+    try {
+      await fs6.promises.access(workspacePath);
+    } catch {
+      return null;
+    }
+    return {
+      id: entry,
+      source: "windsurf",
+      workspacePath,
+      storageDir
+    };
+  }));
+  return results.filter((r) => r !== null);
+}
+
+// src/watcher/configPaths.ts
 function resolveClaudeProjectsPath(override) {
   if (override !== void 0 && override !== "") {
     return override;
@@ -789,12 +1074,72 @@ function resolveClaudeProjectsPath(override) {
     }
   } catch {
   }
-  return path4.join(os2.homedir(), ".claude", "projects");
+  return path7.join(os5.homedir(), ".claude", "projects");
+}
+function resolveClineStoragePath(override) {
+  if (override !== void 0 && override !== "") {
+    return override;
+  }
+  try {
+    const vscode15 = require("vscode");
+    const cfg = vscode15.workspace.getConfiguration("chatwizard");
+    const configured = cfg.get("clineStoragePath");
+    if (configured && configured !== "") {
+      return configured;
+    }
+  } catch {
+  }
+  return getClineStorageRoot();
+}
+function resolveRooCodeStoragePath(override) {
+  if (override !== void 0 && override !== "") {
+    return override;
+  }
+  try {
+    const vscode15 = require("vscode");
+    const cfg = vscode15.workspace.getConfiguration("chatwizard");
+    const configured = cfg.get("rooCodeStoragePath");
+    if (configured && configured !== "") {
+      return configured;
+    }
+  } catch {
+  }
+  return getRooCodeStorageRoot();
+}
+function resolveCursorStoragePath(override) {
+  if (override !== void 0 && override !== "") {
+    return override;
+  }
+  try {
+    const vscode15 = require("vscode");
+    const cfg = vscode15.workspace.getConfiguration("chatwizard");
+    const configured = cfg.get("cursorStoragePath");
+    if (configured && configured !== "") {
+      return configured;
+    }
+  } catch {
+  }
+  return getCursorStorageRoot();
+}
+function resolveWindsurfStoragePath(override) {
+  if (override !== void 0 && override !== "") {
+    return override;
+  }
+  try {
+    const vscode15 = require("vscode");
+    const cfg = vscode15.workspace.getConfiguration("chatwizard");
+    const configured = cfg.get("windsurfStoragePath");
+    if (configured && configured !== "") {
+      return configured;
+    }
+  } catch {
+  }
+  return getWindsurfStorageRoot();
 }
 
 // src/watcher/workspaceScope.ts
-var fs4 = __toESM(require("fs"));
-var path5 = __toESM(require("path"));
+var fs7 = __toESM(require("fs"));
+var path8 = __toESM(require("path"));
 var STORAGE_KEY = "chatwizard.selectedWorkspaceIds";
 var LEGACY_MANUAL_KEY = "chatwizard.workspaceScopeManuallySet";
 var WorkspaceScopeManager = class {
@@ -807,7 +1152,7 @@ var WorkspaceScopeManager = class {
     try {
       const vscode15 = require("vscode");
       return (vscode15.workspace.workspaceFolders ?? []).map(
-        (f) => path5.normalize(f.uri.fsPath).toLowerCase()
+        (f) => path8.normalize(f.uri.fsPath).toLowerCase()
       );
     } catch {
       return [];
@@ -829,7 +1174,7 @@ var WorkspaceScopeManager = class {
     if (openFolderPaths.length === 0) {
       ids = [];
     } else {
-      ids = available.filter((ws) => openFolderPaths.includes(path5.normalize(ws.workspacePath).toLowerCase())).map((ws) => ws.id);
+      ids = available.filter((ws) => openFolderPaths.includes(path8.normalize(ws.workspacePath).toLowerCase())).map((ws) => ws.id);
     }
     await this._context.globalState.update(STORAGE_KEY, ids);
   }
@@ -852,32 +1197,735 @@ var WorkspaceScopeManager = class {
 };
 async function calcWorkspaceSizeBytes(storageDir, source) {
   try {
-    const dir = source === "copilot" ? path5.join(storageDir, "chatSessions") : storageDir;
-    const entries = await fs4.promises.readdir(dir);
-    const jsonlFiles = entries.filter((e) => e.endsWith(".jsonl"));
-    const sizes = await Promise.all(
-      jsonlFiles.map(async (f) => {
-        try {
-          const stat = await fs4.promises.stat(path5.join(dir, f));
-          return stat.size;
-        } catch {
-          return 0;
-        }
-      })
-    );
-    return sizes.reduce((acc, s) => acc + s, 0);
+    if (source === "copilot") {
+      const dir = path8.join(storageDir, "chatSessions");
+      const entries = await fs7.promises.readdir(dir);
+      const sizes = await Promise.all(
+        entries.filter((e) => e.endsWith(".jsonl")).map(async (f) => {
+          try {
+            return (await fs7.promises.stat(path8.join(dir, f))).size;
+          } catch {
+            return 0;
+          }
+        })
+      );
+      return sizes.reduce((acc, s) => acc + s, 0);
+    }
+    if (source === "claude") {
+      const entries = await fs7.promises.readdir(storageDir);
+      const sizes = await Promise.all(
+        entries.filter((e) => e.endsWith(".jsonl")).map(async (f) => {
+          try {
+            return (await fs7.promises.stat(path8.join(storageDir, f))).size;
+          } catch {
+            return 0;
+          }
+        })
+      );
+      return sizes.reduce((acc, s) => acc + s, 0);
+    }
+    if (source === "cline" || source === "roocode") {
+      const entries = await fs7.promises.readdir(storageDir, { withFileTypes: true });
+      const sizes = await Promise.all(
+        entries.filter((e) => e.isDirectory()).map(async (entry) => {
+          const convFile = path8.join(storageDir, entry.name, "api_conversation_history.json");
+          try {
+            return (await fs7.promises.stat(convFile)).size;
+          } catch {
+            return 0;
+          }
+        })
+      );
+      return sizes.reduce((acc, s) => acc + s, 0);
+    }
+    if (source === "cursor" || source === "windsurf") {
+      const vscdb = path8.join(storageDir, "state.vscdb");
+      try {
+        return (await fs7.promises.stat(vscdb)).size;
+      } catch {
+        return 0;
+      }
+    }
+    if (source === "aider") {
+      const histFile = path8.join(storageDir, ".aider.chat.history.md");
+      try {
+        return (await fs7.promises.stat(histFile)).size;
+      } catch {
+        return 0;
+      }
+    }
+    return 0;
   } catch {
     return 0;
   }
 }
 async function countWorkspaceSessions(storageDir, source) {
   try {
-    const dir = source === "copilot" ? path5.join(storageDir, "chatSessions") : storageDir;
-    const entries = await fs4.promises.readdir(dir);
-    return entries.filter((e) => e.endsWith(".jsonl")).length;
+    if (source === "copilot") {
+      const dir = path8.join(storageDir, "chatSessions");
+      const entries = await fs7.promises.readdir(dir);
+      return entries.filter((e) => e.endsWith(".jsonl")).length;
+    }
+    if (source === "claude") {
+      const entries = await fs7.promises.readdir(storageDir);
+      return entries.filter((e) => e.endsWith(".jsonl")).length;
+    }
+    if (source === "cline" || source === "roocode") {
+      const entries = await fs7.promises.readdir(storageDir, { withFileTypes: true });
+      const counts = await Promise.all(
+        entries.filter((e) => e.isDirectory()).map(async (entry) => {
+          const convFile = path8.join(storageDir, entry.name, "api_conversation_history.json");
+          try {
+            await fs7.promises.access(convFile);
+            return 1;
+          } catch {
+            return 0;
+          }
+        })
+      );
+      return counts.reduce((acc, c) => acc + c, 0);
+    }
+    if (source === "cursor" || source === "windsurf") {
+      const vscdb = path8.join(storageDir, "state.vscdb");
+      try {
+        await fs7.promises.access(vscdb);
+        return 1;
+      } catch {
+        return 0;
+      }
+    }
+    if (source === "aider") {
+      const histFile = path8.join(storageDir, ".aider.chat.history.md");
+      try {
+        await fs7.promises.access(histFile);
+        return 1;
+      } catch {
+        return 0;
+      }
+    }
+    return 0;
   } catch {
     return 0;
   }
+}
+
+// src/parsers/cline.ts
+var fs8 = __toESM(require("fs"));
+var path9 = __toESM(require("path"));
+var MAX_FILE_BYTES = 50 * 1024 * 1024;
+var MAX_ARRAY_LENGTH = 5e4;
+var MAX_TITLE_CHARS = 120;
+function extractContent(content) {
+  if (typeof content === "string") {
+    return content;
+  }
+  return content.filter((p) => p.type === "text" && typeof p.text === "string").map((p) => p.text).join("");
+}
+function extractClineCodeBlocks(content, sessionId, messageIndex) {
+  return extractCodeBlocks2(content, sessionId, messageIndex);
+}
+async function parseClineTask(taskDir, _maxLineChars, source = "cline") {
+  const taskId = path9.basename(taskDir);
+  const errors = [];
+  const emptySession = {
+    id: taskId,
+    title: "Untitled Task",
+    source,
+    workspaceId: taskId,
+    workspacePath: void 0,
+    messages: [],
+    filePath: taskDir,
+    createdAt: (/* @__PURE__ */ new Date(0)).toISOString(),
+    updatedAt: (/* @__PURE__ */ new Date(0)).toISOString()
+  };
+  const conversationFile = path9.join(taskDir, "api_conversation_history.json");
+  let apiEntries = [];
+  try {
+    const stat = await fs8.promises.stat(conversationFile);
+    if (stat.size > MAX_FILE_BYTES) {
+      errors.push(`api_conversation_history.json exceeds 50 MB size limit (${stat.size} bytes) \u2014 skipped`);
+      return { session: emptySession, errors };
+    }
+    const raw = await fs8.promises.readFile(conversationFile, "utf-8");
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      errors.push("api_conversation_history.json root value is not an array");
+      return { session: emptySession, errors };
+    }
+    if (parsed.length > MAX_ARRAY_LENGTH) {
+      errors.push(`api_conversation_history.json has ${parsed.length} entries \u2014 truncating to ${MAX_ARRAY_LENGTH}`);
+      apiEntries = parsed.slice(0, MAX_ARRAY_LENGTH);
+    } else {
+      apiEntries = parsed;
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    errors.push(`Failed to read/parse api_conversation_history.json: ${msg}`);
+    return { session: emptySession, errors };
+  }
+  let uiMessages = [];
+  const uiFile = path9.join(taskDir, "ui_messages.json");
+  try {
+    const stat = await fs8.promises.stat(uiFile);
+    if (stat.size <= MAX_FILE_BYTES) {
+      const raw = await fs8.promises.readFile(uiFile, "utf-8");
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        uiMessages = parsed;
+      }
+    }
+  } catch {
+  }
+  let createdAt;
+  let updatedAt;
+  let workspacePath;
+  let model;
+  for (const ui of uiMessages) {
+    if (typeof ui.ts === "number" && ui.ts > 0) {
+      const iso = new Date(ui.ts).toISOString();
+      if (!createdAt) {
+        createdAt = iso;
+      }
+      updatedAt = iso;
+    }
+    if (!workspacePath && typeof ui.cwd === "string" && ui.cwd) {
+      workspacePath = ui.cwd;
+    }
+    if (!model && typeof ui["model"] === "string") {
+      model = ui["model"];
+    }
+  }
+  const messages = [];
+  for (const entry of apiEntries) {
+    const role = entry.role === "user" ? "user" : "assistant";
+    const content = extractContent(entry.content);
+    if (!content.trim()) {
+      continue;
+    }
+    const messageIndex = messages.length;
+    messages.push({
+      id: `${taskId}-${messageIndex}`,
+      role,
+      content,
+      codeBlocks: extractClineCodeBlocks(content, taskId, messageIndex)
+    });
+  }
+  const firstUserMsg = messages.find((m) => m.role === "user");
+  let title = "Untitled Task";
+  if (firstUserMsg) {
+    const firstLine = firstUserMsg.content.split("\n")[0];
+    const base = firstLine || firstUserMsg.content;
+    title = base.length > MAX_TITLE_CHARS ? base.slice(0, MAX_TITLE_CHARS) + "\u2026" : base;
+  }
+  let fileSizeBytes;
+  if (!createdAt || !updatedAt) {
+    try {
+      const stat = await fs8.promises.stat(conversationFile);
+      fileSizeBytes = stat.size;
+      const mtime = stat.mtime.toISOString();
+      if (!createdAt) {
+        createdAt = mtime;
+      }
+      if (!updatedAt) {
+        updatedAt = mtime;
+      }
+    } catch {
+    }
+  } else {
+    try {
+      fileSizeBytes = (await fs8.promises.stat(conversationFile)).size;
+    } catch {
+    }
+  }
+  return {
+    session: {
+      id: taskId,
+      title,
+      source,
+      workspaceId: taskId,
+      workspacePath,
+      model,
+      messages,
+      filePath: taskDir,
+      fileSizeBytes,
+      createdAt: createdAt ?? (/* @__PURE__ */ new Date(0)).toISOString(),
+      updatedAt: updatedAt ?? (/* @__PURE__ */ new Date(0)).toISOString()
+    },
+    errors
+  };
+}
+
+// src/parsers/cursor.ts
+var path10 = __toESM(require("path"));
+var MAX_COMPOSERS = 5e3;
+var MAX_TITLE_CHARS2 = 120;
+function extractCursorCodeBlocks(content, sessionId, messageIndex) {
+  return extractCodeBlocks2(content, sessionId, messageIndex);
+}
+async function parseCursorWorkspace(vscdbPath, workspaceId, workspacePath) {
+  const fatalResult = (msg) => [{
+    session: {
+      id: `${workspaceId}-cursor-error`,
+      title: "Cursor workspace (parse error)",
+      source: "cursor",
+      workspaceId,
+      workspacePath,
+      messages: [],
+      filePath: vscdbPath,
+      createdAt: (/* @__PURE__ */ new Date(0)).toISOString(),
+      updatedAt: (/* @__PURE__ */ new Date(0)).toISOString()
+    },
+    errors: [msg]
+  }];
+  let rawValue = null;
+  try {
+    const Database = require("better-sqlite3");
+    const db = new Database(vscdbPath, { readonly: true, fileMustExist: true });
+    try {
+      const row = db.prepare(
+        "SELECT value FROM ItemTable WHERE key = 'composer.composerData'"
+      ).get();
+      rawValue = row?.value ?? null;
+    } finally {
+      db.close();
+    }
+  } catch (err) {
+    return fatalResult(
+      `Failed to open/query state.vscdb: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+  if (rawValue == null) {
+    return fatalResult("Missing 'composer.composerData' key in state.vscdb");
+  }
+  let composerData;
+  try {
+    composerData = JSON.parse(rawValue);
+  } catch (err) {
+    return fatalResult(
+      `Failed to parse composer.composerData JSON: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+  const allComposers = composerData?.allComposers;
+  if (!Array.isArray(allComposers)) {
+    return fatalResult("composer.composerData.allComposers is not an array");
+  }
+  if (allComposers.length === 0) {
+    return [];
+  }
+  const composers = allComposers.slice(0, MAX_COMPOSERS);
+  return composers.map((composer) => {
+    const composerId = typeof composer.composerId === "string" && composer.composerId ? composer.composerId : `${workspaceId}-${path10.basename(vscdbPath)}-unknown`;
+    const errors = [];
+    const conversation = Array.isArray(composer.conversation) ? composer.conversation : [];
+    const messages = [];
+    for (const item of conversation) {
+      if (item.type !== 1 && item.type !== 2) {
+        continue;
+      }
+      const role = item.type === 1 ? "user" : "assistant";
+      const content = typeof item.text === "string" && item.text ? item.text : typeof item.richText === "string" ? item.richText : "";
+      if (!content.trim()) {
+        continue;
+      }
+      const messageIndex = messages.length;
+      messages.push({
+        id: `${composerId}-${messageIndex}`,
+        role,
+        content,
+        codeBlocks: extractCursorCodeBlocks(content, composerId, messageIndex),
+        timestamp: typeof item.unixMs === "number" && item.unixMs > 0 ? new Date(item.unixMs).toISOString() : void 0
+      });
+    }
+    const firstUserMsg = messages.find((m) => m.role === "user");
+    let title;
+    if (typeof composer.name === "string" && composer.name.trim()) {
+      title = composer.name.trim();
+    } else if (firstUserMsg) {
+      const firstLine = firstUserMsg.content.split("\n")[0];
+      const base = firstLine || firstUserMsg.content;
+      title = base.length > MAX_TITLE_CHARS2 ? base.slice(0, MAX_TITLE_CHARS2) + "\u2026" : base;
+    } else {
+      title = "Untitled";
+    }
+    const createdAt = typeof composer.createdAt === "number" && composer.createdAt > 0 ? new Date(composer.createdAt).toISOString() : messages.find((m) => m.timestamp)?.timestamp ?? (/* @__PURE__ */ new Date(0)).toISOString();
+    const lastTimestampMsg = [...messages].reverse().find((m) => m.timestamp);
+    const updatedAt = lastTimestampMsg?.timestamp ?? createdAt;
+    return {
+      session: {
+        id: composerId,
+        title,
+        source: "cursor",
+        workspaceId,
+        workspacePath,
+        messages,
+        filePath: vscdbPath,
+        createdAt,
+        updatedAt
+      },
+      errors
+    };
+  });
+}
+
+// src/parsers/windsurf.ts
+var MAX_SESSIONS = 5e3;
+var MAX_TITLE_CHARS3 = 120;
+function extractWindsurfCodeBlocks(content, sessionId, messageIndex) {
+  return extractCodeBlocks2(content, sessionId, messageIndex);
+}
+async function parseWindsurfWorkspace(vscdbPath, workspaceId, workspacePath) {
+  const fatalResult = (msg) => [{
+    session: {
+      id: `${workspaceId}-windsurf-error`,
+      title: "Windsurf workspace (parse error)",
+      source: "windsurf",
+      workspaceId,
+      workspacePath,
+      messages: [],
+      filePath: vscdbPath,
+      createdAt: (/* @__PURE__ */ new Date(0)).toISOString(),
+      updatedAt: (/* @__PURE__ */ new Date(0)).toISOString()
+    },
+    errors: [msg]
+  }];
+  let rawValue = null;
+  try {
+    const Database = require("better-sqlite3");
+    const db = new Database(vscdbPath, { readonly: true, fileMustExist: true });
+    try {
+      const row = db.prepare(
+        "SELECT value FROM ItemTable WHERE key = 'cascade.sessionData'"
+      ).get();
+      rawValue = row?.value ?? null;
+    } finally {
+      db.close();
+    }
+  } catch (err) {
+    return fatalResult(
+      `Failed to open/query state.vscdb: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+  if (rawValue == null) {
+    return fatalResult("Missing 'cascade.sessionData' key in state.vscdb");
+  }
+  let cascadeData;
+  try {
+    cascadeData = JSON.parse(rawValue);
+  } catch (err) {
+    return fatalResult(
+      `Failed to parse cascade.sessionData JSON: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+  const allSessions = cascadeData?.sessions;
+  if (!Array.isArray(allSessions)) {
+    return fatalResult("cascade.sessionData.sessions is not an array");
+  }
+  if (allSessions.length === 0) {
+    return [];
+  }
+  const sessions = allSessions.slice(0, MAX_SESSIONS);
+  return sessions.map((cascadeSession) => {
+    const sessionId = typeof cascadeSession.sessionId === "string" && cascadeSession.sessionId ? cascadeSession.sessionId : `${workspaceId}-windsurf-unknown`;
+    const errors = [];
+    const rawMessages = Array.isArray(cascadeSession.messages) ? cascadeSession.messages : [];
+    const messages = [];
+    for (const msg of rawMessages) {
+      if (msg.role !== "user" && msg.role !== "assistant") {
+        continue;
+      }
+      const content = typeof msg.content === "string" ? msg.content : "";
+      if (!content.trim()) {
+        continue;
+      }
+      const messageIndex = messages.length;
+      messages.push({
+        id: `${sessionId}-${messageIndex}`,
+        role: msg.role,
+        content,
+        codeBlocks: extractWindsurfCodeBlocks(content, sessionId, messageIndex),
+        timestamp: typeof msg.timestamp === "number" && msg.timestamp > 0 ? new Date(msg.timestamp).toISOString() : void 0
+      });
+    }
+    const firstUserMsg = messages.find((m) => m.role === "user");
+    let title;
+    if (typeof cascadeSession.title === "string" && cascadeSession.title.trim()) {
+      title = cascadeSession.title.trim();
+    } else if (firstUserMsg) {
+      const firstLine = firstUserMsg.content.split("\n")[0];
+      const base = firstLine || firstUserMsg.content;
+      title = base.length > MAX_TITLE_CHARS3 ? base.slice(0, MAX_TITLE_CHARS3) + "\u2026" : base;
+    } else {
+      title = "Untitled";
+    }
+    const createdAt = typeof cascadeSession.createdAt === "number" && cascadeSession.createdAt > 0 ? new Date(cascadeSession.createdAt).toISOString() : messages.find((m) => m.timestamp)?.timestamp ?? (/* @__PURE__ */ new Date(0)).toISOString();
+    const lastTimestampMsg = [...messages].reverse().find((m) => m.timestamp);
+    const updatedAt = lastTimestampMsg?.timestamp ?? createdAt;
+    return {
+      session: {
+        id: sessionId,
+        title,
+        source: "windsurf",
+        workspaceId,
+        workspacePath,
+        messages,
+        filePath: vscdbPath,
+        createdAt,
+        updatedAt
+      },
+      errors
+    };
+  });
+}
+
+// src/readers/aiderWorkspace.ts
+var fs9 = __toESM(require("fs"));
+var path11 = __toESM(require("path"));
+var AIDER_HISTORY_FILENAME = ".aider.chat.history.md";
+var AIDER_CONFIG_FILENAME = ".aider.conf.yml";
+var MAX_HISTORY_BYTES = 20 * 1024 * 1024;
+var DEFAULT_AIDER_SEARCH_DEPTH = 3;
+var MAX_AIDER_SEARCH_DEPTH = 5;
+async function searchDirAsync(rootDir, maxDepth) {
+  const results = [];
+  await _walkAsync(rootDir, rootDir, 1, maxDepth, results);
+  return results;
+}
+async function _walkAsync(currentDir, _rootDir, currentDepth, maxDepth, results) {
+  let entries;
+  try {
+    entries = await fs9.promises.readdir(currentDir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (!entry.isFile() || entry.isSymbolicLink()) {
+      continue;
+    }
+    if (entry.name !== AIDER_HISTORY_FILENAME) {
+      continue;
+    }
+    const historyFile = path11.join(currentDir, entry.name);
+    try {
+      const lstat = await fs9.promises.lstat(historyFile);
+      if (!lstat.isFile() || lstat.isSymbolicLink()) {
+        continue;
+      }
+      if (lstat.size > MAX_HISTORY_BYTES) {
+        continue;
+      }
+    } catch {
+      continue;
+    }
+    const workspacePath = currentDir;
+    let configFile;
+    const candidate = path11.join(currentDir, AIDER_CONFIG_FILENAME);
+    try {
+      const cfgStat = await fs9.promises.lstat(candidate);
+      if (cfgStat.isFile() && !cfgStat.isSymbolicLink()) {
+        configFile = candidate;
+      }
+    } catch {
+    }
+    results.push({ historyFile, workspacePath, configFile });
+  }
+  if (currentDepth < maxDepth) {
+    await Promise.all(
+      entries.filter((e) => e.isDirectory() && !e.isSymbolicLink()).map((e) => _walkAsync(path11.join(currentDir, e.name), _rootDir, currentDepth + 1, maxDepth, results))
+    );
+  }
+}
+async function discoverAiderHistoryFilesAsync(roots, maxDepth = DEFAULT_AIDER_SEARCH_DEPTH) {
+  const depth = Math.min(Math.max(1, maxDepth), MAX_AIDER_SEARCH_DEPTH);
+  const allResults = await Promise.all(roots.map((r) => searchDirAsync(r, depth)));
+  const seen = /* @__PURE__ */ new Set();
+  const merged = [];
+  for (const batch of allResults) {
+    for (const info of batch) {
+      if (!seen.has(info.historyFile)) {
+        seen.add(info.historyFile);
+        merged.push(info);
+      }
+    }
+  }
+  return merged;
+}
+
+// src/parsers/aider.ts
+var fs10 = __toESM(require("fs"));
+var crypto = __toESM(require("crypto"));
+var DEFAULT_MAX_LINE_CHARS2 = 1e6;
+var MAX_MESSAGE_BYTES = 1024 * 1024;
+var MAX_TITLE_CHARS4 = 120;
+var RE_SESSION_START = /^#\s+aider chat started at\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})/i;
+var USER_PREFIX = "#### ";
+var CMD_PREFIX = "> ";
+function extractAiderCodeBlocks(content, sessionId, messageIndex) {
+  return extractCodeBlocks2(content, sessionId, messageIndex);
+}
+function parseAiderHistory(info, maxLineChars = DEFAULT_MAX_LINE_CHARS2) {
+  const sessionId = crypto.createHash("sha1").update(info.historyFile).digest("hex");
+  const errors = [];
+  let rawContent;
+  try {
+    rawContent = fs10.readFileSync(info.historyFile, "utf8");
+  } catch (err) {
+    const msg = `Failed to read ${info.historyFile}: ${err instanceof Error ? err.message : String(err)}`;
+    errors.push(msg);
+    return {
+      session: _emptySession(sessionId, info, errors),
+      errors
+    };
+  }
+  const model = _readModel(info.configFile);
+  let mtimeIso;
+  try {
+    const st = fs10.statSync(info.historyFile);
+    mtimeIso = st.mtime.toISOString();
+  } catch {
+    mtimeIso = (/* @__PURE__ */ new Date(0)).toISOString();
+  }
+  if (rawContent.trim() === "") {
+    return {
+      session: {
+        ..._emptySession(sessionId, info, errors),
+        model,
+        updatedAt: mtimeIso
+      },
+      errors
+    };
+  }
+  const lines = rawContent.split("\n");
+  let createdAt;
+  const messages = [];
+  let assistantLines = [];
+  let assistantByteCount = 0;
+  let assistantTruncated = false;
+  function flushAssistant() {
+    if (assistantLines.length === 0) {
+      return;
+    }
+    let content = assistantLines.join("\n").trim();
+    if (!content) {
+      assistantLines = [];
+      assistantByteCount = 0;
+      assistantTruncated = false;
+      return;
+    }
+    if (assistantTruncated) {
+      content += "\n[...truncated \u2014 exceeded 1 MB limit]";
+      errors.push(`Assistant message truncated at 1 MB in ${info.historyFile}`);
+    }
+    const messageIndex = messages.length;
+    messages.push({
+      id: `${sessionId}-${messageIndex}`,
+      role: "assistant",
+      content,
+      codeBlocks: extractAiderCodeBlocks(content, sessionId, messageIndex)
+    });
+    assistantLines = [];
+    assistantByteCount = 0;
+    assistantTruncated = false;
+  }
+  for (const rawLine of lines) {
+    if (rawLine.length > maxLineChars) {
+      errors.push(`Line skipped \u2014 length ${rawLine.length} exceeds limit ${maxLineChars} in ${info.historyFile}`);
+      continue;
+    }
+    const startMatch = RE_SESSION_START.exec(rawLine);
+    if (startMatch) {
+      createdAt = new Date(startMatch[1].replace(" ", "T")).toISOString();
+      continue;
+    }
+    if (rawLine.startsWith(USER_PREFIX)) {
+      flushAssistant();
+      const userText = rawLine.slice(USER_PREFIX.length).trim();
+      if (userText) {
+        const messageIndex = messages.length;
+        messages.push({
+          id: `${sessionId}-${messageIndex}`,
+          role: "user",
+          content: userText,
+          codeBlocks: extractAiderCodeBlocks(userText, sessionId, messageIndex)
+        });
+      }
+      continue;
+    }
+    if (rawLine.startsWith(CMD_PREFIX)) {
+      continue;
+    }
+    if (rawLine.trim() === "") {
+      if (assistantLines.length > 0) {
+        assistantLines.push("");
+      }
+      continue;
+    }
+    if (!assistantTruncated) {
+      const lineBytes = Buffer.byteLength(rawLine, "utf8");
+      if (assistantByteCount + lineBytes > MAX_MESSAGE_BYTES) {
+        assistantTruncated = true;
+      } else {
+        assistantLines.push(rawLine);
+        assistantByteCount += lineBytes;
+      }
+    }
+  }
+  flushAssistant();
+  const finalCreatedAt = createdAt ?? mtimeIso;
+  const finalUpdatedAt = mtimeIso;
+  const firstUserMsg = messages.find((m) => m.role === "user");
+  let title;
+  if (firstUserMsg) {
+    const firstLine = firstUserMsg.content.split("\n")[0];
+    const base = firstLine || firstUserMsg.content;
+    title = base.length > MAX_TITLE_CHARS4 ? base.slice(0, MAX_TITLE_CHARS4) + "\u2026" : base;
+  } else {
+    title = "Untitled Aider Session";
+  }
+  return {
+    session: {
+      id: sessionId,
+      title,
+      source: "aider",
+      workspaceId: sessionId,
+      workspacePath: info.workspacePath,
+      model,
+      messages,
+      filePath: info.historyFile,
+      createdAt: finalCreatedAt,
+      updatedAt: finalUpdatedAt
+    },
+    errors
+  };
+}
+function _emptySession(sessionId, info, errors) {
+  return {
+    id: sessionId,
+    title: "Untitled Aider Session",
+    source: "aider",
+    workspaceId: sessionId,
+    workspacePath: info.workspacePath,
+    messages: [],
+    filePath: info.historyFile,
+    createdAt: (/* @__PURE__ */ new Date(0)).toISOString(),
+    updatedAt: (/* @__PURE__ */ new Date(0)).toISOString(),
+    parseErrors: errors.length > 0 ? errors : void 0
+  };
+}
+function _readModel(configFile) {
+  if (!configFile) {
+    return void 0;
+  }
+  try {
+    const raw = fs10.readFileSync(configFile, "utf8");
+    for (const line of raw.split("\n")) {
+      const match = /^model:\s*(.+)/.exec(line.trim());
+      if (match) {
+        return match[1].trim().replace(/^["']|["']$/g, "");
+      }
+    }
+  } catch {
+  }
+  return void 0;
 }
 
 // src/watcher/fileWatcher.ts
@@ -899,16 +1947,16 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
    */
   static _isSafeFilePath(resolvedBase, filePath) {
     try {
-      const realPath = fs5.realpathSync(filePath);
-      return realPath.startsWith(resolvedBase + path6.sep) || realPath === resolvedBase;
+      const realPath = fs11.realpathSync(filePath);
+      return realPath.startsWith(resolvedBase + path12.sep) || realPath === resolvedBase;
     } catch {
       return false;
     }
   }
   static async _isSafeFilePathAsync(resolvedBase, filePath) {
     try {
-      const realPath = await fs5.promises.realpath(filePath);
-      return realPath.startsWith(resolvedBase + path6.sep) || realPath === resolvedBase;
+      const realPath = await fs11.promises.realpath(filePath);
+      return realPath.startsWith(resolvedBase + path12.sep) || realPath === resolvedBase;
     } catch {
       return false;
     }
@@ -918,12 +1966,17 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
     const enabled = cfg.get("enabled", true);
     const indexClaude = cfg.get("indexClaude", true);
     const indexCopilot = cfg.get("indexCopilot", true);
+    const indexCline = cfg.get("indexCline", true);
+    const indexRooCode = cfg.get("indexRooCode", true);
+    const indexCursor = cfg.get("indexCursor", true);
+    const indexWindsurf = cfg.get("indexWindsurf", true);
+    const indexAider = cfg.get("indexAider", true);
     if (!enabled) {
       this.channel.appendLine("[Chat Wizard] Extension disabled via chatwizard.enabled setting \u2014 skipping indexing and file watching.");
       this.index.batchUpsert([]);
       return;
     }
-    await this.buildInitialIndex(indexClaude, indexCopilot);
+    await this.buildInitialIndex(indexClaude, indexCopilot, indexCline, indexRooCode, indexCursor, indexWindsurf, indexAider);
     if (indexClaude) {
       const claudeBaseDir = resolveClaudeProjectsPath();
       const claudePattern = new vscode.RelativePattern(
@@ -934,7 +1987,7 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
       claudeWatcher.onDidCreate((uri) => this.onFileChanged(uri, "claude"));
       claudeWatcher.onDidChange((uri) => this.onFileChanged(uri, "claude"));
       claudeWatcher.onDidDelete((uri) => {
-        const sessionId = path6.basename(uri.fsPath, ".jsonl");
+        const sessionId = path12.basename(uri.fsPath, ".jsonl");
         this.index.remove(sessionId);
         this.channel.appendLine(`[live] removed session ${sessionId}`);
       });
@@ -950,7 +2003,7 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
         this.channel.appendLine(`[error] Failed to discover Copilot workspaces for watching: ${err}`);
       }
       for (const workspace7 of copilotWorkspaces) {
-        const chatSessionsDir = path6.join(workspace7.storageDir, "chatSessions");
+        const chatSessionsDir = path12.join(workspace7.storageDir, "chatSessions");
         const copilotPattern = new vscode.RelativePattern(
           vscode.Uri.file(chatSessionsDir),
           "*.jsonl"
@@ -963,12 +2016,85 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
           (uri) => this.onFileChanged(uri, "copilot", workspace7.workspaceId, workspace7.workspacePath)
         );
         copilotWatcher.onDidDelete((uri) => {
-          const sessionId = path6.basename(uri.fsPath, ".jsonl");
+          const sessionId = path12.basename(uri.fsPath, ".jsonl");
           this.index.remove(sessionId);
           this.channel.appendLine(`[live] removed session ${sessionId}`);
         });
         this.disposables.push(copilotWatcher);
       }
+    }
+    if (indexCline) {
+      const clineRoot = resolveClineStoragePath();
+      const clinePattern = new vscode.RelativePattern(
+        vscode.Uri.file(clineRoot),
+        "**/api_conversation_history.json"
+      );
+      const clineWatcher = vscode.workspace.createFileSystemWatcher(clinePattern);
+      clineWatcher.onDidCreate((uri) => this.onClineFileChanged(uri));
+      clineWatcher.onDidChange((uri) => this.onClineFileChanged(uri));
+      clineWatcher.onDidDelete((uri) => {
+        const taskId = path12.basename(path12.dirname(uri.fsPath));
+        this.index.remove(taskId);
+        this.channel.appendLine(`[live] removed cline session ${taskId}`);
+      });
+      this.disposables.push(clineWatcher);
+    }
+    if (indexRooCode) {
+      const rooCodeRoot = resolveRooCodeStoragePath();
+      const rooCodePattern = new vscode.RelativePattern(
+        vscode.Uri.file(rooCodeRoot),
+        "**/api_conversation_history.json"
+      );
+      const rooCodeWatcher = vscode.workspace.createFileSystemWatcher(rooCodePattern);
+      rooCodeWatcher.onDidCreate((uri) => this.onRooCodeFileChanged(uri));
+      rooCodeWatcher.onDidChange((uri) => this.onRooCodeFileChanged(uri));
+      rooCodeWatcher.onDidDelete((uri) => {
+        const taskId = path12.basename(path12.dirname(uri.fsPath));
+        this.index.remove(taskId);
+        this.channel.appendLine(`[live] removed roocode session ${taskId}`);
+      });
+      this.disposables.push(rooCodeWatcher);
+    }
+    if (indexCursor) {
+      const cursorRoot = resolveCursorStoragePath();
+      const cursorPattern = new vscode.RelativePattern(
+        vscode.Uri.file(cursorRoot),
+        "**/state.vscdb"
+      );
+      const cursorWatcher = vscode.workspace.createFileSystemWatcher(cursorPattern);
+      cursorWatcher.onDidCreate((uri) => this.onCursorFileChanged(uri));
+      cursorWatcher.onDidChange((uri) => this.onCursorFileChanged(uri));
+      cursorWatcher.onDidDelete((uri) => {
+        const vscdbPath = uri.fsPath;
+        this.channel.appendLine(`[live] cursor state.vscdb deleted: ${vscdbPath}`);
+      });
+      this.disposables.push(cursorWatcher);
+    }
+    if (indexWindsurf) {
+      const windsurfRoot = resolveWindsurfStoragePath();
+      const windsurfPattern = new vscode.RelativePattern(
+        vscode.Uri.file(windsurfRoot),
+        "**/state.vscdb"
+      );
+      const windsurfWatcher = vscode.workspace.createFileSystemWatcher(windsurfPattern);
+      windsurfWatcher.onDidCreate((uri) => this.onWindsurfFileChanged(uri));
+      windsurfWatcher.onDidChange((uri) => this.onWindsurfFileChanged(uri));
+      windsurfWatcher.onDidDelete((uri) => {
+        const vscdbPath = uri.fsPath;
+        this.channel.appendLine(`[live] windsurf state.vscdb deleted: ${vscdbPath}`);
+      });
+      this.disposables.push(windsurfWatcher);
+    }
+    if (indexAider) {
+      const aiderWatcher = vscode.workspace.createFileSystemWatcher("**/.aider.chat.history.md");
+      aiderWatcher.onDidCreate((uri) => this.onAiderFileChanged(uri));
+      aiderWatcher.onDidChange((uri) => this.onAiderFileChanged(uri));
+      aiderWatcher.onDidDelete((uri) => {
+        const sessionId = require("crypto").createHash("sha1").update(uri.fsPath).digest("hex");
+        this.index.remove(sessionId);
+        this.channel.appendLine(`[live] removed aider session ${uri.fsPath}`);
+      });
+      this.disposables.push(aiderWatcher);
     }
   }
   /**
@@ -986,7 +2112,7 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
     }
     this.disposables = [];
   }
-  async buildInitialIndex(indexClaude, indexCopilot) {
+  async buildInitialIndex(indexClaude, indexCopilot, indexCline, indexRooCode = true, indexCursor = true, indexWindsurf = true, indexAider = true) {
     await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Window,
@@ -1003,13 +2129,18 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
         } else {
           this.channel.appendLine(`[Chat Wizard] Building index with scope filter: [${selectedIds.join(", ")}]`);
         }
-        const [claudeSessions, copilotSessions] = await Promise.all([
+        const [claudeSessions, copilotSessions, clineSessions, rooCodeSessions, cursorSessions, windsurfSessions, aiderSessions] = await Promise.all([
           // Always pass selectedIds (even empty array) — empty = index nothing, no fallback to all.
           indexClaude ? this.collectClaudeSessionsAsync(onProgress, selectedIds) : Promise.resolve([]),
-          indexCopilot ? this.collectCopilotSessionsAsync(onProgress, selectedIds) : Promise.resolve([])
+          indexCopilot ? this.collectCopilotSessionsAsync(onProgress, selectedIds) : Promise.resolve([]),
+          indexCline ? this.collectClineTasksAsync(onProgress) : Promise.resolve([]),
+          indexRooCode ? this.collectRooCodeTasksAsync(onProgress) : Promise.resolve([]),
+          indexCursor ? this.collectCursorSessionsAsync(onProgress) : Promise.resolve([]),
+          indexWindsurf ? this.collectWindsurfSessionsAsync(onProgress) : Promise.resolve([]),
+          indexAider ? this.collectAiderSessionsAsync(onProgress) : Promise.resolve([])
         ]);
         const cfg = vscode.workspace.getConfiguration("chatwizard");
-        const all = applySessionFilters([...claudeSessions, ...copilotSessions], cfg, this.channel);
+        const all = applySessionFilters([...claudeSessions, ...copilotSessions, ...clineSessions, ...rooCodeSessions, ...cursorSessions, ...windsurfSessions, ...aiderSessions], cfg, this.channel);
         this.index.batchUpsert(all);
         this.channel.appendLine(`[init] Batch indexed ${all.length} sessions`);
       }
@@ -1027,20 +2158,20 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
     try {
       let exists = false;
       try {
-        exists = (await fs5.promises.stat(claudeProjectsDir)).isDirectory();
+        exists = (await fs11.promises.stat(claudeProjectsDir)).isDirectory();
       } catch {
       }
       if (!exists) {
         return [];
       }
-      const resolvedBase = await fs5.promises.realpath(claudeProjectsDir).catch(() => claudeProjectsDir);
-      const projectDirEntries = await fs5.promises.readdir(claudeProjectsDir, { withFileTypes: true });
+      const resolvedBase = await fs11.promises.realpath(claudeProjectsDir).catch(() => claudeProjectsDir);
+      const projectDirEntries = await fs11.promises.readdir(claudeProjectsDir, { withFileTypes: true });
       const allDirEntries = projectDirEntries.filter((d) => d.isDirectory());
       const dirEntries = selectedIds ? allDirEntries.filter((d) => selectedIds.includes(d.name)) : allDirEntries;
       const fileLists = await Promise.all(dirEntries.map(async (d) => {
-        const projectPath = path6.join(claudeProjectsDir, d.name);
+        const projectPath = path12.join(claudeProjectsDir, d.name);
         try {
-          const files = await fs5.promises.readdir(projectPath, { withFileTypes: true });
+          const files = await fs11.promises.readdir(projectPath, { withFileTypes: true });
           return { projectPath, files: files.filter((f) => f.isFile() && f.name.endsWith(".jsonl")) };
         } catch {
           return { projectPath, files: [] };
@@ -1051,7 +2182,7 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
       const dirResults = await Promise.all(fileLists.map(async ({ projectPath, files }) => {
         const dirSessions = [];
         for (const file of files) {
-          const filePath = path6.join(projectPath, file.name);
+          const filePath = path12.join(projectPath, file.name);
           if (!await _ChatWizardWatcher._isSafeFilePathAsync(resolvedBase, filePath)) {
             this.channel.appendLine(`[security] Skipping ${filePath}: resolves outside base directory`);
             current++;
@@ -1091,7 +2222,7 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
       const wsResults = await Promise.all(workspaces.map(async (workspace7, idx) => {
         const files = fileListsPerWorkspace[idx];
         const wsSessions = [];
-        const resolvedBase = await fs5.promises.realpath(workspace7.storageDir).catch(() => workspace7.storageDir);
+        const resolvedBase = await fs11.promises.realpath(workspace7.storageDir).catch(() => workspace7.storageDir);
         for (const filePath of files) {
           if (!await _ChatWizardWatcher._isSafeFilePathAsync(resolvedBase, filePath)) {
             this.channel.appendLine(`[security] Skipping ${filePath}: resolves outside workspace storage`);
@@ -1114,34 +2245,180 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
       return [];
     }
   }
+  /** Async: parse all Cline tasks using non-blocking directory reads. */
+  async collectClineTasksAsync(onProgress, _clineRootOverride) {
+    const root = _clineRootOverride ?? resolveClineStoragePath();
+    try {
+      const tasks = await discoverClineTasksAsync(root);
+      const total = tasks.length;
+      let current = 0;
+      const results = await Promise.all(tasks.map(async (task) => {
+        const result = await parseClineTask(task.storageDir);
+        current++;
+        onProgress?.(current, total);
+        if (result.errors.length > 0) {
+          this.channel.appendLine(`[warn] Cline parse errors in ${task.storageDir}: ${result.errors.join("; ")}`);
+        }
+        if (result.session.messages.length === 0 || result.session.createdAt === (/* @__PURE__ */ new Date(0)).toISOString()) {
+          return null;
+        }
+        return result.session;
+      }));
+      return results.filter((s) => s !== null);
+    } catch (err) {
+      this.channel.appendLine(`[error] Failed to collect Cline tasks: ${err}`);
+      return [];
+    }
+  }
+  /** Async: parse all Roo Code tasks using non-blocking directory reads. */
+  async collectRooCodeTasksAsync(onProgress, _rooCodeRootOverride) {
+    const root = _rooCodeRootOverride ?? resolveRooCodeStoragePath();
+    try {
+      const tasks = await discoverRooCodeTasksAsync(root);
+      const total = tasks.length;
+      let current = 0;
+      const results = await Promise.all(tasks.map(async (task) => {
+        const result = await parseClineTask(task.storageDir, void 0, "roocode");
+        current++;
+        onProgress?.(current, total);
+        if (result.errors.length > 0) {
+          this.channel.appendLine(`[warn] Roo Code parse errors in ${task.storageDir}: ${result.errors.join("; ")}`);
+        }
+        if (result.session.messages.length === 0 || result.session.createdAt === (/* @__PURE__ */ new Date(0)).toISOString()) {
+          return null;
+        }
+        return result.session;
+      }));
+      return results.filter((s) => s !== null);
+    } catch (err) {
+      this.channel.appendLine(`[error] Failed to collect Roo Code tasks: ${err}`);
+      return [];
+    }
+  }
+  /** Async: parse all Cursor sessions by reading state.vscdb files across discovered workspaces. */
+  async collectCursorSessionsAsync(onProgress, _cursorRootOverride) {
+    const root = _cursorRootOverride ?? resolveCursorStoragePath();
+    try {
+      const workspaces = await discoverCursorWorkspacesAsync(root);
+      const total = workspaces.length;
+      let current = 0;
+      const wsResults = await Promise.all(workspaces.map(async (ws) => {
+        const vscdbPath = require("path").join(ws.storageDir, "state.vscdb");
+        const parseResults = await parseCursorWorkspace(vscdbPath, ws.id, ws.workspacePath);
+        current++;
+        onProgress?.(current, total);
+        const sessions = [];
+        for (const result of parseResults) {
+          if (result.errors.length > 0) {
+            this.channel.appendLine(
+              `[warn] Cursor parse errors in ${vscdbPath}: ${result.errors.join("; ")}`
+            );
+          }
+          if (result.session.messages.length === 0 || result.session.createdAt === (/* @__PURE__ */ new Date(0)).toISOString()) {
+            continue;
+          }
+          sessions.push(result.session);
+        }
+        return sessions;
+      }));
+      return wsResults.flat();
+    } catch (err) {
+      this.channel.appendLine(`[error] Failed to collect Cursor sessions: ${err}`);
+      return [];
+    }
+  }
+  /** Async: parse all Windsurf sessions by reading state.vscdb files across discovered workspaces. */
+  async collectWindsurfSessionsAsync(onProgress, _windsurfRootOverride) {
+    const root = _windsurfRootOverride ?? resolveWindsurfStoragePath();
+    try {
+      const workspaces = await discoverWindsurfWorkspacesAsync(root);
+      const total = workspaces.length;
+      let current = 0;
+      const wsResults = await Promise.all(workspaces.map(async (ws) => {
+        const vscdbPath = require("path").join(ws.storageDir, "state.vscdb");
+        const parseResults = await parseWindsurfWorkspace(vscdbPath, ws.id, ws.workspacePath);
+        current++;
+        onProgress?.(current, total);
+        const sessions = [];
+        for (const result of parseResults) {
+          if (result.errors.length > 0) {
+            this.channel.appendLine(
+              `[warn] Windsurf parse errors in ${vscdbPath}: ${result.errors.join("; ")}`
+            );
+          }
+          if (result.session.messages.length === 0 || result.session.createdAt === (/* @__PURE__ */ new Date(0)).toISOString()) {
+            continue;
+          }
+          sessions.push(result.session);
+        }
+        return sessions;
+      }));
+      return wsResults.flat();
+    } catch (err) {
+      this.channel.appendLine(`[error] Failed to collect Windsurf sessions: ${err}`);
+      return [];
+    }
+  }
+  /**
+   * Async: parse all Aider sessions by scanning VS Code workspace folders and
+   * any user-configured extra roots for `.aider.chat.history.md` files.
+   */
+  async collectAiderSessionsAsync(onProgress, _rootsOverride) {
+    try {
+      const cfg = vscode.workspace.getConfiguration("chatwizard");
+      const extraRoots = cfg.get("aiderSearchRoots", []);
+      const maxDepth = cfg.get("aiderSearchDepth", 3);
+      const wsFolders = vscode.workspace.workspaceFolders?.map((f) => f.uri.fsPath) ?? [];
+      const roots = _rootsOverride ?? [...wsFolders, ...extraRoots];
+      const infos = await discoverAiderHistoryFilesAsync(roots, maxDepth);
+      const total = infos.length;
+      let current = 0;
+      const results = await Promise.all(infos.map(async (info) => {
+        const result = parseAiderHistory(info);
+        current++;
+        onProgress?.(current, total);
+        if (result.errors.length > 0) {
+          this.channel.appendLine(`[warn] Aider parse errors in ${info.historyFile}: ${result.errors.join("; ")}`);
+        }
+        if (result.session.messages.length === 0 || result.session.createdAt === (/* @__PURE__ */ new Date(0)).toISOString()) {
+          return null;
+        }
+        return result.session;
+      }));
+      return results.filter((s) => s !== null);
+    } catch (err) {
+      this.channel.appendLine(`[error] Failed to collect Aider sessions: ${err}`);
+      return [];
+    }
+  }
   /** Synchronous collectors kept for internal use by live-update code paths. */
   collectClaudeSessions() {
     const sessions = [];
     const claudeProjectsDir = resolveClaudeProjectsPath();
     try {
-      if (!fs5.existsSync(claudeProjectsDir)) {
+      if (!fs11.existsSync(claudeProjectsDir)) {
         return sessions;
       }
       const resolvedBase = (() => {
         try {
-          return fs5.realpathSync(claudeProjectsDir);
+          return fs11.realpathSync(claudeProjectsDir);
         } catch {
           return claudeProjectsDir;
         }
       })();
-      const projectDirs = fs5.readdirSync(claudeProjectsDir, { withFileTypes: true });
+      const projectDirs = fs11.readdirSync(claudeProjectsDir, { withFileTypes: true });
       for (const projectDir of projectDirs) {
         if (!projectDir.isDirectory()) {
           continue;
         }
-        const projectPath = path6.join(claudeProjectsDir, projectDir.name);
+        const projectPath = path12.join(claudeProjectsDir, projectDir.name);
         try {
-          const files = fs5.readdirSync(projectPath, { withFileTypes: true });
+          const files = fs11.readdirSync(projectPath, { withFileTypes: true });
           for (const file of files) {
             if (!file.isFile() || !file.name.endsWith(".jsonl")) {
               continue;
             }
-            const filePath = path6.join(projectPath, file.name);
+            const filePath = path12.join(projectPath, file.name);
             if (!_ChatWizardWatcher._isSafeFilePath(resolvedBase, filePath)) {
               this.channel.appendLine(`[security] Skipping ${filePath}: resolves outside base directory`);
               continue;
@@ -1168,7 +2445,7 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
         try {
           const resolvedBase = (() => {
             try {
-              return fs5.realpathSync(workspace7.storageDir);
+              return fs11.realpathSync(workspace7.storageDir);
             } catch {
               return workspace7.storageDir;
             }
@@ -1247,10 +2524,133 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
       this.channel.appendLine(`[skip] empty/epoch session ${filePath}`);
     }
   }
+  async onClineFileChanged(uri) {
+    const taskDir = path12.dirname(uri.fsPath);
+    const taskId = path12.basename(taskDir);
+    const result = await parseClineTask(taskDir);
+    if (result.errors.length > 0) {
+      this.channel.appendLine(`[warn] Cline parse errors in ${taskDir}: ${result.errors.join("; ")}`);
+    }
+    if (result.session.messages.length === 0 || result.session.createdAt === (/* @__PURE__ */ new Date(0)).toISOString()) {
+      this.channel.appendLine(`[skip] empty/epoch cline session ${taskId}`);
+      return;
+    }
+    const before = this.index.size;
+    this.index.upsert(result.session);
+    const verb = this.index.size > before ? "added" : "updated";
+    this.channel.appendLine(`[live] ${verb} cline session ${taskId}`);
+  }
+  async onRooCodeFileChanged(uri) {
+    const taskDir = path12.dirname(uri.fsPath);
+    const taskId = path12.basename(taskDir);
+    const result = await parseClineTask(taskDir, void 0, "roocode");
+    if (result.errors.length > 0) {
+      this.channel.appendLine(`[warn] Roo Code parse errors in ${taskDir}: ${result.errors.join("; ")}`);
+    }
+    if (result.session.messages.length === 0 || result.session.createdAt === (/* @__PURE__ */ new Date(0)).toISOString()) {
+      this.channel.appendLine(`[skip] empty/epoch roocode session ${taskId}`);
+      return;
+    }
+    const before = this.index.size;
+    this.index.upsert(result.session);
+    const verb = this.index.size > before ? "added" : "updated";
+    this.channel.appendLine(`[live] ${verb} roocode session ${taskId}`);
+  }
+  async onCursorFileChanged(uri) {
+    const vscdbPath = uri.fsPath;
+    const workspaceId = path12.basename(path12.dirname(vscdbPath));
+    let workspacePath;
+    try {
+      const wsJson = path12.join(path12.dirname(vscdbPath), "workspace.json");
+      const raw = require("fs").readFileSync(wsJson, "utf8");
+      const parsed = JSON.parse(raw);
+      if (parsed.folder) {
+        let decoded = decodeURIComponent(parsed.folder.replace("file://", ""));
+        if (process.platform === "win32" && decoded.startsWith("/")) {
+          decoded = decoded.slice(1);
+        }
+        workspacePath = decoded;
+      }
+    } catch {
+    }
+    const parseResults = await parseCursorWorkspace(vscdbPath, workspaceId, workspacePath);
+    let upsertCount = 0;
+    for (const result of parseResults) {
+      if (result.errors.length > 0) {
+        this.channel.appendLine(
+          `[warn] Cursor parse errors in ${vscdbPath}: ${result.errors.join("; ")}`
+        );
+      }
+      if (result.session.messages.length === 0 || result.session.createdAt === (/* @__PURE__ */ new Date(0)).toISOString()) {
+        continue;
+      }
+      this.index.upsert(result.session);
+      upsertCount++;
+    }
+    this.channel.appendLine(`[live] cursor updated ${upsertCount} session(s) from ${vscdbPath}`);
+  }
+  async onWindsurfFileChanged(uri) {
+    const vscdbPath = uri.fsPath;
+    const workspaceId = path12.basename(path12.dirname(vscdbPath));
+    let workspacePath;
+    try {
+      const wsJson = path12.join(path12.dirname(vscdbPath), "workspace.json");
+      const raw = require("fs").readFileSync(wsJson, "utf8");
+      const parsed = JSON.parse(raw);
+      if (parsed.folder) {
+        let decoded = decodeURIComponent(parsed.folder.replace("file://", ""));
+        if (process.platform === "win32" && decoded.startsWith("/")) {
+          decoded = decoded.slice(1);
+        }
+        workspacePath = decoded;
+      }
+    } catch {
+    }
+    const parseResults = await parseWindsurfWorkspace(vscdbPath, workspaceId, workspacePath);
+    let upsertCount = 0;
+    for (const result of parseResults) {
+      if (result.errors.length > 0) {
+        this.channel.appendLine(
+          `[warn] Windsurf parse errors in ${vscdbPath}: ${result.errors.join("; ")}`
+        );
+      }
+      if (result.session.messages.length === 0 || result.session.createdAt === (/* @__PURE__ */ new Date(0)).toISOString()) {
+        continue;
+      }
+      this.index.upsert(result.session);
+      upsertCount++;
+    }
+    this.channel.appendLine(`[live] windsurf updated ${upsertCount} session(s) from ${vscdbPath}`);
+  }
+  onAiderFileChanged(uri) {
+    const historyFile = uri.fsPath;
+    const workspacePath = require("path").dirname(historyFile);
+    const configFile = (() => {
+      const candidate = require("path").join(workspacePath, ".aider.conf.yml");
+      try {
+        require("fs").accessSync(candidate);
+        return candidate;
+      } catch {
+        return void 0;
+      }
+    })();
+    const result = parseAiderHistory({ historyFile, workspacePath, configFile });
+    if (result.errors.length > 0) {
+      this.channel.appendLine(`[warn] Aider parse errors in ${historyFile}: ${result.errors.join("; ")}`);
+    }
+    if (result.session.messages.length === 0 || result.session.createdAt === (/* @__PURE__ */ new Date(0)).toISOString()) {
+      this.channel.appendLine(`[skip] empty/epoch aider session ${historyFile}`);
+      return;
+    }
+    const before = this.index.size;
+    this.index.upsert(result.session);
+    const verb = this.index.size > before ? "added" : "updated";
+    this.channel.appendLine(`[live] ${verb} aider session ${historyFile}`);
+  }
   onFileChanged(uri, source, workspaceId, workspacePath) {
     const before = this.index.size;
     this.indexFile(uri.fsPath, source, workspaceId, workspacePath);
-    const sessionId = path6.basename(uri.fsPath, ".jsonl");
+    const sessionId = path12.basename(uri.fsPath, ".jsonl");
     const verb = this.index.size > before ? "added" : "updated";
     this.channel.appendLine(`[live] ${verb} session ${sessionId} (${source})`);
   }
@@ -1287,8 +2687,8 @@ async function startWatcher(index, channel, scopeManager) {
 }
 
 // src/readers/claudeWorkspace.ts
-var fs6 = __toESM(require("fs"));
-var path7 = __toESM(require("path"));
+var fs12 = __toESM(require("fs"));
+var path13 = __toESM(require("path"));
 function resolveClaudeWorkspacePath(dirName) {
   if (!dirName || typeof dirName !== "string") {
     return void 0;
@@ -1309,13 +2709,13 @@ async function discoverClaudeWorkspacesAsync(override) {
   try {
     let exists = false;
     try {
-      exists = (await fs6.promises.stat(claudeProjectsDir)).isDirectory();
+      exists = (await fs12.promises.stat(claudeProjectsDir)).isDirectory();
     } catch {
     }
     if (!exists) {
       return [];
     }
-    const entries = await fs6.promises.readdir(claudeProjectsDir, { withFileTypes: true });
+    const entries = await fs12.promises.readdir(claudeProjectsDir, { withFileTypes: true });
     const results = [];
     for (const entry of entries) {
       if (!entry.isDirectory()) {
@@ -1329,7 +2729,7 @@ async function discoverClaudeWorkspacesAsync(override) {
         id: entry.name,
         source: "claude",
         workspacePath,
-        storageDir: path7.join(claudeProjectsDir, entry.name)
+        storageDir: path13.join(claudeProjectsDir, entry.name)
       });
     }
     return results;
@@ -1340,7 +2740,35 @@ async function discoverClaudeWorkspacesAsync(override) {
 
 // src/views/sessionTreeProvider.ts
 var vscode2 = __toESM(require("vscode"));
-var path8 = __toESM(require("path"));
+var path14 = __toESM(require("path"));
+function friendlySourceName(source) {
+  switch (source) {
+    case "copilot":
+      return "GitHub Copilot";
+    case "claude":
+      return "Claude Code";
+    case "cline":
+      return "Cline";
+    case "roocode":
+      return "Roo Code";
+    case "cursor":
+      return "Cursor";
+    case "windsurf":
+      return "Windsurf";
+    case "aider":
+      return "Aider";
+  }
+}
+function sourceIconId(source) {
+  switch (source) {
+    case "copilot":
+      return "github";
+    case "aider":
+      return "terminal";
+    default:
+      return "hubot";
+  }
+}
 var SessionTreeItem = class extends vscode2.TreeItem {
   summary;
   pinned;
@@ -1348,12 +2776,12 @@ var SessionTreeItem = class extends vscode2.TreeItem {
     super(summary.title || "Untitled Session", vscode2.TreeItemCollapsibleState.None);
     this.summary = summary;
     this.pinned = pinned;
-    const workspaceName = path8.basename(summary.workspacePath ?? summary.workspaceId);
+    const workspaceName = path14.basename(summary.workspacePath ?? summary.workspaceId);
     const date = summary.updatedAt.slice(0, 10);
     const msgCount = summary.messageCount;
     const sizeKb = summary.fileSizeBytes !== void 0 ? `${(summary.fileSizeBytes / 1024).toFixed(1)} KB` : void 0;
     this.description = sizeKb ? `${workspaceName} \xB7 ${date} \xB7 ${msgCount} msgs \xB7 ${sizeKb}` : `${workspaceName} \xB7 ${date} \xB7 ${msgCount} msgs`;
-    const sourceName = summary.source === "copilot" ? "GitHub Copilot" : "Claude Code";
+    const sourceName = friendlySourceName(summary.source);
     const modelLine = summary.model ? `
 
 **Model:** ${summary.model}` : "";
@@ -1412,12 +2840,12 @@ ${summary.userMessageCount} prompts \xB7 ${summary.assistantMessageCount} respon
       this.iconPath = new vscode2.ThemeIcon("pinned");
     } else if (summary.interrupted) {
       const red = new vscode2.ThemeColor("list.errorForeground");
-      this.iconPath = summary.source === "copilot" ? new vscode2.ThemeIcon("github", red) : new vscode2.ThemeIcon("hubot", red);
+      this.iconPath = new vscode2.ThemeIcon(sourceIconId(summary.source), red);
     } else if (summary.hasParseErrors) {
       const yellow = new vscode2.ThemeColor("list.warningForeground");
-      this.iconPath = summary.source === "copilot" ? new vscode2.ThemeIcon("github", yellow) : new vscode2.ThemeIcon("hubot", yellow);
+      this.iconPath = new vscode2.ThemeIcon(sourceIconId(summary.source), yellow);
     } else {
-      this.iconPath = summary.source === "copilot" ? new vscode2.ThemeIcon("github") : new vscode2.ThemeIcon("hubot");
+      this.iconPath = new vscode2.ThemeIcon(sourceIconId(summary.source));
     }
     if (summary.hasParseErrors) {
       this.resourceUri = vscode2.Uri.from({ scheme: "chatwizard-warn", path: "/" + summary.id });
@@ -1464,7 +2892,7 @@ var SORT_KEY_LABELS = {
   length: "Message Count",
   title: "Title (A\u2013Z)",
   model: "AI Model",
-  source: "Source (Copilot / Claude)"
+  source: "Source"
 };
 var SHORT_LABEL = {
   date: "Date",
@@ -1479,8 +2907,8 @@ function compareBy(key, a, b) {
     case "date":
       return a.updatedAt.localeCompare(b.updatedAt);
     case "workspace": {
-      const wa = path8.basename(a.workspacePath ?? a.workspaceId);
-      const wb = path8.basename(b.workspacePath ?? b.workspaceId);
+      const wa = path14.basename(a.workspacePath ?? a.workspaceId);
+      const wb = path14.basename(b.workspacePath ?? b.workspaceId);
       return wa.localeCompare(wb);
     }
     case "length":
@@ -2564,6 +3992,12 @@ function friendlyModelName(raw) {
   }
   if (/^o4-mini$/i.test(s)) {
     return "o4 mini";
+  }
+  if (/^cursor-fast$/i.test(s)) {
+    return "Cursor Fast";
+  }
+  if (/^cursor-small$/i.test(s)) {
+    return "Cursor Small";
   }
   const gemVer = s.match(/^gemini-(\d+\.\d+)-(\w+)$/i);
   if (gemVer) {
@@ -4382,7 +5816,7 @@ var SearchPanel = class {
 
 // src/export/exportCommands.ts
 var vscode6 = __toESM(require("vscode"));
-var path9 = __toESM(require("path"));
+var path15 = __toESM(require("path"));
 
 // src/export/markdownSerializer.ts
 function truncate(text, maxLen) {
@@ -4546,7 +5980,7 @@ function registerExportCommands(context, index, getOrderedSummaries) {
       }
       const items = allSummaries.map((s) => ({
         label: s.title || "Untitled Session",
-        description: `${path9.basename(s.workspacePath ?? s.workspaceId)} \xB7 ${s.updatedAt.slice(0, 10)}`,
+        description: `${path15.basename(s.workspacePath ?? s.workspaceId)} \xB7 ${s.updatedAt.slice(0, 10)}`,
         detail: `${s.source === "copilot" ? "Copilot" : "Claude"} \xB7 ${s.messageCount} messages`,
         id: s.id
       }));
@@ -9462,8 +10896,8 @@ var TimelineViewProvider = class _TimelineViewProvider {
 };
 
 // src/telemetry/telemetryRecorder.ts
-var fs7 = __toESM(require("fs"));
-var path10 = __toESM(require("path"));
+var fs13 = __toESM(require("fs"));
+var path16 = __toESM(require("path"));
 var MAX_LOG_BYTES = 1e6;
 var MAX_LOG_AGE_MS = 30 * 24 * 60 * 60 * 1e3;
 var TelemetryRecorder = class {
@@ -9474,7 +10908,7 @@ var TelemetryRecorder = class {
    *                     Typically `context.globalStoragePath` from the VS Code extension context.
    */
   constructor(storagePath) {
-    this.filePath = path10.join(storagePath, "telemetry.jsonl");
+    this.filePath = path16.join(storagePath, "telemetry.jsonl");
   }
   /** Whether telemetry recording is currently enabled. */
   get enabled() {
@@ -9505,8 +10939,8 @@ var TelemetryRecorder = class {
       ...properties !== void 0 ? { properties } : {}
     };
     try {
-      fs7.mkdirSync(path10.dirname(this.filePath), { recursive: true });
-      fs7.appendFileSync(this.filePath, JSON.stringify(entry) + "\n", "utf8");
+      fs13.mkdirSync(path16.dirname(this.filePath), { recursive: true });
+      fs13.appendFileSync(this.filePath, JSON.stringify(entry) + "\n", "utf8");
     } catch {
     }
   }
@@ -9517,7 +10951,7 @@ var TelemetryRecorder = class {
    */
   getEvents() {
     try {
-      const content = fs7.readFileSync(this.filePath, "utf8");
+      const content = fs13.readFileSync(this.filePath, "utf8");
       return content.split("\n").filter((line) => line.trim().length > 0).flatMap((line) => {
         try {
           return [JSON.parse(line)];
@@ -9541,13 +10975,13 @@ var TelemetryRecorder = class {
     try {
       let stat;
       try {
-        stat = fs7.statSync(this.filePath);
+        stat = fs13.statSync(this.filePath);
       } catch {
         return;
       }
       const needsRotation = stat.size > MAX_LOG_BYTES;
       const cutoff = Date.now() - MAX_LOG_AGE_MS;
-      const content = fs7.readFileSync(this.filePath, "utf8");
+      const content = fs13.readFileSync(this.filePath, "utf8");
       const lines = content.split("\n").filter((l) => l.trim().length > 0);
       let hadOld = false;
       const surviving = lines.filter((line) => {
@@ -9563,7 +10997,7 @@ var TelemetryRecorder = class {
         }
       });
       if (needsRotation || hadOld || surviving.length < lines.length) {
-        fs7.writeFileSync(this.filePath, surviving.map((l) => l.trim()).join("\n") + (surviving.length > 0 ? "\n" : ""), "utf8");
+        fs13.writeFileSync(this.filePath, surviving.map((l) => l.trim()).join("\n") + (surviving.length > 0 ? "\n" : ""), "utf8");
       }
     } catch {
     }
@@ -9574,7 +11008,7 @@ var TelemetryRecorder = class {
    */
   clear() {
     try {
-      fs7.unlinkSync(this.filePath);
+      fs13.unlinkSync(this.filePath);
     } catch {
     }
   }
@@ -9586,7 +11020,7 @@ var TelemetryRecorder = class {
 
 // src/commands/manageWorkspaces.ts
 var vscode13 = __toESM(require("vscode"));
-var path11 = __toESM(require("path"));
+var path17 = __toESM(require("path"));
 function registerManageWorkspacesCommand(context, scopeManager, getWatcher, channel, index) {
   context.subscriptions.push(
     vscode13.commands.registerCommand("chatwizard.manageWatchedWorkspaces", async () => {
@@ -9631,24 +11065,24 @@ function registerManageWorkspacesCommand(context, scopeManager, getWatcher, chan
       function indexCountForIds(ids) {
         const dirs = ids.map((id) => {
           const ws = allAvailable.find((w) => w.id === id);
-          return path11.normalize(ws.storageDir);
+          return path17.normalize(ws.storageDir);
         });
         return allSummaries.filter(
-          (s) => dirs.some((dir) => path11.normalize(s.filePath).startsWith(dir + path11.sep))
+          (s) => dirs.some((dir) => path17.normalize(s.filePath).startsWith(dir + path17.sep))
         ).length;
       }
       const countCache = context.globalState.get("cwSessionCountCache", {});
       const updatedCache = { ...countCache };
       const pathGroups = /* @__PURE__ */ new Map();
       for (const ws of allAvailable) {
-        const key = path11.normalize(ws.workspacePath).toLowerCase();
+        const key = path17.normalize(ws.workspacePath).toLowerCase();
         const group = pathGroups.get(key) ?? [];
         group.push(ws);
         pathGroups.set(key, group);
       }
       const allKeys = [...pathGroups.keys()];
       for (const key of allKeys) {
-        const prefix = key.endsWith(path11.sep) ? key : key + path11.sep;
+        const prefix = key.endsWith(path17.sep) ? key : key + path17.sep;
         if (allKeys.some((other) => other !== key && other.startsWith(prefix))) {
           pathGroups.delete(key);
         }
@@ -9659,7 +11093,7 @@ function registerManageWorkspacesCommand(context, scopeManager, getWatcher, chan
         const representative = group[0];
         const allIds = group.map((ws) => ws.id);
         const groupBytes = allIds.reduce((sum, id) => sum + (byteMap.get(id) ?? 0), 0);
-        const cacheKey = path11.normalize(representative.workspacePath).toLowerCase();
+        const cacheKey = path17.normalize(representative.workspacePath).toLowerCase();
         const isSelected = allIds.some((id) => currentSelectedIds.includes(id));
         const indexCount = indexCountForIds(allIds);
         let sessionCount;
@@ -9685,7 +11119,7 @@ function registerManageWorkspacesCommand(context, scopeManager, getWatcher, chan
           totalBytes: groupBytes,
           sessionCount,
           sessionCountApprox: approx,
-          label: path11.basename(representative.workspacePath),
+          label: path17.basename(representative.workspacePath),
           description: representative.workspacePath,
           detail: `${formatSize(groupBytes)}  \u2014  ${countLabel}`,
           picked: isSelected
@@ -9709,10 +11143,10 @@ function registerManageWorkspacesCommand(context, scopeManager, getWatcher, chan
         qp.title = makeTitle(initialReal);
         qp.placeholder = "Select workspaces to index";
         const openPaths = new Set(
-          (vscode13.workspace.workspaceFolders ?? []).map((f) => path11.normalize(f.uri.fsPath).toLowerCase())
+          (vscode13.workspace.workspaceFolders ?? []).map((f) => path17.normalize(f.uri.fsPath).toLowerCase())
         );
         const currentWsItems = workspaceItems.filter(
-          (item) => openPaths.has(path11.normalize(item.workspacePath).toLowerCase())
+          (item) => openPaths.has(path17.normalize(item.workspacePath).toLowerCase())
         );
         qp.onDidChangeSelection((selected) => {
           if (selected.length === 0) {

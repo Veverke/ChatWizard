@@ -712,6 +712,34 @@
           "type": "string",
           "default": "",
           "description": "Override the Cursor workspaceStorage path. Leave empty to use the default OS location (%APPDATA%/Cursor/User/workspaceStorage on Windows)."
+        },
+        "chatwizard.indexWindsurf": {
+          "type": "boolean",
+          "default": true,
+          "description": "Index Windsurf (Codeium) Cascade chat sessions from the Windsurf workspaceStorage directory."
+        },
+        "chatwizard.windsurfStoragePath": {
+          "type": "string",
+          "default": "",
+          "description": "Override the Windsurf workspaceStorage path. Leave empty to use the default OS location (%APPDATA%/Windsurf/User/workspaceStorage on Windows)."
+        },
+        "chatwizard.indexAider": {
+          "type": "boolean",
+          "default": true,
+          "description": "Index Aider chat history files (.aider.chat.history.md) found in VS Code workspace folders and any configured aiderSearchRoots."
+        },
+        "chatwizard.aiderSearchRoots": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Additional root directories to search for .aider.chat.history.md files (up to aiderSearchDepth levels deep)."
+        },
+        "chatwizard.aiderSearchDepth": {
+          "type": "integer",
+          "default": 3,
+          "minimum": 1,
+          "maximum": 5,
+          "description": "Maximum directory depth to recurse when searching for .aider.chat.history.md files (default: 3, max: 5)."
         }
       }
     }

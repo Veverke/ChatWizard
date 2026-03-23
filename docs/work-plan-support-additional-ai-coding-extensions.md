@@ -363,39 +363,39 @@ interface CascadeMessage {
 
 > **Note:** The exact Windsurf schema should be verified by inspecting a live `state.vscdb`. The shape above reflects community-reported structure and may require adjustment during implementation.
 
-### EXT-4-A — Reader: `src/readers/windsurfWorkspace.ts` ☐
+### EXT-4-A — Reader: `src/readers/windsurfWorkspace.ts` ☑
 
 **Exports:**
 - `getWindsurfStorageRoot(): string` — same pattern as `getCursorStorageRoot()` with `Windsurf` in path.
 - `discoverWindsurfWorkspacesAsync(override?: string): Promise<ScopedWorkspace[]>` — same algorithm as `discoverCursorWorkspacesAsync`, with `source: 'windsurf'`.
 
-### EXT-4-B — Parser: `src/parsers/windsurf.ts` ☐
+### EXT-4-B — Parser: `src/parsers/windsurf.ts` ☑
 
 **Exports:**
 - `parseWindsurfWorkspace(vscdbPath: string, workspaceId: string, workspacePath?: string): Promise<ParseResult[]>`
 
 **Algorithm:** same as `parseCursorWorkspace` but reads `cascade.sessionData` key and maps the `CascadeSession` / `CascadeMessage` shapes.
 
-### EXT-4-C — Watcher integration ☐
+### EXT-4-C — Watcher integration ☑
 
 **File:** `src/watcher/fileWatcher.ts`
 
 Same integration pattern as EXT-3-C, pointing to Windsurf paths and `parseWindsurfWorkspace`.
 
-### EXT-4-D — Config path ☐
+### EXT-4-D — Config path ☑
 
 **File:** `src/watcher/configPaths.ts`
 
 - Add `resolveWindsurfStoragePath(override?: string): string`.
 
-### EXT-4-E — Settings registration ☐
+### EXT-4-E — Settings registration ☑
 
 **File:** `package.json`
 
 - `chatwizard.indexWindsurf` (`boolean`, default `true`).
 - `chatwizard.windsurfStoragePath` (`string`, default `""`).
 
-### EXT-4-F — Unit tests ☐
+### EXT-4-F — Unit tests ☑
 
 **New test files:**
 - `test/suite/windsurfParser.test.ts` — mirrors `cursorParser.test.ts` using `cascade.sessionData` key and `CascadeSession` fixture structure.
@@ -440,7 +440,7 @@ assistant response here
 - Model information is **not** in the history file; it is in `.aider.conf.yml` (`model:` key) in the same directory. Read it if present.
 - One `.aider.chat.history.md` file = one `Session`.
 
-### EXT-5-A — Reader: `src/readers/aiderWorkspace.ts` ☐
+### EXT-5-A — Reader: `src/readers/aiderWorkspace.ts` ☑
 
 **Implements:** discovery of Aider history files across VS Code open workspaces and configured locations.
 
@@ -466,7 +466,7 @@ interface AiderHistoryInfo {
 - Depth limit: max 3 levels (configurable via `chatwizard.aiderSearchDepth`, default `3`, max `5`)
 - File size limit: skip files > 20 MB
 
-### EXT-5-B — Parser: `src/parsers/aider.ts` ☐
+### EXT-5-B — Parser: `src/parsers/aider.ts` ☑
 
 **Exports:**
 - `parseAiderHistory(info: AiderHistoryInfo, maxLineChars?: number): ParseResult`
@@ -490,7 +490,7 @@ interface AiderHistoryInfo {
 - Lines > `maxLineChars` → skip with `skipped: true` placeholder (mirrors Claude parser behaviour).
 - Cap assembled message at 1 MB; truncate with warning if exceeded.
 
-### EXT-5-C — Watcher integration ☐
+### EXT-5-C — Watcher integration ☑
 
 **File:** `src/watcher/fileWatcher.ts`
 
@@ -501,13 +501,13 @@ interface AiderHistoryInfo {
 - Register file watcher on `**/.aider.chat.history.md`.
 - `parseFile()`: add `source === 'aider'` branch.
 
-### EXT-5-D — Config paths ☐
+### EXT-5-D — Config paths ☑
 
 **File:** `src/watcher/configPaths.ts`
 
 No root path to resolve (Aider files are in-repo). No new function needed — roots come directly from workspace folders and the `chatwizard.aiderSearchRoots` setting.
 
-### EXT-5-E — Settings registration ☐
+### EXT-5-E — Settings registration ☑
 
 **File:** `package.json`
 
@@ -515,7 +515,7 @@ No root path to resolve (Aider files are in-repo). No new function needed — ro
 - `chatwizard.aiderSearchRoots` (`array` of `string`, default `[]`, description: `"Additional root directories to search for .aider.chat.history.md files."`).
 - `chatwizard.aiderSearchDepth` (`integer`, default `3`, minimum `1`, maximum `5`).
 
-### EXT-5-F — Unit tests ☐
+### EXT-5-F — Unit tests ☑
 
 **New test files:**
 - `test/suite/aiderParser.test.ts`
@@ -562,17 +562,20 @@ Update any exhaustive switches over `SessionSource` in the codebase (run `grep -
 - Add display labels and icon associations for the five new sources (mirror existing Copilot/Claude label pattern).
 - `friendlySourceName(source: SessionSource): string` helper — add to `src/views/webviewUtils.ts` or inline where needed.
 
-### CC-3 — `WorkspaceScopeManager` multi-source extension ☐
+### CC-3 — `WorkspaceScopeManager` multi-source extension ☑
 
 **File:** `src/watcher/workspaceScope.ts`
 
 - `calcWorkspaceSizeBytes` / `countWorkspaceSessions` — add branches for `'cline'`, `'roocode'`, `'cursor'`, `'windsurf'`, `'aider'` sources (scan correct directories for each).
+- `ScopedWorkspace.source` extended to include `'roocode'` and `'aider'` (in `src/types/index.ts`).
+- `calcWorkspaceSizeMb` refactored to delegate to `calcWorkspaceSizeBytes` (eliminates duplication).
 
-### CC-4 — `modelNames.ts` completeness ☐
+### CC-4 — `modelNames.ts` completeness ☑
 
 **File:** `src/analytics/modelNames.ts`
 
 Audit all model IDs that appear in the new fixture files and verify each maps to the correct friendly name. Add missing matchers and unit tests in `test/suite/modelNames.test.ts`.
+- Cursor-native IDs (`cursor-fast`, `cursor-small`) already present in `modelNames.ts`; added unit tests for them plus case-insensitivity and Cursor-surfaced Claude/Gemini IDs.
 
 ### CC-5 — README update ☐
 
@@ -605,11 +608,11 @@ The following groups can be implemented in parallel (no inter-group dependencies
 
 | Item | Status |
 |------|--------|
-| CC-1 — `SessionSource` type extension | ☑ (partial: 'cline' + 'roocode' added) |
-| CC-2 — Source identity display | ☐ |
-| CC-3 — `WorkspaceScopeManager` multi-source | ☐ |
-| CC-4 — `modelNames.ts` completeness | ☐ |
-| CC-5 — README update | ☐ |
+| CC-1 — `SessionSource` type extension | ☑ ('cline' + 'roocode' + 'cursor' + 'windsurf' + 'aider' added) |
+| CC-2 — Source identity display | ☑ (friendlySourceName + sourceIconId helpers in sessionTreeProvider.ts) |
+| CC-3 — `WorkspaceScopeManager` multi-source | ☑ (calcWorkspaceSizeBytes/calcWorkspaceSizeMb/countWorkspaceSessions extended for cline/roocode/cursor/windsurf/aider; ScopedWorkspace.source extended) |
+| CC-4 — `modelNames.ts` completeness | ☑ (cursor-fast/cursor-small matchers already present; added unit tests in modelNames.test.ts) |
+| CC-5 — README update | ☑ |
 | EXT-1-A — Cline reader | ☑ |
 | EXT-1-B — Cline parser | ☑ |
 | EXT-1-C — Cline watcher integration | ☑ |
@@ -629,15 +632,15 @@ The following groups can be implemented in parallel (no inter-group dependencies
 | EXT-3-E — Cursor model name normalisation | ☑ |
 | EXT-3-F — Cursor settings | ☑ |
 | EXT-3-G — Cursor unit tests | ☑ |
-| EXT-4-A — Windsurf reader | ☐ |
-| EXT-4-B — Windsurf parser | ☐ |
-| EXT-4-C — Windsurf watcher integration | ☐ |
-| EXT-4-D — Windsurf config path | ☐ |
-| EXT-4-E — Windsurf settings | ☐ |
-| EXT-4-F — Windsurf unit tests | ☐ |
-| EXT-5-A — Aider reader | ☐ |
-| EXT-5-B — Aider parser | ☐ |
-| EXT-5-C — Aider watcher integration | ☐ |
-| EXT-5-D — Aider config paths | ☐ |
-| EXT-5-E — Aider settings | ☐ |
-| EXT-5-F — Aider unit tests | ☐ |
+| EXT-4-A — Windsurf reader | ☑ |
+| EXT-4-B — Windsurf parser | ☑ |
+| EXT-4-C — Windsurf watcher integration | ☑ |
+| EXT-4-D — Windsurf config path | ☑ |
+| EXT-4-E — Windsurf settings | ☑ |
+| EXT-4-F — Windsurf unit tests | ☑ |
+| EXT-5-A — Aider reader | ☑ |
+| EXT-5-B — Aider parser | ☑ |
+| EXT-5-C — Aider watcher integration | ☑ |
+| EXT-5-D — Aider config paths | ☑ (N/A — roots from workspace folders + setting) |
+| EXT-5-E — Aider settings | ☑ |
+| EXT-5-F — Aider unit tests | ☑ |

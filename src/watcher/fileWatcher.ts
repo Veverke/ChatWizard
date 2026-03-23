@@ -11,12 +11,16 @@ import {
     listSessionFilesAsync,
 } from '../readers/copilotWorkspace';
 import { Session, SessionSource } from '../types/index';
-import { resolveClaudeProjectsPath, resolveClineStoragePath, resolveRooCodeStoragePath, resolveCursorStoragePath } from './configPaths';
+import { resolveClaudeProjectsPath, resolveClineStoragePath, resolveRooCodeStoragePath, resolveCursorStoragePath, resolveWindsurfStoragePath } from './configPaths';
 import { WorkspaceScopeManager } from './workspaceScope';
 import { discoverClineTasksAsync, discoverRooCodeTasksAsync } from '../readers/clineWorkspace';
 import { parseClineTask } from '../parsers/cline';
 import { discoverCursorWorkspacesAsync } from '../readers/cursorWorkspace';
 import { parseCursorWorkspace } from '../parsers/cursor';
+import { discoverWindsurfWorkspacesAsync } from '../readers/windsurfWorkspace';
+import { parseWindsurfWorkspace } from '../parsers/windsurf';
+import { discoverAiderHistoryFilesAsync } from '../readers/aiderWorkspace';
+import { parseAiderHistory } from '../parsers/aider';
 
 export class ChatWizardWatcher implements vscode.Disposable {
     private disposables: vscode.Disposable[] = [];
@@ -64,6 +68,8 @@ export class ChatWizardWatcher implements vscode.Disposable {
         const indexCline    = cfg.get<boolean>('indexCline', true);
         const indexRooCode  = cfg.get<boolean>('indexRooCode', true);
         const indexCursor   = cfg.get<boolean>('indexCursor', true);
+        const indexWindsurf = cfg.get<boolean>('indexWindsurf', true);
+        const indexAider    = cfg.get<boolean>('indexAider', true);
 
         if (!enabled) {
             this.channel.appendLine('[Chat Wizard] Extension disabled via chatwizard.enabled setting — skipping indexing and file watching.');
@@ -72,7 +78,7 @@ export class ChatWizardWatcher implements vscode.Disposable {
             return;
         }
 
-        await this.buildInitialIndex(indexClaude, indexCopilot, indexCline, indexRooCode, indexCursor);
+        await this.buildInitialIndex(indexClaude, indexCopilot, indexCline, indexRooCode, indexCursor, indexWindsurf, indexAider);
 
         if (indexClaude) {
             // Watch Claude sessions
@@ -192,6 +198,41 @@ export class ChatWizardWatcher implements vscode.Disposable {
 
             this.disposables.push(cursorWatcher);
         }
+
+        if (indexWindsurf) {
+            // Watch Windsurf state.vscdb files
+            const windsurfRoot = resolveWindsurfStoragePath();
+            const windsurfPattern = new vscode.RelativePattern(
+                vscode.Uri.file(windsurfRoot),
+                '**/state.vscdb'
+            );
+            const windsurfWatcher = vscode.workspace.createFileSystemWatcher(windsurfPattern);
+
+            windsurfWatcher.onDidCreate((uri) => this.onWindsurfFileChanged(uri));
+            windsurfWatcher.onDidChange((uri) => this.onWindsurfFileChanged(uri));
+            windsurfWatcher.onDidDelete((uri) => {
+                const vscdbPath = uri.fsPath;
+                this.channel.appendLine(`[live] windsurf state.vscdb deleted: ${vscdbPath}`);
+                // Sessions keyed by sessionId — log only; index cleanup happens on next rescan.
+            });
+
+            this.disposables.push(windsurfWatcher);
+        }
+
+        if (indexAider) {
+            // Watch Aider history files in VS Code workspace folders
+            const aiderWatcher = vscode.workspace.createFileSystemWatcher('**/.aider.chat.history.md');
+
+            aiderWatcher.onDidCreate((uri) => this.onAiderFileChanged(uri));
+            aiderWatcher.onDidChange((uri) => this.onAiderFileChanged(uri));
+            aiderWatcher.onDidDelete((uri) => {
+                const sessionId = require('crypto').createHash('sha1').update(uri.fsPath).digest('hex');
+                this.index.remove(sessionId);
+                this.channel.appendLine(`[live] removed aider session ${uri.fsPath}`);
+            });
+
+            this.disposables.push(aiderWatcher);
+        }
     }
 
     /**
@@ -211,7 +252,7 @@ export class ChatWizardWatcher implements vscode.Disposable {
         this.disposables = [];
     }
 
-    private async buildInitialIndex(indexClaude: boolean, indexCopilot: boolean, indexCline: boolean, indexRooCode: boolean = true, indexCursor: boolean = true): Promise<void> {
+    private async buildInitialIndex(indexClaude: boolean, indexCopilot: boolean, indexCline: boolean, indexRooCode: boolean = true, indexCursor: boolean = true, indexWindsurf: boolean = true, indexAider: boolean = true): Promise<void> {
         await vscode.window.withProgress(
             {
                 location: vscode.ProgressLocation.Window,
@@ -229,17 +270,19 @@ export class ChatWizardWatcher implements vscode.Disposable {
                 } else {
                     this.channel.appendLine(`[Chat Wizard] Building index with scope filter: [${selectedIds.join(', ')}]`);
                 }
-                const [claudeSessions, copilotSessions, clineSessions, rooCodeSessions, cursorSessions] = await Promise.all([
+                const [claudeSessions, copilotSessions, clineSessions, rooCodeSessions, cursorSessions, windsurfSessions, aiderSessions] = await Promise.all([
                     // Always pass selectedIds (even empty array) — empty = index nothing, no fallback to all.
-                    indexClaude   ? this.collectClaudeSessionsAsync(onProgress, selectedIds)  : Promise.resolve([]),
-                    indexCopilot  ? this.collectCopilotSessionsAsync(onProgress, selectedIds) : Promise.resolve([]),
-                    indexCline    ? this.collectClineTasksAsync(onProgress)                   : Promise.resolve([]),
-                    indexRooCode  ? this.collectRooCodeTasksAsync(onProgress)                 : Promise.resolve([]),
-                    indexCursor   ? this.collectCursorSessionsAsync(onProgress)               : Promise.resolve([]),
+                    indexClaude    ? this.collectClaudeSessionsAsync(onProgress, selectedIds)  : Promise.resolve([]),
+                    indexCopilot   ? this.collectCopilotSessionsAsync(onProgress, selectedIds) : Promise.resolve([]),
+                    indexCline     ? this.collectClineTasksAsync(onProgress)                   : Promise.resolve([]),
+                    indexRooCode   ? this.collectRooCodeTasksAsync(onProgress)                 : Promise.resolve([]),
+                    indexCursor    ? this.collectCursorSessionsAsync(onProgress)               : Promise.resolve([]),
+                    indexWindsurf  ? this.collectWindsurfSessionsAsync(onProgress)             : Promise.resolve([]),
+                    indexAider     ? this.collectAiderSessionsAsync(onProgress)                : Promise.resolve([]),
                 ]);
 
                 const cfg = vscode.workspace.getConfiguration('chatwizard');
-                const all = applySessionFilters([...claudeSessions, ...copilotSessions, ...clineSessions, ...rooCodeSessions, ...cursorSessions], cfg, this.channel);
+                const all = applySessionFilters([...claudeSessions, ...copilotSessions, ...clineSessions, ...rooCodeSessions, ...cursorSessions, ...windsurfSessions, ...aiderSessions], cfg, this.channel);
                 this.index.batchUpsert(all);
                 this.channel.appendLine(`[init] Batch indexed ${all.length} sessions`);
             }
@@ -474,6 +517,87 @@ export class ChatWizardWatcher implements vscode.Disposable {
         }
     }
 
+    /** Async: parse all Windsurf sessions by reading state.vscdb files across discovered workspaces. */
+    async collectWindsurfSessionsAsync(
+        onProgress?: (current: number, total: number) => void,
+        _windsurfRootOverride?: string
+    ): Promise<Session[]> {
+        const root = _windsurfRootOverride ?? resolveWindsurfStoragePath();
+        try {
+            const workspaces = await discoverWindsurfWorkspacesAsync(root);
+            const total = workspaces.length;
+            let current = 0;
+
+            const wsResults = await Promise.all(workspaces.map(async (ws) => {
+                const vscdbPath = require('path').join(ws.storageDir, 'state.vscdb');
+                const parseResults = await parseWindsurfWorkspace(vscdbPath, ws.id, ws.workspacePath);
+                current++;
+                onProgress?.(current, total);
+
+                const sessions: Session[] = [];
+                for (const result of parseResults) {
+                    if (result.errors.length > 0) {
+                        this.channel.appendLine(
+                            `[warn] Windsurf parse errors in ${vscdbPath}: ${result.errors.join('; ')}`
+                        );
+                    }
+                    if (result.session.messages.length === 0 ||
+                        result.session.createdAt === new Date(0).toISOString()) {
+                        continue;
+                    }
+                    sessions.push(result.session);
+                }
+                return sessions;
+            }));
+
+            return wsResults.flat();
+        } catch (err) {
+            this.channel.appendLine(`[error] Failed to collect Windsurf sessions: ${err}`);
+            return [];
+        }
+    }
+
+    /**
+     * Async: parse all Aider sessions by scanning VS Code workspace folders and
+     * any user-configured extra roots for `.aider.chat.history.md` files.
+     */
+    async collectAiderSessionsAsync(
+        onProgress?: (current: number, total: number) => void,
+        _rootsOverride?: string[]
+    ): Promise<Session[]> {
+        try {
+            const cfg = vscode.workspace.getConfiguration('chatwizard');
+            const extraRoots = cfg.get<string[]>('aiderSearchRoots', []);
+            const maxDepth   = cfg.get<number>('aiderSearchDepth', 3);
+
+            const wsFolders = vscode.workspace.workspaceFolders?.map(f => f.uri.fsPath) ?? [];
+            const roots = _rootsOverride ?? [...wsFolders, ...extraRoots];
+
+            const infos = await discoverAiderHistoryFilesAsync(roots, maxDepth);
+            const total = infos.length;
+            let current = 0;
+
+            const results = await Promise.all(infos.map(async (info) => {
+                const result = parseAiderHistory(info);
+                current++;
+                onProgress?.(current, total);
+                if (result.errors.length > 0) {
+                    this.channel.appendLine(`[warn] Aider parse errors in ${info.historyFile}: ${result.errors.join('; ')}`);
+                }
+                if (result.session.messages.length === 0 ||
+                    result.session.createdAt === new Date(0).toISOString()) {
+                    return null;
+                }
+                return result.session;
+            }));
+
+            return results.filter((s): s is Session => s !== null);
+        } catch (err) {
+            this.channel.appendLine(`[error] Failed to collect Aider sessions: ${err}`);
+            return [];
+        }
+    }
+
     /** Synchronous collectors kept for internal use by live-update code paths. */
     private collectClaudeSessions(): Session[] {
         const sessions: Session[] = [];
@@ -695,6 +819,67 @@ export class ChatWizardWatcher implements vscode.Disposable {
             upsertCount++;
         }
         this.channel.appendLine(`[live] cursor updated ${upsertCount} session(s) from ${vscdbPath}`);
+    }
+
+    private async onWindsurfFileChanged(uri: vscode.Uri): Promise<void> {
+        const vscdbPath = uri.fsPath;
+        // workspaceId is the hash directory name (parent of state.vscdb)
+        const workspaceId = path.basename(path.dirname(vscdbPath));
+        // Try to resolve workspacePath from workspace.json in the same directory
+        let workspacePath: string | undefined;
+        try {
+            const wsJson = path.join(path.dirname(vscdbPath), 'workspace.json');
+            const raw = require('fs').readFileSync(wsJson, 'utf8');
+            const parsed = JSON.parse(raw);
+            if (parsed.folder) {
+                let decoded = decodeURIComponent(parsed.folder.replace('file://', ''));
+                if (process.platform === 'win32' && decoded.startsWith('/')) {
+                    decoded = decoded.slice(1);
+                }
+                workspacePath = decoded;
+            }
+        } catch {
+            // workspace.json missing or unreadable — workspacePath stays undefined
+        }
+
+        const parseResults = await parseWindsurfWorkspace(vscdbPath, workspaceId, workspacePath);
+        let upsertCount = 0;
+        for (const result of parseResults) {
+            if (result.errors.length > 0) {
+                this.channel.appendLine(
+                    `[warn] Windsurf parse errors in ${vscdbPath}: ${result.errors.join('; ')}`
+                );
+            }
+            if (result.session.messages.length === 0 ||
+                result.session.createdAt === new Date(0).toISOString()) {
+                continue;
+            }
+            this.index.upsert(result.session);
+            upsertCount++;
+        }
+        this.channel.appendLine(`[live] windsurf updated ${upsertCount} session(s) from ${vscdbPath}`);
+    }
+
+    private onAiderFileChanged(uri: vscode.Uri): void {
+        const historyFile = uri.fsPath;
+        const workspacePath = require('path').dirname(historyFile);
+        const configFile = (() => {
+            const candidate = require('path').join(workspacePath, '.aider.conf.yml');
+            try { require('fs').accessSync(candidate); return candidate; } catch { return undefined; }
+        })();
+        const result = parseAiderHistory({ historyFile, workspacePath, configFile });
+        if (result.errors.length > 0) {
+            this.channel.appendLine(`[warn] Aider parse errors in ${historyFile}: ${result.errors.join('; ')}`);
+        }
+        if (result.session.messages.length === 0 ||
+            result.session.createdAt === new Date(0).toISOString()) {
+            this.channel.appendLine(`[skip] empty/epoch aider session ${historyFile}`);
+            return;
+        }
+        const before = this.index.size;
+        this.index.upsert(result.session);
+        const verb = this.index.size > before ? 'added' : 'updated';
+        this.channel.appendLine(`[live] ${verb} aider session ${historyFile}`);
     }
 
     private onFileChanged(

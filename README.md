@@ -6,7 +6,7 @@
 [![License: MIT + Commons Clause](https://img.shields.io/badge/license-MIT%20%2B%20Commons%20Clause-blue.svg)](LICENSE)
 
 Inspired by https://github.com/Veverke/bAInder, I decided to make a VS Code extension, with a developer perspective in mind.
-Unified search, analytics, and history browser for your GitHub Copilot Chat, Claude Code, Cline, Roo Code, and Cursor sessions.
+Unified search, analytics, and history browser for your GitHub Copilot Chat, Claude Code, Cline, Roo Code, Cursor, Windsurf, and Aider sessions.
 
 > **Tags:** AI chat history · Copilot history viewer · Claude conversation browser · chat history viewer · prompt library · code block search · token usage analytics · LLM productivity · VS Code AI tools · conversation history manager
 
@@ -140,7 +140,7 @@ A chronological month-grouped feed of all sessions across all workspaces. Each c
 - Clicking any card opens the session reader.
 
 ### Live File Watching
-A `FileSystemWatcher` monitors the Copilot Chat workspace storage directory and the Claude Code projects directory. When a session file is created or updated, only that entry is re-parsed and re-indexed — no full rebuild. All views (Sessions, Code Blocks, Prompt Library, Analytics, Timeline) refresh automatically without user action.
+A `FileSystemWatcher` monitors all configured source directories — Copilot Chat workspace storage, Claude Code projects, Cline/Roo Code task directories, Cursor and Windsurf `state.vscdb` files, and Aider `.aider.chat.history.md` files in open workspace folders. When a session file is created or updated, only that entry is re-parsed and re-indexed — no full rebuild. All views (Sessions, Code Blocks, Prompt Library, Analytics, Timeline) refresh automatically without user action.
 
 ### Configurable Data Source Paths
 Override the default discovery paths for Claude Code sessions and Copilot Chat workspace storage via extension settings — useful for non-standard VS Code installs or custom data directories. Changing a path displays a prompt to reload the window so the new location takes effect immediately.
@@ -200,6 +200,8 @@ Capabilities not available in the built-in GitHub Copilot Chat panel or the Clau
 | **Cline** (`saoudrizwan.claude-dev`) | Per-task JSON files at `%APPDATA%/Code/User/globalStorage/saoudrizwan.claude-dev/tasks/<taskId>/` |
 | **Roo Code** (`rooveterinaryinc.roo-cline`) | Per-task JSON files at `%APPDATA%/Code/User/globalStorage/rooveterinaryinc.roo-cline/tasks/<taskId>/` (Cline-compatible format) |
 | **Cursor** | SQLite `state.vscdb` at `%APPDATA%/Cursor/User/workspaceStorage/<hash>/` — chat history stored under the `composer.composerData` key. Requires `better-sqlite3` (pre-built native module bundled with the extension). |
+| **Windsurf** (Codeium) | SQLite `state.vscdb` at `%APPDATA%/Windsurf/User/workspaceStorage/<hash>/` — Cascade chat history stored under the `cascade.sessionData` key. Reuses the same `better-sqlite3` driver. |
+| **Aider** | Markdown `.aider.chat.history.md` files written by Aider into each project root. ChatWizard scans all open VS Code workspace folders plus any paths listed in `chatwizard.aiderSearchRoots` (up to `chatwizard.aiderSearchDepth` levels deep, default 3). Optional `.aider.conf.yml` in the same directory is read for the `model:` key. No central storage directory — files live inside your project repos. |
 
 ---
 
@@ -234,6 +236,8 @@ Capabilities not available in the built-in GitHub Copilot Chat panel or the Clau
 | `chatwizard.rooCodeStoragePath` | `` | Custom path to the Roo Code globalStorage tasks directory (empty = platform default) |
 | `chatwizard.indexCursor` | `true` | Index Cursor chat sessions |
 | `chatwizard.cursorStoragePath` | `` | Custom path to the Cursor workspaceStorage directory (empty = platform default `%APPDATA%/Cursor/User/workspaceStorage`) |
+| `chatwizard.indexWindsurf` | `true` | Index Windsurf (Codeium) Cascade chat sessions |
+| `chatwizard.windsurfStoragePath` | `` | Custom path to the Windsurf workspaceStorage directory (empty = platform default `%APPDATA%/Windsurf/User/workspaceStorage`) |
 | `chatwizard.enableTelemetry` | `false` | Enable local-only usage telemetry written to the extension's global storage directory (no external data transmission) |
 
 ---

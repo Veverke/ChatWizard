@@ -1,7 +1,7 @@
 // src/types/index.ts
 
 /** Which AI chat extension produced the session */
-export type SessionSource = 'copilot' | 'claude' | 'cline' | 'roocode' | 'cursor';
+export type SessionSource = 'copilot' | 'claude' | 'cline' | 'roocode' | 'cursor' | 'windsurf' | 'aider';
 
 /** Role of a message participant */
 export type MessageRole = 'user' | 'assistant';
@@ -169,6 +169,16 @@ export interface ClineTaskInfo {
     conversationFile: string;
 }
 
+/** Descriptor for a discovered Aider history file */
+export interface AiderHistoryInfo {
+    /** Absolute path to .aider.chat.history.md */
+    historyFile: string;
+    /** Parent directory (the project root where Aider was run) */
+    workspacePath: string;
+    /** Absolute path to .aider.conf.yml if present */
+    configFile?: string;
+}
+
 /** Result of parsing a raw JSONL file */
 export interface ParseResult {
     session: Session;
@@ -187,7 +197,7 @@ export interface ScopedWorkspace {
     /** Unique per source — Copilot storage hash or Claude project directory name */
     id: string;
     /** Which AI extension produced this workspace */
-    source: 'copilot' | 'claude' | 'cline' | 'cursor';
+    source: 'copilot' | 'claude' | 'cline' | 'roocode' | 'cursor' | 'windsurf' | 'aider';
     /** Human-readable absolute path to the workspace root */
     workspacePath: string;
     /** Physical directory containing the session files */

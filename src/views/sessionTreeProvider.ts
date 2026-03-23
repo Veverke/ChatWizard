@@ -1,7 +1,29 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { SessionIndex } from '../index/sessionIndex';
-import { SessionSummary } from '../types/index';
+import { SessionSummary, SessionSource } from '../types/index';
+
+/** Returns a human-readable display name for a session source. */
+function friendlySourceName(source: SessionSource): string {
+    switch (source) {
+        case 'copilot':  return 'GitHub Copilot';
+        case 'claude':   return 'Claude Code';
+        case 'cline':    return 'Cline';
+        case 'roocode':  return 'Roo Code';
+        case 'cursor':   return 'Cursor';
+        case 'windsurf': return 'Windsurf';
+        case 'aider':    return 'Aider';
+    }
+}
+
+/** Returns the VS Code ThemeIcon name for a session source. */
+function sourceIconId(source: SessionSource): string {
+    switch (source) {
+        case 'copilot': return 'github';
+        case 'aider':   return 'terminal';
+        default:        return 'hubot';
+    }
+}
 
 export class SessionTreeItem extends vscode.TreeItem {
     readonly summary: SessionSummary;
@@ -24,7 +46,7 @@ export class SessionTreeItem extends vscode.TreeItem {
             ? `${workspaceName} · ${date} · ${msgCount} msgs · ${sizeKb}`
             : `${workspaceName} · ${date} · ${msgCount} msgs`;
 
-        const sourceName = summary.source === 'copilot' ? 'GitHub Copilot' : 'Claude Code';
+        const sourceName = friendlySourceName(summary.source);
         const modelLine = summary.model ? `\n\n**Model:** ${summary.model}` : '';
         const sizeLine = sizeKb ? `\n\n**Size:** ${msgCount} messages · ${sizeKb}` : `\n\n**Size:** ${msgCount} messages`;
         const pinnedLine = pinned ? `\n\n📌 *Pinned*` : '';
@@ -67,18 +89,12 @@ export class SessionTreeItem extends vscode.TreeItem {
             this.iconPath = new vscode.ThemeIcon('pinned');
         } else if (summary.interrupted) {
             const red = new vscode.ThemeColor('list.errorForeground');
-            this.iconPath = summary.source === 'copilot'
-                ? new vscode.ThemeIcon('github', red)
-                : new vscode.ThemeIcon('hubot', red);
+            this.iconPath = new vscode.ThemeIcon(sourceIconId(summary.source), red);
         } else if (summary.hasParseErrors) {
             const yellow = new vscode.ThemeColor('list.warningForeground');
-            this.iconPath = summary.source === 'copilot'
-                ? new vscode.ThemeIcon('github', yellow)
-                : new vscode.ThemeIcon('hubot', yellow);
+            this.iconPath = new vscode.ThemeIcon(sourceIconId(summary.source), yellow);
         } else {
-            this.iconPath = summary.source === 'copilot'
-                ? new vscode.ThemeIcon('github')
-                : new vscode.ThemeIcon('hubot');
+            this.iconPath = new vscode.ThemeIcon(sourceIconId(summary.source));
         }
 
         if (summary.hasParseErrors) {
@@ -148,7 +164,7 @@ export const SORT_KEY_LABELS: Record<SortKey, string> = {
     length: 'Message Count',
     title: 'Title (A–Z)',
     model: 'AI Model',
-    source: 'Source (Copilot / Claude)',
+    source: 'Source',
 };
 
 const SHORT_LABEL: Record<SortKey, string> = {

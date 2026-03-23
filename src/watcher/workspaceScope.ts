@@ -95,79 +95,89 @@ export class WorkspaceScopeManager {
 }
 
 /**
- * Returns the total size in **bytes** of all `.jsonl` session files for a workspace.
- * Same scanning rules as `calcWorkspaceSizeMb`. Returns `0` on any I/O error.
+ * Returns the total size in **bytes** of session data files for a workspace.
+ * File selection depends on the source:
+ * - **copilot**: `<storageDir>/chatSessions/*.jsonl`
+ * - **claude**:  `<storageDir>/*.jsonl`
+ * - **cline / roocode**: `<storageDir>/<taskId>/api_conversation_history.json` (one per task subdir)
+ * - **cursor / windsurf**: `<storageDir>/state.vscdb`
+ * - **aider**: `<storageDir>/.aider.chat.history.md`
+ *
+ * Returns `0` on any I/O error.
  */
 export async function calcWorkspaceSizeBytes(
     storageDir: string,
     source: SessionSource
 ): Promise<number> {
     try {
-        const dir =
-            source === 'copilot' ? path.join(storageDir, 'chatSessions') : storageDir;
+        if (source === 'copilot') {
+            const dir = path.join(storageDir, 'chatSessions');
+            const entries = await fs.promises.readdir(dir);
+            const sizes = await Promise.all(
+                entries.filter(e => e.endsWith('.jsonl')).map(async f => {
+                    try { return (await fs.promises.stat(path.join(dir, f))).size; } catch { return 0; }
+                })
+            );
+            return sizes.reduce((acc, s) => acc + s, 0);
+        }
 
-        const entries = await fs.promises.readdir(dir);
-        const jsonlFiles = entries.filter(e => e.endsWith('.jsonl'));
+        if (source === 'claude') {
+            const entries = await fs.promises.readdir(storageDir);
+            const sizes = await Promise.all(
+                entries.filter(e => e.endsWith('.jsonl')).map(async f => {
+                    try { return (await fs.promises.stat(path.join(storageDir, f))).size; } catch { return 0; }
+                })
+            );
+            return sizes.reduce((acc, s) => acc + s, 0);
+        }
 
-        const sizes = await Promise.all(
-            jsonlFiles.map(async f => {
-                try {
-                    const stat = await fs.promises.stat(path.join(dir, f));
-                    return stat.size;
-                } catch {
-                    return 0;
-                }
-            })
-        );
+        if (source === 'cline' || source === 'roocode') {
+            const entries = await fs.promises.readdir(storageDir, { withFileTypes: true });
+            const sizes = await Promise.all(
+                entries.filter(e => e.isDirectory()).map(async entry => {
+                    const convFile = path.join(storageDir, entry.name, 'api_conversation_history.json');
+                    try { return (await fs.promises.stat(convFile)).size; } catch { return 0; }
+                })
+            );
+            return sizes.reduce((acc, s) => acc + s, 0);
+        }
 
-        return sizes.reduce((acc, s) => acc + s, 0);
+        if (source === 'cursor' || source === 'windsurf') {
+            const vscdb = path.join(storageDir, 'state.vscdb');
+            try { return (await fs.promises.stat(vscdb)).size; } catch { return 0; }
+        }
+
+        if (source === 'aider') {
+            const histFile = path.join(storageDir, '.aider.chat.history.md');
+            try { return (await fs.promises.stat(histFile)).size; } catch { return 0; }
+        }
+
+        return 0;
     } catch {
         return 0;
     }
 }
 
 /**
- * Calculates the total size in MB of all `.jsonl` session files for a workspace.
- *
- * - **Copilot**: scans `<storageDir>/chatSessions/*.jsonl`
- * - **Claude**:  scans `<storageDir>/*.jsonl`
- *
+ * Calculates the total size in MB of session data files for a workspace.
+ * Uses the same source-specific logic as `calcWorkspaceSizeBytes`.
  * Returns the result rounded to two decimal places, or `0` on any I/O error.
  */
 export async function calcWorkspaceSizeMb(
     storageDir: string,
     source: SessionSource
 ): Promise<number> {
-    try {
-        const dir =
-            source === 'copilot' ? path.join(storageDir, 'chatSessions') : storageDir;
-
-        const entries = await fs.promises.readdir(dir);
-        const jsonlFiles = entries.filter(e => e.endsWith('.jsonl'));
-
-        const sizes = await Promise.all(
-            jsonlFiles.map(async f => {
-                try {
-                    const stat = await fs.promises.stat(path.join(dir, f));
-                    return stat.size;
-                } catch {
-                    return 0;
-                }
-            })
-        );
-
-        const totalBytes = sizes.reduce((acc, s) => acc + s, 0);
-        return Math.round((totalBytes / (1024 * 1024)) * 100) / 100;
-    } catch {
-        return 0;
-    }
+    const totalBytes = await calcWorkspaceSizeBytes(storageDir, source);
+    return Math.round((totalBytes / (1024 * 1024)) * 100) / 100;
 }
 
 /**
- * Counts the number of `.jsonl` session files for a workspace (from disk).
- *
- * - **Copilot**: counts `<storageDir>/chatSessions/*.jsonl`
- * - **Claude**:  counts `<storageDir>/*.jsonl`
+ * Counts the number of session files/tasks for a workspace (from disk).
+ * - **copilot**: counts `<storageDir>/chatSessions/*.jsonl`
+ * - **claude**:  counts `<storageDir>/*.jsonl`
+ * - **cline / roocode**: counts task subdirectories that contain `api_conversation_history.json`
+ * - **cursor / windsurf**: returns 1 if `state.vscdb` exists, else 0
+ * - **aider**: returns 1 if `.aider.chat.history.md` exists, else 0
  *
  * Returns 0 on any I/O error.
  */
@@ -176,10 +186,39 @@ export async function countWorkspaceSessions(
     source: SessionSource
 ): Promise<number> {
     try {
-        const dir =
-            source === 'copilot' ? path.join(storageDir, 'chatSessions') : storageDir;
-        const entries = await fs.promises.readdir(dir);
-        return entries.filter(e => e.endsWith('.jsonl')).length;
+        if (source === 'copilot') {
+            const dir = path.join(storageDir, 'chatSessions');
+            const entries = await fs.promises.readdir(dir);
+            return entries.filter(e => e.endsWith('.jsonl')).length;
+        }
+
+        if (source === 'claude') {
+            const entries = await fs.promises.readdir(storageDir);
+            return entries.filter(e => e.endsWith('.jsonl')).length;
+        }
+
+        if (source === 'cline' || source === 'roocode') {
+            const entries = await fs.promises.readdir(storageDir, { withFileTypes: true });
+            const counts = await Promise.all(
+                entries.filter(e => e.isDirectory()).map(async entry => {
+                    const convFile = path.join(storageDir, entry.name, 'api_conversation_history.json');
+                    try { await fs.promises.access(convFile); return 1 as number; } catch { return 0 as number; }
+                })
+            );
+            return counts.reduce((acc, c) => acc + c, 0);
+        }
+
+        if (source === 'cursor' || source === 'windsurf') {
+            const vscdb = path.join(storageDir, 'state.vscdb');
+            try { await fs.promises.access(vscdb); return 1; } catch { return 0; }
+        }
+
+        if (source === 'aider') {
+            const histFile = path.join(storageDir, '.aider.chat.history.md');
+            try { await fs.promises.access(histFile); return 1; } catch { return 0; }
+        }
+
+        return 0;
     } catch {
         return 0;
     }
