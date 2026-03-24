@@ -194,7 +194,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     });
     context.subscriptions.push(timelineListener);
 
-    const provider = new SessionTreeProvider(index);
+    const provider = new SessionTreeProvider(index, context.extensionUri);
 
     // Restore persisted sort stack
     const savedStackJson = context.globalState.get<string>('sortStack');

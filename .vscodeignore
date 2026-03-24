@@ -18,6 +18,7 @@ node_modules/**
 # Keep bundled output and assets
 !dist/**
 !images/**
+!resources/**
 
 # better-sqlite3: include the compiled native addon and its runtime JS wrapper.
 # The native binary (better_sqlite3.node) is platform-specific and MUST be compiled

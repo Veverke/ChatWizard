@@ -35,7 +35,11 @@
       "Bash(dir \".vscode-test/vscode-win32-x64-archive-1.112.0/07ff9d6178/\")",
       "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(''''version'''', d.get\\(''''version''''\\)\\); print\\(''''electron'''', d.get\\(''''electron''''\\)\\); print\\(''''electronVersion'''', d.get\\(''''electronVersion''''\\)\\)\")",
       "Bash(npx electron-rebuild:*)",
-      "Bash(node scripts/rebuild-native.js)"
+      "Bash(node scripts/rebuild-native.js)",
+      "Bash(curl -s \"https://cline.bot/assets/branding/brand/General%20Logos/Bot/SVG/BOT_LIGHT.svg\" -A \"Mozilla/5.0\")",
+      "Bash(curl -s \"https://cline.bot/assets/branding/brand/General%20Logos/Lockup%20Horizontal/SVG/LOCKUP_HORIZONTAL_LIGHT.svg\" -A \"Mozilla/5.0\")",
+      "Bash(curl -s \"https://aider.chat/assets/logo.svg\" -A \"Mozilla/5.0\")",
+      "Bash(curl -s \"https://api.github.com/repositories/881506708/contents/assets\" -A \"Mozilla/5.0\")"
     ],
     "additionalDirectories": [
       "c:\\Users\\avrei\\.claude\\projects\\c--Repos-Personal-ChatWizard\\memory"

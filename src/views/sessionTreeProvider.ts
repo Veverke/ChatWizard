@@ -16,12 +16,39 @@ function friendlySourceName(source: SessionSource): string {
     }
 }
 
-/** Returns the VS Code ThemeIcon name for a session source. */
+/** Returns the VS Code ThemeIcon name for a session source (fallback when no extensionUri). */
 function sourceIconId(source: SessionSource): string {
     switch (source) {
-        case 'copilot': return 'github';
-        case 'aider':   return 'terminal';
-        default:        return 'hubot';
+        case 'copilot':  return 'github';
+        case 'claude':   return 'hubot';
+        case 'cline':    return 'plug';
+        case 'roocode':  return 'circuit-board';
+        case 'cursor':   return 'edit';
+        case 'windsurf': return 'cloud';
+        case 'aider':    return 'terminal';
+    }
+}
+
+/**
+ * Returns a brand icon `{ light, dark }` URI pair for sources that have bundled SVGs.
+ * Falls back to a ThemeIcon for copilot and claude (which use built-in codicons).
+ */
+function sourceBrandIcon(
+    source: SessionSource,
+    extensionUri: vscode.Uri
+): { light: vscode.Uri; dark: vscode.Uri } | vscode.ThemeIcon {
+    switch (source) {
+        case 'cline':
+        case 'roocode':
+        case 'cursor':
+        case 'windsurf':
+        case 'aider':
+            return {
+                light: vscode.Uri.joinPath(extensionUri, 'resources', 'icons', `${source}_light.svg`),
+                dark:  vscode.Uri.joinPath(extensionUri, 'resources', 'icons', `${source}_dark.svg`),
+            };
+        default:
+            return new vscode.ThemeIcon(sourceIconId(source));
     }
 }
 
@@ -29,7 +56,7 @@ export class SessionTreeItem extends vscode.TreeItem {
     readonly summary: SessionSummary;
     readonly pinned: boolean;
 
-    constructor(summary: SessionSummary, pinned = false) {
+    constructor(summary: SessionSummary, pinned = false, extensionUri?: vscode.Uri) {
         super(summary.title || 'Untitled Session', vscode.TreeItemCollapsibleState.None);
 
         this.summary = summary;
@@ -88,11 +115,15 @@ export class SessionTreeItem extends vscode.TreeItem {
         if (pinned) {
             this.iconPath = new vscode.ThemeIcon('pinned');
         } else if (summary.interrupted) {
+            // Keep ThemeIcon with color tinting so the red error signal is preserved.
             const red = new vscode.ThemeColor('list.errorForeground');
             this.iconPath = new vscode.ThemeIcon(sourceIconId(summary.source), red);
         } else if (summary.hasParseErrors) {
+            // Keep ThemeIcon with color tinting; the ⚠ badge from resourceUri also shows.
             const yellow = new vscode.ThemeColor('list.warningForeground');
             this.iconPath = new vscode.ThemeIcon(sourceIconId(summary.source), yellow);
+        } else if (extensionUri) {
+            this.iconPath = sourceBrandIcon(summary.source, extensionUri);
         } else {
             this.iconPath = new vscode.ThemeIcon(sourceIconId(summary.source));
         }
@@ -260,7 +291,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeI
     /** True until the first change event fires (initial batch index complete) */
     private _loading = true;
 
-    constructor(private readonly index: SessionIndex) {
+    constructor(private readonly index: SessionIndex, private readonly extensionUri?: vscode.Uri) {
         index.addChangeListener(() => {
             this._loading = false;
             this._sortedCache = null;
@@ -495,7 +526,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeI
         const pinnedSet = new Set(this._pinnedIds);
         const all = this._buildOrderedSummaries();
         const visible = all.slice(0, this._visibleCount);
-        const items: (SessionTreeItem | LoadMoreTreeItem)[] = visible.map(s => new SessionTreeItem(s, pinnedSet.has(s.id)));
+        const items: (SessionTreeItem | LoadMoreTreeItem)[] = visible.map(s => new SessionTreeItem(s, pinnedSet.has(s.id), this.extensionUri));
         const remaining = all.length - visible.length;
         if (remaining > 0) {
             items.push(new LoadMoreTreeItem(remaining));

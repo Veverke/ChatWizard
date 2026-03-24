@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <!-- terminal frame -->
+  <path fill="#14b014" fill-rule="evenodd" d="M1.5 2A1.5 1.5 0 0 0 0 3.5v9A1.5 1.5 0 0 0 1.5 14h13a1.5 1.5 0 0 0 1.5-1.5v-9A1.5 1.5 0 0 0 14.5 2zm0 1h13a.5.5 0 0 1 .5.5v9a.5.5 0 0 1-.5.5h-13a.5.5 0 0 1-.5-.5v-9a.5.5 0 0 1 .5-.5z"/>
+  <!-- > prompt arrow -->
+  <path fill="#14b014" d="M2.5 6.5 6 8.5l-3.5 2z"/>
+  <!-- _ cursor bar -->
+  <rect fill="#14b014" x="7" y="10" width="3.5" height="1.2" rx="0.3"/>
+</svg>

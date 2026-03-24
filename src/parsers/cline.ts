@@ -33,6 +33,7 @@ interface UiMessage {
     ask?: string;
     text?: string;
     cwd?: string;
+    model?: string;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
@@ -157,8 +158,20 @@ export async function parseClineTask(
         if (!workspacePath && typeof ui.cwd === 'string' && ui.cwd) {
             workspacePath = ui.cwd;
         }
-        if (!model && typeof (ui as Record<string, unknown>)['model'] === 'string') {
-            model = (ui as Record<string, unknown>)['model'] as string;
+        // Model stored directly on the message (newer Cline versions)
+        if (!model && typeof ui.model === 'string' && ui.model) {
+            model = ui.model;
+        }
+        // Model stored as JSON in the text of api_req_started messages
+        if (!model && ui.say === 'api_req_started' && typeof ui.text === 'string') {
+            try {
+                const parsed = JSON.parse(ui.text) as Record<string, unknown>;
+                if (typeof parsed['model'] === 'string' && parsed['model']) {
+                    model = parsed['model'] as string;
+                }
+            } catch {
+                // not JSON — ignore
+            }
         }
     }
 
@@ -182,13 +195,27 @@ export async function parseClineTask(
         });
     }
 
-    // ── Derive title from first user message ────────────────────────────────
-    const firstUserMsg = messages.find(m => m.role === 'user');
+    // ── Derive title ─────────────────────────────────────────────────────────
+    // Priority 1: ui_messages.json task entry — cleanest, no XML wrapper noise.
+    // Priority 2: Parse <task>…</task> block from first API user message.
+    // Priority 3: First non-empty line of first API user message (fallback).
     let title = 'Untitled Task';
-    if (firstUserMsg) {
-        const firstLine = firstUserMsg.content.split('\n')[0];
-        const base = firstLine || firstUserMsg.content;
-        title = base.length > MAX_TITLE_CHARS ? base.slice(0, MAX_TITLE_CHARS) + '…' : base;
+
+    const taskUiMsg = uiMessages.find(m => m.say === 'task' && typeof m.text === 'string' && m.text?.trim());
+    if (taskUiMsg) {
+        const text = taskUiMsg.text!.trim();
+        const firstLine = text.split('\n')[0] || text;
+        title = firstLine.length > MAX_TITLE_CHARS ? firstLine.slice(0, MAX_TITLE_CHARS) + '…' : firstLine;
+    } else {
+        const firstUserMsg = messages.find(m => m.role === 'user');
+        if (firstUserMsg) {
+            // Cline wraps the user request in <task>…</task> in the API message.
+            const taskMatch = firstUserMsg.content.match(/<task>\s*([\s\S]*?)\s*<\/task>/);
+            const base = taskMatch
+                ? taskMatch[1].split('\n')[0] || taskMatch[1]
+                : (firstUserMsg.content.split('\n').find(l => l.trim() && !l.startsWith('<')) ?? firstUserMsg.content);
+            title = base.length > MAX_TITLE_CHARS ? base.slice(0, MAX_TITLE_CHARS) + '…' : base;
+        }
     }
 
     // ── File stat fallback for timestamps ────────────────────────────────────

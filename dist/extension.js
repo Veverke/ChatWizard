@@ -1391,8 +1391,17 @@ async function parseClineTask(taskDir, _maxLineChars, source = "cline") {
     if (!workspacePath && typeof ui.cwd === "string" && ui.cwd) {
       workspacePath = ui.cwd;
     }
-    if (!model && typeof ui["model"] === "string") {
-      model = ui["model"];
+    if (!model && typeof ui.model === "string" && ui.model) {
+      model = ui.model;
+    }
+    if (!model && ui.say === "api_req_started" && typeof ui.text === "string") {
+      try {
+        const parsed = JSON.parse(ui.text);
+        if (typeof parsed["model"] === "string" && parsed["model"]) {
+          model = parsed["model"];
+        }
+      } catch {
+      }
     }
   }
   const messages = [];
@@ -1410,12 +1419,19 @@ async function parseClineTask(taskDir, _maxLineChars, source = "cline") {
       codeBlocks: extractClineCodeBlocks(content, taskId, messageIndex)
     });
   }
-  const firstUserMsg = messages.find((m) => m.role === "user");
   let title = "Untitled Task";
-  if (firstUserMsg) {
-    const firstLine = firstUserMsg.content.split("\n")[0];
-    const base = firstLine || firstUserMsg.content;
-    title = base.length > MAX_TITLE_CHARS ? base.slice(0, MAX_TITLE_CHARS) + "\u2026" : base;
+  const taskUiMsg = uiMessages.find((m) => m.say === "task" && typeof m.text === "string" && m.text?.trim());
+  if (taskUiMsg) {
+    const text = taskUiMsg.text.trim();
+    const firstLine = text.split("\n")[0] || text;
+    title = firstLine.length > MAX_TITLE_CHARS ? firstLine.slice(0, MAX_TITLE_CHARS) + "\u2026" : firstLine;
+  } else {
+    const firstUserMsg = messages.find((m) => m.role === "user");
+    if (firstUserMsg) {
+      const taskMatch = firstUserMsg.content.match(/<task>\s*([\s\S]*?)\s*<\/task>/);
+      const base = taskMatch ? taskMatch[1].split("\n")[0] || taskMatch[1] : firstUserMsg.content.split("\n").find((l) => l.trim() && !l.startsWith("<")) ?? firstUserMsg.content;
+      title = base.length > MAX_TITLE_CHARS ? base.slice(0, MAX_TITLE_CHARS) + "\u2026" : base;
+    }
   }
   let fileSizeBytes;
   if (!createdAt || !updatedAt) {
@@ -2763,16 +2779,39 @@ function sourceIconId(source) {
   switch (source) {
     case "copilot":
       return "github";
+    case "claude":
+      return "hubot";
+    case "cline":
+      return "plug";
+    case "roocode":
+      return "circuit-board";
+    case "cursor":
+      return "edit";
+    case "windsurf":
+      return "cloud";
     case "aider":
       return "terminal";
+  }
+}
+function sourceBrandIcon(source, extensionUri) {
+  switch (source) {
+    case "cline":
+    case "roocode":
+    case "cursor":
+    case "windsurf":
+    case "aider":
+      return {
+        light: vscode2.Uri.joinPath(extensionUri, "resources", "icons", `${source}_light.svg`),
+        dark: vscode2.Uri.joinPath(extensionUri, "resources", "icons", `${source}_dark.svg`)
+      };
     default:
-      return "hubot";
+      return new vscode2.ThemeIcon(sourceIconId(source));
   }
 }
 var SessionTreeItem = class extends vscode2.TreeItem {
   summary;
   pinned;
-  constructor(summary, pinned = false) {
+  constructor(summary, pinned = false, extensionUri) {
     super(summary.title || "Untitled Session", vscode2.TreeItemCollapsibleState.None);
     this.summary = summary;
     this.pinned = pinned;
@@ -2844,6 +2883,8 @@ ${summary.userMessageCount} prompts \xB7 ${summary.assistantMessageCount} respon
     } else if (summary.hasParseErrors) {
       const yellow = new vscode2.ThemeColor("list.warningForeground");
       this.iconPath = new vscode2.ThemeIcon(sourceIconId(summary.source), yellow);
+    } else if (extensionUri) {
+      this.iconPath = sourceBrandIcon(summary.source, extensionUri);
     } else {
       this.iconPath = new vscode2.ThemeIcon(sourceIconId(summary.source));
     }
@@ -2937,8 +2978,9 @@ var SessionParseWarningDecorationProvider = class {
   }
 };
 var SessionTreeProvider = class {
-  constructor(index) {
+  constructor(index, extensionUri) {
     this.index = index;
+    this.extensionUri = extensionUri;
     index.addChangeListener(() => {
       this._loading = false;
       this._sortedCache = null;
@@ -3190,7 +3232,7 @@ var SessionTreeProvider = class {
     const pinnedSet = new Set(this._pinnedIds);
     const all = this._buildOrderedSummaries();
     const visible = all.slice(0, this._visibleCount);
-    const items = visible.map((s) => new SessionTreeItem(s, pinnedSet.has(s.id)));
+    const items = visible.map((s) => new SessionTreeItem(s, pinnedSet.has(s.id), this.extensionUri));
     const remaining = all.length - visible.length;
     if (remaining > 0) {
       items.push(new LoadMoreTreeItem(remaining));
@@ -11332,7 +11374,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
     timelineViewProvider.refresh();
   });
   context.subscriptions.push(timelineListener);
-  const provider = new SessionTreeProvider(index);
+  const provider = new SessionTreeProvider(index, context.extensionUri);
   const savedStackJson = context.globalState.get("sortStack");
   if (savedStackJson) {
     try {

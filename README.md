@@ -8,7 +8,7 @@
 Inspired by https://github.com/Veverke/bAInder, I decided to make a VS Code extension, with a developer perspective in mind.
 Unified search, analytics, and history browser for your GitHub Copilot Chat, Claude Code, Cline, Roo Code, Cursor, Windsurf, and Aider sessions.
 
-> **Tags:** AI chat history · Copilot history viewer · Claude conversation browser · chat history viewer · prompt library · code block search · token usage analytics · LLM productivity · VS Code AI tools · conversation history manager
+> **Tags:** AI chat manager · Copilot chat manager · Claude chat manager · chat history viewer · prompt library · code block search · token usage analytics · LLM productivity · VS Code AI tools · conversation history manager · Cline chat manager · Roo code chat manager · Cursor chat manager · Windsurf chat manager · Aider chat manager
 
 ---
 
@@ -47,7 +47,7 @@ Unified search, analytics, and history browser for your GitHub Copilot Chat, Cla
 ## Features
 
 ### Session Management Panel
-A sortable, filterable, pinnable, and drag-and-drop reorderable TreeView listing every AI chat session across all your workspaces — from both GitHub Copilot Chat and Claude Code. Each row shows workspace, date, message count, and file size. Hover over any session for a rich tooltip showing title, source, model, workspace, date, size, prompt/response split, and pin status. Click any session to open a full Markdown-rendered conversation reader.
+A sortable, filterable, pinnable, and drag-and-drop reorderable TreeView listing every AI chat session across all your workspaces — from GitHub Copilot Chat, Claude Code, Cline, Roo Code, Cursor, Windsurf, and Aider. Each row shows workspace, date, message count, and file size. Hover over any session for a rich tooltip showing title, source, model, workspace, date, size, prompt/response split, and pin status. Click any session to open a full Markdown-rendered conversation reader.
 
 **Sorting** — Toolbar buttons cycle through five sort keys: Date, Workspace, Length (message count), Title (alphabetical), and Model — each with an ascending/descending direction toggle. Open **Configure Sort Order…** to build a multi-key composite sort with up to 3 criteria, each with its own direction. Sort preferences persist across VS Code restarts.
 
@@ -66,7 +66,7 @@ For very large sessions (500+ messages) only the most-recent messages are shown 
 Open **ChatWizard: Search** from the Command Palette to launch an instant QuickPick panel covering all messages in all sessions across all workspaces. Results appear as you type, powered by an in-memory inverted index with no external dependencies.
 
 - **Regex mode** — prefix the query with `/` to switch to regular-expression matching.
-- **Source filter** — toggle between All / Copilot only / Claude only with an in-panel toolbar button.
+- **Source filter** — toggle between All sources or any individual source (Copilot, Claude, Cline, Roo Code, Cursor, Windsurf, Aider) with an in-panel toolbar button.
 - **Role filter** — toggle between All messages / Prompts only / Responses only.
 - Each result shows a source icon, session title, workspace, date, and a role-labelled snippet (`You: …` or `Copilot: …`) with matched text highlighted.
 - When results exceed 500, a banner prompts you to refine the query.
@@ -143,7 +143,7 @@ A chronological month-grouped feed of all sessions across all workspaces. Each c
 A `FileSystemWatcher` monitors all configured source directories — Copilot Chat workspace storage, Claude Code projects, Cline/Roo Code task directories, Cursor and Windsurf `state.vscdb` files, and Aider `.aider.chat.history.md` files in open workspace folders. When a session file is created or updated, only that entry is re-parsed and re-indexed — no full rebuild. All views (Sessions, Code Blocks, Prompt Library, Analytics, Timeline) refresh automatically without user action.
 
 ### Configurable Data Source Paths
-Override the default discovery paths for Claude Code sessions and Copilot Chat workspace storage via extension settings — useful for non-standard VS Code installs or custom data directories. Changing a path displays a prompt to reload the window so the new location takes effect immediately.
+Override the default discovery paths for any supported source (Claude Code, Copilot Chat, Cline, Roo Code, Cursor, Windsurf) via extension settings — useful for non-standard installs or custom data directories. For Aider, configure additional search roots via `chatwizard.aiderSearchRoots`. Changing a path displays a prompt to reload the window so the new location takes effect immediately.
 
 ---
 
@@ -290,6 +290,16 @@ Sort commands (`chatwizard.sortByDate`, `chatwizard.sortByDate.asc`, `chatwizard
 ---
 
 ## Release Notes
+
+### 1.2.0
+
+- **Cline support** — indexes Cline (`saoudrizwan.claude-dev`) task history; model and workspace path read from `ui_messages.json`; configurable via `chatwizard.indexCline` / `chatwizard.clineStoragePath`.
+- **Roo Code support** — indexes Roo Code (`rooveterinaryinc.roo-cline`) task history (Cline-compatible format); configurable via `chatwizard.indexRooCode` / `chatwizard.rooCodeStoragePath`.
+- **Cursor support** — indexes Cursor chat and agent sessions from SQLite `state.vscdb` (`composer.composerData`); configurable via `chatwizard.indexCursor` / `chatwizard.cursorStoragePath`.
+- **Windsurf support** — indexes Windsurf Cascade sessions from SQLite `state.vscdb` (`cascade.sessionData`); configurable via `chatwizard.indexWindsurf` / `chatwizard.windsurfStoragePath`.
+- **Aider support** — discovers `.aider.chat.history.md` files in workspace folders and `chatwizard.aiderSearchRoots`; model from `.aider.conf.yml`; configurable via `chatwizard.indexAider`, `chatwizard.aiderSearchRoots`, `chatwizard.aiderSearchDepth`.
+- All new sources participate in search, prompt library, code blocks, analytics, model usage, and timeline.
+- Cursor-native model IDs normalised (`cursor-fast`, `cursor-small`).
 
 ### 1.1.0
 
