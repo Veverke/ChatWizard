@@ -227,21 +227,83 @@ export class ModelUsageViewProvider implements vscode.WebviewViewProvider {
       cursor: default;
     }
 
-    /* -- Session hover overlay ------------------------------------ */
-    #session-overlay {
+    .data-table td.model-sub {
+      opacity: 0.55;
+      font-size: 0.9em;
+    }
+
+    /* -- Shared overlay base -------------------------------------- */
+    #session-overlay,
+    #chart-overlay {
       position: fixed;
       z-index: 9999;
       background: var(--vscode-menu-background, #252526);
       border: 1px solid var(--vscode-menu-border, #454545);
       border-radius: 5px;
-      padding: 8px 0;
       box-shadow: 0 4px 16px rgba(0,0,0,0.5);
       display: none;
-      min-width: 280px;
       max-width: 420px;
-      max-height: 320px;
+      max-height: calc(100vh - 80px);
       overflow-y: auto;
       font-size: 0.88em;
+    }
+
+    /* -- Session hover overlay ------------------------------------ */
+    #session-overlay {
+      padding: 8px 0;
+      min-width: 280px;
+    }
+
+    /* -- Chart bar tooltip overlay -------------------------------- */
+    #chart-overlay {
+      padding: 0;
+      min-width: 220px;
+    }
+
+    .co-header {
+      padding: 7px 14px 6px 14px;
+      font-weight: 600;
+      border-bottom: 1px solid var(--vscode-menu-border, #454545);
+    }
+
+    .co-ws-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 5px 14px 2px 14px;
+      font-weight: 600;
+    }
+
+    .co-ws-name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex: 1;
+    }
+
+    .co-ws-count { flex-shrink: 0; }
+
+    .co-asst-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 1px 14px 1px 26px;
+      opacity: 0.8;
+      font-size: 0.93em;
+    }
+
+    .co-asst-name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex: 1;
+    }
+
+    .co-asst-count { flex-shrink: 0; }
+
+    .co-asst-pct {
+      opacity: 0.6;
+      font-size: 0.9em;
     }
 
     .session-overlay-item {
@@ -350,19 +412,19 @@ export class ModelUsageViewProvider implements vscode.WebviewViewProvider {
     </div>
   </div>
 
-  <!-- Claude account section -->
+  <!-- Claude models section -->
   <div class="section account-section" id="section-claude">
     <h2 class="account-heading">
-      <span class="cw-badge-claude">Claude</span> Anthropic account
+      <span class="cw-badge-claude">Claude</span> models
       <span class="sel-total" id="sel-total-claude"></span>
     </h2>
     <div id="chart-claude"></div>
   </div>
 
-  <!-- GitHub Copilot section -->
+  <!-- Other models section -->
   <div class="section account-section" id="section-copilot">
     <h2 class="account-heading">
-      <span class="cw-badge-copilot">Copilot</span> GitHub account
+      <span class="cw-badge-copilot">Other</span> models
       <span class="sel-total" id="sel-total-copilot"></span>
     </h2>
     <div id="chart-copilot"></div>
@@ -374,8 +436,9 @@ export class ModelUsageViewProvider implements vscode.WebviewViewProvider {
     <table class="data-table">
       <thead>
         <tr>
-          <th>Account</th>
+          <th>Provider</th>
           <th>Model</th>
+          <th>Coding Assistant</th>
           <th class="num">Sessions</th>
           <th class="num">Requests</th>
           <th class="num">% of Total</th>
@@ -390,14 +453,17 @@ export class ModelUsageViewProvider implements vscode.WebviewViewProvider {
 <!-- Session breakdown overlay -->
 <div id="session-overlay"></div>
 
+<!-- Chart bar tooltip overlay -->
+<div id="chart-overlay"></div>
+
 <script>
 (function() {
   var vscode = acquireVsCodeApi();
   var charts = { claude: null, copilot: null };
   // Tooltip lookup maps — mutated in-place so existing Chart.js closures always read latest data
   var tooltipMaps = {
-    claude:  { pct: {}, ws: {} },
-    copilot: { pct: {}, ws: {} }
+    claude:  { pct: {}, ws: {}, total: 0 },
+    copilot: { pct: {}, ws: {}, total: 0 }
   };
   // Bar selection state — cleared on data update
   var selectedBars   = { claude: {}, copilot: {} }; // model → true
@@ -517,6 +583,7 @@ export class ModelUsageViewProvider implements vscode.WebviewViewProvider {
     var tm = tooltipMaps[source];
     for (var k in tm.pct) { delete tm.pct[k]; }
     for (var k in tm.ws)  { delete tm.ws[k]; }
+    tm.total = totalUserRequests;
     models.forEach(function(m) {
       tm.pct[m.model] = m.percentage;
       tm.ws[m.model]  = m.workspaceBreakdown || [];
@@ -579,27 +646,53 @@ export class ModelUsageViewProvider implements vscode.WebviewViewProvider {
           plugins: {
             legend: { display: false },
             tooltip: {
-              callbacks: {
-                label: function(ctx) {
-                  var tm = tooltipMaps[source];
-                  var count = ctx.parsed.x;
-                  var pct = tm.pct[ctx.label] !== undefined ? tm.pct[ctx.label] : 0;
-                  var lines = [count + ' requests (' + pct + '% of total)'];
-                  var ws = tm.ws[ctx.label] || [];
-                  if (ws.length > 0) {
-                    lines.push('\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500');
-                    ws.forEach(function(w) {
-                      var name = w.workspace;
-                      // trim long paths to last 2 segments
-                      // use charCode 92 (backslash) to avoid regex escape issues in template literal
-                      var normalized = name.split(String.fromCharCode(92)).join('/');
-                      var parts = normalized.split('/').filter(Boolean);
-                      var display = parts.length > 0 ? parts[parts.length - 1] : name;
-                      lines.push(display + ': ' + w.userRequests);
+              enabled: false,
+              external: function(context) {
+                var tooltipModel = context.tooltip;
+                if (tooltipModel.opacity === 0 || !tooltipModel.dataPoints || !tooltipModel.dataPoints.length) {
+                  if (!isChartOverlayHovered) { scheduleHideChartOverlay(); }
+                  return;
+                }
+                cancelHideChartOverlay();
+                var modelName = tooltipModel.dataPoints[0].label;
+                var tm = tooltipMaps[source];
+                var count = tooltipModel.dataPoints[0].parsed.x;
+                var pct = tm.pct[modelName] !== undefined ? tm.pct[modelName] : 0;
+                var ws = tm.ws[modelName] || [];
+
+                var html = '<div class="co-header">' + escHtml(modelName) + '<br>'
+                  + count.toLocaleString() + ' requests (' + pct + '% of total)</div>';
+                ws.forEach(function(w) {
+                  var norm = w.workspace.split(String.fromCharCode(92)).join('/');
+                  var parts = norm.split('/').filter(Boolean);
+                  var display = parts.length > 0 ? parts[parts.length - 1] : w.workspace;
+                  html += '<div class="co-ws-row"><span class="co-ws-name" title="' + escHtml(w.workspace) + '">'
+                    + escHtml(display) + '</span><span class="co-ws-count">' + w.userRequests.toLocaleString() + '</span></div>';
+                  if (w.assistantBreakdown && w.assistantBreakdown.length > 0) {
+                    var grandTotal = tm.total || 1;
+                    w.assistantBreakdown.forEach(function(a) {
+                      var label = ASST_LABEL[a.assistant] || a.assistant;
+                      var pctOfTotal = (a.userRequests / grandTotal * 100).toFixed(1);
+                      html += '<div class="co-asst-row"><span class="co-asst-name">\u2514 ' + escHtml(label)
+                        + '</span><span class="co-asst-count">' + a.userRequests.toLocaleString()
+                        + ' <span class="co-asst-pct">(' + pctOfTotal + '%)</span></span></div>';
                     });
                   }
-                  return lines;
-                }
+                });
+                chartOverlay.innerHTML = html;
+
+                var canvasRect = context.chart.canvas.getBoundingClientRect();
+                var top  = canvasRect.top  + window.scrollY + tooltipModel.caretY;
+                var left = canvasRect.left + window.scrollX + tooltipModel.caretX + 12;
+                chartOverlay.style.display = 'block';
+                chartOverlay.style.left = '0';
+                chartOverlay.style.top  = '0';
+                var ow = chartOverlay.offsetWidth;
+                var oh = chartOverlay.offsetHeight;
+                if (left + ow > window.innerWidth - 8) { left = Math.max(4, canvasRect.left + window.scrollX + tooltipModel.caretX - ow - 8); }
+                if (top  + oh > window.innerHeight + window.scrollY - 8) { top = Math.max(0, window.innerHeight + window.scrollY - oh - 8); }
+                chartOverlay.style.left = left + 'px';
+                chartOverlay.style.top  = top  + 'px';
               }
             }
           },
@@ -615,49 +708,96 @@ export class ModelUsageViewProvider implements vscode.WebviewViewProvider {
     var tfoot = document.getElementById('summary-tfoot');
 
     if (data.models.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="5" class="empty-state">No data for selected range.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No data for selected range.</td></tr>';
       tfoot.innerHTML = '';
       return;
     }
 
-    // Group rows: claude entries first, then copilot, within each sorted by userRequests desc (already sorted)
-    var claudeRows  = data.models.filter(function(m) { return m.source === 'claude'; });
-    var copilotRows = data.models.filter(function(m) { return m.source === 'copilot'; });
+    // Group rows: Claude models first, then others; within each sorted by userRequests desc (already sorted)
+    var claudeRows = data.models.filter(function(m) { return m.model.startsWith('Claude'); });
+    var otherRows  = data.models.filter(function(m) { return !m.model.startsWith('Claude'); });
 
-    function accountBadge(source) {
-      return source === 'claude'
+    function accountBadge(model) {
+      return model.startsWith('Claude')
         ? '<span class="cw-badge-claude">Claude</span>'
-        : '<span class="cw-badge-copilot">Copilot</span>';
+        : '<span class="cw-badge-copilot">Other</span>';
     }
 
     function makeRows(rows) {
-      return rows.map(function(m, i) {
-        // Only show the badge on the first row of each account group
-        var badge = i === 0 ? accountBadge(m.source) : '';
-        var sessData = m.sessionBreakdown ? escHtml(JSON.stringify(m.sessionBreakdown)) : '';
-        return '<tr' + (sessData ? ' data-sessions="' + sessData + '"' : '') + '>'
-          + '<td>' + badge + '</td>'
-          + '<td title="' + escHtml(m.model) + '">' + escHtml(m.model) + '</td>'
-          + '<td class="num">' + m.sessionCount.toLocaleString() + '</td>'
-          + '<td class="num">' + m.userRequests.toLocaleString() + '</td>'
-          + '<td class="num">' + m.percentage.toFixed(2) + '%</td>'
-          + '</tr>';
+      return rows.map(function(m) {
+        var badge = accountBadge(m.model);
+        // One row per contributing assistant (sourceBreakdown), or fall back to single row
+        var srcRows = (m.sourceBreakdown && m.sourceBreakdown.length > 0)
+          ? m.sourceBreakdown
+          : [{ source: (m.sources || [])[0] || '', sessionCount: m.sessionCount, userRequests: m.userRequests, percentage: m.percentage, sessionBreakdown: m.sessionBreakdown || [] }];
+
+        return srcRows.map(function(sr, si) {
+          var sessData = sr.sessionBreakdown && sr.sessionBreakdown.length > 0
+            ? escHtml(JSON.stringify(sr.sessionBreakdown)) : '';
+          var asstLabel = ASST_LABEL[sr.source] || sr.source;
+          // Show provider badge and model name only on the first source row for this model
+          var providerCell = si === 0 ? '<td>' + badge + '</td>' : '<td></td>';
+          var modelCell    = si === 0
+            ? '<td title="' + escHtml(m.model) + '">' + escHtml(m.model) + '</td>'
+            : '<td class="model-sub" title="' + escHtml(m.model) + '">' + escHtml(m.model) + '</td>';
+          return '<tr' + (sessData ? ' data-sessions="' + sessData + '"' : '') + '>'
+            + providerCell
+            + modelCell
+            + '<td title="' + escHtml(asstLabel) + '">' + escHtml(asstLabel) + '</td>'
+            + '<td class="num">' + sr.sessionCount.toLocaleString() + '</td>'
+            + '<td class="num">' + sr.userRequests.toLocaleString() + '</td>'
+            + '<td class="num">' + sr.percentage.toFixed(2) + '%</td>'
+            + '</tr>';
+        }).join('');
       }).join('');
     }
 
-    tbody.innerHTML = makeRows(claudeRows) + makeRows(copilotRows);
+    tbody.innerHTML = makeRows(claudeRows) + makeRows(otherRows);
 
     tfoot.innerHTML = '<tr>'
-      + '<td colspan="2"><strong>Total</strong></td>'
+      + '<td colspan="3"><strong>Total</strong></td>'
       + '<td class="num"><strong>' + data.totalSessions.toLocaleString() + '</strong></td>'
       + '<td class="num"><strong>' + data.totalUserRequests.toLocaleString() + '</strong></td>'
       + '<td class="num"><strong>100%</strong></td>'
       + '</tr>';
   }
 
+  // -- Chart bar tooltip overlay ---------------------------------
+  var chartOverlay = document.getElementById('chart-overlay');
+  var chartOverlayHideTimer = null;
+  var isChartOverlayHovered = false;
+
+  function hideChartOverlay() {
+    chartOverlay.style.display = 'none';
+    chartOverlay.innerHTML = '';
+  }
+
+  function scheduleHideChartOverlay() {
+    if (chartOverlayHideTimer) { clearTimeout(chartOverlayHideTimer); }
+    chartOverlayHideTimer = setTimeout(hideChartOverlay, 400);
+  }
+
+  function cancelHideChartOverlay() {
+    if (chartOverlayHideTimer) { clearTimeout(chartOverlayHideTimer); chartOverlayHideTimer = null; }
+  }
+
+  chartOverlay.addEventListener('mouseenter', function() {
+    isChartOverlayHovered = true;
+    cancelHideChartOverlay();
+  });
+  chartOverlay.addEventListener('mouseleave', function() {
+    isChartOverlayHovered = false;
+    scheduleHideChartOverlay();
+  });
+
   // -- Session hover overlay -------------------------------------
   var overlay = document.getElementById('session-overlay');
   var overlayHideTimer = null;
+
+  var ASST_LABEL = {
+    claude: 'Claude Code', copilot: 'GitHub Copilot', cline: 'Cline',
+    roocode: 'Roo Code', cursor: 'Cursor', windsurf: 'Windsurf', aider: 'Aider'
+  };
 
   function showOverlay(sessions, anchorRect) {
     if (!sessions || sessions.length === 0) { return; }
@@ -692,7 +832,8 @@ export class ModelUsageViewProvider implements vscode.WebviewViewProvider {
   }
 
   function scheduleHide() {
-    overlayHideTimer = setTimeout(hideOverlay, 200);
+    if (overlayHideTimer) { clearTimeout(overlayHideTimer); }
+    overlayHideTimer = setTimeout(hideOverlay, 400);
   }
 
   function cancelHide() {
@@ -736,11 +877,11 @@ export class ModelUsageViewProvider implements vscode.WebviewViewProvider {
       document.getElementById('to-input').value   = msg.dateRange.to;
     }
 
-    var claudeModels  = msg.data.models.filter(function(m) { return m.source === 'claude'; });
-    var copilotModels = msg.data.models.filter(function(m) { return m.source === 'copilot'; });
+    var claudeModels = msg.data.models.filter(function(m) { return m.model.startsWith('Claude'); });
+    var otherModels  = msg.data.models.filter(function(m) { return !m.model.startsWith('Claude'); });
 
-    renderAccountChart('claude',  claudeModels,  msg.data.totalUserRequests);
-    renderAccountChart('copilot', copilotModels, msg.data.totalUserRequests);
+    renderAccountChart('claude',  claudeModels, msg.data.totalUserRequests);
+    renderAccountChart('copilot', otherModels,  msg.data.totalUserRequests);
     renderTable(msg.data);
   });
 

@@ -52,7 +52,7 @@ suite('computeModelUsage', () => {
         const result = computeModelUsage([s], JAN1, JAN31);
         assert.strictEqual(result.models.length, 1);
         assert.strictEqual(result.models[0].model, 'Unknown');
-        assert.strictEqual(result.models[0].source, 'claude');
+        assert.ok(result.models[0].sources.includes('claude'));
         assert.strictEqual(result.models[0].userRequests, 4);
     });
 
@@ -69,19 +69,18 @@ suite('computeModelUsage', () => {
         assert.strictEqual(result.models.length, 1);
         assert.strictEqual(result.models[0].sessionCount, 2);
         assert.strictEqual(result.models[0].userRequests, 10);
-        assert.strictEqual(result.models[0].source, 'copilot');
+        assert.ok(result.models[0].sources.includes('copilot'));
     });
 
-    test('same model name from different sources stays as separate entries', () => {
-        // e.g. Claude Sonnet accessed via Claude Code AND via Copilot Chat
-        const s1 = makeSummary({ id: 's1', model: 'claude-sonnet-4-20250514', source: 'claude',  userMessageCount: 5 });
-        const s2 = makeSummary({ id: 's2', model: 'claude-sonnet-4-20250514', source: 'copilot', userMessageCount: 3 });
+    test('same model name from different sources is merged into one entry with both sources listed', () => {
+        // e.g. Claude Sonnet accessed via Claude Code AND via Cline
+        const s1 = makeSummary({ id: 's1', model: 'claude-sonnet-4-20250514', source: 'claude', userMessageCount: 5 });
+        const s2 = makeSummary({ id: 's2', model: 'claude-sonnet-4-20250514', source: 'cline',  userMessageCount: 3 });
         const result = computeModelUsage([s1, s2], JAN1, JAN31);
-        assert.strictEqual(result.models.length, 2);
-        const claudeEntry  = result.models.find(m => m.source === 'claude');
-        const copilotEntry = result.models.find(m => m.source === 'copilot');
-        assert.strictEqual(claudeEntry?.userRequests, 5);
-        assert.strictEqual(copilotEntry?.userRequests, 3);
+        assert.strictEqual(result.models.length, 1);
+        assert.strictEqual(result.models[0].userRequests, 8);
+        assert.ok(result.models[0].sources.includes('claude'));
+        assert.ok(result.models[0].sources.includes('cline'));
     });
 
     test('models array sorted descending by userRequests', () => {
@@ -152,5 +151,20 @@ suite('computeModelUsage', () => {
         const result = computeModelUsage([s], JAN1, JAN31);
         const entry = result.models[0];
         assert.strictEqual(entry.workspaceBreakdown[0].workspace, 'abc123');
+    });
+
+    test('assistantBreakdown within workspace shows per-assistant request counts', () => {
+        const s1 = makeSummary({ id: 's1', model: 'gpt-4o', source: 'copilot', workspacePath: '/ws/a', userMessageCount: 4 });
+        const s2 = makeSummary({ id: 's2', model: 'gpt-4o', source: 'cline',   workspacePath: '/ws/a', userMessageCount: 6 });
+        const result = computeModelUsage([s1, s2], JAN1, JAN31);
+        const entry = result.models[0];
+        assert.strictEqual(entry.workspaceBreakdown.length, 1);
+        assert.strictEqual(entry.workspaceBreakdown[0].userRequests, 10);
+        const breakdown = entry.workspaceBreakdown[0].assistantBreakdown;
+        // sorted by userRequests desc
+        assert.strictEqual(breakdown[0].assistant, 'cline');
+        assert.strictEqual(breakdown[0].userRequests, 6);
+        assert.strictEqual(breakdown[1].assistant, 'copilot');
+        assert.strictEqual(breakdown[1].userRequests, 4);
     });
 });

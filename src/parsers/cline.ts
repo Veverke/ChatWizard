@@ -34,6 +34,7 @@ interface UiMessage {
     text?: string;
     cwd?: string;
     model?: string;
+    modelInfo?: { modelId?: string; providerId?: string; mode?: string };
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
@@ -158,7 +159,11 @@ export async function parseClineTask(
         if (!workspacePath && typeof ui.cwd === 'string' && ui.cwd) {
             workspacePath = ui.cwd;
         }
-        // Model stored directly on the message (newer Cline versions)
+        // Model stored in modelInfo.modelId (current Cline versions)
+        if (!model && typeof ui.modelInfo?.modelId === 'string' && ui.modelInfo.modelId) {
+            model = ui.modelInfo.modelId;
+        }
+        // Model stored directly on the message (older Cline versions)
         if (!model && typeof ui.model === 'string' && ui.model) {
             model = ui.model;
         }
@@ -171,6 +176,22 @@ export async function parseClineTask(
                 }
             } catch {
                 // not JSON — ignore
+            }
+        }
+    }
+
+    // ── Fallback: extract workspace from first API message system prompt ─────
+    // Newer Cline versions omit cwd from ui_messages.json. The system prompt
+    // injected into the first user API message contains:
+    //   "# Current Working Directory (PATH) Files"
+    if (!workspacePath) {
+        const RE_CWD = /# Current Working Directory \(([^)]+)\)/;
+        for (const entry of apiEntries) {
+            if (entry.role === 'user') {
+                const text = extractContent(entry.content);
+                const m = text.match(RE_CWD);
+                if (m) { workspacePath = m[1]; }
+                break; // only check first user message
             }
         }
     }

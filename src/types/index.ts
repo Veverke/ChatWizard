@@ -126,10 +126,17 @@ export interface SessionSummary {
     hasParseErrors?: boolean;
 }
 
+/** Per-assistant request count within a WorkspaceUsage */
+export interface AssistantUsage {
+    assistant: string;   // SessionSource value, e.g. 'claude', 'cline', 'copilot'
+    userRequests: number;
+}
+
 /** Per-workspace request count within a ModelEntry */
 export interface WorkspaceUsage {
     workspace: string;   // workspacePath, or workspaceId when no path is known
     userRequests: number;
+    assistantBreakdown: AssistantUsage[];  // sorted by userRequests desc
 }
 
 /** Per-session request count within a ModelEntry */
@@ -139,15 +146,25 @@ export interface SessionUsage {
     userRequests: number;
 }
 
+/** Per-assistant breakdown within a ModelEntry, used for the Summary table rows */
+export interface SourceBreakdown {
+    source: SessionSource;
+    sessionCount: number;
+    userRequests: number;
+    percentage: number;           // (userRequests / totalUserRequests) * 100, rounded 2dp
+    sessionBreakdown: SessionUsage[];  // sorted by userRequests desc
+}
+
 /** Per-model usage entry for the Model Usage view */
 export interface ModelEntry {
     model: string;               // e.g. "GPT-4o", "Claude Sonnet 4", "Unknown"
-    source: SessionSource;       // which account/service produced these sessions
+    sources: SessionSource[];    // all assistants that used this model
     sessionCount: number;
-    userRequests: number;        // sum of SessionSummary.userMessageCount
+    userRequests: number;        // sum of SessionSummary.userMessageCount across all sources
     percentage: number;          // (userRequests / totalUserRequests) * 100, rounded 2dp
-    workspaceBreakdown: WorkspaceUsage[];  // sorted by userRequests desc
+    workspaceBreakdown: WorkspaceUsage[];  // for chart tooltip, sorted by userRequests desc
     sessionBreakdown: SessionUsage[];     // sorted by userRequests desc
+    sourceBreakdown: SourceBreakdown[];  // one entry per assistant, sorted by userRequests desc
 }
 
 /** Top-level output for the Model Usage view */
