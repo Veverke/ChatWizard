@@ -5,6 +5,7 @@ import { SessionIndex } from '../index/sessionIndex';
 import { SessionSummary, SessionSource } from '../types/index';
 import { FullTextSearchEngine } from './fullTextEngine';
 import { SearchResult, SearchFilter, SearchResponse } from './types';
+import { friendlySourceName, sourceCodiconId } from '../ui/sourceUi';
 
 interface SearchResultItem extends vscode.QuickPickItem {
     result: SearchResult;
@@ -139,15 +140,15 @@ export class SearchPanel {
                 const summary = summaryMap.get(result.sessionId);
                 if (!summary) { continue; }
 
-                // Source icon in label so Copilot vs Claude is instantly recognisable
-                const srcIcon = summary.source === 'copilot' ? '$(github)' : '$(hubot)';
+                // Source icon in label so source is instantly recognisable
+                const srcIcon = `$(${sourceCodiconId(summary.source)})`;
                 const label = `${srcIcon}  ${summary.title}`;
 
                 const workspace = summary.workspacePath ?? summary.workspaceId;
                 const description = `${workspace}  ·  ${summary.updatedAt.slice(0, 10)}`;
 
                 // Prefix snippet with which side of the conversation matched
-                const assistantName = summary.source === 'copilot' ? 'Copilot' : 'Claude';
+                const assistantName = friendlySourceName(summary.source);
                 const rolePrefix = result.messageRole === 'user' ? 'You' : assistantName;
                 const detail = `${rolePrefix}:  ${result.snippet}`;
 

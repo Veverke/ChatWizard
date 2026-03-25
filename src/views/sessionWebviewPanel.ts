@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { Session } from '../types/index';
 import { cwThemeCss, syntaxHighlighterCss, cwInteractiveJs } from '../webview/cwTheme';
 import { friendlyModelName } from '../analytics/modelNames';
+import { friendlySourceName } from '../ui/sourceUi';
 import {
     VisibleMessage,
     renderChunk,
@@ -63,7 +64,7 @@ export class SessionWebviewPanel {
             ? (config.get<boolean>('scrollToFirstCodeBlock', true) ?? false)
             : false;
 
-        const assistantLabel = session.source === 'copilot' ? 'Copilot' : 'Claude';
+        const assistantLabel = friendlySourceName(session.source);
 
         // Compute visible messages (non-empty content)
         const visibleMessages: VisibleMessage[] = session.messages
@@ -192,6 +193,7 @@ export class SessionWebviewPanel {
             type: 'render',
             title:            session.title,
             source:           session.source,
+            assistantLabel,
             userColor,
             term:             searchTerm ?? null,
             scrollInit:       null, // scroll sent separately after all chunks via cwScroll
@@ -203,6 +205,7 @@ export class SessionWebviewPanel {
             userRequestCount: session.messages.filter(m => m.role === 'user').length,
             model:            friendlyModelName(session.model),
             parseErrors:      session.parseErrors ?? [],
+            sourceNotes:      session.sourceNotes ?? [],
             filePath:         session.filePath,
         });
 
@@ -459,6 +462,17 @@ export class SessionWebviewPanel {
     }
     .parse-errors-banner ul { margin: 6px 0 0; padding-left: 1.5em; }
     .parse-errors-banner li { margin: 3px 0; font-family: var(--vscode-editor-font-family, monospace); font-size: 0.9em; }
+    .source-notes-banner {
+      background: rgba(0, 120, 212, 0.08);
+      border: 1px solid rgba(0, 120, 212, 0.35);
+      border-left: 3px solid var(--vscode-textLink-foreground, #3794ff);
+      border-radius: var(--cw-radius);
+      padding: 10px 14px;
+      margin-bottom: 14px;
+      font-size: 0.85em;
+      color: var(--vscode-foreground, #ccc);
+    }
+    .source-notes-banner strong { color: var(--vscode-textLink-foreground, #3794ff); }
     .parse-error-path { word-break: break-all; font-family: var(--vscode-editor-font-family, monospace); opacity: 0.8; }
     .skipped-notice { font-style: italic; color: var(--vscode-editorWarning-foreground, #c8a800); }
     mark {
@@ -945,7 +959,7 @@ ${cwInteractiveJs()}
       document.getElementById('session-title').textContent = data.title;
       document.documentElement.style.setProperty('--cw-user-color', data.userColor || '#007acc');
       if (data.source) {
-        var srcLabel = data.source === 'copilot' ? 'GitHub Copilot' : 'Claude';
+        var srcLabel = data.assistantLabel || data.source;
         var respLabelEl = document.getElementById('filter-responses-label');
         if (respLabelEl) { respLabelEl.textContent = srcLabel; }
       }
@@ -971,7 +985,19 @@ ${cwInteractiveJs()}
       }
       container.innerHTML = data.messagesHtml;
 
-      // Parse-errors banner — prepended before messages when the session has read errors
+      // Informational source notes (e.g. Cursor aiService-only recovery) — not parse failures
+      if (data.sourceNotes && data.sourceNotes.length > 0) {
+        var noteBanner = document.createElement('div');
+        noteBanner.className = 'source-notes-banner';
+        noteBanner.innerHTML =
+          '<strong>About this session</strong>' +
+          (data.filePath ? ' &mdash; <span class="parse-error-path">' + escH(data.filePath) + '</span>' : '') +
+          '<ul style="margin:6px 0 0;padding-left:1.5em">' +
+          data.sourceNotes.map(function(n) { return '<li>' + escH(n) + '</li>'; }).join('') +
+          '</ul>';
+        container.insertBefore(noteBanner, container.firstChild);
+      }
+      // Parse-errors banner — real read/parse failures only
       if (data.parseErrors && data.parseErrors.length > 0) {
         var banner = document.createElement('div');
         banner.className = 'parse-errors-banner';

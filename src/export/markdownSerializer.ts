@@ -1,6 +1,7 @@
 // src/export/markdownSerializer.ts
 
 import { Session } from '../types/index';
+import { friendlySourceName } from '../ui/sourceUi';
 
 /** Truncate text to at most maxLen chars, appending '…' if cut. */
 function truncate(text: string, maxLen: number): string {
@@ -37,7 +38,7 @@ export function serializeSession(session: Session, sanitize = true): string {
     const lines: string[] = [];
     lines.push(`# ${session.title || 'Untitled Session'}`);
     lines.push('');
-    lines.push(`- **Source:** ${session.source === 'copilot' ? 'GitHub Copilot' : 'Claude Code'}`);
+    lines.push(`- **Source:** ${friendlySourceName(session.source)}`);
     if (session.model) { lines.push(`- **Model:** ${session.model}`); }
     lines.push(`- **Updated:** ${session.updatedAt.slice(0, 16).replace('T', ' ')}`);
     lines.push('');

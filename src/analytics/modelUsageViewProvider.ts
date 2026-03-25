@@ -222,7 +222,7 @@ export class ModelUsageViewProvider implements vscode.WebviewViewProvider {
       background: var(--cw-surface-subtle);
     }
 
-    .data-table tbody tr[data-sessions]:hover {
+    .data-table tbody tr[data-sessions-idx]:hover {
       background: var(--cw-surface-raised);
       cursor: default;
     }
@@ -465,6 +465,8 @@ export class ModelUsageViewProvider implements vscode.WebviewViewProvider {
     claude:  { pct: {}, ws: {}, total: 0 },
     copilot: { pct: {}, ws: {}, total: 0 }
   };
+  /** Session lists for Summary table rows — avoids broken JSON in HTML attributes (titles with quotes, &, etc.). */
+  var sessionRowSessions = [];
   // Bar selection state — cleared on data update
   var selectedBars   = { claude: {}, copilot: {} }; // model → true
   var requestCounts  = { claude: {}, copilot: {} }; // model → userRequests (refreshed per update)
@@ -706,6 +708,7 @@ export class ModelUsageViewProvider implements vscode.WebviewViewProvider {
   function renderTable(data) {
     var tbody = document.getElementById('summary-tbody');
     var tfoot = document.getElementById('summary-tfoot');
+    sessionRowSessions = [];
 
     if (data.models.length === 0) {
       tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No data for selected range.</td></tr>';
@@ -732,15 +735,20 @@ export class ModelUsageViewProvider implements vscode.WebviewViewProvider {
           : [{ source: (m.sources || [])[0] || '', sessionCount: m.sessionCount, userRequests: m.userRequests, percentage: m.percentage, sessionBreakdown: m.sessionBreakdown || [] }];
 
         return srcRows.map(function(sr, si) {
-          var sessData = sr.sessionBreakdown && sr.sessionBreakdown.length > 0
-            ? escHtml(JSON.stringify(sr.sessionBreakdown)) : '';
+          var sess = sr.sessionBreakdown && sr.sessionBreakdown.length > 0 ? sr.sessionBreakdown : null;
+          var sessIdxAttr = '';
+          if (sess) {
+            var sidx = sessionRowSessions.length;
+            sessionRowSessions.push(sess);
+            sessIdxAttr = ' data-sessions-idx="' + sidx + '"';
+          }
           var asstLabel = ASST_LABEL[sr.source] || sr.source;
           // Show provider badge and model name only on the first source row for this model
           var providerCell = si === 0 ? '<td>' + badge + '</td>' : '<td></td>';
           var modelCell    = si === 0
             ? '<td title="' + escHtml(m.model) + '">' + escHtml(m.model) + '</td>'
             : '<td class="model-sub" title="' + escHtml(m.model) + '">' + escHtml(m.model) + '</td>';
-          return '<tr' + (sessData ? ' data-sessions="' + sessData + '"' : '') + '>'
+          return '<tr' + sessIdxAttr + '>'
             + providerCell
             + modelCell
             + '<td title="' + escHtml(asstLabel) + '">' + escHtml(asstLabel) + '</td>'
@@ -753,6 +761,25 @@ export class ModelUsageViewProvider implements vscode.WebviewViewProvider {
     }
 
     tbody.innerHTML = makeRows(claudeRows) + makeRows(otherRows);
+
+    // Per-row mouseenter/mouseleave: delegated pointerover on tbody is unreliable in some VS Code webviews (e.g. Cursor).
+    var overlayEl = document.getElementById('session-overlay');
+    tbody.querySelectorAll('tr[data-sessions-idx]').forEach(function(tr) {
+      tr.addEventListener('mouseenter', function() {
+        isRowHovered = true;
+        cancelHide();
+        var sidx = tr.getAttribute('data-sessions-idx');
+        var idx = sidx === null || sidx === '' ? NaN : parseInt(sidx, 10);
+        var sessions = !isNaN(idx) ? sessionRowSessions[idx] : null;
+        if (sessions) { showOverlay(sessions, tr.getBoundingClientRect()); }
+      });
+      tr.addEventListener('mouseleave', function(e) {
+        var rt = e.relatedTarget;
+        if (rt && overlayEl && overlayEl.contains(rt)) { return; }
+        isRowHovered = false;
+        scheduleHide();
+      });
+    });
 
     tfoot.innerHTML = '<tr>'
       + '<td colspan="3"><strong>Total</strong></td>'
@@ -793,6 +820,8 @@ export class ModelUsageViewProvider implements vscode.WebviewViewProvider {
   // -- Session hover overlay -------------------------------------
   var overlay = document.getElementById('session-overlay');
   var overlayHideTimer = null;
+  var isOverlayHovered = false;
+  var isRowHovered = false;
 
   var ASST_LABEL = {
     claude: 'Claude Code', copilot: 'GitHub Copilot', cline: 'Cline',
@@ -811,8 +840,8 @@ export class ModelUsageViewProvider implements vscode.WebviewViewProvider {
     });
     overlay.innerHTML = html;
 
-    // Position: prefer below-left of the row, flip if off-screen
-    var top = anchorRect.bottom + window.scrollY + 2;
+    // Overlap row by several px so the pointer path can reach the overlay in Electron/Cursor webviews
+    var top = anchorRect.bottom + window.scrollY - 6;
     var left = anchorRect.left + window.scrollX;
     overlay.style.display = 'block';
     overlay.style.left = '0';
@@ -833,29 +862,27 @@ export class ModelUsageViewProvider implements vscode.WebviewViewProvider {
 
   function scheduleHide() {
     if (overlayHideTimer) { clearTimeout(overlayHideTimer); }
-    overlayHideTimer = setTimeout(hideOverlay, 400);
+    overlayHideTimer = setTimeout(function() {
+      if (!isRowHovered && !isOverlayHovered) { hideOverlay(); }
+    }, 900);
   }
 
   function cancelHide() {
     if (overlayHideTimer) { clearTimeout(overlayHideTimer); overlayHideTimer = null; }
   }
 
-  document.getElementById('summary-tbody').addEventListener('mouseover', function(e) {
-    var tr = e.target.closest('tr[data-sessions]');
-    if (!tr) { scheduleHide(); return; }
-    cancelHide();
-    try {
-      var sessions = JSON.parse(tr.getAttribute('data-sessions'));
-      showOverlay(sessions, tr.getBoundingClientRect());
-    } catch (err) { /* ignore */ }
-  });
+  var tbody = document.getElementById('summary-tbody');
 
-  document.getElementById('summary-tbody').addEventListener('mouseleave', function() {
+  overlay.addEventListener('pointerenter', function() {
+    isOverlayHovered = true;
+    cancelHide();
+  });
+  overlay.addEventListener('pointerleave', function(e) {
+    isOverlayHovered = false;
+    var rt = e.relatedTarget;
+    if (rt && tbody.contains(rt)) { return; } // moving back onto the table
     scheduleHide();
   });
-
-  overlay.addEventListener('mouseenter', cancelHide);
-  overlay.addEventListener('mouseleave', scheduleHide);
 
   overlay.addEventListener('click', function(e) {
     var item = e.target.closest('.session-overlay-item');

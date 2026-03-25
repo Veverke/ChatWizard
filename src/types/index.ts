@@ -67,6 +67,8 @@ export interface Session {
     /** Non-fatal parse errors encountered while reading the source file (e.g. invalid JSON lines).
      *  Skipped-line placeholders are NOT included here — they appear as Message entries instead. */
     parseErrors?: string[];
+    /** Informational notes (e.g. Cursor recovered prompts from aiService only) — not parse failures */
+    sourceNotes?: string[];
 }
 
 /** A fenced code block with session metadata attached, for the Code Blocks panel */

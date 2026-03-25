@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { IndexedCodeBlock, SessionSource } from '../types/index';
+import { friendlySourceName } from '../ui/sourceUi';
 import { SessionIndex } from '../index/sessionIndex';
 import { CodeBlockSearchEngine } from '../codeblocks/codeBlockSearchEngine';
 
@@ -43,7 +44,7 @@ export interface CodeBlockSessionRef {
 export interface CodeBlockFilter {
     language?: string;
     content?: string;
-    sessionSource?: 'copilot' | 'claude';
+    sessionSource?: SessionSource;
     messageRole?: 'user' | 'assistant';
 }
 
@@ -145,7 +146,7 @@ export class CodeBlockGroupItem extends vscode.TreeItem {
         // Description: date · snippet count · source
         const dateStr = group.sessionUpdatedAt ? group.sessionUpdatedAt.slice(0, 10) : '';
         const blockCount = group.blocks.length;
-        const sourceLabel = group.sessionSource === 'copilot' ? 'Copilot' : 'Claude';
+        const sourceLabel = friendlySourceName(group.sessionSource);
         this.description = [
             dateStr,
             `${blockCount} snippet${blockCount === 1 ? '' : 's'}`,

@@ -804,6 +804,7 @@ export class ChatWizardWatcher implements vscode.Disposable {
         }
 
         const parseResults = await parseCursorWorkspace(vscdbPath, workspaceId, workspacePath);
+        const keepIds = new Set<string>();
         let upsertCount = 0;
         for (const result of parseResults) {
             if (result.errors.length > 0) {
@@ -815,9 +816,11 @@ export class ChatWizardWatcher implements vscode.Disposable {
                 result.session.createdAt === new Date(0).toISOString()) {
                 continue;
             }
+            keepIds.add(result.session.id);
             this.index.upsert(result.session);
             upsertCount++;
         }
+        this.index.removeSessionsForStateFileNotIn(vscdbPath, 'cursor', keepIds);
         this.channel.appendLine(`[live] cursor updated ${upsertCount} session(s) from ${vscdbPath}`);
     }
 
@@ -843,6 +846,7 @@ export class ChatWizardWatcher implements vscode.Disposable {
         }
 
         const parseResults = await parseWindsurfWorkspace(vscdbPath, workspaceId, workspacePath);
+        const keepIds = new Set<string>();
         let upsertCount = 0;
         for (const result of parseResults) {
             if (result.errors.length > 0) {
@@ -854,9 +858,11 @@ export class ChatWizardWatcher implements vscode.Disposable {
                 result.session.createdAt === new Date(0).toISOString()) {
                 continue;
             }
+            keepIds.add(result.session.id);
             this.index.upsert(result.session);
             upsertCount++;
         }
+        this.index.removeSessionsForStateFileNotIn(vscdbPath, 'windsurf', keepIds);
         this.channel.appendLine(`[live] windsurf updated ${upsertCount} session(s) from ${vscdbPath}`);
     }
 

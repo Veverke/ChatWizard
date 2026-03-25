@@ -110,6 +110,22 @@ export class SessionIndex {
     }
 
     /**
+     * After re-parsing a `state.vscdb`, drop indexed sessions from the same file/source
+     * whose ids are no longer present (e.g. old merged `…-cursor-aiservice` vs per-composer ids).
+     */
+    removeSessionsForStateFileNotIn(filePath: string, source: SessionSource, keepIds: Set<string>): void {
+        const toRemove: string[] = [];
+        for (const [id, session] of this.sessions) {
+            if (session.filePath === filePath && session.source === source && !keepIds.has(id)) {
+                toRemove.push(id);
+            }
+        }
+        for (const id of toRemove) {
+            this.remove(id);
+        }
+    }
+
+    /**
      * Insert or replace all sessions in the array, then fire one typed 'batch' event
      * and one plain change notification.
      */

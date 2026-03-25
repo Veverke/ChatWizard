@@ -2,32 +2,8 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { SessionIndex } from '../index/sessionIndex';
 import { SessionSummary, SessionSource } from '../types/index';
-
-/** Returns a human-readable display name for a session source. */
-function friendlySourceName(source: SessionSource): string {
-    switch (source) {
-        case 'copilot':  return 'GitHub Copilot';
-        case 'claude':   return 'Claude Code';
-        case 'cline':    return 'Cline';
-        case 'roocode':  return 'Roo Code';
-        case 'cursor':   return 'Cursor';
-        case 'windsurf': return 'Windsurf';
-        case 'aider':    return 'Aider';
-    }
-}
-
-/** Returns the VS Code ThemeIcon name for a session source (fallback when no extensionUri). */
-function sourceIconId(source: SessionSource): string {
-    switch (source) {
-        case 'copilot':  return 'github';
-        case 'claude':   return 'hubot';
-        case 'cline':    return 'plug';
-        case 'roocode':  return 'circuit-board';
-        case 'cursor':   return 'edit';
-        case 'windsurf': return 'cloud';
-        case 'aider':    return 'terminal';
-    }
-}
+import { friendlySourceName, sourceCodiconId } from '../ui/sourceUi';
+import { sourceBrandIconUris } from '../ui/sourceBrandIcons';
 
 /**
  * Returns a brand icon `{ light, dark }` URI pair for sources that have bundled SVGs.
@@ -37,19 +13,8 @@ function sourceBrandIcon(
     source: SessionSource,
     extensionUri: vscode.Uri
 ): { light: vscode.Uri; dark: vscode.Uri } | vscode.ThemeIcon {
-    switch (source) {
-        case 'cline':
-        case 'roocode':
-        case 'cursor':
-        case 'windsurf':
-        case 'aider':
-            return {
-                light: vscode.Uri.joinPath(extensionUri, 'resources', 'icons', `${source}_light.svg`),
-                dark:  vscode.Uri.joinPath(extensionUri, 'resources', 'icons', `${source}_dark.svg`),
-            };
-        default:
-            return new vscode.ThemeIcon(sourceIconId(source));
-    }
+    const brand = sourceBrandIconUris(source, extensionUri);
+    return brand ?? new vscode.ThemeIcon(sourceCodiconId(source));
 }
 
 export class SessionTreeItem extends vscode.TreeItem {
@@ -114,18 +79,20 @@ export class SessionTreeItem extends vscode.TreeItem {
 
         if (pinned) {
             this.iconPath = new vscode.ThemeIcon('pinned');
+        } else if (extensionUri && sourceBrandIconUris(summary.source, extensionUri)) {
+            // Prefer bundled brand SVGs (Cursor, Cline, …) even when interrupted / parse warnings —
+            // codicon fallbacks like $(edit) are misleading for product identity.
+            this.iconPath = sourceBrandIcon(summary.source, extensionUri);
         } else if (summary.interrupted) {
-            // Keep ThemeIcon with color tinting so the red error signal is preserved.
             const red = new vscode.ThemeColor('list.errorForeground');
-            this.iconPath = new vscode.ThemeIcon(sourceIconId(summary.source), red);
+            this.iconPath = new vscode.ThemeIcon(sourceCodiconId(summary.source), red);
         } else if (summary.hasParseErrors) {
-            // Keep ThemeIcon with color tinting; the ⚠ badge from resourceUri also shows.
             const yellow = new vscode.ThemeColor('list.warningForeground');
-            this.iconPath = new vscode.ThemeIcon(sourceIconId(summary.source), yellow);
+            this.iconPath = new vscode.ThemeIcon(sourceCodiconId(summary.source), yellow);
         } else if (extensionUri) {
             this.iconPath = sourceBrandIcon(summary.source, extensionUri);
         } else {
-            this.iconPath = new vscode.ThemeIcon(sourceIconId(summary.source));
+            this.iconPath = new vscode.ThemeIcon(sourceCodiconId(summary.source));
         }
 
         if (summary.hasParseErrors) {
@@ -216,6 +183,7 @@ export interface SessionFilter {
     dateFrom?: string;     // YYYY-MM-DD lower bound (inclusive)
     dateTo?: string;       // YYYY-MM-DD upper bound (inclusive)
     model?: string;        // case-insensitive substring
+    source?: SessionSource; // exact source to show
     minMessages?: number;
     maxMessages?: number;
     hideInterrupted?: boolean;   // when true, hide sessions whose last message has no assistant reply
@@ -393,7 +361,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeI
 
     hasActiveFilter(): boolean {
         const f = this._filter;
-        return !!(f.title || f.dateFrom || f.dateTo || f.model ||
+        return !!(f.title || f.dateFrom || f.dateTo || f.model || f.source ||
                   f.minMessages !== undefined || f.maxMessages !== undefined ||
                   f.hideInterrupted || f.onlyWithWarnings);
     }
@@ -407,6 +375,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeI
         if (f.model !== undefined && f.model !== '') {
             if (!(s.model ?? '').toLowerCase().includes(f.model.toLowerCase())) { return false; }
         }
+        if (f.source && s.source !== f.source) { return false; }
         if (f.minMessages !== undefined && s.messageCount < f.minMessages) { return false; }
         if (f.maxMessages !== undefined && s.messageCount > f.maxMessages) { return false; }
         if (f.hideInterrupted && s.interrupted) { return false; }
@@ -420,6 +389,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeI
         if (f.title) { parts.push(`title:"${f.title}"`); }
         if (f.dateFrom || f.dateTo) { parts.push(`date:${f.dateFrom ?? '*'}→${f.dateTo ?? '*'}`); }
         if (f.model) { parts.push(`model:"${f.model}"`); }
+        if (f.source) { parts.push(`source:${friendlySourceName(f.source)}`); }
         if (f.minMessages !== undefined || f.maxMessages !== undefined) {
             parts.push(`msgs:${f.minMessages ?? 0}–${f.maxMessages ?? '∞'}`);
         }

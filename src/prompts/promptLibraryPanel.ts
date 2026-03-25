@@ -599,7 +599,11 @@ export class PromptLibraryPanel {
 
       var rows = sessions.map(function(m) {
         var date = m.updatedAt ? m.updatedAt.substring(0, 10) : '';
-        var srcLabel = m.source === 'copilot' ? 'Copilot' : 'Claude';
+        var SRC_LABEL = {
+          claude: 'Claude Code', copilot: 'GitHub Copilot', cline: 'Cline',
+          roocode: 'Roo Code', cursor: 'Cursor', windsurf: 'Windsurf', aider: 'Aider'
+        };
+        var srcLabel = SRC_LABEL[m.source] || m.source;
         return '<div class="overlay-session-row" data-sid="' + escHtml(m.sessionId) + '" data-prompt="' + escHtml(promptText) + '">'
           + '<span class="overlay-session-icon">\\u27A4</span>'
           + '<div class="overlay-session-body">'

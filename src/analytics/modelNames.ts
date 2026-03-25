@@ -15,6 +15,8 @@ export function friendlyModelName(raw: string | undefined | null): string {
     if (!raw) { return 'Unknown'; }
     const s = raw.trim();
     if (!s || s === '<synthetic>') { return 'Unknown'; }
+    // Some sources store a non-model sentinel like "Auto" / "Unknown".
+    if (/^(auto|unknown)$/i.test(s)) { return 'Unknown'; }
 
     // ── Anthropic Claude ──────────────────────────────────────────────────────
 

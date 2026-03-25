@@ -200,7 +200,7 @@ suite('Cursor Parser', () => {
 
         assert.strictEqual(results.length, 1);
         assert.ok(results[0].errors.length > 0);
-        assert.ok(results[0].errors[0].includes('composer.composerData'));
+        assert.ok(results[0].errors[0].includes('composer') || results[0].errors[0].includes('Missing usable'));
         assert.strictEqual(results[0].session.messages.length, 0);
     });
 
@@ -222,7 +222,7 @@ suite('Cursor Parser', () => {
 
     // ── Composer with only empty messages ─────────────────────────────────────
 
-    test('composer with only empty/unsupported messages produces empty messages array', async () => {
+    test('composer with only empty/unsupported messages yields no parse results (no aiService fallback)', async () => {
         const dbPath = path.join(tmpDir, 'state.vscdb');
         createDb(dbPath, [{
             key: 'composer.composerData',
@@ -241,9 +241,117 @@ suite('Cursor Parser', () => {
 
         const results = await parseCursorWorkspace(dbPath, 'workspace-hash-empty-msgs');
 
+        assert.strictEqual(results.length, 0);
+    });
+
+    test('new Cursor shape: metadata-only composers + aiService.prompts → one session (user prompts)', async () => {
+        const dbPath = path.join(tmpDir, 'state.vscdb');
+        const composerOnlyMeta = JSON.stringify({
+            allComposers: [{
+                composerId: 'c1',
+                name: 'Tab title',
+                createdAt: 1700000000000,
+                branches: [{ branchName: 'main', lastInteractionAt: 1 }],
+                activeBranch: { branchName: 'main', lastInteractionAt: 1 },
+            }],
+        });
+        const prompts = JSON.stringify([
+            { text: 'First user question', commandType: 4 },
+            { text: 'Second prompt line', commandType: 4 },
+        ]);
+        const generations = JSON.stringify([
+            { unixMs: 1700000001000, generationUUID: 'u1', type: 'composer', textDescription: 'ignored dup' },
+            { unixMs: 1700000002000, generationUUID: 'u2', type: 'composer', textDescription: 'ignored' },
+        ]);
+        createDb(dbPath, [
+            { key: 'composer.composerData', value: composerOnlyMeta },
+            { key: 'aiService.prompts', value: prompts },
+            { key: 'aiService.generations', value: generations },
+        ]);
+
+        const results = await parseCursorWorkspace(dbPath, 'ws-hash', '/repo');
+
         assert.strictEqual(results.length, 1);
-        assert.strictEqual(results[0].session.messages.length, 0);
-        assert.strictEqual(results[0].errors.length, 0);
+        assert.strictEqual(results[0].session.id, 'c1');
+        assert.strictEqual(results[0].session.messages.length, 2);
+        assert.strictEqual(results[0].session.messages[0].role, 'user');
+        assert.strictEqual(results[0].session.messages[0].content, 'First user question');
+        assert.ok(results[0].session.sourceNotes?.length);
+    });
+
+    test('metadata-only: three composers + three prompts (no per-prompt composerId) → three sessions via even split', async () => {
+        const dbPath = path.join(tmpDir, 'state.vscdb');
+        const composerOnlyMeta = JSON.stringify({
+            allComposers: [
+                {
+                    composerId: 'a',
+                    name: 'Recommendations For VSIX IDE',
+                    createdAt: 1700000000000,
+                    lastUpdatedAt: 1700000001000,
+                },
+                {
+                    composerId: 'b',
+                    name: 'Missing extension in marketplace',
+                    createdAt: 1700000002000,
+                    lastUpdatedAt: 1700000003000,
+                },
+                {
+                    composerId: 'c',
+                    name: 'Chat Wizard extension testing issues',
+                    createdAt: 1700000004000,
+                    lastUpdatedAt: 1700000005000,
+                },
+            ],
+        });
+        const prompts = JSON.stringify([
+            { text: 'First chat first prompt', commandType: 4 },
+            { text: 'Second chat first prompt', commandType: 4 },
+            { text: 'Third chat first prompt', commandType: 4 },
+        ]);
+        createDb(dbPath, [
+            { key: 'composer.composerData', value: composerOnlyMeta },
+            { key: 'aiService.prompts', value: prompts },
+        ]);
+
+        const results = await parseCursorWorkspace(dbPath, 'ws3', '/repo');
+
+        assert.strictEqual(results.length, 3);
+        const titles = results.map(r => r.session.title).sort();
+        assert.deepStrictEqual(
+            titles,
+            [
+                'Chat Wizard extension testing issues',
+                'Missing extension in marketplace',
+                'Recommendations For VSIX IDE',
+            ]
+        );
+        assert.ok(results.every(r => r.session.sourceNotes?.length));
+    });
+
+    test('metadata-only: prompts carry composerId → grouped into matching composer sessions', async () => {
+        const dbPath = path.join(tmpDir, 'state.vscdb');
+        const composerOnlyMeta = JSON.stringify({
+            allComposers: [
+                { composerId: 'id-a', name: 'Alpha', createdAt: 1, lastUpdatedAt: 10 },
+                { composerId: 'id-b', name: 'Beta', createdAt: 2, lastUpdatedAt: 20 },
+            ],
+        });
+        const prompts = JSON.stringify([
+            { text: 'only a', composerId: 'id-a' },
+            { text: 'only b1', composerId: 'id-b' },
+            { text: 'only b2', composerId: 'id-b' },
+        ]);
+        createDb(dbPath, [
+            { key: 'composer.composerData', value: composerOnlyMeta },
+            { key: 'aiService.prompts', value: prompts },
+        ]);
+
+        const results = await parseCursorWorkspace(dbPath, 'ws2', '/repo');
+
+        assert.strictEqual(results.length, 2);
+        const byId = new Map(results.map(r => [r.session.id, r.session]));
+        assert.strictEqual(byId.get('id-a')?.messages.length, 1);
+        assert.strictEqual(byId.get('id-b')?.messages.length, 2);
     });
 
     // ── Non-SQLite file ───────────────────────────────────────────────────────

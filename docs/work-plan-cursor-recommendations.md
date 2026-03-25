@@ -8,16 +8,15 @@ This doc lists **repo-specific** recommendations to improve ChatWizard as a VSIX
 
 Several UI/UX paths still assume only **Copilot** vs **Claude**, but the watcher/indexing supports **Cline / Roo Code / Cursor / Windsurf / Aider** too.
 
-- **Session viewer assistant label**: `src/views/sessionWebviewPanel.ts` uses `session.source === 'copilot' ? 'Copilot' : 'Claude'`, which mislabels every non-copilot source as “Claude”.
-  - **Recommendation**: centralize `friendlySourceName(source)` and `sourceIcon(source)` and use it consistently across tree items, tooltips, session viewer, export pickers, analytics, etc.
+- ✅ **Session viewer assistant label** (completed): `src/views/sessionWebviewPanel.ts` now uses a shared `friendlySourceName()` so non-Copilot sources (Cursor/Cline/Roo/Windsurf/Aider) are no longer mislabeled as “Claude”.
+  - ✅ **Implementation**: centralized `friendlySourceName(source)` / `sourceCodiconId(source)` and applied across session viewer + related UI entry points.
 
-- **Code blocks filter**: `src/extension.ts` → `filterCodeBlocks` offers only Copilot/Claude in `sessionSource`.
-  - **Recommendation**: extend the picker to all `SessionSource` values and update any display strings (“Source (Copilot/Claude)”).
+- ✅ **Code blocks filter** (completed): `src/extension.ts` → `filterCodeBlocks` source picker now supports all `SessionSource` values and no longer hardcodes “Copilot/Claude”.
 
 - **Export UI**:
-  - `src/export/exportCommands.ts` → `exportSelected` uses `detail: Copilot/Claude` only.
-  - `exportExcerpt` uses `assistantLabel = session.source === 'copilot' ? 'Copilot' : 'Claude'`.
-  - **Recommendation**: display the real source label and icon for all sources, and consider including the **workspace name/path** and **model** when available.
+  - ✅ (completed) `src/export/exportCommands.ts` → `exportSelected` detail uses the real source label for all sources.
+  - ✅ (completed) `exportExcerpt` uses `friendlySourceName(session.source)` and the source codicon for assistant rows.
+  - **Remaining**: consider including the **workspace name/path** and **model** when available.
 
 ### 2) Restart/re-index on *all* relevant setting changes (not just Claude/Copilot)
 

@@ -34,7 +34,7 @@ __export(extension_exports, {
   deactivate: () => deactivate
 });
 module.exports = __toCommonJS(extension_exports);
-var vscode14 = __toESM(require("vscode"));
+var vscode15 = __toESM(require("vscode"));
 
 // src/index/sessionIndex.ts
 function toSummary(session) {
@@ -124,6 +124,21 @@ var SessionIndex = class {
       this._notifyListeners();
     }
     return removed;
+  }
+  /**
+   * After re-parsing a `state.vscdb`, drop indexed sessions from the same file/source
+   * whose ids are no longer present (e.g. old merged `…-cursor-aiservice` vs per-composer ids).
+   */
+  removeSessionsForStateFileNotIn(filePath, source, keepIds) {
+    const toRemove = [];
+    for (const [id, session] of this.sessions) {
+      if (session.filePath === filePath && session.source === source && !keepIds.has(id)) {
+        toRemove.push(id);
+      }
+    }
+    for (const id of toRemove) {
+      this.remove(id);
+    }
   }
   /**
    * Insert or replace all sessions in the array, then fire one typed 'batch' event
@@ -1066,8 +1081,8 @@ function resolveClaudeProjectsPath(override) {
     return override;
   }
   try {
-    const vscode15 = require("vscode");
-    const cfg = vscode15.workspace.getConfiguration("chatwizard");
+    const vscode16 = require("vscode");
+    const cfg = vscode16.workspace.getConfiguration("chatwizard");
     const configured = cfg.get("claudeProjectsPath");
     if (configured && configured !== "") {
       return configured;
@@ -1081,8 +1096,8 @@ function resolveClineStoragePath(override) {
     return override;
   }
   try {
-    const vscode15 = require("vscode");
-    const cfg = vscode15.workspace.getConfiguration("chatwizard");
+    const vscode16 = require("vscode");
+    const cfg = vscode16.workspace.getConfiguration("chatwizard");
     const configured = cfg.get("clineStoragePath");
     if (configured && configured !== "") {
       return configured;
@@ -1096,8 +1111,8 @@ function resolveRooCodeStoragePath(override) {
     return override;
   }
   try {
-    const vscode15 = require("vscode");
-    const cfg = vscode15.workspace.getConfiguration("chatwizard");
+    const vscode16 = require("vscode");
+    const cfg = vscode16.workspace.getConfiguration("chatwizard");
     const configured = cfg.get("rooCodeStoragePath");
     if (configured && configured !== "") {
       return configured;
@@ -1111,8 +1126,8 @@ function resolveCursorStoragePath(override) {
     return override;
   }
   try {
-    const vscode15 = require("vscode");
-    const cfg = vscode15.workspace.getConfiguration("chatwizard");
+    const vscode16 = require("vscode");
+    const cfg = vscode16.workspace.getConfiguration("chatwizard");
     const configured = cfg.get("cursorStoragePath");
     if (configured && configured !== "") {
       return configured;
@@ -1126,8 +1141,8 @@ function resolveWindsurfStoragePath(override) {
     return override;
   }
   try {
-    const vscode15 = require("vscode");
-    const cfg = vscode15.workspace.getConfiguration("chatwizard");
+    const vscode16 = require("vscode");
+    const cfg = vscode16.workspace.getConfiguration("chatwizard");
     const configured = cfg.get("windsurfStoragePath");
     if (configured && configured !== "") {
       return configured;
@@ -1150,8 +1165,8 @@ var WorkspaceScopeManager = class {
   /** Returns the normalised, lowercase paths of currently open VS Code workspace folders. */
   _getOpenFolderPaths() {
     try {
-      const vscode15 = require("vscode");
-      return (vscode15.workspace.workspaceFolders ?? []).map(
+      const vscode16 = require("vscode");
+      return (vscode16.workspace.workspaceFolders ?? []).map(
         (f) => path8.normalize(f.uri.fsPath).toLowerCase()
       );
     } catch {
@@ -1491,6 +1506,327 @@ async function parseClineTask(taskDir, _maxLineChars, source = "cline") {
 var path10 = __toESM(require("path"));
 var MAX_COMPOSERS = 5e3;
 var MAX_TITLE_CHARS2 = 120;
+function extractItemRole(item) {
+  if (item.type === 1) {
+    return "user";
+  }
+  if (item.type === 2) {
+    return "assistant";
+  }
+  if (item.isUser === true) {
+    return "user";
+  }
+  if (item.isUser === false) {
+    return "assistant";
+  }
+  if (typeof item.role === "string") {
+    const r = item.role.toLowerCase();
+    if (r === "user") {
+      return "user";
+    }
+    if (r === "assistant" || r === "model" || r === "ai") {
+      return "assistant";
+    }
+  }
+  return null;
+}
+function extractItemText(item) {
+  if (typeof item.text === "string" && item.text.trim()) {
+    return item.text;
+  }
+  if (typeof item.richText === "string" && item.richText.trim()) {
+    return item.richText;
+  }
+  if (typeof item.content === "string" && item.content.trim()) {
+    return item.content;
+  }
+  if (typeof item.message === "string" && item.message.trim()) {
+    return item.message;
+  }
+  if (typeof item.markdown === "string" && item.markdown.trim()) {
+    return item.markdown;
+  }
+  if (Array.isArray(item.parts)) {
+    const fromParts = item.parts.map((p) => typeof p.text === "string" && p.text ? p.text : typeof p.content === "string" ? p.content : "").filter(Boolean).join("\n").trim();
+    if (fromParts) {
+      return fromParts;
+    }
+  }
+  return "";
+}
+var AISERVICE_SOURCE_NOTE = "This session was rebuilt from Cursor's aiService.prompts data. Cursor does not store full assistant replies in workspace state.vscdb for this build \u2014 only your prompts are available here. This is not a parse failure.";
+function extractPromptComposerId(p) {
+  if (!p || typeof p !== "object") {
+    return void 0;
+  }
+  const o = p;
+  const keys = ["composerId", "composerID", "composerSessionId", "sessionId", "chatId", "composer_id"];
+  for (const k of keys) {
+    const v = o[k];
+    if (typeof v === "string" && v.trim()) {
+      return v.trim();
+    }
+  }
+  return void 0;
+}
+function extractPromptText(p) {
+  if (!p || typeof p !== "object") {
+    return "";
+  }
+  const o = p;
+  if (typeof o.text === "string" && o.text.trim()) {
+    return o.text.trim();
+  }
+  if (typeof o.prompt === "string" && o.prompt.trim()) {
+    return o.prompt.trim();
+  }
+  if (typeof o.content === "string" && o.content.trim()) {
+    return o.content.trim();
+  }
+  return "";
+}
+function composerTimeEnd(c) {
+  const lu = c.lastUpdatedAt ?? c.updatedAt ?? 0;
+  const cr = c.createdAt ?? 0;
+  return (lu > 0 ? lu : cr) || cr;
+}
+function buildAiServiceFallbackSessions(vscdbPath, workspaceId, workspacePath, composers, promptsJson, generationsJson) {
+  let prompts;
+  try {
+    prompts = JSON.parse(promptsJson);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(prompts) || prompts.length === 0) {
+    return null;
+  }
+  let genTimestamps = [];
+  if (generationsJson) {
+    try {
+      const gens = JSON.parse(generationsJson);
+      if (Array.isArray(gens)) {
+        genTimestamps = gens.map(
+          (g) => typeof g === "object" && g !== null && "unixMs" in g && typeof g.unixMs === "number" && g.unixMs > 0 ? g.unixMs : void 0
+        );
+      }
+    } catch {
+    }
+  }
+  const flat = [];
+  for (let i = 0; i < prompts.length; i++) {
+    const text = extractPromptText(prompts[i]);
+    if (!text) {
+      continue;
+    }
+    const unixMs = genTimestamps[i];
+    const cid = extractPromptComposerId(prompts[i]);
+    flat.push({
+      index: i,
+      text,
+      unixMs: unixMs !== void 0 ? unixMs : void 0,
+      composerId: cid
+    });
+  }
+  if (flat.length === 0) {
+    return null;
+  }
+  const withIds = composers.filter((c) => typeof c.composerId === "string" && c.composerId.trim());
+  const buildMergedOrSingleComposerSession = (composer) => {
+    const sid = composer?.composerId && composer.composerId.trim() ? composer.composerId.trim() : `${workspaceId}-cursor-aiservice`;
+    const messages = [];
+    for (let j = 0; j < flat.length; j++) {
+      const fp = flat[j];
+      const messageIndex = messages.length;
+      messages.push({
+        id: `${sid}-${messageIndex}`,
+        role: "user",
+        content: fp.text,
+        codeBlocks: extractCursorCodeBlocks(fp.text, sid, messageIndex),
+        timestamp: fp.unixMs !== void 0 ? new Date(fp.unixMs).toISOString() : void 0
+      });
+    }
+    const firstLine = messages[0].content.split("\n")[0] || messages[0].content;
+    let title;
+    if (composer && typeof composer.name === "string" && composer.name.trim()) {
+      title = composer.name.trim();
+    } else {
+      title = firstLine.length > MAX_TITLE_CHARS2 ? firstLine.slice(0, MAX_TITLE_CHARS2) + "\u2026" : firstLine;
+    }
+    const createdAt = composer && typeof composer.createdAt === "number" && composer.createdAt > 0 ? new Date(composer.createdAt).toISOString() : messages.find((m) => m.timestamp)?.timestamp ?? (/* @__PURE__ */ new Date()).toISOString();
+    const updatedAt = [...messages].reverse().find((m) => m.timestamp)?.timestamp ?? createdAt;
+    return {
+      session: {
+        id: sid,
+        title,
+        source: "cursor",
+        workspaceId,
+        workspacePath,
+        model: composer?.model,
+        messages,
+        filePath: vscdbPath,
+        createdAt,
+        updatedAt,
+        sourceNotes: [AISERVICE_SOURCE_NOTE]
+      },
+      errors: []
+    };
+  };
+  if (withIds.length <= 1) {
+    return [buildMergedOrSingleComposerSession(withIds[0])];
+  }
+  const byComposer = /* @__PURE__ */ new Map();
+  for (const c of withIds) {
+    byComposer.set(c.composerId, []);
+  }
+  const unassigned = [];
+  for (const fp of flat) {
+    if (fp.composerId && byComposer.has(fp.composerId)) {
+      byComposer.get(fp.composerId).push(fp);
+    } else {
+      unassigned.push(fp);
+    }
+  }
+  if (unassigned.length > 0) {
+    const sorted = [...withIds].sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
+    for (const fp of unassigned) {
+      const ts = fp.unixMs;
+      if (ts === void 0) {
+        continue;
+      }
+      let best;
+      for (const c of sorted) {
+        const start = c.createdAt ?? 0;
+        const end = composerTimeEnd(c);
+        if (end >= start && ts >= start && ts <= end) {
+          best = c;
+          break;
+        }
+      }
+      if (!best) {
+        let bestDist = Infinity;
+        for (const c of sorted) {
+          const start = c.createdAt ?? 0;
+          const end = composerTimeEnd(c);
+          const mid = start && end ? (start + end) / 2 : start || end || ts;
+          const dist = Math.abs(ts - mid);
+          if (dist < bestDist) {
+            bestDist = dist;
+            best = c;
+          }
+        }
+      }
+      if (best?.composerId) {
+        byComposer.get(best.composerId).push(fp);
+      }
+    }
+  }
+  const claimed = /* @__PURE__ */ new Set();
+  for (const [, arr] of byComposer) {
+    for (const p of arr) {
+      claimed.add(`${p.index}`);
+    }
+  }
+  const stillFloating = [];
+  for (const fp of flat) {
+    if (!claimed.has(`${fp.index}`)) {
+      stillFloating.push(fp);
+    }
+  }
+  if (stillFloating.length > 0) {
+    const sortedC = [...withIds].sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
+    for (const fp of stillFloating) {
+      const firstLine = fp.text.split("\n")[0]?.trim() ?? fp.text;
+      let matched;
+      for (const c of sortedC) {
+        const name = typeof c.name === "string" ? c.name.trim() : "";
+        if (!name) {
+          continue;
+        }
+        if (firstLine === name || firstLine.toLowerCase().startsWith(name.toLowerCase())) {
+          matched = c;
+          break;
+        }
+      }
+      if (matched?.composerId) {
+        byComposer.get(matched.composerId).push(fp);
+      }
+    }
+  }
+  const claimed2 = /* @__PURE__ */ new Set();
+  for (const [, arr] of byComposer) {
+    for (const p of arr) {
+      claimed2.add(`${p.index}`);
+    }
+  }
+  const still2 = [];
+  for (const fp of flat) {
+    if (!claimed2.has(`${fp.index}`)) {
+      still2.push(fp);
+    }
+  }
+  if (still2.length > 0) {
+    const sortedC = [...withIds].sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
+    const k = sortedC.length;
+    const n = still2.length;
+    const base = Math.floor(n / k);
+    const rem = n % k;
+    let offset = 0;
+    for (let i = 0; i < k; i++) {
+      const len = base + (i < rem ? 1 : 0);
+      const slice = still2.slice(offset, offset + len);
+      offset += len;
+      const cid = sortedC[i].composerId;
+      byComposer.get(cid).push(...slice);
+    }
+  }
+  const results = [];
+  const ordered = [...withIds].sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
+  for (const c of ordered) {
+    const cid = c.composerId;
+    const items = (byComposer.get(cid) ?? []).slice().sort((a, b) => a.index - b.index);
+    if (items.length === 0) {
+      continue;
+    }
+    const messages = [];
+    for (let j = 0; j < items.length; j++) {
+      const fp = items[j];
+      const messageIndex = messages.length;
+      messages.push({
+        id: `${cid}-${messageIndex}`,
+        role: "user",
+        content: fp.text,
+        codeBlocks: extractCursorCodeBlocks(fp.text, cid, messageIndex),
+        timestamp: fp.unixMs !== void 0 ? new Date(fp.unixMs).toISOString() : void 0
+      });
+    }
+    let title;
+    if (typeof c.name === "string" && c.name.trim()) {
+      title = c.name.trim();
+    } else {
+      const firstLine = messages[0].content.split("\n")[0] || messages[0].content;
+      title = firstLine.length > MAX_TITLE_CHARS2 ? firstLine.slice(0, MAX_TITLE_CHARS2) + "\u2026" : firstLine;
+    }
+    const createdAt = typeof c.createdAt === "number" && c.createdAt > 0 ? new Date(c.createdAt).toISOString() : messages.find((m) => m.timestamp)?.timestamp ?? (/* @__PURE__ */ new Date()).toISOString();
+    const updatedAt = [...messages].reverse().find((m) => m.timestamp)?.timestamp ?? createdAt;
+    results.push({
+      session: {
+        id: cid,
+        title,
+        source: "cursor",
+        workspaceId,
+        workspacePath,
+        model: c.model,
+        messages,
+        filePath: vscdbPath,
+        createdAt,
+        updatedAt,
+        sourceNotes: [AISERVICE_SOURCE_NOTE]
+      },
+      errors: []
+    });
+  }
+  return results.length > 0 ? results : null;
+}
 function extractCursorCodeBlocks(content, sessionId, messageIndex) {
   return extractCodeBlocks2(content, sessionId, messageIndex);
 }
@@ -1510,6 +1846,9 @@ async function parseCursorWorkspace(vscdbPath, workspaceId, workspacePath) {
     errors: [msg]
   }];
   let rawValue = null;
+  let usedKey = "composer.composerData";
+  let rawPrompts = null;
+  let rawGenerations = null;
   try {
     const Database = require("better-sqlite3");
     const db = new Database(vscdbPath, { readonly: true, fileMustExist: true });
@@ -1518,6 +1857,30 @@ async function parseCursorWorkspace(vscdbPath, workspaceId, workspacePath) {
         "SELECT value FROM ItemTable WHERE key = 'composer.composerData'"
       ).get();
       rawValue = row?.value ?? null;
+      if (rawValue == null) {
+        const probeRows = db.prepare(
+          "SELECT key, value FROM ItemTable WHERE key LIKE '%composer%' ORDER BY key LIMIT 100"
+        ).all();
+        for (const pr of probeRows) {
+          try {
+            const parsed = JSON.parse(pr.value);
+            if (Array.isArray(parsed?.allComposers) || Array.isArray(parsed?.composers)) {
+              rawValue = pr.value;
+              usedKey = pr.key;
+              break;
+            }
+          } catch {
+          }
+        }
+      }
+      const prRow = db.prepare(
+        "SELECT value FROM ItemTable WHERE key = 'aiService.prompts'"
+      ).get();
+      rawPrompts = prRow?.value ?? null;
+      const genRow = db.prepare(
+        "SELECT value FROM ItemTable WHERE key = 'aiService.generations'"
+      ).get();
+      rawGenerations = genRow?.value ?? null;
     } finally {
       db.close();
     }
@@ -1527,7 +1890,18 @@ async function parseCursorWorkspace(vscdbPath, workspaceId, workspacePath) {
     );
   }
   if (rawValue == null) {
-    return fatalResult("Missing 'composer.composerData' key in state.vscdb");
+    if (rawPrompts) {
+      const fb2 = buildAiServiceFallbackSessions(
+        vscdbPath,
+        workspaceId,
+        workspacePath,
+        [],
+        rawPrompts,
+        rawGenerations
+      );
+      return fb2 && fb2.length > 0 ? fb2 : fatalResult("Missing usable composer data key in state.vscdb");
+    }
+    return fatalResult("Missing usable composer data key in state.vscdb");
   }
   let composerData;
   try {
@@ -1537,25 +1911,33 @@ async function parseCursorWorkspace(vscdbPath, workspaceId, workspacePath) {
       `Failed to parse composer.composerData JSON: ${err instanceof Error ? err.message : String(err)}`
     );
   }
-  const allComposers = composerData?.allComposers;
+  const allComposers = Array.isArray(composerData?.allComposers) ? composerData.allComposers : composerData?.composers;
   if (!Array.isArray(allComposers)) {
-    return fatalResult("composer.composerData.allComposers is not an array");
+    return fatalResult(`${usedKey} does not contain allComposers/composers array`);
   }
   if (allComposers.length === 0) {
-    return [];
+    const fb2 = rawPrompts ? buildAiServiceFallbackSessions(
+      vscdbPath,
+      workspaceId,
+      workspacePath,
+      [],
+      rawPrompts,
+      rawGenerations
+    ) : null;
+    return fb2 && fb2.length > 0 ? fb2 : [];
   }
   const composers = allComposers.slice(0, MAX_COMPOSERS);
-  return composers.map((composer) => {
+  const perComposer = composers.map((composer) => {
     const composerId = typeof composer.composerId === "string" && composer.composerId ? composer.composerId : `${workspaceId}-${path10.basename(vscdbPath)}-unknown`;
     const errors = [];
-    const conversation = Array.isArray(composer.conversation) ? composer.conversation : [];
+    const conversation = Array.isArray(composer.conversation) ? composer.conversation : Array.isArray(composer.messages) ? composer.messages : [];
     const messages = [];
     for (const item of conversation) {
-      if (item.type !== 1 && item.type !== 2) {
+      const role = extractItemRole(item);
+      if (!role) {
         continue;
       }
-      const role = item.type === 1 ? "user" : "assistant";
-      const content = typeof item.text === "string" && item.text ? item.text : typeof item.richText === "string" ? item.richText : "";
+      const content = extractItemText(item);
       if (!content.trim()) {
         continue;
       }
@@ -1565,7 +1947,7 @@ async function parseCursorWorkspace(vscdbPath, workspaceId, workspacePath) {
         role,
         content,
         codeBlocks: extractCursorCodeBlocks(content, composerId, messageIndex),
-        timestamp: typeof item.unixMs === "number" && item.unixMs > 0 ? new Date(item.unixMs).toISOString() : void 0
+        timestamp: typeof item.unixMs === "number" && item.unixMs > 0 ? new Date(item.unixMs).toISOString() : typeof item.timestamp === "number" && item.timestamp > 0 ? new Date(item.timestamp).toISOString() : typeof item.createdAt === "number" && item.createdAt > 0 ? new Date(item.createdAt).toISOString() : void 0
       });
     }
     const firstUserMsg = messages.find((m) => m.role === "user");
@@ -1579,7 +1961,7 @@ async function parseCursorWorkspace(vscdbPath, workspaceId, workspacePath) {
     } else {
       title = "Untitled";
     }
-    const createdAt = typeof composer.createdAt === "number" && composer.createdAt > 0 ? new Date(composer.createdAt).toISOString() : messages.find((m) => m.timestamp)?.timestamp ?? (/* @__PURE__ */ new Date(0)).toISOString();
+    const createdAt = typeof composer.createdAt === "number" && composer.createdAt > 0 ? new Date(composer.createdAt).toISOString() : typeof composer.updatedAt === "number" && composer.updatedAt > 0 ? new Date(composer.updatedAt).toISOString() : messages.find((m) => m.timestamp)?.timestamp ?? (/* @__PURE__ */ new Date()).toISOString();
     const lastTimestampMsg = [...messages].reverse().find((m) => m.timestamp);
     const updatedAt = lastTimestampMsg?.timestamp ?? createdAt;
     return {
@@ -1589,6 +1971,7 @@ async function parseCursorWorkspace(vscdbPath, workspaceId, workspacePath) {
         source: "cursor",
         workspaceId,
         workspacePath,
+        model: composer.model,
         messages,
         filePath: vscdbPath,
         createdAt,
@@ -1597,6 +1980,19 @@ async function parseCursorWorkspace(vscdbPath, workspaceId, workspacePath) {
       errors
     };
   });
+  const nonempty = perComposer.filter((r) => r.session.messages.length > 0);
+  if (nonempty.length > 0) {
+    return nonempty;
+  }
+  const fb = rawPrompts ? buildAiServiceFallbackSessions(
+    vscdbPath,
+    workspaceId,
+    workspacePath,
+    composers,
+    rawPrompts,
+    rawGenerations
+  ) : null;
+  return fb && fb.length > 0 ? fb : [];
 }
 
 // src/parsers/windsurf.ts
@@ -2606,6 +3002,7 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
     } catch {
     }
     const parseResults = await parseCursorWorkspace(vscdbPath, workspaceId, workspacePath);
+    const keepIds = /* @__PURE__ */ new Set();
     let upsertCount = 0;
     for (const result of parseResults) {
       if (result.errors.length > 0) {
@@ -2616,9 +3013,11 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
       if (result.session.messages.length === 0 || result.session.createdAt === (/* @__PURE__ */ new Date(0)).toISOString()) {
         continue;
       }
+      keepIds.add(result.session.id);
       this.index.upsert(result.session);
       upsertCount++;
     }
+    this.index.removeSessionsForStateFileNotIn(vscdbPath, "cursor", keepIds);
     this.channel.appendLine(`[live] cursor updated ${upsertCount} session(s) from ${vscdbPath}`);
   }
   async onWindsurfFileChanged(uri) {
@@ -2639,6 +3038,7 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
     } catch {
     }
     const parseResults = await parseWindsurfWorkspace(vscdbPath, workspaceId, workspacePath);
+    const keepIds = /* @__PURE__ */ new Set();
     let upsertCount = 0;
     for (const result of parseResults) {
       if (result.errors.length > 0) {
@@ -2649,9 +3049,11 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
       if (result.session.messages.length === 0 || result.session.createdAt === (/* @__PURE__ */ new Date(0)).toISOString()) {
         continue;
       }
+      keepIds.add(result.session.id);
       this.index.upsert(result.session);
       upsertCount++;
     }
+    this.index.removeSessionsForStateFileNotIn(vscdbPath, "windsurf", keepIds);
     this.channel.appendLine(`[live] windsurf updated ${upsertCount} session(s) from ${vscdbPath}`);
   }
   onAiderFileChanged(uri) {
@@ -2770,9 +3172,7 @@ async function discoverClaudeWorkspacesAsync(override) {
   }
 }
 
-// src/views/sessionTreeProvider.ts
-var vscode2 = __toESM(require("vscode"));
-var path14 = __toESM(require("path"));
+// src/ui/sourceUi.ts
 function friendlySourceName(source) {
   switch (source) {
     case "copilot":
@@ -2791,7 +3191,7 @@ function friendlySourceName(source) {
       return "Aider";
   }
 }
-function sourceIconId(source) {
+function sourceCodiconId(source) {
   switch (source) {
     case "copilot":
       return "github";
@@ -2802,14 +3202,22 @@ function sourceIconId(source) {
     case "roocode":
       return "circuit-board";
     case "cursor":
-      return "edit";
+      return "sparkle";
+    // fallback when no bundled brand SVG; never use "edit" (pencil)
     case "windsurf":
       return "cloud";
     case "aider":
       return "terminal";
   }
 }
-function sourceBrandIcon(source, extensionUri) {
+
+// src/views/sessionTreeProvider.ts
+var vscode3 = __toESM(require("vscode"));
+var path14 = __toESM(require("path"));
+
+// src/ui/sourceBrandIcons.ts
+var vscode2 = __toESM(require("vscode"));
+function sourceBrandIconUris(source, extensionUri) {
   switch (source) {
     case "cline":
     case "roocode":
@@ -2821,14 +3229,20 @@ function sourceBrandIcon(source, extensionUri) {
         dark: vscode2.Uri.joinPath(extensionUri, "resources", "icons", `${source}_dark.svg`)
       };
     default:
-      return new vscode2.ThemeIcon(sourceIconId(source));
+      return null;
   }
 }
-var SessionTreeItem = class extends vscode2.TreeItem {
+
+// src/views/sessionTreeProvider.ts
+function sourceBrandIcon(source, extensionUri) {
+  const brand = sourceBrandIconUris(source, extensionUri);
+  return brand ?? new vscode3.ThemeIcon(sourceCodiconId(source));
+}
+var SessionTreeItem = class extends vscode3.TreeItem {
   summary;
   pinned;
   constructor(summary, pinned = false, extensionUri) {
-    super(summary.title || "Untitled Session", vscode2.TreeItemCollapsibleState.None);
+    super(summary.title || "Untitled Session", vscode3.TreeItemCollapsibleState.None);
     this.summary = summary;
     this.pinned = pinned;
     const workspaceName = path14.basename(summary.workspacePath ?? summary.workspaceId);
@@ -2854,13 +3268,13 @@ var SessionTreeItem = class extends vscode2.TreeItem {
     const parseErrorsLine = summary.hasParseErrors ? `
 
 \u26A0 *This session has parse errors \u2014 some lines could not be read*` : "";
-    const config = vscode2.workspace.getConfiguration("chatwizard");
+    const config = vscode3.workspace.getConfiguration("chatwizard");
     const labelColor = config.get("tooltipLabelColor", "");
     let tooltip;
     if (labelColor) {
       const lbl = (t) => `<span style="color:${labelColor};">${t}</span>`;
       const sizeText = sizeKb ? `${msgCount} messages \xB7 ${sizeKb}` : `${msgCount} messages`;
-      tooltip = new vscode2.MarkdownString(
+      tooltip = new vscode3.MarkdownString(
         `${lbl("Title:")} ${summary.title || "Untitled Session"}
 
 ${lbl("Source:")} ${sourceName}` + (summary.model ? `
@@ -2878,7 +3292,7 @@ ${summary.userMessageCount} prompts \xB7 ${summary.assistantMessageCount} respon
       tooltip.isTrusted = true;
       tooltip.supportHtml = true;
     } else {
-      tooltip = new vscode2.MarkdownString(
+      tooltip = new vscode3.MarkdownString(
         `**Title:** ${summary.title || "Untitled Session"}
 
 **Source:** ${sourceName}${modelLine}
@@ -2892,20 +3306,22 @@ ${summary.userMessageCount} prompts \xB7 ${summary.assistantMessageCount} respon
     }
     this.tooltip = tooltip;
     if (pinned) {
-      this.iconPath = new vscode2.ThemeIcon("pinned");
+      this.iconPath = new vscode3.ThemeIcon("pinned");
+    } else if (extensionUri && sourceBrandIconUris(summary.source, extensionUri)) {
+      this.iconPath = sourceBrandIcon(summary.source, extensionUri);
     } else if (summary.interrupted) {
-      const red = new vscode2.ThemeColor("list.errorForeground");
-      this.iconPath = new vscode2.ThemeIcon(sourceIconId(summary.source), red);
+      const red = new vscode3.ThemeColor("list.errorForeground");
+      this.iconPath = new vscode3.ThemeIcon(sourceCodiconId(summary.source), red);
     } else if (summary.hasParseErrors) {
-      const yellow = new vscode2.ThemeColor("list.warningForeground");
-      this.iconPath = new vscode2.ThemeIcon(sourceIconId(summary.source), yellow);
+      const yellow = new vscode3.ThemeColor("list.warningForeground");
+      this.iconPath = new vscode3.ThemeIcon(sourceCodiconId(summary.source), yellow);
     } else if (extensionUri) {
       this.iconPath = sourceBrandIcon(summary.source, extensionUri);
     } else {
-      this.iconPath = new vscode2.ThemeIcon(sourceIconId(summary.source));
+      this.iconPath = new vscode3.ThemeIcon(sourceCodiconId(summary.source));
     }
     if (summary.hasParseErrors) {
-      this.resourceUri = vscode2.Uri.from({ scheme: "chatwizard-warn", path: "/" + summary.id });
+      this.resourceUri = vscode3.Uri.from({ scheme: "chatwizard-warn", path: "/" + summary.id });
     }
     this.contextValue = pinned ? "session.pinned" : "session";
     this.command = {
@@ -2915,17 +3331,17 @@ ${summary.userMessageCount} prompts \xB7 ${summary.assistantMessageCount} respon
     };
   }
 };
-var LoadingTreeItem = class extends vscode2.TreeItem {
+var LoadingTreeItem = class extends vscode3.TreeItem {
   constructor() {
-    super("Indexing sessions\u2026", vscode2.TreeItemCollapsibleState.None);
-    this.iconPath = new vscode2.ThemeIcon("loading~spin");
+    super("Indexing sessions\u2026", vscode3.TreeItemCollapsibleState.None);
+    this.iconPath = new vscode3.ThemeIcon("loading~spin");
     this.contextValue = "loading";
   }
 };
-var LoadMoreTreeItem = class extends vscode2.TreeItem {
+var LoadMoreTreeItem = class extends vscode3.TreeItem {
   remaining;
   constructor(remaining) {
-    super(`\u22EF Load more (${remaining} remaining)`, vscode2.TreeItemCollapsibleState.None);
+    super(`\u22EF Load more (${remaining} remaining)`, vscode3.TreeItemCollapsibleState.None);
     this.remaining = remaining;
     this.contextValue = "loadMore";
     this.command = {
@@ -2986,7 +3402,7 @@ var SessionParseWarningDecorationProvider = class {
     if (uri.scheme === "chatwizard-warn") {
       return {
         badge: "\u26A0",
-        color: new vscode2.ThemeColor("list.warningForeground"),
+        color: new vscode3.ThemeColor("list.warningForeground"),
         tooltip: "This session has parse errors",
         propagate: false
       };
@@ -3003,7 +3419,7 @@ var SessionTreeProvider = class {
       this.refresh();
     });
   }
-  _onDidChangeTreeData = new vscode2.EventEmitter();
+  _onDidChangeTreeData = new vscode3.EventEmitter();
   onDidChangeTreeData = this._onDidChangeTreeData.event;
   sortStack = [{ key: "date", direction: "desc" }];
   _filter = {};
@@ -3108,7 +3524,7 @@ var SessionTreeProvider = class {
   }
   hasActiveFilter() {
     const f = this._filter;
-    return !!(f.title || f.dateFrom || f.dateTo || f.model || f.minMessages !== void 0 || f.maxMessages !== void 0 || f.hideInterrupted || f.onlyWithWarnings);
+    return !!(f.title || f.dateFrom || f.dateTo || f.model || f.source || f.minMessages !== void 0 || f.maxMessages !== void 0 || f.hideInterrupted || f.onlyWithWarnings);
   }
   _matchesFilter(s) {
     const f = this._filter;
@@ -3126,6 +3542,9 @@ var SessionTreeProvider = class {
       if (!(s.model ?? "").toLowerCase().includes(f.model.toLowerCase())) {
         return false;
       }
+    }
+    if (f.source && s.source !== f.source) {
+      return false;
     }
     if (f.minMessages !== void 0 && s.messageCount < f.minMessages) {
       return false;
@@ -3152,6 +3571,9 @@ var SessionTreeProvider = class {
     }
     if (f.model) {
       parts.push(`model:"${f.model}"`);
+    }
+    if (f.source) {
+      parts.push(`source:${friendlySourceName(f.source)}`);
     }
     if (f.minMessages !== void 0 || f.maxMessages !== void 0) {
       parts.push(`msgs:${f.minMessages ?? 0}\u2013${f.maxMessages ?? "\u221E"}`);
@@ -3262,7 +3684,7 @@ var SessionTreeProvider = class {
 };
 
 // src/views/codeBlockTreeProvider.ts
-var vscode3 = __toESM(require("vscode"));
+var vscode4 = __toESM(require("vscode"));
 var CB_SORT_KEY_LABELS = {
   date: "Date",
   workspace: "Workspace",
@@ -3406,14 +3828,14 @@ function groupBySession(blocks) {
   }
   return Array.from(map.values());
 }
-var CodeBlockGroupItem = class extends vscode3.TreeItem {
+var CodeBlockGroupItem = class extends vscode4.TreeItem {
   sessionRef;
   constructor(group) {
-    super(group.sessionTitle, vscode3.TreeItemCollapsibleState.Collapsed);
+    super(group.sessionTitle, vscode4.TreeItemCollapsibleState.Collapsed);
     this.sessionRef = { sessionId: group.sessionId, blocks: group.blocks };
     const dateStr = group.sessionUpdatedAt ? group.sessionUpdatedAt.slice(0, 10) : "";
     const blockCount = group.blocks.length;
-    const sourceLabel = group.sessionSource === "copilot" ? "Copilot" : "Claude";
+    const sourceLabel = friendlySourceName(group.sessionSource);
     this.description = [
       dateStr,
       `${blockCount} snippet${blockCount === 1 ? "" : "s"}`,
@@ -3421,10 +3843,10 @@ var CodeBlockGroupItem = class extends vscode3.TreeItem {
     ].filter(Boolean).join(" \xB7 ");
     const lang = group.primaryLanguage.toLowerCase().trim();
     if (lang === "css") {
-      this.iconPath = new vscode3.ThemeIcon("symbol-misc");
+      this.iconPath = new vscode4.ThemeIcon("symbol-misc");
     } else {
       const ext = langToExtension(group.primaryLanguage);
-      this.resourceUri = vscode3.Uri.file(`file.${ext}`);
+      this.resourceUri = vscode4.Uri.file(`file.${ext}`);
     }
     const workspaceName = group.sessionWorkspacePath ? group.sessionWorkspacePath.replace(/\\/g, "/").split("/").pop() ?? "" : "";
     const shownBlocks = group.blocks.slice(0, 3);
@@ -3444,7 +3866,7 @@ ${preview}
       `**Language:** ${langLabel}  |  **Source:** ${sourceLabel}  |  **Snippets:** ${blockCount}${dateStr ? `  |  **Date:** ${dateStr}` : ""}`,
       workspaceName ? `**Workspace:** ${workspaceName}` : ""
     ].filter(Boolean).join("\n\n");
-    this.tooltip = new vscode3.MarkdownString(
+    this.tooltip = new vscode4.MarkdownString(
       [`**${group.sessionTitle}**`, meta, "", ...blockPreviews].join("\n\n")
     );
     this.contextValue = "codeblock";
@@ -3455,19 +3877,19 @@ ${preview}
     };
   }
 };
-var CodeBlockLeafItem = class extends vscode3.TreeItem {
+var CodeBlockLeafItem = class extends vscode4.TreeItem {
   block;
   sessionRef;
   constructor(block) {
     const langLabel = block.language || "plain";
     const preview = block.content.length > 60 ? block.content.slice(0, 60).replace(/\n/g, " ") + "\u2026" : block.content.replace(/\n/g, " ");
-    super(`${langLabel}: ${preview}`, vscode3.TreeItemCollapsibleState.None);
+    super(`${langLabel}: ${preview}`, vscode4.TreeItemCollapsibleState.None);
     this.block = block;
     this.sessionRef = { sessionId: block.sessionId, blocks: [block] };
     const ext = langToExtension(block.language || "");
-    this.resourceUri = vscode3.Uri.file(`file.${ext}`);
+    this.resourceUri = vscode4.Uri.file(`file.${ext}`);
     const fullPreview = block.content.length > 300 ? block.content.slice(0, 300) + "\u2026" : block.content;
-    this.tooltip = new vscode3.MarkdownString(
+    this.tooltip = new vscode4.MarkdownString(
       `**${langLabel}** \xB7 ${block.messageRole}
 
 \`\`\`${langLabel}
@@ -3482,10 +3904,10 @@ ${fullPreview}
     };
   }
 };
-var CodeBlockLoadMoreItem = class extends vscode3.TreeItem {
+var CodeBlockLoadMoreItem = class extends vscode4.TreeItem {
   remaining;
   constructor(remaining) {
-    super(`\u22EF Load more (${remaining} remaining)`, vscode3.TreeItemCollapsibleState.None);
+    super(`\u22EF Load more (${remaining} remaining)`, vscode4.TreeItemCollapsibleState.None);
     this.remaining = remaining;
     this.contextValue = "cbLoadMore";
     this.command = {
@@ -3504,7 +3926,7 @@ var CodeBlockTreeProvider = class {
       this.refresh();
     });
   }
-  _onDidChangeTreeData = new vscode3.EventEmitter();
+  _onDidChangeTreeData = new vscode4.EventEmitter();
   onDidChangeTreeData = this._onDidChangeTreeData.event;
   _filter = {};
   _sortMode = "date";
@@ -3679,7 +4101,7 @@ var CodeBlockTreeProvider = class {
 };
 
 // src/views/sessionWebviewPanel.ts
-var vscode4 = __toESM(require("vscode"));
+var vscode5 = __toESM(require("vscode"));
 
 // src/webview/cwTheme.ts
 function cwThemeCss() {
@@ -3998,6 +4420,9 @@ function friendlyModelName(raw) {
   }
   const s = raw.trim();
   if (!s || s === "<synthetic>") {
+    return "Unknown";
+  }
+  if (/^(auto|unknown)$/i.test(s)) {
     return "Unknown";
   }
   const c4 = s.match(/^claude-(opus|sonnet|haiku)-4(-(\d{1,2}))?(?:-\d{8})?$/i);
@@ -4375,11 +4800,11 @@ var SessionWebviewPanel = class _SessionWebviewPanel {
   static _panelState = /* @__PURE__ */ new Map();
   // ── Public entry point ────────────────────────────────────────────────────
   static show(context, session, searchTerm, scrollToCodeBlock, targetBlockMessageIndex, _targetBlockContent, targetBlockIdx, highlightContainer) {
-    const config = vscode4.workspace.getConfiguration("chatwizard");
+    const config = vscode5.workspace.getConfiguration("chatwizard");
     const userColor = config.get("userMessageColor", "#007acc") || "#007acc";
     const cbHighlightColor = scrollToCodeBlock ? config.get("codeBlockHighlightColor", "#EA5C00") || "" : "";
     const cbScroll = scrollToCodeBlock ? config.get("scrollToFirstCodeBlock", true) ?? false : false;
-    const assistantLabel = session.source === "copilot" ? "Copilot" : "Claude";
+    const assistantLabel = friendlySourceName(session.source);
     const visibleMessages = session.messages.map((msg, origIdx) => ({ msg, origIdx })).filter(({ msg }) => msg.content.trim() !== "" || !!msg.skipped);
     const total = visibleMessages.length;
     const initialSz = INITIAL_WINDOW;
@@ -4407,7 +4832,7 @@ var SessionWebviewPanel = class _SessionWebviewPanel {
     const initialWindowEnd = Math.min(windowStart + initialSz, total);
     const existing = _SessionWebviewPanel._panels.get(session.id);
     if (existing) {
-      existing.reveal(vscode4.ViewColumn.One);
+      existing.reveal(vscode5.ViewColumn.One);
       const prev = _SessionWebviewPanel._panelState.get(session.id);
       const newVersion = (prev?.streamVersion ?? 0) + 1;
       _SessionWebviewPanel._panelState.set(session.id, {
@@ -4430,10 +4855,10 @@ var SessionWebviewPanel = class _SessionWebviewPanel {
       );
       return;
     }
-    const panel = vscode4.window.createWebviewPanel(
+    const panel = vscode5.window.createWebviewPanel(
       "chatwizardSession3",
       session.title,
-      vscode4.ViewColumn.One,
+      vscode5.ViewColumn.One,
       { enableScripts: true }
     );
     panel.webview.html = _SessionWebviewPanel._getShellHtml();
@@ -4463,7 +4888,7 @@ var SessionWebviewPanel = class _SessionWebviewPanel {
         } else if (msg.type === "loadMoreMessages") {
           void _SessionWebviewPanel._loadMoreMessages(session.id);
         } else if (msg.command === "exportExcerpt") {
-          void vscode4.commands.executeCommand("chatwizard.exportExcerpt", session.id);
+          void vscode5.commands.executeCommand("chatwizard.exportExcerpt", session.id);
         } else if (msg.command === "exportSelection" && msg.text) {
           void _SessionWebviewPanel._saveSelection(msg.text, session.title);
         }
@@ -4500,6 +4925,7 @@ var SessionWebviewPanel = class _SessionWebviewPanel {
       type: "render",
       title: session.title,
       source: session.source,
+      assistantLabel,
       userColor,
       term: searchTerm ?? null,
       scrollInit: null,
@@ -4512,6 +4938,7 @@ var SessionWebviewPanel = class _SessionWebviewPanel {
       userRequestCount: session.messages.filter((m) => m.role === "user").length,
       model: friendlyModelName(session.model),
       parseErrors: session.parseErrors ?? [],
+      sourceNotes: session.sourceNotes ?? [],
       filePath: session.filePath
     });
     let cursor = firstEnd;
@@ -4763,6 +5190,17 @@ var SessionWebviewPanel = class _SessionWebviewPanel {
     }
     .parse-errors-banner ul { margin: 6px 0 0; padding-left: 1.5em; }
     .parse-errors-banner li { margin: 3px 0; font-family: var(--vscode-editor-font-family, monospace); font-size: 0.9em; }
+    .source-notes-banner {
+      background: rgba(0, 120, 212, 0.08);
+      border: 1px solid rgba(0, 120, 212, 0.35);
+      border-left: 3px solid var(--vscode-textLink-foreground, #3794ff);
+      border-radius: var(--cw-radius);
+      padding: 10px 14px;
+      margin-bottom: 14px;
+      font-size: 0.85em;
+      color: var(--vscode-foreground, #ccc);
+    }
+    .source-notes-banner strong { color: var(--vscode-textLink-foreground, #3794ff); }
     .parse-error-path { word-break: break-all; font-family: var(--vscode-editor-font-family, monospace); opacity: 0.8; }
     .skipped-notice { font-style: italic; color: var(--vscode-editorWarning-foreground, #c8a800); }
     mark {
@@ -5249,7 +5687,7 @@ ${cwInteractiveJs()}
       document.getElementById('session-title').textContent = data.title;
       document.documentElement.style.setProperty('--cw-user-color', data.userColor || '#007acc');
       if (data.source) {
-        var srcLabel = data.source === 'copilot' ? 'GitHub Copilot' : 'Claude';
+        var srcLabel = data.assistantLabel || data.source;
         var respLabelEl = document.getElementById('filter-responses-label');
         if (respLabelEl) { respLabelEl.textContent = srcLabel; }
       }
@@ -5275,7 +5713,19 @@ ${cwInteractiveJs()}
       }
       container.innerHTML = data.messagesHtml;
 
-      // Parse-errors banner \u2014 prepended before messages when the session has read errors
+      // Informational source notes (e.g. Cursor aiService-only recovery) \u2014 not parse failures
+      if (data.sourceNotes && data.sourceNotes.length > 0) {
+        var noteBanner = document.createElement('div');
+        noteBanner.className = 'source-notes-banner';
+        noteBanner.innerHTML =
+          '<strong>About this session</strong>' +
+          (data.filePath ? ' &mdash; <span class="parse-error-path">' + escH(data.filePath) + '</span>' : '') +
+          '<ul style="margin:6px 0 0;padding-left:1.5em">' +
+          data.sourceNotes.map(function(n) { return '<li>' + escH(n) + '</li>'; }).join('') +
+          '</ul>';
+        container.insertBefore(noteBanner, container.firstChild);
+      }
+      // Parse-errors banner \u2014 real read/parse failures only
       if (data.parseErrors && data.parseErrors.length > 0) {
         var banner = document.createElement('div');
         banner.className = 'parse-errors-banner';
@@ -5352,8 +5802,8 @@ ${cwInteractiveJs()}
   static async _saveSelection(text, sessionTitle) {
     const safe = sessionTitle.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "session";
     const home = process.env["USERPROFILE"] ?? process.env["HOME"] ?? "/";
-    const defaultUri = vscode4.Uri.file(`${home}/${safe}-selection.md`);
-    const uri = await vscode4.window.showSaveDialog({
+    const defaultUri = vscode5.Uri.file(`${home}/${safe}-selection.md`);
+    const uri = await vscode5.window.showSaveDialog({
       defaultUri,
       filters: { "Markdown": ["md"] },
       title: "Export Selection as Markdown"
@@ -5365,8 +5815,8 @@ ${cwInteractiveJs()}
 
 ${text}
 `;
-    await vscode4.workspace.fs.writeFile(uri, Buffer.from(content, "utf8"));
-    await vscode4.window.showTextDocument(uri);
+    await vscode5.workspace.fs.writeFile(uri, Buffer.from(content, "utf8"));
+    await vscode5.window.showTextDocument(uri);
   }
 };
 
@@ -5705,7 +6155,7 @@ var FullTextSearchEngine = class {
 };
 
 // src/search/searchPanel.ts
-var vscode5 = __toESM(require("vscode"));
+var vscode6 = __toESM(require("vscode"));
 function nextSourceState(current) {
   if (current === "all") {
     return "copilot";
@@ -5717,12 +6167,12 @@ function nextSourceState(current) {
 }
 function sourceButtonIcon(state) {
   if (state === "copilot") {
-    return new vscode5.ThemeIcon("github");
+    return new vscode6.ThemeIcon("github");
   }
   if (state === "claude") {
-    return new vscode5.ThemeIcon("hubot");
+    return new vscode6.ThemeIcon("hubot");
   }
-  return new vscode5.ThemeIcon("list-filter");
+  return new vscode6.ThemeIcon("list-filter");
 }
 function sourceButtonTooltip(state) {
   if (state === "all") {
@@ -5744,12 +6194,12 @@ function nextMsgTypeState(current) {
 }
 function msgTypeIcon(state) {
   if (state === "prompts") {
-    return new vscode5.ThemeIcon("person");
+    return new vscode6.ThemeIcon("person");
   }
   if (state === "responses") {
-    return new vscode5.ThemeIcon("hubot");
+    return new vscode6.ThemeIcon("hubot");
   }
-  return new vscode5.ThemeIcon("comment-discussion");
+  return new vscode6.ThemeIcon("comment-discussion");
 }
 function msgTypeTooltip(state) {
   if (state === "all") {
@@ -5776,7 +6226,7 @@ var SearchPanel = class {
       iconPath: msgTypeIcon(msgTypeFilter),
       tooltip: msgTypeTooltip(msgTypeFilter)
     };
-    const quickPick = vscode5.window.createQuickPick();
+    const quickPick = vscode6.window.createQuickPick();
     quickPick.placeholder = "Search chat history\u2026 (prefix with / for regex)";
     quickPick.matchOnDescription = false;
     quickPick.matchOnDetail = true;
@@ -5816,11 +6266,11 @@ var SearchPanel = class {
         if (!summary) {
           continue;
         }
-        const srcIcon = summary.source === "copilot" ? "$(github)" : "$(hubot)";
+        const srcIcon = `$(${sourceCodiconId(summary.source)})`;
         const label = `${srcIcon}  ${summary.title}`;
         const workspace7 = summary.workspacePath ?? summary.workspaceId;
         const description = `${workspace7}  \xB7  ${summary.updatedAt.slice(0, 10)}`;
-        const assistantName = summary.source === "copilot" ? "Copilot" : "Claude";
+        const assistantName = friendlySourceName(summary.source);
         const rolePrefix = result.messageRole === "user" ? "You" : assistantName;
         const detail = `${rolePrefix}:  ${result.snippet}`;
         const prefixLen = rolePrefix.length + 3;
@@ -5859,7 +6309,7 @@ var SearchPanel = class {
       if (active && active.result) {
         const raw = quickPick.value;
         const term = raw.startsWith("/") ? raw.slice(1) : raw;
-        vscode5.commands.executeCommand("chatwizard.openSession", active.summary, term);
+        vscode6.commands.executeCommand("chatwizard.openSession", active.summary, term);
       }
     });
     quickPick.onDidHide(() => {
@@ -5873,7 +6323,7 @@ var SearchPanel = class {
 };
 
 // src/export/exportCommands.ts
-var vscode6 = __toESM(require("vscode"));
+var vscode7 = __toESM(require("vscode"));
 var path15 = __toESM(require("path"));
 
 // src/export/markdownSerializer.ts
@@ -5892,7 +6342,7 @@ function serializeSession(session, sanitize = true) {
   const lines = [];
   lines.push(`# ${session.title || "Untitled Session"}`);
   lines.push("");
-  lines.push(`- **Source:** ${session.source === "copilot" ? "GitHub Copilot" : "Claude Code"}`);
+  lines.push(`- **Source:** ${friendlySourceName(session.source)}`);
   if (session.model) {
     lines.push(`- **Model:** ${session.model}`);
   }
@@ -5949,23 +6399,23 @@ function safeFilename(title) {
   return title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "session";
 }
 function defaultFolderUri() {
-  const folders = vscode6.workspace.workspaceFolders;
+  const folders = vscode7.workspace.workspaceFolders;
   if (folders && folders.length > 0) {
     return folders[0].uri;
   }
   const home = process.env["USERPROFILE"] ?? process.env["HOME"] ?? "/";
-  return vscode6.Uri.file(home);
+  return vscode7.Uri.file(home);
 }
 async function performExport(sessions) {
   if (sessions.length === 0) {
-    vscode6.window.showInformationMessage("No sessions to export");
+    vscode7.window.showInformationMessage("No sessions to export");
     return;
   }
   const modeItems = [
     { label: "$(file)  One file per session", description: "Creates a .md file for each session in a chosen folder", id: "separate" },
     { label: "$(files)  Single combined file", description: "All sessions in one .md file with a table of contents", id: "combined" }
   ];
-  const modePick = await vscode6.window.showQuickPick(modeItems, {
+  const modePick = await vscode7.window.showQuickPick(modeItems, {
     title: "Export Sessions",
     placeHolder: "Choose export format"
   });
@@ -5973,7 +6423,7 @@ async function performExport(sessions) {
     return;
   }
   if (modePick.id === "separate") {
-    const folderUris = await vscode6.window.showOpenDialog({
+    const folderUris = await vscode7.window.showOpenDialog({
       canSelectFiles: false,
       canSelectFolders: true,
       canSelectMany: false,
@@ -5985,64 +6435,64 @@ async function performExport(sessions) {
     }
     const folder = folderUris[0];
     for (const session of sessions) {
-      const fileUri = vscode6.Uri.joinPath(folder, `${safeFilename(session.title)}.md`);
-      await vscode6.workspace.fs.writeFile(fileUri, Buffer.from(serializeSession(session), "utf8"));
+      const fileUri = vscode7.Uri.joinPath(folder, `${safeFilename(session.title)}.md`);
+      await vscode7.workspace.fs.writeFile(fileUri, Buffer.from(serializeSession(session), "utf8"));
     }
-    vscode6.window.showInformationMessage(`Exported ${sessions.length} session(s) to ${folder.fsPath}`);
+    vscode7.window.showInformationMessage(`Exported ${sessions.length} session(s) to ${folder.fsPath}`);
     return;
   }
-  const saveUri = await vscode6.window.showSaveDialog({
+  const saveUri = await vscode7.window.showSaveDialog({
     filters: { "Markdown": ["md"] },
     title: "Save combined export",
-    defaultUri: vscode6.Uri.joinPath(defaultFolderUri(), "chatwizard-export.md")
+    defaultUri: vscode7.Uri.joinPath(defaultFolderUri(), "chatwizard-export.md")
   });
   if (!saveUri) {
     return;
   }
-  await vscode6.workspace.fs.writeFile(saveUri, Buffer.from(serializeSessions(sessions, "combined"), "utf8"));
-  await vscode6.window.showTextDocument(saveUri);
+  await vscode7.workspace.fs.writeFile(saveUri, Buffer.from(serializeSessions(sessions, "combined"), "utf8"));
+  await vscode7.window.showTextDocument(saveUri);
 }
 function registerExportCommands(context, index, getOrderedSummaries) {
   context.subscriptions.push(
-    vscode6.commands.registerCommand("chatwizard.exportSession", async (item) => {
+    vscode7.commands.registerCommand("chatwizard.exportSession", async (item) => {
       const session = index.get(item.summary.id);
       if (!session) {
-        vscode6.window.showErrorMessage(`Session not found: ${item.summary.id}`);
+        vscode7.window.showErrorMessage(`Session not found: ${item.summary.id}`);
         return;
       }
       const filename = `${safeFilename(session.title)}.md`;
-      const uri = await vscode6.window.showSaveDialog({
-        defaultUri: vscode6.Uri.joinPath(defaultFolderUri(), filename),
+      const uri = await vscode7.window.showSaveDialog({
+        defaultUri: vscode7.Uri.joinPath(defaultFolderUri(), filename),
         filters: { "Markdown": ["md"] },
         title: "Export Session as Markdown"
       });
       if (!uri) {
         return;
       }
-      await vscode6.workspace.fs.writeFile(uri, Buffer.from(serializeSession(session), "utf8"));
-      await vscode6.window.showTextDocument(uri);
+      await vscode7.workspace.fs.writeFile(uri, Buffer.from(serializeSession(session), "utf8"));
+      await vscode7.window.showTextDocument(uri);
     })
   );
   context.subscriptions.push(
-    vscode6.commands.registerCommand("chatwizard.exportAll", async () => {
+    vscode7.commands.registerCommand("chatwizard.exportAll", async () => {
       const sessions = index.getAllSummaries().map((s) => index.get(s.id)).filter((s) => s != null);
       await performExport(sessions);
     })
   );
   context.subscriptions.push(
-    vscode6.commands.registerCommand("chatwizard.exportSelected", async () => {
+    vscode7.commands.registerCommand("chatwizard.exportSelected", async () => {
       const allSummaries = getOrderedSummaries ? getOrderedSummaries() : index.getAllSummaries();
       if (allSummaries.length === 0) {
-        vscode6.window.showInformationMessage("No sessions to export");
+        vscode7.window.showInformationMessage("No sessions to export");
         return;
       }
       const items = allSummaries.map((s) => ({
         label: s.title || "Untitled Session",
         description: `${path15.basename(s.workspacePath ?? s.workspaceId)} \xB7 ${s.updatedAt.slice(0, 10)}`,
-        detail: `${s.source === "copilot" ? "Copilot" : "Claude"} \xB7 ${s.messageCount} messages`,
+        detail: `${friendlySourceName(s.source)} \xB7 ${s.messageCount} messages`,
         id: s.id
       }));
-      const qp = vscode6.window.createQuickPick();
+      const qp = vscode7.window.createQuickPick();
       qp.items = items;
       qp.canSelectMany = true;
       qp.title = "Export Selected Sessions";
@@ -6068,20 +6518,21 @@ function registerExportCommands(context, index, getOrderedSummaries) {
     })
   );
   context.subscriptions.push(
-    vscode6.commands.registerCommand("chatwizard.exportExcerpt", async (sessionId) => {
+    vscode7.commands.registerCommand("chatwizard.exportExcerpt", async (sessionId) => {
       const session = index.get(sessionId);
       if (!session) {
-        vscode6.window.showErrorMessage(`Session not found: ${sessionId}`);
+        vscode7.window.showErrorMessage(`Session not found: ${sessionId}`);
         return;
       }
       const visible = session.messages.filter((m) => m.content.trim() !== "");
-      const assistantLabel = session.source === "copilot" ? "Copilot" : "Claude";
+      const assistantLabel = friendlySourceName(session.source);
+      const assistantIcon = sourceCodiconId(session.source);
       const items = visible.map((msg, i) => ({
-        label: msg.role === "user" ? "$(account) You" : `$(hubot) ${assistantLabel}`,
+        label: msg.role === "user" ? "$(account) You" : `$(${assistantIcon}) ${assistantLabel}`,
         description: msg.content.split("\n")[0].slice(0, 90),
         msgIndex: i
       }));
-      const picked = await vscode6.window.showQuickPick(items, {
+      const picked = await vscode7.window.showQuickPick(items, {
         canPickMany: true,
         title: `Export Excerpt \u2014 ${session.title}`,
         placeHolder: "Select messages to include (Space to toggle, Enter to confirm)"
@@ -6095,16 +6546,16 @@ function registerExportCommands(context, index, getOrderedSummaries) {
         messages: picked.map((p) => visible[p.msgIndex])
       };
       const filename = `${safeFilename(session.title)}-excerpt.md`;
-      const uri = await vscode6.window.showSaveDialog({
-        defaultUri: vscode6.Uri.joinPath(defaultFolderUri(), filename),
+      const uri = await vscode7.window.showSaveDialog({
+        defaultUri: vscode7.Uri.joinPath(defaultFolderUri(), filename),
         filters: { "Markdown": ["md"] },
         title: "Export Excerpt as Markdown"
       });
       if (!uri) {
         return;
       }
-      await vscode6.workspace.fs.writeFile(uri, Buffer.from(serializeSession(excerptSession), "utf8"));
-      await vscode6.window.showTextDocument(uri);
+      await vscode7.workspace.fs.writeFile(uri, Buffer.from(serializeSession(excerptSession), "utf8"));
+      await vscode7.window.showTextDocument(uri);
     })
   );
 }
@@ -6168,24 +6619,24 @@ var CodeBlockSearchEngine = class {
 };
 
 // src/codeblocks/codeBlocksPanel.ts
-var vscode7 = __toESM(require("vscode"));
+var vscode8 = __toESM(require("vscode"));
 var CodeBlocksPanel = class _CodeBlocksPanel {
   static _panel;
   static show(context, index, engine) {
     const blocks = index.getAllCodeBlocks();
     engine.index(blocks);
     if (_CodeBlocksPanel._panel) {
-      _CodeBlocksPanel._panel.reveal(vscode7.ViewColumn.One);
+      _CodeBlocksPanel._panel.reveal(vscode8.ViewColumn.One);
       void _CodeBlocksPanel._panel.webview.postMessage({
         type: "update",
         data: _CodeBlocksPanel.buildPayload(blocks, engine)
       });
       return;
     }
-    const panel = vscode7.window.createWebviewPanel(
+    const panel = vscode8.window.createWebviewPanel(
       "chatwizardCodeBlocks",
       "Code Blocks",
-      vscode7.ViewColumn.One,
+      vscode8.ViewColumn.One,
       { enableScripts: true, retainContextWhenHidden: true }
     );
     _CodeBlocksPanel._panel = panel;
@@ -6195,12 +6646,12 @@ var CodeBlocksPanel = class _CodeBlocksPanel {
     }, null, context.subscriptions);
     panel.webview.onDidReceiveMessage((message) => {
       if (message.command === "copy") {
-        void vscode7.env.clipboard.writeText(message.text ?? "");
-        void vscode7.window.showInformationMessage("Code block copied to clipboard.");
+        void vscode8.env.clipboard.writeText(message.text ?? "");
+        void vscode8.window.showInformationMessage("Code block copied to clipboard.");
       } else if (message.command === "openSettings") {
-        void vscode7.commands.executeCommand("workbench.action.openSettings", "chatwizard");
+        void vscode8.commands.executeCommand("workbench.action.openSettings", "chatwizard");
       } else if (message.command === "rescan") {
-        void vscode7.commands.executeCommand("chatwizard.rescan");
+        void vscode8.commands.executeCommand("chatwizard.rescan");
       } else if (message.type === "ready") {
         void panel.webview.postMessage({
           type: "update",
@@ -6557,7 +7008,11 @@ var CodeBlocksPanel = class _CodeBlocksPanel {
         const langDisplay  = lang || 'plain';
         const langLower    = lang.toLowerCase();
         const roleLabel    = block.messageRole === 'user' ? 'User' : 'AI';
-        const sourceLabel  = block.sessionSource === 'copilot' ? 'Copilot' : 'Claude';
+        const SRC_LABEL = {
+          claude: 'Claude Code', copilot: 'GitHub Copilot', cline: 'Cline',
+          roocode: 'Roo Code', cursor: 'Cursor', windsurf: 'Windsurf', aider: 'Aider'
+        };
+        const sourceLabel  = SRC_LABEL[block.sessionSource] || block.sessionSource;
         const sourceBadge  = block.sessionSource === 'copilot' ? 'cw-badge-copilot' : 'cw-badge-claude';
         const dateStr      = block.sessionUpdatedAt ? block.sessionUpdatedAt.slice(0, 10) : '';
         const wsPath       = block.sessionWorkspacePath || '';
@@ -6663,7 +7118,7 @@ var CodeBlocksPanel = class _CodeBlocksPanel {
 };
 
 // src/prompts/promptLibraryPanel.ts
-var vscode8 = __toESM(require("vscode"));
+var vscode9 = __toESM(require("vscode"));
 
 // src/prompts/promptExtractor.ts
 function normalizePromptText(text) {
@@ -6871,17 +7326,17 @@ var PromptLibraryPanel = class _PromptLibraryPanel {
     const entries = buildPromptLibrary(index);
     const clusters = clusterPrompts(entries);
     if (_PromptLibraryPanel._panel) {
-      _PromptLibraryPanel._panel.reveal(vscode8.ViewColumn.One);
+      _PromptLibraryPanel._panel.reveal(vscode9.ViewColumn.One);
       void _PromptLibraryPanel._panel.webview.postMessage({
         type: "update",
         data: { clusters, truncated: false }
       });
       return;
     }
-    const panel = vscode8.window.createWebviewPanel(
+    const panel = vscode9.window.createWebviewPanel(
       "chatwizardPromptLibrary",
       "Prompt Library",
-      vscode8.ViewColumn.One,
+      vscode9.ViewColumn.One,
       { enableScripts: true, retainContextWhenHidden: true }
     );
     _PromptLibraryPanel._panel = panel;
@@ -6891,14 +7346,14 @@ var PromptLibraryPanel = class _PromptLibraryPanel {
     }, null, context.subscriptions);
     panel.webview.onDidReceiveMessage((message) => {
       if (message.command === "copy") {
-        void vscode8.env.clipboard.writeText(message.text ?? "");
-        void vscode8.window.showInformationMessage("Prompt copied to clipboard.");
+        void vscode9.env.clipboard.writeText(message.text ?? "");
+        void vscode9.window.showInformationMessage("Prompt copied to clipboard.");
       } else if (message.command === "openSession" && message.sessionId) {
-        void vscode8.commands.executeCommand("chatwizard.openSession", { id: message.sessionId }, message.searchTerm, message.highlightContainer);
+        void vscode9.commands.executeCommand("chatwizard.openSession", { id: message.sessionId }, message.searchTerm, message.highlightContainer);
       } else if (message.command === "openSettings") {
-        void vscode8.commands.executeCommand("workbench.action.openSettings", "chatwizard");
+        void vscode9.commands.executeCommand("workbench.action.openSettings", "chatwizard");
       } else if (message.command === "rescan") {
-        void vscode8.commands.executeCommand("chatwizard.rescan");
+        void vscode9.commands.executeCommand("chatwizard.rescan");
       } else if (message.type === "ready") {
         void panel.webview.postMessage({
           type: "update",
@@ -7449,7 +7904,11 @@ var PromptLibraryPanel = class _PromptLibraryPanel {
 
       var rows = sessions.map(function(m) {
         var date = m.updatedAt ? m.updatedAt.substring(0, 10) : '';
-        var srcLabel = m.source === 'copilot' ? 'Copilot' : 'Claude';
+        var SRC_LABEL = {
+          claude: 'Claude Code', copilot: 'GitHub Copilot', cline: 'Cline',
+          roocode: 'Roo Code', cursor: 'Cursor', windsurf: 'Windsurf', aider: 'Aider'
+        };
+        var srcLabel = SRC_LABEL[m.source] || m.source;
         return '<div class="overlay-session-row" data-sid="' + escHtml(m.sessionId) + '" data-prompt="' + escHtml(promptText) + '">'
           + '<span class="overlay-session-icon">\\u27A4</span>'
           + '<div class="overlay-session-body">'
@@ -7836,7 +8295,7 @@ var PromptLibraryPanel = class _PromptLibraryPanel {
 };
 
 // src/prompts/promptLibraryViewProvider.ts
-var vscode9 = __toESM(require("vscode"));
+var vscode10 = __toESM(require("vscode"));
 var PromptLibraryViewProvider = class {
   constructor(_index) {
     this._index = _index;
@@ -7856,14 +8315,14 @@ var PromptLibraryViewProvider = class {
     });
     webviewView.webview.onDidReceiveMessage((message) => {
       if (message.command === "copy") {
-        void vscode9.env.clipboard.writeText(message.text ?? "");
-        void vscode9.window.showInformationMessage("Prompt copied to clipboard.");
+        void vscode10.env.clipboard.writeText(message.text ?? "");
+        void vscode10.window.showInformationMessage("Prompt copied to clipboard.");
       } else if (message.command === "openSession" && message.sessionId) {
-        void vscode9.commands.executeCommand("chatwizard.openSession", { id: message.sessionId }, message.searchTerm, message.highlightContainer);
+        void vscode10.commands.executeCommand("chatwizard.openSession", { id: message.sessionId }, message.searchTerm, message.highlightContainer);
       } else if (message.command === "openSettings") {
-        void vscode9.commands.executeCommand("workbench.action.openSettings", "chatwizard");
+        void vscode10.commands.executeCommand("workbench.action.openSettings", "chatwizard");
       } else if (message.command === "rescan") {
-        void vscode9.commands.executeCommand("chatwizard.rescan");
+        void vscode10.commands.executeCommand("chatwizard.rescan");
       } else if (message.type === "ready") {
         void this._sendData();
       }
@@ -7902,7 +8361,7 @@ var PromptLibraryViewProvider = class {
 };
 
 // src/analytics/analyticsPanel.ts
-var vscode10 = __toESM(require("vscode"));
+var vscode11 = __toESM(require("vscode"));
 
 // src/analytics/analyticsEngine.ts
 var STOP_WORDS = /* @__PURE__ */ new Set([
@@ -8093,17 +8552,17 @@ var AnalyticsPanel = class _AnalyticsPanel {
   static _panel;
   static show(context, index) {
     if (_AnalyticsPanel._panel) {
-      _AnalyticsPanel._panel.reveal(vscode10.ViewColumn.One);
+      _AnalyticsPanel._panel.reveal(vscode11.ViewColumn.One);
       void _AnalyticsPanel._panel.webview.postMessage({
         type: "update",
         data: _AnalyticsPanel.build(index)
       });
       return;
     }
-    const panel = vscode10.window.createWebviewPanel(
+    const panel = vscode11.window.createWebviewPanel(
       "chatwizardAnalytics",
       "Chat Analytics",
-      vscode10.ViewColumn.One,
+      vscode11.ViewColumn.One,
       {
         enableScripts: true,
         retainContextWhenHidden: true
@@ -8122,11 +8581,11 @@ var AnalyticsPanel = class _AnalyticsPanel {
           }
         });
       } else if (msg.command === "openSession" && msg.sessionId) {
-        void vscode10.commands.executeCommand("chatwizard.openSession", { id: msg.sessionId });
+        void vscode11.commands.executeCommand("chatwizard.openSession", { id: msg.sessionId });
       } else if (msg.command === "openSettings") {
-        void vscode10.commands.executeCommand("workbench.action.openSettings", "chatwizard");
+        void vscode11.commands.executeCommand("workbench.action.openSettings", "chatwizard");
       } else if (msg.command === "rescan") {
-        void vscode10.commands.executeCommand("chatwizard.rescan");
+        void vscode11.commands.executeCommand("chatwizard.rescan");
       }
     }, void 0, context.subscriptions);
     panel.onDidDispose(() => {
@@ -8756,7 +9215,7 @@ var AnalyticsPanel = class _AnalyticsPanel {
 };
 
 // src/analytics/analyticsViewProvider.ts
-var vscode11 = __toESM(require("vscode"));
+var vscode12 = __toESM(require("vscode"));
 var AnalyticsViewProvider = class {
   constructor(_index) {
     this._index = _index;
@@ -8772,7 +9231,7 @@ var AnalyticsViewProvider = class {
       if (msg.type === "ready") {
         this._sendData();
       } else if (msg.command === "openSession" && msg.sessionId) {
-        void vscode11.commands.executeCommand("chatwizard.openSession", { id: msg.sessionId });
+        void vscode12.commands.executeCommand("chatwizard.openSession", { id: msg.sessionId });
       }
     });
     webviewView.onDidChangeVisibility(() => {
@@ -9106,7 +9565,7 @@ var ModelUsageViewProvider = class {
       background: var(--cw-surface-subtle);
     }
 
-    .data-table tbody tr[data-sessions]:hover {
+    .data-table tbody tr[data-sessions-idx]:hover {
       background: var(--cw-surface-raised);
       cursor: default;
     }
@@ -9349,6 +9808,8 @@ var ModelUsageViewProvider = class {
     claude:  { pct: {}, ws: {}, total: 0 },
     copilot: { pct: {}, ws: {}, total: 0 }
   };
+  /** Session lists for Summary table rows \u2014 avoids broken JSON in HTML attributes (titles with quotes, &, etc.). */
+  var sessionRowSessions = [];
   // Bar selection state \u2014 cleared on data update
   var selectedBars   = { claude: {}, copilot: {} }; // model \u2192 true
   var requestCounts  = { claude: {}, copilot: {} }; // model \u2192 userRequests (refreshed per update)
@@ -9590,6 +10051,7 @@ var ModelUsageViewProvider = class {
   function renderTable(data) {
     var tbody = document.getElementById('summary-tbody');
     var tfoot = document.getElementById('summary-tfoot');
+    sessionRowSessions = [];
 
     if (data.models.length === 0) {
       tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No data for selected range.</td></tr>';
@@ -9616,15 +10078,20 @@ var ModelUsageViewProvider = class {
           : [{ source: (m.sources || [])[0] || '', sessionCount: m.sessionCount, userRequests: m.userRequests, percentage: m.percentage, sessionBreakdown: m.sessionBreakdown || [] }];
 
         return srcRows.map(function(sr, si) {
-          var sessData = sr.sessionBreakdown && sr.sessionBreakdown.length > 0
-            ? escHtml(JSON.stringify(sr.sessionBreakdown)) : '';
+          var sess = sr.sessionBreakdown && sr.sessionBreakdown.length > 0 ? sr.sessionBreakdown : null;
+          var sessIdxAttr = '';
+          if (sess) {
+            var sidx = sessionRowSessions.length;
+            sessionRowSessions.push(sess);
+            sessIdxAttr = ' data-sessions-idx="' + sidx + '"';
+          }
           var asstLabel = ASST_LABEL[sr.source] || sr.source;
           // Show provider badge and model name only on the first source row for this model
           var providerCell = si === 0 ? '<td>' + badge + '</td>' : '<td></td>';
           var modelCell    = si === 0
             ? '<td title="' + escHtml(m.model) + '">' + escHtml(m.model) + '</td>'
             : '<td class="model-sub" title="' + escHtml(m.model) + '">' + escHtml(m.model) + '</td>';
-          return '<tr' + (sessData ? ' data-sessions="' + sessData + '"' : '') + '>'
+          return '<tr' + sessIdxAttr + '>'
             + providerCell
             + modelCell
             + '<td title="' + escHtml(asstLabel) + '">' + escHtml(asstLabel) + '</td>'
@@ -9637,6 +10104,25 @@ var ModelUsageViewProvider = class {
     }
 
     tbody.innerHTML = makeRows(claudeRows) + makeRows(otherRows);
+
+    // Per-row mouseenter/mouseleave: delegated pointerover on tbody is unreliable in some VS Code webviews (e.g. Cursor).
+    var overlayEl = document.getElementById('session-overlay');
+    tbody.querySelectorAll('tr[data-sessions-idx]').forEach(function(tr) {
+      tr.addEventListener('mouseenter', function() {
+        isRowHovered = true;
+        cancelHide();
+        var sidx = tr.getAttribute('data-sessions-idx');
+        var idx = sidx === null || sidx === '' ? NaN : parseInt(sidx, 10);
+        var sessions = !isNaN(idx) ? sessionRowSessions[idx] : null;
+        if (sessions) { showOverlay(sessions, tr.getBoundingClientRect()); }
+      });
+      tr.addEventListener('mouseleave', function(e) {
+        var rt = e.relatedTarget;
+        if (rt && overlayEl && overlayEl.contains(rt)) { return; }
+        isRowHovered = false;
+        scheduleHide();
+      });
+    });
 
     tfoot.innerHTML = '<tr>'
       + '<td colspan="3"><strong>Total</strong></td>'
@@ -9677,6 +10163,8 @@ var ModelUsageViewProvider = class {
   // -- Session hover overlay -------------------------------------
   var overlay = document.getElementById('session-overlay');
   var overlayHideTimer = null;
+  var isOverlayHovered = false;
+  var isRowHovered = false;
 
   var ASST_LABEL = {
     claude: 'Claude Code', copilot: 'GitHub Copilot', cline: 'Cline',
@@ -9695,8 +10183,8 @@ var ModelUsageViewProvider = class {
     });
     overlay.innerHTML = html;
 
-    // Position: prefer below-left of the row, flip if off-screen
-    var top = anchorRect.bottom + window.scrollY + 2;
+    // Overlap row by several px so the pointer path can reach the overlay in Electron/Cursor webviews
+    var top = anchorRect.bottom + window.scrollY - 6;
     var left = anchorRect.left + window.scrollX;
     overlay.style.display = 'block';
     overlay.style.left = '0';
@@ -9717,29 +10205,27 @@ var ModelUsageViewProvider = class {
 
   function scheduleHide() {
     if (overlayHideTimer) { clearTimeout(overlayHideTimer); }
-    overlayHideTimer = setTimeout(hideOverlay, 400);
+    overlayHideTimer = setTimeout(function() {
+      if (!isRowHovered && !isOverlayHovered) { hideOverlay(); }
+    }, 900);
   }
 
   function cancelHide() {
     if (overlayHideTimer) { clearTimeout(overlayHideTimer); overlayHideTimer = null; }
   }
 
-  document.getElementById('summary-tbody').addEventListener('mouseover', function(e) {
-    var tr = e.target.closest('tr[data-sessions]');
-    if (!tr) { scheduleHide(); return; }
-    cancelHide();
-    try {
-      var sessions = JSON.parse(tr.getAttribute('data-sessions'));
-      showOverlay(sessions, tr.getBoundingClientRect());
-    } catch (err) { /* ignore */ }
-  });
+  var tbody = document.getElementById('summary-tbody');
 
-  document.getElementById('summary-tbody').addEventListener('mouseleave', function() {
+  overlay.addEventListener('pointerenter', function() {
+    isOverlayHovered = true;
+    cancelHide();
+  });
+  overlay.addEventListener('pointerleave', function(e) {
+    isOverlayHovered = false;
+    var rt = e.relatedTarget;
+    if (rt && tbody.contains(rt)) { return; } // moving back onto the table
     scheduleHide();
   });
-
-  overlay.addEventListener('mouseenter', cancelHide);
-  overlay.addEventListener('mouseleave', scheduleHide);
 
   overlay.addEventListener('click', function(e) {
     var item = e.target.closest('.session-overlay-item');
@@ -9779,7 +10265,7 @@ var ModelUsageViewProvider = class {
 };
 
 // src/timeline/timelineViewProvider.ts
-var vscode12 = __toESM(require("vscode"));
+var vscode13 = __toESM(require("vscode"));
 
 // src/timeline/timelineBuilder.ts
 function extractWorkspaceName(workspacePath) {
@@ -10171,7 +10657,7 @@ var TimelineViewProvider = class _TimelineViewProvider {
     webviewView.webview.html = _TimelineViewProvider.getShellHtml();
     webviewView.webview.onDidReceiveMessage((msg) => {
       if (msg.command === "openSession") {
-        void vscode12.commands.executeCommand("chatwizard.openSession", { id: msg.sessionId });
+        void vscode13.commands.executeCommand("chatwizard.openSession", { id: msg.sessionId });
       } else if (msg.command === "setFilter") {
         this._filter = msg.filter ?? {};
         this._dayFilter = void 0;
@@ -10181,7 +10667,7 @@ var TimelineViewProvider = class _TimelineViewProvider {
       } else if (msg.command === "jumpToMonth") {
         this._sendMore(msg.month);
       } else if (msg.command === "openSettings") {
-        void vscode12.commands.executeCommand("workbench.action.openSettings", "chatwizard");
+        void vscode13.commands.executeCommand("workbench.action.openSettings", "chatwizard");
       } else if (msg.command === "filterByDay") {
         this._dayFilter = msg.date || void 0;
         this._sendInitial();
@@ -10708,6 +11194,11 @@ var TimelineViewProvider = class _TimelineViewProvider {
       .replace(/'/g, '&#39;');
   }
 
+  const SRC_LABEL = {
+    claude: 'Claude Code', copilot: 'GitHub Copilot', cline: 'Cline',
+    roocode: 'Roo Code', cursor: 'Cursor', windsurf: 'Windsurf', aider: 'Aider'
+  };
+
   function applyFilter() {
     const src = document.getElementById('srcFilter').value;
     vscode.postMessage({ command: 'setFilter', filter: { source: src || undefined } });
@@ -10839,7 +11330,7 @@ var TimelineViewProvider = class _TimelineViewProvider {
 
   function renderEntryHtml(entry, fadeIdx) {
     const fadeAttr     = fadeIdx < 25 ? ' style="--cw-i:' + fadeIdx + '"' : '';
-    const sourceLabel  = entry.source === 'copilot' ? 'Copilot' : 'Claude';
+    const sourceLabel  = (SRC_LABEL && SRC_LABEL[entry.source]) ? SRC_LABEL[entry.source] : entry.source;
     const badgeClass   = entry.source === 'copilot' ? 'cw-badge-copilot' : 'cw-badge-claude';
     const wsMeta       = entry.workspaceName || '(unknown workspace)';
     const promptText   = entry.firstPrompt   || '(no prompt)';
@@ -11252,12 +11743,12 @@ var TelemetryRecorder = class {
 };
 
 // src/commands/manageWorkspaces.ts
-var vscode13 = __toESM(require("vscode"));
+var vscode14 = __toESM(require("vscode"));
 var path17 = __toESM(require("path"));
 function registerManageWorkspacesCommand(context, scopeManager, getWatcher, channel, index) {
   context.subscriptions.push(
-    vscode13.commands.registerCommand("chatwizard.manageWatchedWorkspaces", async () => {
-      const [copilotWs, claudeWs] = await Promise.all([
+    vscode14.commands.registerCommand("chatwizard.manageWatchedWorkspaces", async () => {
+      const [copilotWs, claudeWs, cursorWs] = await Promise.all([
         discoverCopilotWorkspacesAsync().then(
           (list) => list.map((ws) => ({
             id: ws.workspaceId,
@@ -11266,12 +11757,13 @@ function registerManageWorkspacesCommand(context, scopeManager, getWatcher, chan
             storageDir: ws.storageDir
           }))
         ).catch(() => []),
-        discoverClaudeWorkspacesAsync().catch(() => [])
+        discoverClaudeWorkspacesAsync().catch(() => []),
+        discoverCursorWorkspacesAsync().catch(() => [])
       ]);
-      const allAvailable = [...copilotWs, ...claudeWs];
+      const allAvailable = [...copilotWs, ...claudeWs, ...cursorWs];
       if (allAvailable.length === 0) {
-        void vscode13.window.showInformationMessage(
-          "Chat Wizard: No Copilot or Claude workspaces found to manage."
+        void vscode14.window.showInformationMessage(
+          "Chat Wizard: No Copilot, Claude, or Cursor workspaces found to manage."
         );
         return;
       }
@@ -11368,7 +11860,7 @@ function registerManageWorkspacesCommand(context, scopeManager, getWatcher, chan
       const picked = await new Promise((resolve) => {
         let accepted = false;
         const initialReal = workspaceItems.filter((i) => i.picked);
-        const qp = vscode13.window.createQuickPick();
+        const qp = vscode14.window.createQuickPick();
         qp.canSelectMany = true;
         qp.keepScrollPosition = true;
         qp.items = workspaceItems;
@@ -11376,7 +11868,7 @@ function registerManageWorkspacesCommand(context, scopeManager, getWatcher, chan
         qp.title = makeTitle(initialReal);
         qp.placeholder = "Select workspaces to index";
         const openPaths = new Set(
-          (vscode13.workspace.workspaceFolders ?? []).map((f) => path17.normalize(f.uri.fsPath).toLowerCase())
+          (vscode14.workspace.workspaceFolders ?? []).map((f) => path17.normalize(f.uri.fsPath).toLowerCase())
         );
         const currentWsItems = workspaceItems.filter(
           (item) => openPaths.has(path17.normalize(item.workspacePath).toLowerCase())
@@ -11444,30 +11936,30 @@ function registerManageWorkspacesCommand(context, scopeManager, getWatcher, chan
 // src/extension.ts
 var watcher;
 async function activate(context) {
-  const channel = vscode14.window.createOutputChannel("Chat Wizard");
+  const channel = vscode15.window.createOutputChannel("Chat Wizard");
   context.subscriptions.push(channel);
   const telemetry = new TelemetryRecorder(context.globalStorageUri.fsPath);
-  const telemetryCfg = vscode14.workspace.getConfiguration("chatwizard");
+  const telemetryCfg = vscode15.workspace.getConfiguration("chatwizard");
   telemetry.setEnabled(telemetryCfg.get("enableTelemetry") ?? false);
   const index = new SessionIndex();
   const promptLibraryViewProvider = new PromptLibraryViewProvider(index);
   context.subscriptions.push(
-    vscode14.window.registerWebviewViewProvider(PromptLibraryViewProvider.viewType, promptLibraryViewProvider)
+    vscode15.window.registerWebviewViewProvider(PromptLibraryViewProvider.viewType, promptLibraryViewProvider)
   );
   const analyticsViewProvider = new AnalyticsViewProvider(index);
   context.subscriptions.push(
-    vscode14.window.registerWebviewViewProvider(AnalyticsViewProvider.viewType, analyticsViewProvider)
+    vscode15.window.registerWebviewViewProvider(AnalyticsViewProvider.viewType, analyticsViewProvider)
   );
   const modelUsageViewProvider = new ModelUsageViewProvider(context, index);
   context.subscriptions.push(
-    vscode14.window.registerWebviewViewProvider(ModelUsageViewProvider.viewType, modelUsageViewProvider)
+    vscode15.window.registerWebviewViewProvider(ModelUsageViewProvider.viewType, modelUsageViewProvider)
   );
   const timelineViewProvider = new TimelineViewProvider(index, context);
   context.subscriptions.push(
-    vscode14.window.registerWebviewViewProvider(TimelineViewProvider.viewType, timelineViewProvider)
+    vscode15.window.registerWebviewViewProvider(TimelineViewProvider.viewType, timelineViewProvider)
   );
   context.subscriptions.push(
-    vscode14.window.registerFileDecorationProvider(new SessionParseWarningDecorationProvider())
+    vscode15.window.registerFileDecorationProvider(new SessionParseWarningDecorationProvider())
   );
   const engine = new FullTextSearchEngine();
   const searchIndexListener = index.addTypedChangeListener((event) => {
@@ -11490,7 +11982,7 @@ async function activate(context) {
   context.subscriptions.push(searchIndexListener);
   const codeBlockEngine = new CodeBlockSearchEngine();
   context.subscriptions.push(
-    vscode14.window.registerWebviewPanelSerializer("chatwizardAnalytics", {
+    vscode15.window.registerWebviewPanelSerializer("chatwizardAnalytics", {
       async deserializeWebviewPanel(webviewPanel) {
         webviewPanel.webview.options = { enableScripts: true };
         webviewPanel.webview.html = AnalyticsPanel.getShellHtml();
@@ -11506,7 +11998,7 @@ async function activate(context) {
     })
   );
   context.subscriptions.push(
-    vscode14.window.registerWebviewPanelSerializer("chatwizardCodeBlocks", {
+    vscode15.window.registerWebviewPanelSerializer("chatwizardCodeBlocks", {
       async deserializeWebviewPanel(webviewPanel) {
         webviewPanel.webview.options = { enableScripts: true };
         webviewPanel.webview.html = CodeBlocksPanel.getShellHtml();
@@ -11515,7 +12007,7 @@ async function activate(context) {
         const blocks = index.getAllCodeBlocks();
         webviewPanel.webview.onDidReceiveMessage((msg) => {
           if (msg.command === "copy") {
-            void vscode14.env.clipboard.writeText(msg.text ?? "");
+            void vscode15.env.clipboard.writeText(msg.text ?? "");
           } else if (msg.type === "ready") {
             void webviewPanel.webview.postMessage({ type: "update", data: CodeBlocksPanel.buildPayload(blocks, codeBlockEngine) });
           }
@@ -11525,14 +12017,14 @@ async function activate(context) {
     })
   );
   context.subscriptions.push(
-    vscode14.window.registerWebviewPanelSerializer("chatwizardPromptLibrary", {
+    vscode15.window.registerWebviewPanelSerializer("chatwizardPromptLibrary", {
       async deserializeWebviewPanel(webviewPanel) {
         webviewPanel.dispose();
       }
     })
   );
   context.subscriptions.push(
-    vscode14.window.registerWebviewPanelSerializer("chatwizardSession3", {
+    vscode15.window.registerWebviewPanelSerializer("chatwizardSession3", {
       async deserializeWebviewPanel(webviewPanel) {
         webviewPanel.dispose();
       }
@@ -11590,9 +12082,9 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
   }
   function syncContext() {
     const primary = provider.getPrimary();
-    void vscode14.commands.executeCommand("setContext", "chatwizard.sortKey", primary.key);
-    void vscode14.commands.executeCommand("setContext", "chatwizard.sortDir", primary.direction);
-    void vscode14.commands.executeCommand("setContext", "chatwizard.hasFilter", provider.hasActiveFilter());
+    void vscode15.commands.executeCommand("setContext", "chatwizard.sortKey", primary.key);
+    void vscode15.commands.executeCommand("setContext", "chatwizard.sortDir", primary.direction);
+    void vscode15.commands.executeCommand("setContext", "chatwizard.hasFilter", provider.hasActiveFilter());
   }
   syncContext();
   function savePins() {
@@ -11605,7 +12097,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
     handleDrag(items, dataTransfer) {
       dataTransfer.set(
         "application/vnd.chatwizard.session",
-        new vscode14.DataTransferItem(items.map((i) => i.summary.id))
+        new vscode15.DataTransferItem(items.map((i) => i.summary.id))
       );
     },
     async handleDrop(target, dataTransfer) {
@@ -11620,7 +12112,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
       savePins();
     }
   };
-  const treeView = vscode14.window.createTreeView("chatwizardSessions", {
+  const treeView = vscode15.window.createTreeView("chatwizardSessions", {
     treeDataProvider: provider,
     dragAndDropController: dragDropController,
     canSelectMany: true
@@ -11632,7 +12124,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
     treeView.message = index.size === 0 ? makeEmptyStateMsg("sessions") : void 0;
   });
   context.subscriptions.push(sessionDescListener);
-  const codeBlockTreeView = vscode14.window.createTreeView("chatwizardCodeBlocks", {
+  const codeBlockTreeView = vscode15.window.createTreeView("chatwizardCodeBlocks", {
     treeDataProvider: codeBlockProvider,
     canSelectMany: false
   });
@@ -11654,8 +12146,8 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
     void context.globalState.update("sortStack", JSON.stringify(provider.getSortStack()));
   }
   function syncCbContext() {
-    void vscode14.commands.executeCommand("setContext", "chatwizard.cbSortKey", codeBlockProvider.getSortMode());
-    void vscode14.commands.executeCommand("setContext", "chatwizard.cbSortDir", codeBlockProvider.getSortDir());
+    void vscode15.commands.executeCommand("setContext", "chatwizard.cbSortKey", codeBlockProvider.getSortMode());
+    void vscode15.commands.executeCommand("setContext", "chatwizard.cbSortDir", codeBlockProvider.getSortDir());
   }
   syncCbContext();
   function applyCbSort(mode) {
@@ -11667,29 +12159,29 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
   const sortModes = ["date", "workspace", "length", "title", "model"];
   for (const mode of sortModes) {
     context.subscriptions.push(
-      vscode14.commands.registerCommand(`chatwizard.sortBy${capitalise(mode)}`, () => applySort(mode))
+      vscode15.commands.registerCommand(`chatwizard.sortBy${capitalise(mode)}`, () => applySort(mode))
     );
     context.subscriptions.push(
-      vscode14.commands.registerCommand(`chatwizard.sortBy${capitalise(mode)}.asc`, () => applySort(mode))
+      vscode15.commands.registerCommand(`chatwizard.sortBy${capitalise(mode)}.asc`, () => applySort(mode))
     );
     context.subscriptions.push(
-      vscode14.commands.registerCommand(`chatwizard.sortBy${capitalise(mode)}.desc`, () => applySort(mode))
+      vscode15.commands.registerCommand(`chatwizard.sortBy${capitalise(mode)}.desc`, () => applySort(mode))
     );
   }
   const cbSortModes = ["date", "workspace", "length", "title", "language"];
   for (const mode of cbSortModes) {
     context.subscriptions.push(
-      vscode14.commands.registerCommand(`chatwizard.cbSortBy${capitalise(mode)}`, () => applyCbSort(mode))
+      vscode15.commands.registerCommand(`chatwizard.cbSortBy${capitalise(mode)}`, () => applyCbSort(mode))
     );
     context.subscriptions.push(
-      vscode14.commands.registerCommand(`chatwizard.cbSortBy${capitalise(mode)}.asc`, () => applyCbSort(mode))
+      vscode15.commands.registerCommand(`chatwizard.cbSortBy${capitalise(mode)}.asc`, () => applyCbSort(mode))
     );
     context.subscriptions.push(
-      vscode14.commands.registerCommand(`chatwizard.cbSortBy${capitalise(mode)}.desc`, () => applyCbSort(mode))
+      vscode15.commands.registerCommand(`chatwizard.cbSortBy${capitalise(mode)}.desc`, () => applyCbSort(mode))
     );
   }
   context.subscriptions.push(
-    vscode14.commands.registerCommand("chatwizard.configureSortOrder", async () => {
+    vscode15.commands.registerCommand("chatwizard.configureSortOrder", async () => {
       const allKeys = ["date", "workspace", "length", "title", "model", "source"];
       const newStack = [];
       for (let round = 0; round < 3; round++) {
@@ -11702,7 +12194,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
         if (round > 0) {
           items.push({ label: "$(check)  Done \u2014 apply current sort", key: "_done", alwaysShow: true });
         }
-        const keyPick = await vscode14.window.showQuickPick(items, {
+        const keyPick = await vscode15.window.showQuickPick(items, {
           title: `Sort order \u2014 ${ordinal} criterion`,
           placeHolder: round === 0 ? "Pick the primary sort key" : "Pick an additional key, or Done to finish"
         });
@@ -11713,7 +12205,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
           { label: "$(arrow-down)  Descending", description: "Newest \xB7 Largest \xB7 Z\u2192A", dir: "desc" },
           { label: "$(arrow-up)  Ascending", description: "Oldest \xB7 Smallest \xB7 A\u2192Z", dir: "asc" }
         ];
-        const dirPick = await vscode14.window.showQuickPick(dirItems, {
+        const dirPick = await vscode15.window.showQuickPick(dirItems, {
           title: `Direction for "${SORT_KEY_LABELS[keyPick.key]}"`
         });
         if (!dirPick) {
@@ -11727,7 +12219,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
     })
   );
   context.subscriptions.push(
-    vscode14.commands.registerCommand("chatwizard.filterSessions", async () => {
+    vscode15.commands.registerCommand("chatwizard.filterSessions", async () => {
       const current = provider.getFilter();
       const items = [
         {
@@ -11749,6 +12241,11 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
           id: "model",
           label: "$(symbol-event)  Model contains\u2026",
           description: current.model ? `current: "${current.model}"` : void 0
+        },
+        {
+          id: "source",
+          label: "$(extensions)  Source (AI assistant)\u2026",
+          description: current.source ? `current: ${friendlySourceName(current.source)}` : void 0
         },
         {
           id: "minMessages",
@@ -11776,7 +12273,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
           alwaysShow: true
         }
       ];
-      const pick = await vscode14.window.showQuickPick(items, {
+      const pick = await vscode15.window.showQuickPick(items, {
         title: "Filter Sessions",
         placeHolder: "Choose a filter criterion to set (or clear all)"
       });
@@ -11787,12 +12284,12 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
         provider.clearFilter();
         treeView.description = provider.getDescription();
         provider.refresh();
-        void vscode14.commands.executeCommand("setContext", "chatwizard.hasFilter", false);
+        void vscode15.commands.executeCommand("setContext", "chatwizard.hasFilter", false);
         return;
       }
       const newFilter = { ...current };
       if (pick.id === "title") {
-        const val = await vscode14.window.showInputBox({
+        const val = await vscode15.window.showInputBox({
           title: "Filter by title (case-insensitive substring)",
           value: current.title ?? "",
           placeHolder: "Leave blank to remove this filter"
@@ -11802,7 +12299,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
         }
         newFilter.title = val.trim() || void 0;
       } else if (pick.id === "dateFrom") {
-        const val = await vscode14.window.showInputBox({
+        const val = await vscode15.window.showInputBox({
           title: "Updated from (YYYY-MM-DD, inclusive)",
           value: current.dateFrom ?? "",
           placeHolder: "e.g. 2024-01-01  \u2014  blank to remove",
@@ -11813,7 +12310,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
         }
         newFilter.dateFrom = val.trim() || void 0;
       } else if (pick.id === "dateTo") {
-        const val = await vscode14.window.showInputBox({
+        const val = await vscode15.window.showInputBox({
           title: "Updated until (YYYY-MM-DD, inclusive)",
           value: current.dateTo ?? "",
           placeHolder: "e.g. 2024-12-31  \u2014  blank to remove",
@@ -11824,7 +12321,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
         }
         newFilter.dateTo = val.trim() || void 0;
       } else if (pick.id === "model") {
-        const val = await vscode14.window.showInputBox({
+        const val = await vscode15.window.showInputBox({
           title: "Filter by model (case-insensitive substring)",
           value: current.model ?? "",
           placeHolder: "e.g. gpt-4  \u2014  blank to remove"
@@ -11833,8 +12330,25 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
           return;
         }
         newFilter.model = val.trim() || void 0;
+      } else if (pick.id === "source") {
+        const allSources = ["claude", "copilot", "cline", "roocode", "cursor", "windsurf", "aider"];
+        const sourceItems = [
+          { label: "$(close)  Show all sources", value: void 0 },
+          ...allSources.map((s) => ({
+            label: `$(${sourceCodiconId(s)})  ${friendlySourceName(s)}`,
+            value: s,
+            description: current.source === s ? "current" : void 0
+          }))
+        ];
+        const chosen = await vscode15.window.showQuickPick(sourceItems, {
+          title: "Filter by source (AI assistant)"
+        });
+        if (chosen === void 0) {
+          return;
+        }
+        newFilter.source = chosen.value;
       } else if (pick.id === "minMessages") {
-        const val = await vscode14.window.showInputBox({
+        const val = await vscode15.window.showInputBox({
           title: "Minimum message count (inclusive)",
           value: current.minMessages !== void 0 ? String(current.minMessages) : "",
           placeHolder: "e.g. 10  \u2014  blank to remove",
@@ -11845,7 +12359,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
         }
         newFilter.minMessages = val.trim() ? parseInt(val.trim(), 10) : void 0;
       } else if (pick.id === "maxMessages") {
-        const val = await vscode14.window.showInputBox({
+        const val = await vscode15.window.showInputBox({
           title: "Maximum message count (inclusive)",
           value: current.maxMessages !== void 0 ? String(current.maxMessages) : "",
           placeHolder: "e.g. 100  \u2014  blank to remove",
@@ -11863,11 +12377,11 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
       provider.setFilter(newFilter);
       treeView.description = provider.getDescription();
       provider.refresh();
-      void vscode14.commands.executeCommand("setContext", "chatwizard.hasFilter", provider.hasActiveFilter());
+      void vscode15.commands.executeCommand("setContext", "chatwizard.hasFilter", provider.hasActiveFilter());
     })
   );
   context.subscriptions.push(
-    vscode14.commands.registerCommand("chatwizard.filterCodeBlocks", async () => {
+    vscode15.commands.registerCommand("chatwizard.filterCodeBlocks", async () => {
       const current = codeBlockProvider.getFilter();
       const items = [
         {
@@ -11882,7 +12396,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
         },
         {
           id: "sessionSource",
-          label: "$(github)  Source (Copilot/Claude)",
+          label: "$(symbol-class)  Source",
           description: current.sessionSource ? `current: ${current.sessionSource}` : void 0
         },
         {
@@ -11896,7 +12410,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
           alwaysShow: true
         }
       ];
-      const pick = await vscode14.window.showQuickPick(items, {
+      const pick = await vscode15.window.showQuickPick(items, {
         title: "Filter Code Blocks",
         placeHolder: "Choose a filter criterion to set (or clear all)"
       });
@@ -11911,7 +12425,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
       }
       const newFilter = { ...current };
       if (pick.id === "language") {
-        const val = await vscode14.window.showInputBox({
+        const val = await vscode15.window.showInputBox({
           title: "Filter by language (case-insensitive substring)",
           value: current.language ?? "",
           placeHolder: "e.g. typescript, python, javascript"
@@ -11921,7 +12435,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
         }
         newFilter.language = val.trim() || void 0;
       } else if (pick.id === "content") {
-        const val = await vscode14.window.showInputBox({
+        const val = await vscode15.window.showInputBox({
           title: "Filter by content (case-insensitive substring)",
           value: current.content ?? "",
           placeHolder: "Search within code block content"
@@ -11931,12 +12445,15 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
         }
         newFilter.content = val.trim() || void 0;
       } else if (pick.id === "sessionSource") {
+        const allSources = ["copilot", "claude", "cline", "roocode", "cursor", "windsurf", "aider"];
         const sourceItems = [
-          { label: "$(github)  GitHub Copilot", source: "copilot" },
-          { label: "$(hubot)  Claude Code", source: "claude" },
+          ...allSources.map((s) => ({
+            label: `$(${sourceCodiconId(s)})  ${friendlySourceName(s)}`,
+            source: s
+          })),
           { label: "$(close)  Clear filter", source: void 0 }
         ];
-        const sourcePick = await vscode14.window.showQuickPick(sourceItems, {
+        const sourcePick = await vscode15.window.showQuickPick(sourceItems, {
           title: "Filter by source"
         });
         if (!sourcePick) {
@@ -11949,7 +12466,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
           { label: "$(hubot)  AI Assistant", role: "assistant" },
           { label: "$(close)  Clear filter", role: void 0 }
         ];
-        const rolePick = await vscode14.window.showQuickPick(roleItems, {
+        const rolePick = await vscode15.window.showQuickPick(roleItems, {
           title: "Filter by message role"
         });
         if (!rolePick) {
@@ -11963,30 +12480,30 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
     })
   );
   context.subscriptions.push(
-    vscode14.commands.registerCommand("chatwizard.pinSession", (item) => {
+    vscode15.commands.registerCommand("chatwizard.pinSession", (item) => {
       provider.pin(item.summary.id);
       provider.refresh();
       savePins();
     })
   );
   context.subscriptions.push(
-    vscode14.commands.registerCommand("chatwizard.unpinSession", (item) => {
+    vscode15.commands.registerCommand("chatwizard.unpinSession", (item) => {
       provider.unpin(item.summary.id);
       provider.refresh();
       savePins();
     })
   );
   context.subscriptions.push(
-    vscode14.commands.registerCommand("chatwizard.loadMoreSessions", () => provider.loadMore())
+    vscode15.commands.registerCommand("chatwizard.loadMoreSessions", () => provider.loadMore())
   );
   context.subscriptions.push(
-    vscode14.commands.registerCommand("chatwizard.loadMoreCodeBlocks", () => codeBlockProvider.loadMore())
+    vscode15.commands.registerCommand("chatwizard.loadMoreCodeBlocks", () => codeBlockProvider.loadMore())
   );
   context.subscriptions.push(
-    vscode14.commands.registerCommand("chatwizard.openSession", (summary, searchTerm, highlightContainer) => {
+    vscode15.commands.registerCommand("chatwizard.openSession", (summary, searchTerm, highlightContainer) => {
       const session = index.get(summary.id);
       if (!session) {
-        vscode14.window.showErrorMessage(`Session not found: ${summary.id}`);
+        vscode15.window.showErrorMessage(`Session not found: ${summary.id}`);
         return;
       }
       telemetry.record("session.opened", { source: session.source });
@@ -11994,10 +12511,10 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
     })
   );
   context.subscriptions.push(
-    vscode14.commands.registerCommand("chatwizard.openSessionFromCodeBlock", (ref) => {
+    vscode15.commands.registerCommand("chatwizard.openSessionFromCodeBlock", (ref) => {
       const session = index.get(ref.sessionId);
       if (!session) {
-        vscode14.window.showErrorMessage(`Session not found: ${ref.sessionId}`);
+        vscode15.window.showErrorMessage(`Session not found: ${ref.sessionId}`);
         return;
       }
       const isLeaf = ref.blocks.length === 1;
@@ -12007,53 +12524,53 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
     })
   );
   context.subscriptions.push(
-    vscode14.commands.registerCommand("chatwizard.search", () => {
+    vscode15.commands.registerCommand("chatwizard.search", () => {
       telemetry.record("search.opened");
       SearchPanel.show(context, index, engine);
     })
   );
   context.subscriptions.push(
-    vscode14.commands.registerCommand("chatwizard.showCodeBlocks", () => {
+    vscode15.commands.registerCommand("chatwizard.showCodeBlocks", () => {
       CodeBlocksPanel.show(context, index, codeBlockEngine);
     })
   );
   context.subscriptions.push(
-    vscode14.commands.registerCommand("chatwizard.showPromptLibrary", () => {
+    vscode15.commands.registerCommand("chatwizard.showPromptLibrary", () => {
       PromptLibraryPanel.show(context, index);
     })
   );
   context.subscriptions.push(
-    vscode14.commands.registerCommand("chatwizard.showAnalytics", () => {
+    vscode15.commands.registerCommand("chatwizard.showAnalytics", () => {
       AnalyticsPanel.show(context, index);
     })
   );
   context.subscriptions.push(
-    vscode14.commands.registerCommand("chatwizard.showTimeline", () => {
-      void vscode14.commands.executeCommand("chatwizardTimeline.focus");
+    vscode15.commands.registerCommand("chatwizard.showTimeline", () => {
+      void vscode15.commands.executeCommand("chatwizardTimeline.focus");
     })
   );
   context.subscriptions.push(
-    vscode14.commands.registerCommand("chatwizard.rescan", () => {
-      void vscode14.window.showInformationMessage(
+    vscode15.commands.registerCommand("chatwizard.rescan", () => {
+      void vscode15.window.showInformationMessage(
         "Chat Wizard indexes sessions automatically via file system events. If sessions are missing, reload the window to trigger a fresh scan.",
         "Reload Window"
       ).then((action) => {
         if (action === "Reload Window") {
-          void vscode14.commands.executeCommand("workbench.action.reloadWindow");
+          void vscode15.commands.executeCommand("workbench.action.reloadWindow");
         }
       });
     })
   );
   context.subscriptions.push(
-    vscode14.workspace.onDidChangeConfiguration((e) => {
+    vscode15.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("chatwizard.enableTelemetry")) {
-        const cfg = vscode14.workspace.getConfiguration("chatwizard");
+        const cfg = vscode15.workspace.getConfiguration("chatwizard");
         telemetry.setEnabled(cfg.get("enableTelemetry") ?? false);
       }
-      if (e.affectsConfiguration("chatwizard.claudeProjectsPath") || e.affectsConfiguration("chatwizard.copilotStoragePath")) {
+      if (e.affectsConfiguration("chatwizard.claudeProjectsPath") || e.affectsConfiguration("chatwizard.copilotStoragePath") || e.affectsConfiguration("chatwizard.cursorStoragePath")) {
         channel.appendLine("[Chat Wizard] Data path setting changed \u2014 re-discovering workspaces and restarting index...");
         void (async () => {
-          const [copilotWs, claudeWs] = await Promise.all([
+          const [copilotWs, claudeWs, cursorWs] = await Promise.all([
             discoverCopilotWorkspacesAsync().then(
               (list) => list.map((ws) => ({
                 id: ws.workspaceId,
@@ -12062,9 +12579,10 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
                 storageDir: ws.storageDir
               }))
             ).catch(() => []),
-            discoverClaudeWorkspacesAsync().catch(() => [])
+            discoverClaudeWorkspacesAsync().catch(() => []),
+            discoverCursorWorkspacesAsync().catch(() => [])
           ]);
-          const allAvailable = [...copilotWs, ...claudeWs];
+          const allAvailable = [...copilotWs, ...claudeWs, ...cursorWs];
           scopeManager.resetToDefault();
           await scopeManager.initDefault(allAvailable);
           const selectedIds = scopeManager.getSelectedIds();
@@ -12077,7 +12595,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
           }
         })().catch((err) => channel.appendLine(`[error] Path-change restart failed: ${err}`));
       }
-      if (e.affectsConfiguration("chatwizard.oldestSessionDate") || e.affectsConfiguration("chatwizard.maxSessions")) {
+      if (e.affectsConfiguration("chatwizard.oldestSessionDate") || e.affectsConfiguration("chatwizard.maxSessions") || e.affectsConfiguration("chatwizard.indexCursor")) {
         channel.appendLine("[Chat Wizard] Session filter setting changed \u2014 restarting index...");
         void watcher?.restart().then(() => channel.appendLine("[Chat Wizard] Watcher restarted after filter change.")).catch((err) => channel.appendLine(`[error] Filter-change restart failed: ${err}`));
       }
@@ -12085,7 +12603,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
   );
   registerExportCommands(context, index, () => provider.getSortedSummaries());
   context.subscriptions.push(
-    vscode14.commands.registerCommand(
+    vscode15.commands.registerCommand(
       "chatwizard.exportFromTreeSelection",
       async (item, allSelected) => {
         const items = allSelected && allSelected.length > 0 ? allSelected : item ? [item] : [];
@@ -12098,7 +12616,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
   registerManageWorkspacesCommand(context, scopeManager, () => watcher, channel, index);
   await new Promise((resolve) => setTimeout(resolve, 200));
   void (async () => {
-    const [copilotWs, claudeWs] = await Promise.all([
+    const [copilotWs, claudeWs, cursorWs] = await Promise.all([
       discoverCopilotWorkspacesAsync().then(
         (list) => list.map((ws) => ({
           id: ws.workspaceId,
@@ -12107,9 +12625,10 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
           storageDir: ws.storageDir
         }))
       ).catch(() => []),
-      discoverClaudeWorkspacesAsync().catch(() => [])
+      discoverClaudeWorkspacesAsync().catch(() => []),
+      discoverCursorWorkspacesAsync().catch(() => [])
     ]);
-    const allAvailable = [...copilotWs, ...claudeWs];
+    const allAvailable = [...copilotWs, ...claudeWs, ...cursorWs];
     channel.appendLine(
       `[Chat Wizard] Discovered ${allAvailable.length} workspace(s) for scope detection: ` + allAvailable.map((ws) => `${ws.source}:${ws.id} (${ws.workspacePath})`).join(", ")
     );
