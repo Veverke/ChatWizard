@@ -64,7 +64,7 @@ jobs:
           name: vsix-${{ matrix.target }}
           path: chatwizard-${{ matrix.target }}.vsix
 
-  # ── Publish all platform VSIXs to the VS Code Marketplace ────────────────────
+  # ── Publish all platform VSIXs to the all supported Marketplaces (MS, Open VSX) ────────────────────
   publish:
     needs: build
     runs-on: ubuntu-latest
@@ -81,8 +81,8 @@ jobs:
           pattern: vsix-*
           merge-multiple: true
 
-      - name: Install vsce
-        run: npm install -g @vscode/vsce
+      - name: Install vsce and ovsx
+        run: npm install -g @vscode/vsce ovsx
 
       - name: Publish to VS Code Marketplace
         run: |
@@ -92,3 +92,10 @@ jobs:
             --packagePath chatwizard-darwin-x64.vsix \
             --packagePath chatwizard-darwin-arm64.vsix \
             -p ${{ secrets.VSCE_TOKEN }}
+
+      - name: Publish to Open VSX Registry
+        run: |
+          ovsx publish chatwizard-win32-x64.vsix -p ${{ secrets.OVSX_TOKEN }}
+          ovsx publish chatwizard-linux-x64.vsix -p ${{ secrets.OVSX_TOKEN }}
+          ovsx publish chatwizard-darwin-x64.vsix -p ${{ secrets.OVSX_TOKEN }}
+          ovsx publish chatwizard-darwin-arm64.vsix -p ${{ secrets.OVSX_TOKEN }}
