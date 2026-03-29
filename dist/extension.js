@@ -882,6 +882,25 @@ var fs5 = __toESM(require("fs"));
 var path5 = __toESM(require("path"));
 var os3 = __toESM(require("os"));
 var MAX_VSCDB_BYTES = 500 * 1024 * 1024;
+function getCursorGlobalDbPath(override) {
+  if (override !== void 0 && override !== "") {
+    return override;
+  }
+  const platform = process.platform;
+  let base;
+  if (platform === "win32") {
+    base = path5.join(process.env["APPDATA"] || os3.homedir(), "Cursor", "User");
+  } else if (platform === "darwin") {
+    base = path5.join(os3.homedir(), "Library", "Application Support", "Cursor", "User");
+  } else {
+    base = path5.join(
+      process.env["XDG_CONFIG_HOME"] || path5.join(os3.homedir(), ".config"),
+      "Cursor",
+      "User"
+    );
+  }
+  return path5.join(base, "globalStorage", "state.vscdb");
+}
 function getCursorStorageRoot() {
   const platform = process.platform;
   if (platform === "win32") {
@@ -1586,46 +1605,61 @@ function extractPromptText(p) {
   return "";
 }
 function composerTimeEnd(c) {
+  const lai = c.activeBranch?.lastInteractionAt ?? 0;
   const lu = c.lastUpdatedAt ?? c.updatedAt ?? 0;
+  const best = Math.max(lai, lu);
   const cr = c.createdAt ?? 0;
-  return (lu > 0 ? lu : cr) || cr;
+  return (best > 0 ? best : cr) || cr;
 }
 function buildAiServiceFallbackSessions(vscdbPath, workspaceId, workspacePath, composers, promptsJson, generationsJson) {
-  let prompts;
-  try {
-    prompts = JSON.parse(promptsJson);
-  } catch {
-    return null;
-  }
-  if (!Array.isArray(prompts) || prompts.length === 0) {
-    return null;
-  }
-  let genTimestamps = [];
+  const generationEntries = [];
+  const textToTimestamp = /* @__PURE__ */ new Map();
   if (generationsJson) {
     try {
       const gens = JSON.parse(generationsJson);
       if (Array.isArray(gens)) {
-        genTimestamps = gens.map(
-          (g) => typeof g === "object" && g !== null && "unixMs" in g && typeof g.unixMs === "number" && g.unixMs > 0 ? g.unixMs : void 0
-        );
+        for (const g of gens) {
+          if (typeof g !== "object" || g === null) {
+            continue;
+          }
+          const go = g;
+          const text = typeof go.textDescription === "string" ? go.textDescription.trim() : "";
+          const ts = typeof go.unixMs === "number" && go.unixMs > 0 ? go.unixMs : 0;
+          if (text && ts) {
+            generationEntries.push({ text, unixMs: ts });
+            if (!textToTimestamp.has(text)) {
+              textToTimestamp.set(text, ts);
+            }
+          }
+        }
       }
     } catch {
     }
   }
   const flat = [];
-  for (let i = 0; i < prompts.length; i++) {
-    const text = extractPromptText(prompts[i]);
-    if (!text) {
-      continue;
+  if (generationEntries.length > 0) {
+    for (let i = 0; i < generationEntries.length; i++) {
+      flat.push({ index: i, text: generationEntries[i].text, unixMs: generationEntries[i].unixMs });
     }
-    const unixMs = genTimestamps[i];
-    const cid = extractPromptComposerId(prompts[i]);
-    flat.push({
-      index: i,
-      text,
-      unixMs: unixMs !== void 0 ? unixMs : void 0,
-      composerId: cid
-    });
+  } else {
+    let prompts;
+    try {
+      prompts = JSON.parse(promptsJson);
+    } catch {
+      return null;
+    }
+    if (!Array.isArray(prompts) || prompts.length === 0) {
+      return null;
+    }
+    for (let i = 0; i < prompts.length; i++) {
+      const text = extractPromptText(prompts[i]);
+      if (!text) {
+        continue;
+      }
+      const ts = textToTimestamp.get(text.trim());
+      const cid = extractPromptComposerId(prompts[i]);
+      flat.push({ index: i, text, unixMs: ts, composerId: cid });
+    }
   }
   if (flat.length === 0) {
     return null;
@@ -1687,7 +1721,15 @@ function buildAiServiceFallbackSessions(vscdbPath, workspaceId, workspacePath, c
     }
   }
   if (unassigned.length > 0) {
-    const sorted = [...withIds].sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
+    const sorted = [...withIds].sort((a, b) => {
+      const aEnd = composerTimeEnd(a);
+      const aStart = a.createdAt ?? 0;
+      const bEnd = composerTimeEnd(b);
+      const bStart = b.createdAt ?? 0;
+      const aSize = aEnd > 0 && aEnd > aStart ? aEnd - aStart : Number.MAX_SAFE_INTEGER;
+      const bSize = bEnd > 0 && bEnd > bStart ? bEnd - bStart : Number.MAX_SAFE_INTEGER;
+      return aSize - bSize;
+    });
     for (const fp of unassigned) {
       const ts = fp.unixMs;
       if (ts === void 0) {
@@ -1697,7 +1739,7 @@ function buildAiServiceFallbackSessions(vscdbPath, workspaceId, workspacePath, c
       for (const c of sorted) {
         const start = c.createdAt ?? 0;
         const end = composerTimeEnd(c);
-        if (end >= start && ts >= start && ts <= end) {
+        if (end >= start && ts >= start && ts <= end + 2e3) {
           best = c;
           break;
         }
@@ -1826,6 +1868,155 @@ function buildAiServiceFallbackSessions(vscdbPath, workspaceId, workspacePath, c
     });
   }
   return results.length > 0 ? results : null;
+}
+async function parseCursorGlobalDb(globalDbPath) {
+  let composerRows = [];
+  let bubbleRows = [];
+  try {
+    const Database = require("better-sqlite3");
+    const db = new Database(globalDbPath, { readonly: true, fileMustExist: true });
+    try {
+      const tableCheck = db.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='cursorDiskKV'"
+      ).get();
+      if (!tableCheck) {
+        return [];
+      }
+      composerRows = db.prepare(
+        "SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%'"
+      ).all();
+      bubbleRows = db.prepare(
+        "SELECT key, value FROM cursorDiskKV WHERE key LIKE 'bubbleId:%'"
+      ).all();
+    } finally {
+      db.close();
+    }
+  } catch {
+    return [];
+  }
+  if (composerRows.length === 0) {
+    return [];
+  }
+  const bubblesByComposer = /* @__PURE__ */ new Map();
+  for (const row of bubbleRows) {
+    const firstColon = row.key.indexOf(":");
+    if (firstColon < 0) {
+      continue;
+    }
+    const remainder = row.key.slice(firstColon + 1);
+    const secondColon = remainder.indexOf(":");
+    if (secondColon < 0) {
+      continue;
+    }
+    const composerId = remainder.slice(0, secondColon);
+    const bubbleId = remainder.slice(secondColon + 1);
+    if (!composerId || !bubbleId) {
+      continue;
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(row.value);
+    } catch {
+      continue;
+    }
+    const type = typeof parsed.type === "number" ? parsed.type : 0;
+    const text = typeof parsed.text === "string" ? parsed.text.trim() : "";
+    const unixMs = typeof parsed.unixMs === "number" && parsed.unixMs > 0 ? parsed.unixMs : void 0;
+    if (!text || type !== 1 && type !== 2) {
+      continue;
+    }
+    let list = bubblesByComposer.get(composerId);
+    if (!list) {
+      list = [];
+      bubblesByComposer.set(composerId, list);
+    }
+    list.push({ bubbleId, type, text, unixMs });
+  }
+  const results = [];
+  for (const row of composerRows) {
+    const composerId = row.key.slice("composerData:".length);
+    if (!composerId) {
+      continue;
+    }
+    let composerMeta;
+    try {
+      composerMeta = JSON.parse(row.value);
+    } catch {
+      continue;
+    }
+    const rawBubbles = bubblesByComposer.get(composerId) ?? [];
+    if (rawBubbles.length === 0) {
+      continue;
+    }
+    const headers = Array.isArray(composerMeta.fullConversationHeadersOnly) ? composerMeta.fullConversationHeadersOnly : [];
+    let orderedBubbles;
+    if (headers.length > 0) {
+      const orderMap = /* @__PURE__ */ new Map();
+      for (let i = 0; i < headers.length; i++) {
+        const bid = headers[i].bubbleId;
+        if (bid) {
+          orderMap.set(bid, i);
+        }
+      }
+      orderedBubbles = [...rawBubbles].sort((a, b) => {
+        const ai = orderMap.get(a.bubbleId) ?? Number.MAX_SAFE_INTEGER;
+        const bi = orderMap.get(b.bubbleId) ?? Number.MAX_SAFE_INTEGER;
+        if (ai !== bi) {
+          return ai - bi;
+        }
+        return (a.unixMs ?? 0) - (b.unixMs ?? 0);
+      });
+    } else {
+      orderedBubbles = [...rawBubbles].sort((a, b) => (a.unixMs ?? 0) - (b.unixMs ?? 0));
+    }
+    const messages = [];
+    for (const bubble of orderedBubbles) {
+      const role = bubble.type === 1 ? "user" : "assistant";
+      const messageIndex = messages.length;
+      messages.push({
+        id: `${composerId}-${messageIndex}`,
+        role,
+        content: bubble.text,
+        codeBlocks: extractCursorCodeBlocks(bubble.text, composerId, messageIndex),
+        timestamp: bubble.unixMs !== void 0 ? new Date(bubble.unixMs).toISOString() : void 0
+      });
+    }
+    const name = typeof composerMeta.name === "string" ? composerMeta.name.trim() : "";
+    let title;
+    if (name) {
+      title = name;
+    } else {
+      const firstUser = messages.find((m) => m.role === "user");
+      if (firstUser) {
+        const firstLine = firstUser.content.split("\n")[0] || firstUser.content;
+        title = firstLine.length > MAX_TITLE_CHARS2 ? firstLine.slice(0, MAX_TITLE_CHARS2) + "\u2026" : firstLine;
+      } else {
+        title = "Untitled";
+      }
+    }
+    const createdAt = typeof composerMeta.createdAt === "number" && composerMeta.createdAt > 0 ? new Date(composerMeta.createdAt).toISOString() : messages.find((m) => m.timestamp)?.timestamp ?? (/* @__PURE__ */ new Date()).toISOString();
+    const lastTimestampMsg = [...messages].reverse().find((m) => m.timestamp);
+    const updatedAt = lastTimestampMsg?.timestamp ?? createdAt;
+    const model = typeof composerMeta.model === "string" && composerMeta.model.trim() ? composerMeta.model.trim() : void 0;
+    results.push({
+      session: {
+        id: composerId,
+        title,
+        source: "cursor",
+        // workspaceId / workspacePath will be enriched by the caller
+        // using per-workspace metadata when available.
+        workspaceId: "cursor-global",
+        workspacePath: void 0,
+        model,
+        messages,
+        filePath: globalDbPath,
+        createdAt,
+        updatedAt
+      },
+      errors: []
+    });
+  }
+  return results;
 }
 function extractCursorCodeBlocks(content, sessionId, messageIndex) {
   return extractCodeBlocks2(content, sessionId, messageIndex);
@@ -2724,12 +2915,14 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
     }
   }
   /** Async: parse all Cursor sessions by reading state.vscdb files across discovered workspaces. */
-  async collectCursorSessionsAsync(onProgress, _cursorRootOverride) {
+  async collectCursorSessionsAsync(onProgress, _cursorRootOverride, _globalDbPathOverride) {
     const root = _cursorRootOverride ?? resolveCursorStoragePath();
     try {
       const workspaces = await discoverCursorWorkspacesAsync(root);
       const total = workspaces.length;
       let current = 0;
+      const composerIdToWorkspaceInfo = /* @__PURE__ */ new Map();
+      const wsSessionsById = /* @__PURE__ */ new Map();
       const wsResults = await Promise.all(workspaces.map(async (ws) => {
         const vscdbPath = require("path").join(ws.storageDir, "state.vscdb");
         const parseResults = await parseCursorWorkspace(vscdbPath, ws.id, ws.workspacePath);
@@ -2742,6 +2935,12 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
               `[warn] Cursor parse errors in ${vscdbPath}: ${result.errors.join("; ")}`
             );
           }
+          if (result.session.id && !result.session.id.endsWith("-cursor-error")) {
+            composerIdToWorkspaceInfo.set(result.session.id, {
+              workspaceId: ws.id,
+              workspacePath: ws.workspacePath
+            });
+          }
           if (result.session.messages.length === 0 || result.session.createdAt === (/* @__PURE__ */ new Date(0)).toISOString()) {
             continue;
           }
@@ -2749,7 +2948,46 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
         }
         return sessions;
       }));
-      return wsResults.flat();
+      for (const session of wsResults.flat()) {
+        wsSessionsById.set(session.id, session);
+      }
+      const globalDbPath = getCursorGlobalDbPath(_globalDbPathOverride);
+      let globalSessions = [];
+      try {
+        const globalResults = await parseCursorGlobalDb(globalDbPath);
+        for (const result of globalResults) {
+          if (result.errors.length > 0) {
+            this.channel.appendLine(`[warn] Cursor global DB errors: ${result.errors.join("; ")}`);
+          }
+          if (result.session.messages.length === 0 || result.session.createdAt === (/* @__PURE__ */ new Date(0)).toISOString()) {
+            continue;
+          }
+          const wsInfo = composerIdToWorkspaceInfo.get(result.session.id);
+          if (wsInfo) {
+            result.session.workspaceId = wsInfo.workspaceId;
+            result.session.workspacePath = wsInfo.workspacePath;
+          }
+          globalSessions.push(result.session);
+        }
+        if (globalSessions.length > 0) {
+          this.channel.appendLine(
+            `[init] Cursor global DB: ${globalSessions.length} sessions with full conversations`
+          );
+        }
+      } catch (err) {
+        this.channel.appendLine(`[warn] Failed to read Cursor global DB: ${err}`);
+      }
+      const globalById = /* @__PURE__ */ new Map();
+      for (const s of globalSessions) {
+        globalById.set(s.id, s);
+      }
+      const merged = [...globalSessions];
+      for (const s of wsSessionsById.values()) {
+        if (!globalById.has(s.id)) {
+          merged.push(s);
+        }
+      }
+      return merged;
     } catch (err) {
       this.channel.appendLine(`[error] Failed to collect Cursor sessions: ${err}`);
       return [];
@@ -3001,21 +3239,53 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
       }
     } catch {
     }
-    const parseResults = await parseCursorWorkspace(vscdbPath, workspaceId, workspacePath);
+    const wsParseResults = await parseCursorWorkspace(vscdbPath, workspaceId, workspacePath);
+    const composerIdToWsInfo = /* @__PURE__ */ new Map();
+    const wsSessionsById = /* @__PURE__ */ new Map();
+    for (const result of wsParseResults) {
+      if (result.errors.length > 0) {
+        this.channel.appendLine(`[warn] Cursor parse errors in ${vscdbPath}: ${result.errors.join("; ")}`);
+      }
+      if (result.session.id && !result.session.id.endsWith("-cursor-error")) {
+        composerIdToWsInfo.set(result.session.id, { workspaceId, workspacePath });
+        wsSessionsById.set(result.session.id, result.session);
+      }
+    }
+    const globalDbPath = getCursorGlobalDbPath();
+    const globalById = /* @__PURE__ */ new Map();
+    try {
+      const globalResults = await parseCursorGlobalDb(globalDbPath);
+      for (const result of globalResults) {
+        if (result.session.messages.length === 0 || result.session.createdAt === (/* @__PURE__ */ new Date(0)).toISOString()) {
+          continue;
+        }
+        const wsInfo = composerIdToWsInfo.get(result.session.id);
+        if (wsInfo) {
+          result.session.workspaceId = wsInfo.workspaceId;
+          result.session.workspacePath = wsInfo.workspacePath;
+        }
+        if (composerIdToWsInfo.has(result.session.id)) {
+          globalById.set(result.session.id, result.session);
+        }
+      }
+    } catch {
+    }
     const keepIds = /* @__PURE__ */ new Set();
     let upsertCount = 0;
-    for (const result of parseResults) {
-      if (result.errors.length > 0) {
-        this.channel.appendLine(
-          `[warn] Cursor parse errors in ${vscdbPath}: ${result.errors.join("; ")}`
-        );
-      }
-      if (result.session.messages.length === 0 || result.session.createdAt === (/* @__PURE__ */ new Date(0)).toISOString()) {
-        continue;
-      }
-      keepIds.add(result.session.id);
-      this.index.upsert(result.session);
+    for (const session of globalById.values()) {
+      keepIds.add(session.id);
+      this.index.upsert(session);
       upsertCount++;
+    }
+    for (const session of wsSessionsById.values()) {
+      if (!globalById.has(session.id)) {
+        if (session.messages.length === 0 || session.createdAt === (/* @__PURE__ */ new Date(0)).toISOString()) {
+          continue;
+        }
+        keepIds.add(session.id);
+        this.index.upsert(session);
+        upsertCount++;
+      }
     }
     this.index.removeSessionsForStateFileNotIn(vscdbPath, "cursor", keepIds);
     this.channel.appendLine(`[live] cursor updated ${upsertCount} session(s) from ${vscdbPath}`);
@@ -4579,12 +4849,21 @@ function renderMessage(msg, origIdx, visibleIdx, visibleMessages, assistantLabel
   <div class="message-body" data-raw="${escapeHtml(msg.content)}">${renderedContent}</div>
 </div>`;
   const nextEntry = visibleMessages[visibleIdx + 1];
+  const hasAssistant = visibleMessages.some((vm) => vm.msg.role === "assistant");
   if (msg.role === "user" && (!nextEntry || nextEntry.msg.role === "user")) {
-    html += `
+    if (hasAssistant) {
+      html += `
 <div class="message assistant cw-role-response aborted">
   <div class="message-header"><span class="role-label">${assistantLabel}</span></div>
   <div class="message-body aborted-notice">&#9888; Response not available &mdash; cancelled or incomplete</div>
 </div>`;
+    } else {
+      html += `
+<div class="message assistant cw-role-response aborted">
+  <div class="message-header"><span class="role-label">${assistantLabel}</span></div>
+  <div class="message-body aborted-notice" style="opacity:0.55">&#8505; Response not stored locally for this source</div>
+</div>`;
+    }
   }
   return html;
 }
@@ -9277,6 +9556,20 @@ function toDateStr(d) {
 function normalizeWsKey(raw) {
   return raw.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 }
+var SOURCE_AUTO_MODEL = {
+  cursor: "Cursor Auto",
+  cline: "Cline Auto",
+  roocode: "Roo Code Auto",
+  windsurf: "Windsurf Auto",
+  aider: "Aider Auto"
+};
+function resolveModel(raw, source) {
+  const name = friendlyModelName(raw);
+  if (name !== "Unknown") {
+    return name;
+  }
+  return SOURCE_AUTO_MODEL[source] ?? "Unknown";
+}
 function computeModelUsage(summaries, from, to) {
   const fromStr = toDateStr(from);
   const toStr = toDateStr(to);
@@ -9288,7 +9581,7 @@ function computeModelUsage(summaries, from, to) {
     if (dateStr < fromStr || dateStr > toStr) {
       continue;
     }
-    const model = friendlyModelName(s.model);
+    const model = resolveModel(s.model, s.source);
     let entry = modelMap.get(model);
     if (!entry) {
       entry = { sources: /* @__PURE__ */ new Set(), model, sessionCount: 0, userRequests: 0, wsMap: /* @__PURE__ */ new Map(), sessionMap: /* @__PURE__ */ new Map(), sourceMap: /* @__PURE__ */ new Map() };
@@ -10026,16 +10319,17 @@ var ModelUsageViewProvider = class {
                 });
                 chartOverlay.innerHTML = html;
 
+                // position:fixed \u2014 viewport coords only, no scrollY/scrollX.
                 var canvasRect = context.chart.canvas.getBoundingClientRect();
-                var top  = canvasRect.top  + window.scrollY + tooltipModel.caretY;
-                var left = canvasRect.left + window.scrollX + tooltipModel.caretX + 12;
+                var top  = canvasRect.top  + tooltipModel.caretY;
+                var left = canvasRect.left + tooltipModel.caretX + 12;
                 chartOverlay.style.display = 'block';
                 chartOverlay.style.left = '0';
                 chartOverlay.style.top  = '0';
                 var ow = chartOverlay.offsetWidth;
                 var oh = chartOverlay.offsetHeight;
-                if (left + ow > window.innerWidth - 8) { left = Math.max(4, canvasRect.left + window.scrollX + tooltipModel.caretX - ow - 8); }
-                if (top  + oh > window.innerHeight + window.scrollY - 8) { top = Math.max(0, window.innerHeight + window.scrollY - oh - 8); }
+                if (left + ow > window.innerWidth - 8) { left = Math.max(4, canvasRect.left + tooltipModel.caretX - ow - 8); }
+                if (top  + oh > window.innerHeight - 8) { top = Math.max(0, window.innerHeight - oh - 8); }
                 chartOverlay.style.left = left + 'px';
                 chartOverlay.style.top  = top  + 'px';
               }
@@ -10183,9 +10477,10 @@ var ModelUsageViewProvider = class {
     });
     overlay.innerHTML = html;
 
-    // Overlap row by several px so the pointer path can reach the overlay in Electron/Cursor webviews
-    var top = anchorRect.bottom + window.scrollY - 6;
-    var left = anchorRect.left + window.scrollX;
+    // position:fixed uses viewport coordinates \u2014 do NOT add scrollY/scrollX.
+    // Overlap row by several px so the pointer path can reach the overlay.
+    var top  = anchorRect.bottom - 6;
+    var left = anchorRect.left;
     overlay.style.display = 'block';
     overlay.style.left = '0';
     overlay.style.top = '0';
@@ -10193,7 +10488,7 @@ var ModelUsageViewProvider = class {
     var ow = overlay.offsetWidth;
     var oh = overlay.offsetHeight;
     if (left + ow > window.innerWidth) { left = Math.max(0, window.innerWidth - ow - 8); }
-    if (top + oh > window.innerHeight + window.scrollY) { top = anchorRect.top + window.scrollY - oh - 2; }
+    if (top + oh > window.innerHeight) { top = Math.max(0, anchorRect.top - oh - 2); }
     overlay.style.left = left + 'px';
     overlay.style.top  = top  + 'px';
   }
@@ -10232,6 +10527,15 @@ var ModelUsageViewProvider = class {
     if (!item) { return; }
     var sid = item.getAttribute('data-session-id');
     if (sid) { vscode.postMessage({ type: 'openSession', sessionId: sid }); }
+  });
+
+  // Hide both overlays immediately when the pointer leaves the webview entirely.
+  document.addEventListener('mouseleave', function() {
+    isRowHovered = false;
+    isOverlayHovered = false;
+    isChartOverlayHovered = false;
+    hideOverlay();
+    hideChartOverlay();
   });
 
   // -- Message handler -------------------------------------------

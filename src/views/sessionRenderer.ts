@@ -162,13 +162,25 @@ export function renderMessage(
   <div class="message-body" data-raw="${escapeHtml(msg.content)}">${renderedContent}</div>
 </div>`;
 
-    // Aborted-response placeholder: user msg with no following assistant reply
+    // Response placeholder after each user message that has no following assistant reply.
+    // Two cases:
+    //   • session has NO assistant messages → user-prompts-only source (Cursor aiService);
+    //     show a subtle "not stored locally" notice so the UI isn't a bare wall of prompts.
+    //   • session has some assistant messages but this one is unanswered → aborted/cancelled.
     const nextEntry = visibleMessages[visibleIdx + 1];
+    const hasAssistant = visibleMessages.some(vm => vm.msg.role === 'assistant');
     if (msg.role === 'user' && (!nextEntry || nextEntry.msg.role === 'user')) {
-        html += `\n<div class="message assistant cw-role-response aborted">
+        if (hasAssistant) {
+            html += `\n<div class="message assistant cw-role-response aborted">
   <div class="message-header"><span class="role-label">${assistantLabel}</span></div>
   <div class="message-body aborted-notice">&#9888; Response not available &mdash; cancelled or incomplete</div>
 </div>`;
+        } else {
+            html += `\n<div class="message assistant cw-role-response aborted">
+  <div class="message-header"><span class="role-label">${assistantLabel}</span></div>
+  <div class="message-body aborted-notice" style="opacity:0.55">&#8505; Response not stored locally for this source</div>
+</div>`;
+        }
     }
     return html;
 }

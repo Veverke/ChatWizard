@@ -683,16 +683,17 @@ export class ModelUsageViewProvider implements vscode.WebviewViewProvider {
                 });
                 chartOverlay.innerHTML = html;
 
+                // position:fixed — viewport coords only, no scrollY/scrollX.
                 var canvasRect = context.chart.canvas.getBoundingClientRect();
-                var top  = canvasRect.top  + window.scrollY + tooltipModel.caretY;
-                var left = canvasRect.left + window.scrollX + tooltipModel.caretX + 12;
+                var top  = canvasRect.top  + tooltipModel.caretY;
+                var left = canvasRect.left + tooltipModel.caretX + 12;
                 chartOverlay.style.display = 'block';
                 chartOverlay.style.left = '0';
                 chartOverlay.style.top  = '0';
                 var ow = chartOverlay.offsetWidth;
                 var oh = chartOverlay.offsetHeight;
-                if (left + ow > window.innerWidth - 8) { left = Math.max(4, canvasRect.left + window.scrollX + tooltipModel.caretX - ow - 8); }
-                if (top  + oh > window.innerHeight + window.scrollY - 8) { top = Math.max(0, window.innerHeight + window.scrollY - oh - 8); }
+                if (left + ow > window.innerWidth - 8) { left = Math.max(4, canvasRect.left + tooltipModel.caretX - ow - 8); }
+                if (top  + oh > window.innerHeight - 8) { top = Math.max(0, window.innerHeight - oh - 8); }
                 chartOverlay.style.left = left + 'px';
                 chartOverlay.style.top  = top  + 'px';
               }
@@ -840,9 +841,10 @@ export class ModelUsageViewProvider implements vscode.WebviewViewProvider {
     });
     overlay.innerHTML = html;
 
-    // Overlap row by several px so the pointer path can reach the overlay in Electron/Cursor webviews
-    var top = anchorRect.bottom + window.scrollY - 6;
-    var left = anchorRect.left + window.scrollX;
+    // position:fixed uses viewport coordinates — do NOT add scrollY/scrollX.
+    // Overlap row by several px so the pointer path can reach the overlay.
+    var top  = anchorRect.bottom - 6;
+    var left = anchorRect.left;
     overlay.style.display = 'block';
     overlay.style.left = '0';
     overlay.style.top = '0';
@@ -850,7 +852,7 @@ export class ModelUsageViewProvider implements vscode.WebviewViewProvider {
     var ow = overlay.offsetWidth;
     var oh = overlay.offsetHeight;
     if (left + ow > window.innerWidth) { left = Math.max(0, window.innerWidth - ow - 8); }
-    if (top + oh > window.innerHeight + window.scrollY) { top = anchorRect.top + window.scrollY - oh - 2; }
+    if (top + oh > window.innerHeight) { top = Math.max(0, anchorRect.top - oh - 2); }
     overlay.style.left = left + 'px';
     overlay.style.top  = top  + 'px';
   }
@@ -889,6 +891,15 @@ export class ModelUsageViewProvider implements vscode.WebviewViewProvider {
     if (!item) { return; }
     var sid = item.getAttribute('data-session-id');
     if (sid) { vscode.postMessage({ type: 'openSession', sessionId: sid }); }
+  });
+
+  // Hide both overlays immediately when the pointer leaves the webview entirely.
+  document.addEventListener('mouseleave', function() {
+    isRowHovered = false;
+    isOverlayHovered = false;
+    isChartOverlayHovered = false;
+    hideOverlay();
+    hideChartOverlay();
   });
 
   // -- Message handler -------------------------------------------

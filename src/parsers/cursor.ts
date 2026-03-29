@@ -23,6 +23,8 @@ interface ComposerEntry {
     conversation?: ConversationItem[];
     messages?: ConversationItem[];
     model?: string;
+    /** Cursor 0.44+ — active branch metadata (replaces inline conversation storage) */
+    activeBranch?: { branchName?: string; lastInteractionAt?: number };
 }
 
 interface ConversationItem {
@@ -96,9 +98,11 @@ function extractPromptText(p: unknown): string {
 }
 
 function composerTimeEnd(c: ComposerEntry): number {
+    const lai = c.activeBranch?.lastInteractionAt ?? 0;
     const lu = c.lastUpdatedAt ?? c.updatedAt ?? 0;
+    const best = Math.max(lai, lu);
     const cr = c.createdAt ?? 0;
-    return (lu > 0 ? lu : cr) || cr;
+    return (best > 0 ? best : cr) || cr;
 }
 
 /**
@@ -113,26 +117,28 @@ function buildAiServiceFallbackSessions(
     promptsJson: string,
     generationsJson: string | null
 ): ParseResult[] | null {
-    let prompts: unknown;
-    try {
-        prompts = JSON.parse(promptsJson);
-    } catch {
-        return null;
-    }
-    if (!Array.isArray(prompts) || prompts.length === 0) { return null; }
-
-    let genTimestamps: Array<number | undefined> = [];
+    // ── Build text→timestamp map from aiService.generations ──────────────────
+    // generations[i].textDescription is the user's prompt text; unixMs is the
+    // correct timestamp. We use this to timestamp prompts accurately, since
+    // aiService.prompts is a rolling window and its indices do NOT align with
+    // aiService.generations indices.
+    type GenEntry = { text: string; unixMs: number };
+    const generationEntries: GenEntry[] = [];
+    const textToTimestamp = new Map<string, number>();
     if (generationsJson) {
         try {
             const gens = JSON.parse(generationsJson) as unknown;
             if (Array.isArray(gens)) {
-                genTimestamps = gens.map(g =>
-                    (typeof g === 'object' && g !== null && 'unixMs' in g &&
-                        typeof (g as { unixMs?: unknown }).unixMs === 'number' &&
-                        (g as { unixMs: number }).unixMs > 0)
-                        ? (g as { unixMs: number }).unixMs
-                        : undefined
-                );
+                for (const g of gens) {
+                    if (typeof g !== 'object' || g === null) { continue; }
+                    const go = g as Record<string, unknown>;
+                    const text = typeof go.textDescription === 'string' ? go.textDescription.trim() : '';
+                    const ts = typeof go.unixMs === 'number' && go.unixMs > 0 ? go.unixMs : 0;
+                    if (text && ts) {
+                        generationEntries.push({ text, unixMs: ts });
+                        if (!textToTimestamp.has(text)) { textToTimestamp.set(text, ts); }
+                    }
+                }
             }
         } catch {
             // ignore
@@ -141,17 +147,26 @@ function buildAiServiceFallbackSessions(
 
     type IndexedPrompt = { index: number; text: string; unixMs?: number; composerId?: string };
     const flat: IndexedPrompt[] = [];
-    for (let i = 0; i < prompts.length; i++) {
-        const text = extractPromptText(prompts[i]);
-        if (!text) { continue; }
-        const unixMs = genTimestamps[i];
-        const cid = extractPromptComposerId(prompts[i]);
-        flat.push({
-            index: i,
-            text,
-            unixMs: unixMs !== undefined ? unixMs : undefined,
-            composerId: cid,
-        });
+
+    // Prefer aiService.generations as the source — it contains ALL prompts with
+    // correct timestamps (aiService.prompts is a rolling window that may be
+    // missing older messages and has no timestamps of its own).
+    if (generationEntries.length > 0) {
+        for (let i = 0; i < generationEntries.length; i++) {
+            flat.push({ index: i, text: generationEntries[i].text, unixMs: generationEntries[i].unixMs });
+        }
+    } else {
+        // Fall back to aiService.prompts, using text-matched timestamps from generations.
+        let prompts: unknown;
+        try { prompts = JSON.parse(promptsJson); } catch { return null; }
+        if (!Array.isArray(prompts) || prompts.length === 0) { return null; }
+        for (let i = 0; i < prompts.length; i++) {
+            const text = extractPromptText(prompts[i]);
+            if (!text) { continue; }
+            const ts = textToTimestamp.get(text.trim());
+            const cid = extractPromptComposerId(prompts[i]);
+            flat.push({ index: i, text, unixMs: ts, composerId: cid });
+        }
     }
     if (flat.length === 0) { return null; }
 
@@ -222,9 +237,17 @@ function buildAiServiceFallbackSessions(
         }
     }
 
-    /** Assign prompts whose entries lack composerId using per-composer time windows. */
+    /** Assign prompts whose entries lack composerId using per-composer time windows.
+     *  Sort by window size ascending so the most specific (narrowest) window wins
+     *  when multiple composers' ranges overlap. */
     if (unassigned.length > 0) {
-        const sorted = [...withIds].sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
+        const sorted = [...withIds].sort((a, b) => {
+            const aEnd = composerTimeEnd(a); const aStart = a.createdAt ?? 0;
+            const bEnd = composerTimeEnd(b); const bStart = b.createdAt ?? 0;
+            const aSize = (aEnd > 0 && aEnd > aStart) ? aEnd - aStart : Number.MAX_SAFE_INTEGER;
+            const bSize = (bEnd > 0 && bEnd > bStart) ? bEnd - bStart : Number.MAX_SAFE_INTEGER;
+            return aSize - bSize;
+        });
         for (const fp of unassigned) {
             const ts = fp.unixMs;
             if (ts === undefined) { continue; }
@@ -232,7 +255,9 @@ function buildAiServiceFallbackSessions(
             for (const c of sorted) {
                 const start = c.createdAt ?? 0;
                 const end = composerTimeEnd(c);
-                if (end >= start && ts >= start && ts <= end) {
+                // Allow 2 s overshoot: Cursor records lastUpdatedAt slightly before
+                // the generation timestamp is written, causing tiny misses.
+                if (end >= start && ts >= start && ts <= end + 2000) {
                     best = c;
                     break;
                 }
@@ -363,6 +388,193 @@ function buildAiServiceFallbackSessions(
     }
 
     return results.length > 0 ? results : null;
+}
+
+// ─── cursorDiskKV global DB reader (Cursor 0.43+) ────────────────────────────
+
+interface BubbleRow {
+    bubbleId: string;
+    type: number;      // 1 = user, 2 = assistant
+    text: string;
+    unixMs?: number;
+}
+
+/**
+ * Reads Cursor's **global** `state.vscdb` and returns one `ParseResult` per
+ * composer found in the `cursorDiskKV` table.
+ *
+ * Cursor 0.43+ stores full conversations (user prompts **and** AI responses)
+ * in this table rather than only in workspace-specific databases.
+ *
+ * - `composerData:<uuid>` rows supply session metadata.
+ * - `bubbleId:<composerId>:<bubbleId>` rows supply individual messages.
+ *
+ * Returns `[]` when the table is absent (pre-0.43 installs) or the file does
+ * not exist.
+ */
+export async function parseCursorGlobalDb(
+    globalDbPath: string
+): Promise<ParseResult[]> {
+    let composerRows: Array<{ key: string; value: string }> = [];
+    let bubbleRows:   Array<{ key: string; value: string }> = [];
+
+    try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const Database = require('better-sqlite3') as typeof import('better-sqlite3');
+        const db = new Database(globalDbPath, { readonly: true, fileMustExist: true });
+        try {
+            // Check if cursorDiskKV table exists (Cursor 0.43+).
+            const tableCheck = db.prepare(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='cursorDiskKV'"
+            ).get() as { name: string } | undefined;
+            if (!tableCheck) { return []; }
+
+            composerRows = db.prepare(
+                "SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%'"
+            ).all() as Array<{ key: string; value: string }>;
+
+            bubbleRows = db.prepare(
+                "SELECT key, value FROM cursorDiskKV WHERE key LIKE 'bubbleId:%'"
+            ).all() as Array<{ key: string; value: string }>;
+        } finally {
+            db.close();
+        }
+    } catch {
+        // File does not exist, is locked, or is not a valid SQLite database.
+        return [];
+    }
+
+    if (composerRows.length === 0) { return []; }
+
+    // ── Build composerId → bubble list map ───────────────────────────────────
+    // Key format: bubbleId:<composerId>:<bubbleId>
+    // Both IDs are UUIDs (contain hyphens) so we split at the first two colons.
+    const bubblesByComposer = new Map<string, BubbleRow[]>();
+
+    for (const row of bubbleRows) {
+        const firstColon  = row.key.indexOf(':');
+        if (firstColon < 0) { continue; }
+        const remainder   = row.key.slice(firstColon + 1);
+        const secondColon = remainder.indexOf(':');
+        if (secondColon < 0) { continue; }
+        const composerId = remainder.slice(0, secondColon);
+        const bubbleId   = remainder.slice(secondColon + 1);
+        if (!composerId || !bubbleId) { continue; }
+
+        let parsed: Record<string, unknown>;
+        try { parsed = JSON.parse(row.value); } catch { continue; }
+
+        const type  = typeof parsed.type   === 'number' ? parsed.type   : 0;
+        const text  = typeof parsed.text   === 'string' ? parsed.text.trim() : '';
+        const unixMs = (typeof parsed.unixMs === 'number' && parsed.unixMs > 0) ? parsed.unixMs : undefined;
+
+        if (!text || (type !== 1 && type !== 2)) { continue; }
+
+        let list = bubblesByComposer.get(composerId);
+        if (!list) { list = []; bubblesByComposer.set(composerId, list); }
+        list.push({ bubbleId, type, text, unixMs });
+    }
+
+    // ── Build one ParseResult per composerData row ────────────────────────────
+    const results: ParseResult[] = [];
+
+    for (const row of composerRows) {
+        // key = "composerData:<composerId>"
+        const composerId = row.key.slice('composerData:'.length);
+        if (!composerId) { continue; }
+
+        let composerMeta: Record<string, unknown>;
+        try { composerMeta = JSON.parse(row.value); } catch { continue; }
+
+        const rawBubbles = bubblesByComposer.get(composerId) ?? [];
+        if (rawBubbles.length === 0) { continue; }
+
+        // Order bubbles using `fullConversationHeadersOnly` when available,
+        // falling back to timestamp sort.
+        const headers = Array.isArray(composerMeta.fullConversationHeadersOnly)
+            ? (composerMeta.fullConversationHeadersOnly as Array<{ bubbleId?: string }>)
+            : [];
+
+        let orderedBubbles: BubbleRow[];
+        if (headers.length > 0) {
+            const orderMap = new Map<string, number>();
+            for (let i = 0; i < headers.length; i++) {
+                const bid = headers[i].bubbleId;
+                if (bid) { orderMap.set(bid, i); }
+            }
+            orderedBubbles = [...rawBubbles].sort((a, b) => {
+                const ai = orderMap.get(a.bubbleId) ?? Number.MAX_SAFE_INTEGER;
+                const bi = orderMap.get(b.bubbleId) ?? Number.MAX_SAFE_INTEGER;
+                if (ai !== bi) { return ai - bi; }
+                return (a.unixMs ?? 0) - (b.unixMs ?? 0);
+            });
+        } else {
+            orderedBubbles = [...rawBubbles].sort((a, b) => (a.unixMs ?? 0) - (b.unixMs ?? 0));
+        }
+
+        // ── Build Message list ────────────────────────────────────────────────
+        const messages: Message[] = [];
+        for (const bubble of orderedBubbles) {
+            const role: 'user' | 'assistant' = bubble.type === 1 ? 'user' : 'assistant';
+            const messageIndex = messages.length;
+            messages.push({
+                id: `${composerId}-${messageIndex}`,
+                role,
+                content: bubble.text,
+                codeBlocks: extractCursorCodeBlocks(bubble.text, composerId, messageIndex),
+                timestamp: bubble.unixMs !== undefined ? new Date(bubble.unixMs).toISOString() : undefined,
+            });
+        }
+
+        // ── Derive title ──────────────────────────────────────────────────────
+        const name = typeof composerMeta.name === 'string' ? composerMeta.name.trim() : '';
+        let title: string;
+        if (name) {
+            title = name;
+        } else {
+            const firstUser = messages.find(m => m.role === 'user');
+            if (firstUser) {
+                const firstLine = firstUser.content.split('\n')[0] || firstUser.content;
+                title = firstLine.length > MAX_TITLE_CHARS
+                    ? firstLine.slice(0, MAX_TITLE_CHARS) + '…'
+                    : firstLine;
+            } else {
+                title = 'Untitled';
+            }
+        }
+
+        // ── Derive timestamps ─────────────────────────────────────────────────
+        const createdAt = (typeof composerMeta.createdAt === 'number' && composerMeta.createdAt > 0)
+            ? new Date(composerMeta.createdAt as number).toISOString()
+            : (messages.find(m => m.timestamp)?.timestamp ?? new Date().toISOString());
+
+        const lastTimestampMsg = [...messages].reverse().find(m => m.timestamp);
+        const updatedAt = lastTimestampMsg?.timestamp ?? createdAt;
+
+        const model = (typeof composerMeta.model === 'string' && composerMeta.model.trim())
+            ? composerMeta.model.trim()
+            : undefined;
+
+        results.push({
+            session: {
+                id: composerId,
+                title,
+                source: 'cursor',
+                // workspaceId / workspacePath will be enriched by the caller
+                // using per-workspace metadata when available.
+                workspaceId: 'cursor-global',
+                workspacePath: undefined,
+                model,
+                messages,
+                filePath: globalDbPath,
+                createdAt,
+                updatedAt,
+            },
+            errors: [],
+        });
+    }
+
+    return results;
 }
 
 // ─── Public exports ───────────────────────────────────────────────────────────

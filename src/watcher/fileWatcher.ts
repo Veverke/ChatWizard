@@ -15,8 +15,8 @@ import { resolveClaudeProjectsPath, resolveClineStoragePath, resolveRooCodeStora
 import { WorkspaceScopeManager } from './workspaceScope';
 import { discoverClineTasksAsync, discoverRooCodeTasksAsync } from '../readers/clineWorkspace';
 import { parseClineTask } from '../parsers/cline';
-import { discoverCursorWorkspacesAsync } from '../readers/cursorWorkspace';
-import { parseCursorWorkspace } from '../parsers/cursor';
+import { discoverCursorWorkspacesAsync, getCursorGlobalDbPath } from '../readers/cursorWorkspace';
+import { parseCursorWorkspace, parseCursorGlobalDb } from '../parsers/cursor';
 import { discoverWindsurfWorkspacesAsync } from '../readers/windsurfWorkspace';
 import { parseWindsurfWorkspace } from '../parsers/windsurf';
 import { discoverAiderHistoryFilesAsync } from '../readers/aiderWorkspace';
@@ -480,13 +480,20 @@ export class ChatWizardWatcher implements vscode.Disposable {
     /** Async: parse all Cursor sessions by reading state.vscdb files across discovered workspaces. */
     async collectCursorSessionsAsync(
         onProgress?: (current: number, total: number) => void,
-        _cursorRootOverride?: string
+        _cursorRootOverride?: string,
+        _globalDbPathOverride?: string
     ): Promise<Session[]> {
         const root = _cursorRootOverride ?? resolveCursorStoragePath();
         try {
             const workspaces = await discoverCursorWorkspacesAsync(root);
             const total = workspaces.length;
             let current = 0;
+
+            // ── Parse workspace-specific state.vscdb files ────────────────────
+            // These give us session metadata and workspace paths, but typically
+            // lack AI assistant responses (stored only in global cursorDiskKV).
+            const composerIdToWorkspaceInfo = new Map<string, { workspaceId: string; workspacePath: string | undefined }>();
+            const wsSessionsById = new Map<string, Session>();
 
             const wsResults = await Promise.all(workspaces.map(async (ws) => {
                 const vscdbPath = require('path').join(ws.storageDir, 'state.vscdb');
@@ -501,6 +508,15 @@ export class ChatWizardWatcher implements vscode.Disposable {
                             `[warn] Cursor parse errors in ${vscdbPath}: ${result.errors.join('; ')}`
                         );
                     }
+                    // Always track composer→workspace mapping so global DB sessions
+                    // can be enriched even when the workspace-specific vscdb has no
+                    // messages (Cursor 0.43+ moved conversations to cursorDiskKV).
+                    if (result.session.id && !result.session.id.endsWith('-cursor-error')) {
+                        composerIdToWorkspaceInfo.set(result.session.id, {
+                            workspaceId: ws.id,
+                            workspacePath: ws.workspacePath,
+                        });
+                    }
                     if (result.session.messages.length === 0 ||
                         result.session.createdAt === new Date(0).toISOString()) {
                         continue;
@@ -510,7 +526,54 @@ export class ChatWizardWatcher implements vscode.Disposable {
                 return sessions;
             }));
 
-            return wsResults.flat();
+            for (const session of wsResults.flat()) {
+                wsSessionsById.set(session.id, session);
+            }
+
+            // ── Parse global cursorDiskKV (Cursor 0.43+) ──────────────────────
+            // Contains full conversations including AI responses for all workspaces.
+            const globalDbPath = getCursorGlobalDbPath(_globalDbPathOverride);
+            let globalSessions: Session[] = [];
+            try {
+                const globalResults = await parseCursorGlobalDb(globalDbPath);
+                for (const result of globalResults) {
+                    if (result.errors.length > 0) {
+                        this.channel.appendLine(`[warn] Cursor global DB errors: ${result.errors.join('; ')}`);
+                    }
+                    if (result.session.messages.length === 0 ||
+                        result.session.createdAt === new Date(0).toISOString()) {
+                        continue;
+                    }
+                    // Enrich with workspace info from the workspace-specific parse.
+                    const wsInfo = composerIdToWorkspaceInfo.get(result.session.id);
+                    if (wsInfo) {
+                        result.session.workspaceId  = wsInfo.workspaceId;
+                        result.session.workspacePath = wsInfo.workspacePath;
+                    }
+                    globalSessions.push(result.session);
+                }
+                if (globalSessions.length > 0) {
+                    this.channel.appendLine(
+                        `[init] Cursor global DB: ${globalSessions.length} sessions with full conversations`
+                    );
+                }
+            } catch (err) {
+                this.channel.appendLine(`[warn] Failed to read Cursor global DB: ${err}`);
+            }
+
+            // ── Merge: global DB sessions take precedence (have AI responses) ─
+            // Keep workspace-specific sessions only when they have no global entry.
+            const globalById = new Map<string, Session>();
+            for (const s of globalSessions) { globalById.set(s.id, s); }
+
+            const merged: Session[] = [...globalSessions];
+            for (const s of wsSessionsById.values()) {
+                if (!globalById.has(s.id)) {
+                    merged.push(s);
+                }
+            }
+
+            return merged;
         } catch (err) {
             this.channel.appendLine(`[error] Failed to collect Cursor sessions: ${err}`);
             return [];
@@ -803,23 +866,63 @@ export class ChatWizardWatcher implements vscode.Disposable {
             // workspace.json missing or unreadable — workspacePath stays undefined
         }
 
-        const parseResults = await parseCursorWorkspace(vscdbPath, workspaceId, workspacePath);
+        // ── Parse workspace-specific vscdb for composer metadata ─────────────
+        const wsParseResults = await parseCursorWorkspace(vscdbPath, workspaceId, workspacePath);
+        const composerIdToWsInfo = new Map<string, { workspaceId: string; workspacePath: string | undefined }>();
+        const wsSessionsById = new Map<string, typeof wsParseResults[0]['session']>();
+        for (const result of wsParseResults) {
+            if (result.errors.length > 0) {
+                this.channel.appendLine(`[warn] Cursor parse errors in ${vscdbPath}: ${result.errors.join('; ')}`);
+            }
+            if (result.session.id && !result.session.id.endsWith('-cursor-error')) {
+                composerIdToWsInfo.set(result.session.id, { workspaceId, workspacePath });
+                wsSessionsById.set(result.session.id, result.session);
+            }
+        }
+
+        // ── Re-read global DB and merge (global has AI responses) ────────────
+        const globalDbPath = getCursorGlobalDbPath();
+        const globalById = new Map<string, typeof wsParseResults[0]['session']>();
+        try {
+            const globalResults = await parseCursorGlobalDb(globalDbPath);
+            for (const result of globalResults) {
+                if (result.session.messages.length === 0 ||
+                    result.session.createdAt === new Date(0).toISOString()) { continue; }
+                const wsInfo = composerIdToWsInfo.get(result.session.id);
+                if (wsInfo) {
+                    result.session.workspaceId  = wsInfo.workspaceId;
+                    result.session.workspacePath = wsInfo.workspacePath;
+                }
+                // Only index sessions belonging to this workspace vscdb
+                if (composerIdToWsInfo.has(result.session.id)) {
+                    globalById.set(result.session.id, result.session);
+                }
+            }
+        } catch {
+            // Global DB unavailable — fall through to workspace-only sessions
+        }
+
         const keepIds = new Set<string>();
         let upsertCount = 0;
-        for (const result of parseResults) {
-            if (result.errors.length > 0) {
-                this.channel.appendLine(
-                    `[warn] Cursor parse errors in ${vscdbPath}: ${result.errors.join('; ')}`
-                );
-            }
-            if (result.session.messages.length === 0 ||
-                result.session.createdAt === new Date(0).toISOString()) {
-                continue;
-            }
-            keepIds.add(result.session.id);
-            this.index.upsert(result.session);
+
+        // Global DB sessions take precedence
+        for (const session of globalById.values()) {
+            keepIds.add(session.id);
+            this.index.upsert(session);
             upsertCount++;
         }
+
+        // Workspace-only sessions (no global DB entry) — only if non-empty
+        for (const session of wsSessionsById.values()) {
+            if (!globalById.has(session.id)) {
+                if (session.messages.length === 0 ||
+                    session.createdAt === new Date(0).toISOString()) { continue; }
+                keepIds.add(session.id);
+                this.index.upsert(session);
+                upsertCount++;
+            }
+        }
+
         this.index.removeSessionsForStateFileNotIn(vscdbPath, 'cursor', keepIds);
         this.channel.appendLine(`[live] cursor updated ${upsertCount} session(s) from ${vscdbPath}`);
     }

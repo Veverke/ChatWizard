@@ -8,6 +8,32 @@ import { ScopedWorkspace } from '../types/index';
 const MAX_VSCDB_BYTES = 500 * 1024 * 1024; // 500 MB
 
 /**
+ * Returns the path to Cursor's **global** storage database (`state.vscdb`).
+ * This file contains the `cursorDiskKV` table (Cursor 0.43+) which stores full
+ * conversations — including AI assistant responses — for all workspaces.
+ *
+ * Windows:  %APPDATA%/Cursor/User/globalStorage/state.vscdb
+ * macOS:    ~/Library/Application Support/Cursor/User/globalStorage/state.vscdb
+ * Linux:    ~/.config/Cursor/User/globalStorage/state.vscdb
+ */
+export function getCursorGlobalDbPath(override?: string): string {
+    if (override !== undefined && override !== '') { return override; }
+    const platform = process.platform;
+    let base: string;
+    if (platform === 'win32') {
+        base = path.join(process.env['APPDATA'] || os.homedir(), 'Cursor', 'User');
+    } else if (platform === 'darwin') {
+        base = path.join(os.homedir(), 'Library', 'Application Support', 'Cursor', 'User');
+    } else {
+        base = path.join(
+            process.env['XDG_CONFIG_HOME'] || path.join(os.homedir(), '.config'),
+            'Cursor', 'User'
+        );
+    }
+    return path.join(base, 'globalStorage', 'state.vscdb');
+}
+
+/**
  * Resolves the Cursor workspaceStorage root directory cross-platform.
  * Windows:  %APPDATA%/Cursor/User/workspaceStorage
  * macOS:    ~/Library/Application Support/Cursor/User/workspaceStorage

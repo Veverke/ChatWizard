@@ -12,6 +12,21 @@ function normalizeWsKey(raw: string): string {
     return raw.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
 }
 
+/** Source-aware model name: falls back to a branded label when model is unknown. */
+const SOURCE_AUTO_MODEL: Partial<Record<SessionSource, string>> = {
+    cursor:   'Cursor Auto',
+    cline:    'Cline Auto',
+    roocode:  'Roo Code Auto',
+    windsurf: 'Windsurf Auto',
+    aider:    'Aider Auto',
+};
+
+function resolveModel(raw: string | undefined, source: SessionSource): string {
+    const name = friendlyModelName(raw);
+    if (name !== 'Unknown') { return name; }
+    return SOURCE_AUTO_MODEL[source] ?? 'Unknown';
+}
+
 export function computeModelUsage(
     summaries: SessionSummary[],
     from: Date,
@@ -43,7 +58,7 @@ export function computeModelUsage(
         const dateStr = s.updatedAt.slice(0, 10);
         if (dateStr < fromStr || dateStr > toStr) { continue; }
 
-        const model = friendlyModelName(s.model);
+        const model = resolveModel(s.model, s.source);
         let entry = modelMap.get(model);
         if (!entry) {
             entry = { sources: new Set(), model, sessionCount: 0, userRequests: 0, wsMap: new Map(), sessionMap: new Map(), sourceMap: new Map() };
