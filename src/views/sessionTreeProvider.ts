@@ -118,6 +118,80 @@ export class LoadingTreeItem extends vscode.TreeItem {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Date grouping
+// ---------------------------------------------------------------------------
+
+export type GroupMode = 'none' | 'date';
+
+/**
+ * Returns a bucket label for a given ISO date string.
+ * Buckets (in descending recency): "This Week", "Last Week",
+ * "This Month", "Last Month", then full month names like "March 2025".
+ */
+export function getDateBucket(isoDate: string): string {
+    const now = new Date();
+    const d = new Date(isoDate);
+
+    // Start of the current ISO week (Monday)
+    const dayOfWeek = now.getDay() === 0 ? 6 : now.getDay() - 1; // 0=Mon…6=Sun
+    const thisWeekStart = new Date(now);
+    thisWeekStart.setHours(0, 0, 0, 0);
+    thisWeekStart.setDate(thisWeekStart.getDate() - dayOfWeek);
+
+    const lastWeekStart = new Date(thisWeekStart);
+    lastWeekStart.setDate(lastWeekStart.getDate() - 7);
+
+    if (d >= thisWeekStart) { return 'This Week'; }
+    if (d >= lastWeekStart) { return 'Last Week'; }
+
+    // Calendar months
+    const nowYear = now.getFullYear();
+    const nowMonth = now.getMonth(); // 0-based
+    const dYear = d.getFullYear();
+    const dMonth = d.getMonth();
+
+    if (dYear === nowYear && dMonth === nowMonth) { return 'This Month'; }
+
+    const lastMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    if (dYear === lastMonthDate.getFullYear() && dMonth === lastMonthDate.getMonth()) { return 'Last Month'; }
+
+    // Older: full month label
+    const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
+        'July', 'August', 'September', 'October', 'November', 'December'];
+    return `${MONTHS[dMonth]} ${dYear}`;
+}
+
+/** Sort order for date bucket labels (most recent first). */
+function dateBucketOrder(label: string): number {
+    if (label === 'This Week') { return 0; }
+    if (label === 'Last Week') { return 1; }
+    if (label === 'This Month') { return 2; }
+    if (label === 'Last Month') { return 3; }
+    // For older buckets "Month YYYY", parse and sort by year/month descending
+    const match = /^(\w+) (\d{4})$/.exec(label);
+    if (match) {
+        const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
+            'July', 'August', 'September', 'October', 'November', 'December'];
+        const monthIdx = MONTHS.indexOf(match[1]);
+        const year = parseInt(match[2], 10);
+        return 4 + (3000 - year) * 12 + (11 - monthIdx);
+    }
+    return 9999;
+}
+
+export class DateGroupTreeItem extends vscode.TreeItem {
+    readonly bucketLabel: string;
+
+    constructor(label: string, count: number) {
+        super(label, vscode.TreeItemCollapsibleState.Expanded);
+        this.bucketLabel = label;
+        this.description = `${count} session${count === 1 ? '' : 's'}`;
+        this.iconPath = new vscode.ThemeIcon('calendar');
+        this.contextValue = 'dateGroup';
+    }
+}
+
 export class LoadMoreTreeItem extends vscode.TreeItem {
     readonly remaining: number;
     constructor(remaining: number) {
@@ -243,8 +317,10 @@ export class SessionParseWarningDecorationProvider implements vscode.FileDecorat
 // Provider
 // ---------------------------------------------------------------------------
 
-export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeItem | LoadMoreTreeItem | LoadingTreeItem> {
-    private _onDidChangeTreeData = new vscode.EventEmitter<SessionTreeItem | LoadMoreTreeItem | LoadingTreeItem | undefined | void>();
+export type SessionTreeNode = SessionTreeItem | DateGroupTreeItem | LoadMoreTreeItem | LoadingTreeItem;
+
+export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeNode> {
+    private _onDidChangeTreeData = new vscode.EventEmitter<SessionTreeNode | undefined | void>();
     readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
     private sortStack: SortStack = [{ key: 'date', direction: 'desc' }];
@@ -258,6 +334,8 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeI
     private _filterDebounceTimer: ReturnType<typeof setTimeout> | null = null;
     /** True until the first change event fires (initial batch index complete) */
     private _loading = true;
+    /** Group mode — on by default */
+    private _groupMode: GroupMode = 'date';
 
     constructor(private readonly index: SessionIndex, private readonly extensionUri?: vscode.Uri) {
         index.addChangeListener(() => {
@@ -288,6 +366,17 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeI
     getManualOrder(): string[] { return [...this._manualOrder]; }
 
     setManualOrder(order: string[]): void { this._manualOrder = order; }
+
+    // ------------------------------------------------------------------
+    // Group mode
+    // ------------------------------------------------------------------
+
+    getGroupMode(): GroupMode { return this._groupMode; }
+
+    setGroupMode(mode: GroupMode): void {
+        this._groupMode = mode;
+        this._onDidChangeTreeData.fire();
+    }
 
     /**
      * Move `draggedIds` to just before `beforeId` in the full display order.
@@ -443,10 +532,21 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeI
 
     refresh(): void { this._onDidChangeTreeData.fire(); }
 
-    getTreeItem(element: SessionTreeItem | LoadMoreTreeItem | LoadingTreeItem): vscode.TreeItem { return element; }
+    getTreeItem(element: SessionTreeNode): vscode.TreeItem { return element; }
 
-    // Required by VS Code for treeView.reveal() to work — all items are root-level, so no parent.
-    getParent(_element: SessionTreeItem | LoadMoreTreeItem | LoadingTreeItem): undefined { return undefined; }
+    // Required by VS Code for treeView.reveal() to work.
+    getParent(element: SessionTreeNode): DateGroupTreeItem | undefined {
+        // When grouping is active, SessionTreeItems are nested under a DateGroupTreeItem.
+        // DateGroupTreeItems and loading/load-more items are at root level.
+        if (this._groupMode === 'date' && element instanceof SessionTreeItem) {
+            const bucket = getDateBucket(element.summary.updatedAt);
+            const all = this._buildOrderedSummaries();
+            const bucketed = this._buildBuckets(all);
+            const grp = bucketed.find(b => b.label === bucket);
+            if (grp) { return new DateGroupTreeItem(grp.label, grp.items.length); }
+        }
+        return undefined;
+    }
 
     private _buildOrderedSummaries(): SessionSummary[] {
         if (this._sortedCache !== null) {
@@ -489,14 +589,48 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeI
         return this._sortedCache;
     }
 
-    getChildren(): (SessionTreeItem | LoadMoreTreeItem | LoadingTreeItem)[] {
+    /** Groups a sorted list of summaries into date buckets. */
+    private _buildBuckets(summaries: SessionSummary[]): { label: string; items: SessionSummary[] }[] {
+        const bucketMap = new Map<string, SessionSummary[]>();
+        for (const s of summaries) {
+            const label = getDateBucket(s.updatedAt);
+            let arr = bucketMap.get(label);
+            if (!arr) { arr = []; bucketMap.set(label, arr); }
+            arr.push(s);
+        }
+        return Array.from(bucketMap.entries())
+            .map(([label, items]) => ({ label, items }))
+            .sort((a, b) => dateBucketOrder(a.label) - dateBucketOrder(b.label));
+    }
+
+    getChildren(element?: SessionTreeNode): SessionTreeNode[] {
         if (this._loading) {
             return [new LoadingTreeItem()];
         }
+
+        // When a DateGroupTreeItem is expanded, return its session children
+        if (element instanceof DateGroupTreeItem) {
+            const all = this._buildOrderedSummaries();
+            const pinnedSet = new Set(this._pinnedIds);
+            return all
+                .filter(s => getDateBucket(s.updatedAt) === element.bucketLabel)
+                .map(s => new SessionTreeItem(s, pinnedSet.has(s.id), this.extensionUri));
+        }
+
+        if (element) { return []; }
+
         const pinnedSet = new Set(this._pinnedIds);
         const all = this._buildOrderedSummaries();
+
+        // Grouped view
+        if (this._groupMode === 'date') {
+            const buckets = this._buildBuckets(all);
+            return buckets.map(b => new DateGroupTreeItem(b.label, b.items.length));
+        }
+
+        // Flat view (original behaviour with pagination)
         const visible = all.slice(0, this._visibleCount);
-        const items: (SessionTreeItem | LoadMoreTreeItem)[] = visible.map(s => new SessionTreeItem(s, pinnedSet.has(s.id), this.extensionUri));
+        const items: SessionTreeNode[] = visible.map(s => new SessionTreeItem(s, pinnedSet.has(s.id), this.extensionUri));
         const remaining = all.length - visible.length;
         if (remaining > 0) {
             items.push(new LoadMoreTreeItem(remaining));
@@ -507,5 +641,10 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeI
     /** Returns sessions in the same order as the tree view (sort, pins, filters applied). */
     getSortedSummaries(): SessionSummary[] {
         return this._buildOrderedSummaries();
+    }
+
+    /** Returns true when grouping is active in the date mode. */
+    isGrouped(): boolean {
+        return this._groupMode === 'date';
     }
 }

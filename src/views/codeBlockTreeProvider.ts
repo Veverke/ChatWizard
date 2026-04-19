@@ -250,11 +250,34 @@ export class CodeBlockLoadMoreItem extends vscode.TreeItem {
 }
 
 // ---------------------------------------------------------------------------
-// Provider
+// Language group item
 // ---------------------------------------------------------------------------
 
-export class CodeBlockTreeProvider implements vscode.TreeDataProvider<CodeBlockGroupItem | CodeBlockLeafItem | CodeBlockLoadMoreItem> {
-    private _onDidChangeTreeData = new vscode.EventEmitter<CodeBlockGroupItem | CodeBlockLeafItem | CodeBlockLoadMoreItem | undefined | void>();
+export type CbGroupMode = 'none' | 'language';
+
+export class CbLanguageGroupItem extends vscode.TreeItem {
+    readonly language: string;
+
+    constructor(language: string, count: number) {
+        const displayLang = language || 'Plain / Unknown';
+        super(displayLang, vscode.TreeItemCollapsibleState.Expanded);
+        this.language = language;
+        this.description = `${count} session${count === 1 ? '' : 's'}`;
+        this.contextValue = 'cbLanguageGroup';
+        // Use file icon from extension when possible, otherwise a generic icon
+        const ext = langToExtension(language);
+        if (ext !== 'txt' && language) {
+            this.resourceUri = vscode.Uri.file(`file.${ext}`);
+        } else {
+            this.iconPath = new vscode.ThemeIcon('symbol-misc');
+        }
+    }
+}
+
+export type CodeBlockTreeNode = CbLanguageGroupItem | CodeBlockGroupItem | CodeBlockLeafItem | CodeBlockLoadMoreItem;
+
+export class CodeBlockTreeProvider implements vscode.TreeDataProvider<CodeBlockTreeNode> {
+    private _onDidChangeTreeData = new vscode.EventEmitter<CodeBlockTreeNode | undefined | void>();
     readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
     private _filter: CodeBlockFilter = {};
@@ -262,6 +285,8 @@ export class CodeBlockTreeProvider implements vscode.TreeDataProvider<CodeBlockG
     private _sortDir: CbSortDirection = 'desc';
     private _groupCache: SessionCodeBlockGroup[] | null = null;
     private _visibleGroupCount = 200;
+    /** Language group mode — on by default */
+    private _groupMode: CbGroupMode = 'language';
 
     constructor(
         private readonly index: SessionIndex,
@@ -335,6 +360,20 @@ export class CodeBlockTreeProvider implements vscode.TreeDataProvider<CodeBlockG
 
     getSortMode(): CbSortMode { return this._sortMode; }
     getSortDir(): CbSortDirection { return this._sortDir; }
+
+    // ------------------------------------------------------------------
+    // Group mode
+    // ------------------------------------------------------------------
+    getGroupMode(): CbGroupMode { return this._groupMode; }
+
+    setGroupMode(mode: CbGroupMode): void {
+        this._groupMode = mode;
+        this._groupCache = null;
+        this._visibleGroupCount = 200;
+        this._onDidChangeTreeData.fire();
+    }
+
+    isGrouped(): boolean { return this._groupMode === 'language'; }
 
     // ------------------------------------------------------------------
     // Load more
@@ -415,18 +454,51 @@ export class CodeBlockTreeProvider implements vscode.TreeDataProvider<CodeBlockG
     // ------------------------------------------------------------------
     refresh(): void { this._onDidChangeTreeData.fire(); }
 
-    getTreeItem(element: CodeBlockGroupItem | CodeBlockLeafItem | CodeBlockLoadMoreItem): vscode.TreeItem { return element; }
+    getTreeItem(element: CodeBlockTreeNode): vscode.TreeItem { return element; }
 
-    getChildren(element?: CodeBlockGroupItem | CodeBlockLeafItem | CodeBlockLoadMoreItem): (CodeBlockGroupItem | CodeBlockLeafItem | CodeBlockLoadMoreItem)[] {
+    getChildren(element?: CodeBlockTreeNode): CodeBlockTreeNode[] {
+        // Leaf nodes have no children
+        if (element instanceof CodeBlockLeafItem) { return []; }
+
+        // Session group node: return its code block leaves
         if (element instanceof CodeBlockGroupItem) {
-            // Lazy children: compute code block leaf items only when session is expanded
             return element.sessionRef.blocks.map(b => new CodeBlockLeafItem(b));
         }
 
-        // Top-level: return paginated session groups
+        // Language group node: return the session groups belonging to this language
+        if (element instanceof CbLanguageGroupItem) {
+            const allGroups = this._buildSortedGroups();
+            const lang = element.language;
+            return allGroups
+                .filter(g => (g.primaryLanguage || '') === lang)
+                .map(g => new CodeBlockGroupItem(g));
+        }
+
+        // Root level
         const allGroups = this._buildSortedGroups();
+
+        if (this._groupMode === 'language') {
+            // Build language groups sorted: known languages A–Z, empty/unknown last
+            const langMap = new Map<string, SessionCodeBlockGroup[]>();
+            for (const g of allGroups) {
+                const lang = g.primaryLanguage || '';
+                let arr = langMap.get(lang);
+                if (!arr) { arr = []; langMap.set(lang, arr); }
+                arr.push(g);
+            }
+            const sorted = Array.from(langMap.entries()).sort(([a], [b]) => {
+                const aEmpty = !a;
+                const bEmpty = !b;
+                if (aEmpty && !bEmpty) { return 1; }
+                if (!aEmpty && bEmpty) { return -1; }
+                return a.localeCompare(b);
+            });
+            return sorted.map(([lang, groups]) => new CbLanguageGroupItem(lang, groups.length));
+        }
+
+        // Flat view (original behaviour with pagination)
         const visible = allGroups.slice(0, this._visibleGroupCount);
-        const items: (CodeBlockGroupItem | CodeBlockLeafItem | CodeBlockLoadMoreItem)[] = visible.map(g => new CodeBlockGroupItem(g));
+        const items: CodeBlockTreeNode[] = visible.map(g => new CodeBlockGroupItem(g));
         const remaining = allGroups.length - visible.length;
         if (remaining > 0) {
             items.push(new CodeBlockLoadMoreItem(remaining));

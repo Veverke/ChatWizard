@@ -132,6 +132,58 @@ suite('parseCopilotSession — nonexistent file', () => {
 });
 
 // ---------------------------------------------------------------------------
+// parseCopilotSession — incremental multi-turn (each turn added via separate kind=2 patch)
+// ---------------------------------------------------------------------------
+// This exercises the pattern where VS Code writes one 1-element kind=2 requests
+// patch per turn instead of a single patch with all turns.  The parser must
+// APPEND each new turn rather than replace the entire requests array.
+suite('parseCopilotSession — multi-turn incremental fixture', () => {
+
+    const MULTI_TURN_FIXTURE = path.join(FIXTURE_DIR, 'multi-turn-incremental.jsonl');
+
+    test('returns no errors', () => {
+        const { errors } = parseCopilotSession(MULTI_TURN_FIXTURE, 'ws-id');
+        assert.strictEqual(errors.length, 0, `Unexpected errors: ${errors.join(', ')}`);
+    });
+
+    test('session has exactly 6 messages (3 turns × user+assistant)', () => {
+        const { session } = parseCopilotSession(MULTI_TURN_FIXTURE, 'ws-id');
+        assert.strictEqual(session.messages.length, 6);
+    });
+
+    test('messages alternate user/assistant for all 3 turns', () => {
+        const { session } = parseCopilotSession(MULTI_TURN_FIXTURE, 'ws-id');
+        const roles = session.messages.map((m: Message) => m.role);
+        assert.deepStrictEqual(roles, ['user', 'assistant', 'user', 'assistant', 'user', 'assistant']);
+    });
+
+    test('first user message is correct', () => {
+        const { session } = parseCopilotSession(MULTI_TURN_FIXTURE, 'ws-id');
+        assert.strictEqual(session.messages[0].content, 'What is TypeScript?');
+    });
+
+    test('second user message is correct', () => {
+        const { session } = parseCopilotSession(MULTI_TURN_FIXTURE, 'ws-id');
+        assert.strictEqual(session.messages[2].content, 'How do I install it?');
+    });
+
+    test('third user message is correct', () => {
+        const { session } = parseCopilotSession(MULTI_TURN_FIXTURE, 'ws-id');
+        assert.strictEqual(session.messages[4].content, 'How do I compile a file?');
+    });
+
+    test('third assistant response is correct', () => {
+        const { session } = parseCopilotSession(MULTI_TURN_FIXTURE, 'ws-id');
+        assert.strictEqual(session.messages[5].content, 'Run: tsc yourfile.ts');
+    });
+
+    test('custom title is used as session title', () => {
+        const { session } = parseCopilotSession(MULTI_TURN_FIXTURE, 'ws-id');
+        assert.strictEqual(session.title, 'Multi-turn incremental test');
+    });
+});
+
+// ---------------------------------------------------------------------------
 // extractCodeBlocks — with code blocks
 // ---------------------------------------------------------------------------
 suite('extractCodeBlocks — content with 2 fenced code blocks', () => {
