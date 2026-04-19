@@ -1,0 +1,11 @@
+{"kind":0,"v":{"version":3,"sessionId":"copilot-multi-turn-001","creationDate":1705312800000,"requests":[],"inputState":{}}}
+{"kind":1,"k":["customTitle"],"v":"Multi-turn incremental test"}
+{"kind":2,"k":["requests"],"v":[{"requestId":"req-001","timestamp":1705312803000,"message":{"text":"What is TypeScript?"},"response":[]}]}
+{"kind":2,"k":["requests",0,"response"],"v":[{"value":"TypeScript is a typed superset of JavaScript."}]}
+{"kind":1,"k":["requests",0,"modelState"],"v":{"value":1,"completedAt":1705312810000}}
+{"kind":2,"k":["requests"],"v":[{"requestId":"req-002","timestamp":1705312820000,"message":{"text":"How do I install it?"},"response":[]}]}
+{"kind":2,"k":["requests",1,"response"],"v":[{"value":"Run: npm install -g typescript"}]}
+{"kind":1,"k":["requests",1,"modelState"],"v":{"value":1,"completedAt":1705312830000}}
+{"kind":2,"k":["requests"],"v":[{"requestId":"req-003","timestamp":1705312840000,"message":{"text":"How do I compile a file?"},"response":[]}]}
+{"kind":2,"k":["requests",2,"response"],"v":[{"value":"Run: tsc yourfile.ts"}]}
+{"kind":1,"k":["requests",2,"modelState"],"v":{"value":1,"completedAt":1705312850000}}

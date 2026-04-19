@@ -18,8 +18,9 @@ import {
     SORT_KEY_LABELS,
     SessionFilter,
     SessionParseWarningDecorationProvider,
+    GroupMode,
 } from './views/sessionTreeProvider';
-import { CodeBlockTreeProvider, CodeBlockFilter, CbSortMode, CodeBlockSessionRef } from './views/codeBlockTreeProvider';
+import { CodeBlockTreeProvider, CodeBlockFilter, CbSortMode, CodeBlockSessionRef, CbGroupMode } from './views/codeBlockTreeProvider';
 import { SessionWebviewPanel } from './views/sessionWebviewPanel';
 import { FullTextSearchEngine } from './search/fullTextEngine';
 import { SearchPanel } from './search/searchPanel';
@@ -207,6 +208,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         } catch { /* ignore corrupt state */ }
     }
 
+    // Restore persisted session group mode (default: 'date' — matches provider default)
+    const savedSessionGroupMode = context.globalState.get<string>('sessionGroupMode') as GroupMode | undefined;
+    if (savedSessionGroupMode === 'none' || savedSessionGroupMode === 'date') {
+        provider.setGroupMode(savedSessionGroupMode);
+    }
+
+    // Restore persisted code block group mode (default: 'language' — matches provider default)
+    const savedCbGroupMode = context.globalState.get<string>('cbGroupMode') as CbGroupMode | undefined;
+    if (savedCbGroupMode === 'none' || savedCbGroupMode === 'language') {
+        codeBlockProvider.setGroupMode(savedCbGroupMode);
+    }
+
     // Restore persisted pinned IDs
     const savedPinnedJson = context.globalState.get<string>('pinnedIds');
     if (savedPinnedJson) {
@@ -229,8 +242,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         void vscode.commands.executeCommand('setContext', 'chatwizard.sortKey', primary.key);
         void vscode.commands.executeCommand('setContext', 'chatwizard.sortDir', primary.direction);
         void vscode.commands.executeCommand('setContext', 'chatwizard.hasFilter', provider.hasActiveFilter());
+        void vscode.commands.executeCommand('setContext', 'chatwizard.sessionGrouped', provider.isGrouped());
     }
     syncContext();
+
+    function syncCbGroupContext(): void {
+        void vscode.commands.executeCommand('setContext', 'chatwizard.cbGrouped', codeBlockProvider.isGrouped());
+    }
+    syncCbGroupContext();
 
     function savePins(): void {
         void context.globalState.update('pinnedIds', JSON.stringify(provider.getPinnedIds()));
@@ -696,6 +715,61 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
     context.subscriptions.push(
         vscode.commands.registerCommand('chatwizard.loadMoreCodeBlocks', () => codeBlockProvider.loadMore())
+    );
+
+    // ------------------------------------------------------------------
+    // Group toggle commands
+    // ------------------------------------------------------------------
+    context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.toggleSessionGrouping', () => {
+            const next: GroupMode = provider.getGroupMode() === 'date' ? 'none' : 'date';
+            provider.setGroupMode(next);
+            treeView.description = provider.getDescription();
+            void context.globalState.update('sessionGroupMode', next);
+            syncContext();
+        })
+    );
+    context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.enableSessionGrouping', () => {
+            provider.setGroupMode('date');
+            treeView.description = provider.getDescription();
+            void context.globalState.update('sessionGroupMode', 'date');
+            syncContext();
+        })
+    );
+    context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.disableSessionGrouping', () => {
+            provider.setGroupMode('none');
+            treeView.description = provider.getDescription();
+            void context.globalState.update('sessionGroupMode', 'none');
+            syncContext();
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.toggleCbGrouping', () => {
+            const next: CbGroupMode = codeBlockProvider.getGroupMode() === 'language' ? 'none' : 'language';
+            codeBlockProvider.setGroupMode(next);
+            codeBlockTreeView.description = codeBlockProvider.getDescription();
+            void context.globalState.update('cbGroupMode', next);
+            syncCbGroupContext();
+        })
+    );
+    context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.enableCbGrouping', () => {
+            codeBlockProvider.setGroupMode('language');
+            codeBlockTreeView.description = codeBlockProvider.getDescription();
+            void context.globalState.update('cbGroupMode', 'language');
+            syncCbGroupContext();
+        })
+    );
+    context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.disableCbGrouping', () => {
+            codeBlockProvider.setGroupMode('none');
+            codeBlockTreeView.description = codeBlockProvider.getDescription();
+            void context.globalState.update('cbGroupMode', 'none');
+            syncCbGroupContext();
+        })
     );
 
     // ------------------------------------------------------------------

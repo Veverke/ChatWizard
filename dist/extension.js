@@ -393,7 +393,12 @@ function parseCopilotSession(filePath, workspaceId, workspacePath) {
   }
   for (const patch of patches) {
     try {
-      deepSet(state, patch.k, patch.v);
+      if (patch.kind === 2 && patch.k.length === 1 && String(patch.k[0]) === "requests" && Array.isArray(patch.v)) {
+        const existing = Array.isArray(state["requests"]) ? state["requests"] : [];
+        state["requests"] = [...existing, ...patch.v];
+      } else {
+        deepSet(state, patch.k, patch.v);
+      }
     } catch {
     }
   }
@@ -3608,6 +3613,93 @@ var LoadingTreeItem = class extends vscode3.TreeItem {
     this.contextValue = "loading";
   }
 };
+function getDateBucket(isoDate) {
+  const now = /* @__PURE__ */ new Date();
+  const d = new Date(isoDate);
+  const dayOfWeek = now.getDay() === 0 ? 6 : now.getDay() - 1;
+  const thisWeekStart = new Date(now);
+  thisWeekStart.setHours(0, 0, 0, 0);
+  thisWeekStart.setDate(thisWeekStart.getDate() - dayOfWeek);
+  const lastWeekStart = new Date(thisWeekStart);
+  lastWeekStart.setDate(lastWeekStart.getDate() - 7);
+  if (d >= thisWeekStart) {
+    return "This Week";
+  }
+  if (d >= lastWeekStart) {
+    return "Last Week";
+  }
+  const nowYear = now.getFullYear();
+  const nowMonth = now.getMonth();
+  const dYear = d.getFullYear();
+  const dMonth = d.getMonth();
+  if (dYear === nowYear && dMonth === nowMonth) {
+    return "This Month";
+  }
+  const lastMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  if (dYear === lastMonthDate.getFullYear() && dMonth === lastMonthDate.getMonth()) {
+    return "Last Month";
+  }
+  const MONTHS = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December"
+  ];
+  return `${MONTHS[dMonth]} ${dYear}`;
+}
+function dateBucketOrder(label) {
+  if (label === "This Week") {
+    return 0;
+  }
+  if (label === "Last Week") {
+    return 1;
+  }
+  if (label === "This Month") {
+    return 2;
+  }
+  if (label === "Last Month") {
+    return 3;
+  }
+  const match = /^(\w+) (\d{4})$/.exec(label);
+  if (match) {
+    const MONTHS = [
+      "January",
+      "February",
+      "March",
+      "April",
+      "May",
+      "June",
+      "July",
+      "August",
+      "September",
+      "October",
+      "November",
+      "December"
+    ];
+    const monthIdx = MONTHS.indexOf(match[1]);
+    const year = parseInt(match[2], 10);
+    return 4 + (3e3 - year) * 12 + (11 - monthIdx);
+  }
+  return 9999;
+}
+var DateGroupTreeItem = class extends vscode3.TreeItem {
+  bucketLabel;
+  constructor(label, count) {
+    super(label, vscode3.TreeItemCollapsibleState.Expanded);
+    this.bucketLabel = label;
+    this.description = `${count} session${count === 1 ? "" : "s"}`;
+    this.iconPath = new vscode3.ThemeIcon("calendar");
+    this.contextValue = "dateGroup";
+  }
+};
 var LoadMoreTreeItem = class extends vscode3.TreeItem {
   remaining;
   constructor(remaining) {
@@ -3702,6 +3794,8 @@ var SessionTreeProvider = class {
   _filterDebounceTimer = null;
   /** True until the first change event fires (initial batch index complete) */
   _loading = true;
+  /** Group mode — on by default */
+  _groupMode = "date";
   // ------------------------------------------------------------------
   // Pin management
   // ------------------------------------------------------------------
@@ -3727,6 +3821,16 @@ var SessionTreeProvider = class {
   }
   setManualOrder(order) {
     this._manualOrder = order;
+  }
+  // ------------------------------------------------------------------
+  // Group mode
+  // ------------------------------------------------------------------
+  getGroupMode() {
+    return this._groupMode;
+  }
+  setGroupMode(mode) {
+    this._groupMode = mode;
+    this._onDidChangeTreeData.fire();
   }
   /**
    * Move `draggedIds` to just before `beforeId` in the full display order.
@@ -3898,8 +4002,17 @@ var SessionTreeProvider = class {
   getTreeItem(element) {
     return element;
   }
-  // Required by VS Code for treeView.reveal() to work — all items are root-level, so no parent.
-  getParent(_element) {
+  // Required by VS Code for treeView.reveal() to work.
+  getParent(element) {
+    if (this._groupMode === "date" && element instanceof SessionTreeItem) {
+      const bucket = getDateBucket(element.summary.updatedAt);
+      const all = this._buildOrderedSummaries();
+      const bucketed = this._buildBuckets(all);
+      const grp = bucketed.find((b) => b.label === bucket);
+      if (grp) {
+        return new DateGroupTreeItem(grp.label, grp.items.length);
+      }
+    }
     return void 0;
   }
   _buildOrderedSummaries() {
@@ -3933,12 +4046,38 @@ var SessionTreeProvider = class {
     this._sortedCache = [...pinned, ...unpinned];
     return this._sortedCache;
   }
-  getChildren() {
+  /** Groups a sorted list of summaries into date buckets. */
+  _buildBuckets(summaries) {
+    const bucketMap = /* @__PURE__ */ new Map();
+    for (const s of summaries) {
+      const label = getDateBucket(s.updatedAt);
+      let arr = bucketMap.get(label);
+      if (!arr) {
+        arr = [];
+        bucketMap.set(label, arr);
+      }
+      arr.push(s);
+    }
+    return Array.from(bucketMap.entries()).map(([label, items]) => ({ label, items })).sort((a, b) => dateBucketOrder(a.label) - dateBucketOrder(b.label));
+  }
+  getChildren(element) {
     if (this._loading) {
       return [new LoadingTreeItem()];
     }
+    if (element instanceof DateGroupTreeItem) {
+      const all2 = this._buildOrderedSummaries();
+      const pinnedSet2 = new Set(this._pinnedIds);
+      return all2.filter((s) => getDateBucket(s.updatedAt) === element.bucketLabel).map((s) => new SessionTreeItem(s, pinnedSet2.has(s.id), this.extensionUri));
+    }
+    if (element) {
+      return [];
+    }
     const pinnedSet = new Set(this._pinnedIds);
     const all = this._buildOrderedSummaries();
+    if (this._groupMode === "date") {
+      const buckets = this._buildBuckets(all);
+      return buckets.map((b) => new DateGroupTreeItem(b.label, b.items.length));
+    }
     const visible = all.slice(0, this._visibleCount);
     const items = visible.map((s) => new SessionTreeItem(s, pinnedSet.has(s.id), this.extensionUri));
     const remaining = all.length - visible.length;
@@ -3950,6 +4089,10 @@ var SessionTreeProvider = class {
   /** Returns sessions in the same order as the tree view (sort, pins, filters applied). */
   getSortedSummaries() {
     return this._buildOrderedSummaries();
+  }
+  /** Returns true when grouping is active in the date mode. */
+  isGrouped() {
+    return this._groupMode === "date";
   }
 };
 
@@ -4187,6 +4330,22 @@ var CodeBlockLoadMoreItem = class extends vscode4.TreeItem {
     };
   }
 };
+var CbLanguageGroupItem = class extends vscode4.TreeItem {
+  language;
+  constructor(language, count) {
+    const displayLang = language || "Plain / Unknown";
+    super(displayLang, vscode4.TreeItemCollapsibleState.Expanded);
+    this.language = language;
+    this.description = `${count} session${count === 1 ? "" : "s"}`;
+    this.contextValue = "cbLanguageGroup";
+    const ext = langToExtension(language);
+    if (ext !== "txt" && language) {
+      this.resourceUri = vscode4.Uri.file(`file.${ext}`);
+    } else {
+      this.iconPath = new vscode4.ThemeIcon("symbol-misc");
+    }
+  }
+};
 var CodeBlockTreeProvider = class {
   constructor(index, engine) {
     this.index = index;
@@ -4203,6 +4362,8 @@ var CodeBlockTreeProvider = class {
   _sortDir = "desc";
   _groupCache = null;
   _visibleGroupCount = 200;
+  /** Language group mode — on by default */
+  _groupMode = "language";
   // ------------------------------------------------------------------
   // Filter
   // ------------------------------------------------------------------
@@ -4282,6 +4443,21 @@ var CodeBlockTreeProvider = class {
     return this._sortDir;
   }
   // ------------------------------------------------------------------
+  // Group mode
+  // ------------------------------------------------------------------
+  getGroupMode() {
+    return this._groupMode;
+  }
+  setGroupMode(mode) {
+    this._groupMode = mode;
+    this._groupCache = null;
+    this._visibleGroupCount = 200;
+    this._onDidChangeTreeData.fire();
+  }
+  isGrouped() {
+    return this._groupMode === "language";
+  }
+  // ------------------------------------------------------------------
   // Load more
   // ------------------------------------------------------------------
   loadMore() {
@@ -4356,10 +4532,42 @@ var CodeBlockTreeProvider = class {
     return element;
   }
   getChildren(element) {
+    if (element instanceof CodeBlockLeafItem) {
+      return [];
+    }
     if (element instanceof CodeBlockGroupItem) {
       return element.sessionRef.blocks.map((b) => new CodeBlockLeafItem(b));
     }
+    if (element instanceof CbLanguageGroupItem) {
+      const allGroups2 = this._buildSortedGroups();
+      const lang = element.language;
+      return allGroups2.filter((g) => (g.primaryLanguage || "") === lang).map((g) => new CodeBlockGroupItem(g));
+    }
     const allGroups = this._buildSortedGroups();
+    if (this._groupMode === "language") {
+      const langMap = /* @__PURE__ */ new Map();
+      for (const g of allGroups) {
+        const lang = g.primaryLanguage || "";
+        let arr = langMap.get(lang);
+        if (!arr) {
+          arr = [];
+          langMap.set(lang, arr);
+        }
+        arr.push(g);
+      }
+      const sorted = Array.from(langMap.entries()).sort(([a], [b]) => {
+        const aEmpty = !a;
+        const bEmpty = !b;
+        if (aEmpty && !bEmpty) {
+          return 1;
+        }
+        if (!aEmpty && bEmpty) {
+          return -1;
+        }
+        return a.localeCompare(b);
+      });
+      return sorted.map(([lang, groups]) => new CbLanguageGroupItem(lang, groups.length));
+    }
     const visible = allGroups.slice(0, this._visibleGroupCount);
     const items = visible.map((g) => new CodeBlockGroupItem(g));
     const remaining = allGroups.length - visible.length;
@@ -7881,6 +8089,41 @@ var PromptLibraryPanel = class _PromptLibraryPanel {
     .empty-state-guided .empty-state-body { opacity: 0.6; margin-bottom: 16px; font-size: 0.92em; }
     .empty-state-guided .empty-state-actions { display: flex; gap: 8px; justify-content: center; }
 
+    .group-toggle {
+      font-size: 0.78em;
+      padding: 2px 8px;
+      border: 1px solid var(--cw-border-strong);
+      border-radius: var(--cw-radius-xs);
+      cursor: pointer;
+      background: var(--cw-surface-subtle);
+      color: inherit;
+      white-space: nowrap;
+      flex-shrink: 0;
+      transition: background 0.12s, color 0.12s, border-color 0.12s;
+    }
+    .group-toggle.active {
+      background: var(--cw-accent);
+      color: var(--cw-accent-text);
+      border-color: var(--cw-accent);
+    }
+    .group-toggle:hover:not(.active) {
+      background: var(--cw-surface-raised);
+    }
+
+    .month-header {
+      font-size: 0.82em;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      opacity: 0.6;
+      padding: 14px 0 4px;
+      margin: 0;
+      border-bottom: 1px solid var(--cw-border);
+      margin-bottom: 8px;
+    }
+    .month-header:first-child { padding-top: 4px; }
+    .month-section { margin-bottom: 8px; }
+
     /* Session hover overlay \u2014 styled as a distinct floating popup */
     #sessionOverlay {
       display: none;
@@ -7964,6 +8207,8 @@ var PromptLibraryPanel = class _PromptLibraryPanel {
   <div class="toolbar">
     <span id="promptCount">Loading&#8230;</span>
     <input id="searchInput" type="text" placeholder="Filter by text&#8230;" />
+    <button id="btnGroupSimilarity" class="group-toggle active" title="Group by Similarity">Similarity</button>
+    <button id="btnGroupMonth" class="group-toggle" title="Group by Month">By Month</button>
   </div>
   <div id="truncatedBanner"></div>
   <div class="prompts-list" id="promptsList"></div>
@@ -7990,6 +8235,30 @@ var PromptLibraryPanel = class _PromptLibraryPanel {
     const countEl      = document.getElementById('promptCount');
     const listEl       = document.getElementById('promptsList');
     const bannerEl     = document.getElementById('truncatedBanner');
+    const btnSimilarity = document.getElementById('btnGroupSimilarity');
+    const btnMonth      = document.getElementById('btnGroupMonth');
+
+    // 'similarity' | 'month'
+    var currentGroupMode = 'similarity';
+    // Cache last received data so mode switch can re-render without a new message
+    var _lastClusters = [];
+    var _lastTruncated = false;
+
+    function setGroupMode(mode) {
+      currentGroupMode = mode;
+      if (mode === 'similarity') {
+        btnSimilarity.classList.add('active');
+        btnMonth.classList.remove('active');
+        renderClusters(_lastClusters);
+      } else {
+        btnMonth.classList.add('active');
+        btnSimilarity.classList.remove('active');
+        renderByMonth(_lastClusters);
+      }
+    }
+
+    btnSimilarity.addEventListener('click', function() { setGroupMode('similarity'); });
+    btnMonth.addEventListener('click', function() { setGroupMode('month'); });
 
     function applyFilter() {
       const query = searchInput.value.toLowerCase();
@@ -8018,26 +8287,176 @@ var PromptLibraryPanel = class _PromptLibraryPanel {
       if (window.cwMorphCopy) { window.cwMorphCopy(btn, btn.textContent); }
     });
 
-    function renderClusters(clusters) {
+    // -----------------------------------------------------------------
+    // Month grouping helper
+    // -----------------------------------------------------------------
+    var MONTH_NAMES = ['January','February','March','April','May','June',
+      'July','August','September','October','November','December'];
+
+    function clusterMonthKey(cluster) {
+      var iso = (cluster.canonical && cluster.canonical.firstSeen) || '';
+      if (!iso) { return 'Unknown'; }
+      var d = new Date(iso);
+      if (isNaN(d.getTime())) { return 'Unknown'; }
+      return MONTH_NAMES[d.getMonth()] + ' ' + d.getFullYear();
+    }
+
+    function monthKeyOrder(key) {
+      if (key === 'Unknown') { return Number.MAX_SAFE_INTEGER; }
+      var parts = key.split(' ');
+      var mi = MONTH_NAMES.indexOf(parts[0]);
+      var yr = parseInt(parts[1], 10) || 0;
+      return -(yr * 12 + mi);
+    }
+
+    function buildMonthBuckets(clusters) {
+      var buckets = new Map();
+      clusters.forEach(function(c) {
+        var key = clusterMonthKey(c);
+        if (!buckets.has(key)) { buckets.set(key, []); }
+        buckets.get(key).push(c);
+      });
+      var entries = Array.from(buckets.entries());
+      entries.sort(function(a, b) { return monthKeyOrder(a[0]) - monthKeyOrder(b[0]); });
+      return entries;
+    }
+
+    function clusterCardHtml(cluster, i) {
+      const canonical      = cluster.canonical;
+      const variants       = cluster.variants || [];
+      const totalFrequency = cluster.totalFrequency;
+      const allProjectIds  = cluster.allProjectIds || [];
+      const projectCount   = allProjectIds.length;
+
+      const statsLabel = 'Asked ' + totalFrequency + ' time' + (totalFrequency === 1 ? '' : 's')
+        + (projectCount > 0 ? ' across ' + projectCount + ' project' + (projectCount === 1 ? '' : 's') : '');
+
+      const escapedText      = escHtml(canonical.text);
+      const displayText      = escHtml(truncateDisplay(canonical.text, MAX_PROMPT_DISPLAY));
+      const escapedTextLower = escHtml(canonical.text.toLowerCase());
+
+      let variantsHtml = '';
+      if (variants.length > 0) {
+        const variantItems = variants.map(function(v) {
+          const escapedV      = escHtml(v.text);
+          const displayV      = escHtml(truncateDisplay(v.text, MAX_PROMPT_DISPLAY));
+          const vMeta = v.sessionMeta || [];
+          const vSessionsAttr = escHtml(JSON.stringify(vMeta));
+          const vDirectAttr = vMeta.length === 1 ? (' data-direct="' + escHtml(vMeta[0].sessionId) + '"') : '';
+          const vTitleAttr = vMeta.length === 1
+            ? (' title="Click to open \u201C' + escHtml(vMeta[0].title) + '\u201D"')
+            : (vMeta.length > 1 ? ' title="Hover or click to pick a session"' : '');
+          const sessionInfoParts = vMeta.map(function(m) {
+            const date = m.updatedAt ? m.updatedAt.substring(0, 10) : '';
+            return escHtml(m.title + (date ? ' \xB7 ' + date : ''));
+          });
+          const sessionInfoHtml = sessionInfoParts.length > 0
+            ? '<span class="variant-session">' + sessionInfoParts.join(', ') + '</span>'
+            : '';
+          return '<li class="variant-item" data-sessions="' + vSessionsAttr + '" data-prompt="' + escapedV + '"' + vDirectAttr + vTitleAttr + '>'
+            + '<div class="variant-body">'
+            + '<span class="variant-text">' + displayV + '</span>'
+            + sessionInfoHtml
+            + '</div>'
+            + '<span class="variant-freq">' + v.frequency + '\xD7</span>'
+            + '<button class="copy-btn copy-btn-sm" data-text="' + escapedV + '" title="Copy variant">Copy</button>'
+            + '</li>';
+        }).join('');
+        variantsHtml = '<details class="variants-details">'
+          + '<summary class="variants-summary">' + variants.length + ' similar variant' + (variants.length === 1 ? '' : 's') + '</summary>'
+          + '<ul class="variants-list">' + variantItems + '</ul>'
+          + '</details>';
+      }
+
+      const fadeAttr = i < 15 ? ' style="--cw-i:' + i + '"' : '';
+      const sessionMeta = cluster.canonical.sessionMeta || [];
+      const canonicalSessionsAttr = escHtml(JSON.stringify(sessionMeta));
+      const canonicalDirectAttr = sessionMeta.length === 1 ? (' data-direct="' + escHtml(sessionMeta[0].sessionId) + '"') : '';
+      const canonicalTitleAttr = sessionMeta.length === 1
+        ? (' title="Click to open \u201C' + escHtml(sessionMeta[0].title) + '\u201D"')
+        : (sessionMeta.length > 1 ? ' title="Hover or click to pick a session"' : '');
+      return '<div class="prompt-card cw-fade-item"' + fadeAttr + ' data-text="' + escapedTextLower + '">'
+        + '\\n  <div class="card-header">'
+        + '\\n    <span class="freq-badge">' + totalFrequency + '\\u00d7</span>'
+        + '\\n    <span class="stats-label">' + escHtml(statsLabel) + '</span>'
+        + '\\n    <button class="copy-btn" data-text="' + escapedText + '" title="Copy prompt">Copy</button>'
+        + '\\n  </div>'
+        + '\\n  <div class="prompt-text" data-sessions="' + canonicalSessionsAttr + '" data-prompt="' + escapedText + '"' + canonicalDirectAttr + canonicalTitleAttr + '>' + displayText + '</div>'
+        + variantsHtml
+        + '\\n</div>';
+    }
+
+    function emptyStateHtml() {
+      return '<div class="empty-state-guided">'
+        + '<p class="empty-state-title">No prompts indexed yet.</p>'
+        + '<p class="empty-state-body">Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure the data paths are configured correctly.</p>'
+        + '<div class="empty-state-actions">'
+        + '<button class="copy-btn" id="btn-open-settings">Configure Paths</button>'
+        + '<button class="copy-btn" id="btn-rescan">Rescan</button>'
+        + '</div></div>';
+    }
+
+    function attachEmptyStateHandlers() {
+      var btnCfg = document.getElementById('btn-open-settings');
+      var btnScan = document.getElementById('btn-rescan');
+      if (btnCfg) { btnCfg.addEventListener('click', function() { vscode.postMessage({ command: 'openSettings' }); }); }
+      if (btnScan) { btnScan.addEventListener('click', function() { vscode.postMessage({ command: 'rescan' }); }); }
+    }
+
+    function renderByMonth(clusters) {
       var newJson = JSON.stringify(clusters);
-      if (newJson === _lastClustersJson) { return; }
+      if (currentGroupMode !== 'month') { return; }
+      if (newJson === _lastClustersJson && listEl.dataset.mode === 'month') { return; }
       _lastClustersJson = newJson;
+      listEl.dataset.mode = 'month';
 
       const scrollTop = window.scrollY;
       const savedQuery = searchInput.value;
 
       if (clusters.length === 0) {
-        listEl.innerHTML = '<div class="empty-state-guided">'
-          + '<p class="empty-state-title">No prompts indexed yet.</p>'
-          + '<p class="empty-state-body">Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure the data paths are configured correctly.</p>'
-          + '<div class="empty-state-actions">'
-          + '<button class="copy-btn" id="btn-open-settings">Configure Paths</button>'
-          + '<button class="copy-btn" id="btn-rescan">Rescan</button>'
-          + '</div></div>';
-        var btnCfg = document.getElementById('btn-open-settings');
-        var btnScan = document.getElementById('btn-rescan');
-        if (btnCfg) { btnCfg.addEventListener('click', function() { vscode.postMessage({ command: 'openSettings' }); }); }
-        if (btnScan) { btnScan.addEventListener('click', function() { vscode.postMessage({ command: 'rescan' }); }); }
+        listEl.innerHTML = emptyStateHtml();
+        attachEmptyStateHandlers();
+        countEl.textContent = '0 prompts';
+        searchInput.value = savedQuery;
+        return;
+      }
+
+      const buckets = buildMonthBuckets(clusters);
+      let totalEntries = 0;
+      let html = '';
+
+      buckets.forEach(function(bucket) {
+        const monthKey = bucket[0];
+        const monthClusters = bucket[1];
+        totalEntries += monthClusters.length;
+
+        const headerHtml = '<p class="month-header">' + escHtml(monthKey)
+          + ' <span style="opacity:0.5;font-weight:400;">(' + monthClusters.length + ')</span></p>';
+        const cardsHtml = monthClusters.map(function(c, i) {
+          return clusterCardHtml(c, i);
+        }).join('');
+        html += '<div class="month-section">' + headerHtml + cardsHtml + '</div>';
+      });
+
+      listEl.innerHTML = html;
+      searchInput.value = savedQuery;
+      applyFilter();
+      countEl.textContent = totalEntries + ' prompt' + (totalEntries === 1 ? '' : 's');
+      window.scrollTo(0, scrollTop);
+    }
+
+    function renderClusters(clusters) {
+      var newJson = JSON.stringify(clusters);
+      if (newJson === _lastClustersJson && listEl.dataset.mode !== 'month') { return; }
+      _lastClustersJson = newJson;
+      listEl.dataset.mode = 'similarity';
+
+      const scrollTop = window.scrollY;
+      const savedQuery = searchInput.value;
+
+      if (clusters.length === 0) {
+        listEl.innerHTML = emptyStateHtml();
+        attachEmptyStateHandlers();
         countEl.textContent = '0 prompts';
         searchInput.value = savedQuery;
         return;
@@ -8047,71 +8466,8 @@ var PromptLibraryPanel = class _PromptLibraryPanel {
       let cardsHtml = '';
 
       clusters.forEach(function(cluster, i) {
-        const canonical      = cluster.canonical;
-        const variants       = cluster.variants || [];
-        const totalFrequency = cluster.totalFrequency;
-        const allProjectIds  = cluster.allProjectIds || [];
-        const projectCount   = allProjectIds.length;
-        totalEntries += 1 + variants.length;
-
-        const statsLabel = 'Asked ' + totalFrequency + ' time' + (totalFrequency === 1 ? '' : 's')
-          + (projectCount > 0 ? ' across ' + projectCount + ' project' + (projectCount === 1 ? '' : 's') : '');
-
-        const escapedText      = escHtml(canonical.text);
-        const displayText      = escHtml(truncateDisplay(canonical.text, MAX_PROMPT_DISPLAY));
-        const escapedTextLower = escHtml(canonical.text.toLowerCase());
-
-        let variantsHtml = '';
-        if (variants.length > 0) {
-          const variantItems = variants.map(function(v) {
-            const escapedV      = escHtml(v.text);
-            const displayV      = escHtml(truncateDisplay(v.text, MAX_PROMPT_DISPLAY));
-            const vMeta = v.sessionMeta || [];
-            const vSessionsAttr = escHtml(JSON.stringify(vMeta));
-            const vDirectAttr = vMeta.length === 1 ? (' data-direct="' + escHtml(vMeta[0].sessionId) + '"') : '';
-            const vTitleAttr = vMeta.length === 1
-              ? (' title="Click to open \u201C' + escHtml(vMeta[0].title) + '\u201D"')
-              : (vMeta.length > 1 ? ' title="Hover or click to pick a session"' : '');
-            const sessionInfoParts = vMeta.map(function(m) {
-              const date = m.updatedAt ? m.updatedAt.substring(0, 10) : '';
-              return escHtml(m.title + (date ? ' \xB7 ' + date : ''));
-            });
-            const sessionInfoHtml = sessionInfoParts.length > 0
-              ? '<span class="variant-session">' + sessionInfoParts.join(', ') + '</span>'
-              : '';
-            return '<li class="variant-item" data-sessions="' + vSessionsAttr + '" data-prompt="' + escapedV + '"' + vDirectAttr + vTitleAttr + '>'
-              + '<div class="variant-body">'
-              + '<span class="variant-text">' + displayV + '</span>'
-              + sessionInfoHtml
-              + '</div>'
-              + '<span class="variant-freq">' + v.frequency + '\xD7</span>'
-              + '<button class="copy-btn copy-btn-sm" data-text="' + escapedV + '" title="Copy variant">Copy</button>'
-              + '</li>';
-          }).join('');
-          variantsHtml = '<details class="variants-details">'
-            + '<summary class="variants-summary">' + variants.length + ' similar variant' + (variants.length === 1 ? '' : 's') + '</summary>'
-            + '<ul class="variants-list">' + variantItems + '</ul>'
-            + '</details>';
-        }
-
-        const fadeAttr = i < 15 ? ' style="--cw-i:' + i + '"' : '';
-        const sessionMeta = cluster.canonical.sessionMeta || [];
-        const canonicalSessionsAttr = escHtml(JSON.stringify(sessionMeta));
-        const canonicalDirectAttr = sessionMeta.length === 1 ? (' data-direct="' + escHtml(sessionMeta[0].sessionId) + '"') : '';
-        const canonicalTitleAttr = sessionMeta.length === 1
-          ? (' title="Click to open \u201C' + escHtml(sessionMeta[0].title) + '\u201D"')
-          : (sessionMeta.length > 1 ? ' title="Hover or click to pick a session"' : '');
-        const promptTextAttr = escapedText;
-        cardsHtml +=
-          '<div class="prompt-card cw-fade-item"' + fadeAttr + ' data-text="' + escapedTextLower + '">'
-          + '\\n  <div class="card-header">'
-          + '\\n    <span class="freq-badge">' + totalFrequency + '\\u00d7</span>'
-          + '\\n    <span class="stats-label">' + escHtml(statsLabel) + '</span>'
-          + '\\n    <button class="copy-btn" data-text="' + escapedText + '" title="Copy prompt">Copy</button>'
-          + '\\n  </div>'
-          + '\\n  <div class="prompt-text" data-sessions="' + canonicalSessionsAttr + '" data-prompt="' + promptTextAttr + '"' + canonicalDirectAttr + canonicalTitleAttr + '>' + displayText + '</div>'
-          + variantsHtml
-          + '\\n</div>';
+        totalEntries += 1 + (cluster.variants || []).length;
+        cardsHtml += clusterCardHtml(cluster, i);
       });
 
       listEl.innerHTML = cardsHtml;
@@ -8127,8 +8483,14 @@ var PromptLibraryPanel = class _PromptLibraryPanel {
     window.addEventListener('message', function(event) {
       const msg = event.data;
       if (msg && msg.type === 'update') {
-        renderClusters(msg.data.clusters || []);
-        if (msg.data.truncated) {
+        _lastClusters = msg.data.clusters || [];
+        _lastTruncated = !!msg.data.truncated;
+        if (currentGroupMode === 'month') {
+          renderByMonth(_lastClusters);
+        } else {
+          renderClusters(_lastClusters);
+        }
+        if (_lastTruncated) {
           bannerEl.style.display = '';
           bannerEl.textContent = 'Results truncated \\u2014 showing top entries only.';
         } else {
@@ -12370,6 +12732,14 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
     } catch {
     }
   }
+  const savedSessionGroupMode = context.globalState.get("sessionGroupMode");
+  if (savedSessionGroupMode === "none" || savedSessionGroupMode === "date") {
+    provider.setGroupMode(savedSessionGroupMode);
+  }
+  const savedCbGroupMode = context.globalState.get("cbGroupMode");
+  if (savedCbGroupMode === "none" || savedCbGroupMode === "language") {
+    codeBlockProvider.setGroupMode(savedCbGroupMode);
+  }
   const savedPinnedJson = context.globalState.get("pinnedIds");
   if (savedPinnedJson) {
     try {
@@ -12389,8 +12759,13 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
     void vscode15.commands.executeCommand("setContext", "chatwizard.sortKey", primary.key);
     void vscode15.commands.executeCommand("setContext", "chatwizard.sortDir", primary.direction);
     void vscode15.commands.executeCommand("setContext", "chatwizard.hasFilter", provider.hasActiveFilter());
+    void vscode15.commands.executeCommand("setContext", "chatwizard.sessionGrouped", provider.isGrouped());
   }
   syncContext();
+  function syncCbGroupContext() {
+    void vscode15.commands.executeCommand("setContext", "chatwizard.cbGrouped", codeBlockProvider.isGrouped());
+  }
+  syncCbGroupContext();
   function savePins() {
     void context.globalState.update("pinnedIds", JSON.stringify(provider.getPinnedIds()));
     void context.globalState.update("manualOrder", JSON.stringify(provider.getManualOrder()));
@@ -12802,6 +13177,56 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
   );
   context.subscriptions.push(
     vscode15.commands.registerCommand("chatwizard.loadMoreCodeBlocks", () => codeBlockProvider.loadMore())
+  );
+  context.subscriptions.push(
+    vscode15.commands.registerCommand("chatwizard.toggleSessionGrouping", () => {
+      const next = provider.getGroupMode() === "date" ? "none" : "date";
+      provider.setGroupMode(next);
+      treeView.description = provider.getDescription();
+      void context.globalState.update("sessionGroupMode", next);
+      syncContext();
+    })
+  );
+  context.subscriptions.push(
+    vscode15.commands.registerCommand("chatwizard.enableSessionGrouping", () => {
+      provider.setGroupMode("date");
+      treeView.description = provider.getDescription();
+      void context.globalState.update("sessionGroupMode", "date");
+      syncContext();
+    })
+  );
+  context.subscriptions.push(
+    vscode15.commands.registerCommand("chatwizard.disableSessionGrouping", () => {
+      provider.setGroupMode("none");
+      treeView.description = provider.getDescription();
+      void context.globalState.update("sessionGroupMode", "none");
+      syncContext();
+    })
+  );
+  context.subscriptions.push(
+    vscode15.commands.registerCommand("chatwizard.toggleCbGrouping", () => {
+      const next = codeBlockProvider.getGroupMode() === "language" ? "none" : "language";
+      codeBlockProvider.setGroupMode(next);
+      codeBlockTreeView.description = codeBlockProvider.getDescription();
+      void context.globalState.update("cbGroupMode", next);
+      syncCbGroupContext();
+    })
+  );
+  context.subscriptions.push(
+    vscode15.commands.registerCommand("chatwizard.enableCbGrouping", () => {
+      codeBlockProvider.setGroupMode("language");
+      codeBlockTreeView.description = codeBlockProvider.getDescription();
+      void context.globalState.update("cbGroupMode", "language");
+      syncCbGroupContext();
+    })
+  );
+  context.subscriptions.push(
+    vscode15.commands.registerCommand("chatwizard.disableCbGrouping", () => {
+      codeBlockProvider.setGroupMode("none");
+      codeBlockTreeView.description = codeBlockProvider.getDescription();
+      void context.globalState.update("cbGroupMode", "none");
+      syncCbGroupContext();
+    })
   );
   context.subscriptions.push(
     vscode15.commands.registerCommand("chatwizard.openSession", (summary, searchTerm, highlightContainer) => {

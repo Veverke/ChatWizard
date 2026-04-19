@@ -178,7 +178,20 @@ export function parseCopilotSession(
     // Apply patches to reconstruct final state
     for (const patch of patches) {
         try {
-            deepSet(state, patch.k, patch.v);
+            // kind=2 on k=['requests'] is an append operation, not a full replacement.
+            // VS Code writes each new conversation turn as a 1-element array rather
+            // than the entire accumulated array, so we must extend rather than overwrite.
+            if (
+                patch.kind === 2 &&
+                patch.k.length === 1 &&
+                String(patch.k[0]) === 'requests' &&
+                Array.isArray(patch.v)
+            ) {
+                const existing = Array.isArray(state['requests']) ? (state['requests'] as unknown[]) : [];
+                state['requests'] = [...existing, ...(patch.v as unknown[])];
+            } else {
+                deepSet(state, patch.k, patch.v);
+            }
         } catch {
             // Ignore unapplicable patches
         }

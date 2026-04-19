@@ -246,6 +246,30 @@
         "category": "Chat Wizard"
       },
       {
+        "command": "chatwizard.enableSessionGrouping",
+        "title": "Group Sessions by Date",
+        "category": "Chat Wizard",
+        "icon": "$(list-tree)"
+      },
+      {
+        "command": "chatwizard.disableSessionGrouping",
+        "title": "Ungroup Sessions (Flat List)",
+        "category": "Chat Wizard",
+        "icon": "$(list-flat)"
+      },
+      {
+        "command": "chatwizard.enableCbGrouping",
+        "title": "Group Code Blocks by Language",
+        "category": "Chat Wizard",
+        "icon": "$(list-tree)"
+      },
+      {
+        "command": "chatwizard.disableCbGrouping",
+        "title": "Ungroup Code Blocks (Flat List)",
+        "category": "Chat Wizard",
+        "icon": "$(list-flat)"
+      },
+      {
         "command": "chatwizard.exportSession",
         "title": "Export Session to Markdown",
         "category": "Chat Wizard",
@@ -414,6 +438,16 @@
           "group": "navigation@0"
         },
         {
+          "command": "chatwizard.enableSessionGrouping",
+          "when": "view == chatwizardSessions && chatwizard.sessionGrouped == false",
+          "group": "navigation@0"
+        },
+        {
+          "command": "chatwizard.disableSessionGrouping",
+          "when": "view == chatwizardSessions && chatwizard.sessionGrouped != false",
+          "group": "navigation@0"
+        },
+        {
           "command": "chatwizard.sortByDate",
           "when": "view == chatwizardSessions && chatwizard.sortKey != 'date'",
           "group": "navigation@1"
@@ -501,6 +535,16 @@
         {
           "command": "chatwizard.filterCodeBlocks",
           "when": "view == chatwizardCodeBlocks",
+          "group": "navigation@0"
+        },
+        {
+          "command": "chatwizard.enableCbGrouping",
+          "when": "view == chatwizardCodeBlocks && chatwizard.cbGrouped == false",
+          "group": "navigation@0"
+        },
+        {
+          "command": "chatwizard.disableCbGrouping",
+          "when": "view == chatwizardCodeBlocks && chatwizard.cbGrouped != false",
           "group": "navigation@0"
         },
         {

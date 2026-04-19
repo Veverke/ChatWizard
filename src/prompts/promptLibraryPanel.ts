@@ -297,6 +297,41 @@ export class PromptLibraryPanel {
     .empty-state-guided .empty-state-body { opacity: 0.6; margin-bottom: 16px; font-size: 0.92em; }
     .empty-state-guided .empty-state-actions { display: flex; gap: 8px; justify-content: center; }
 
+    .group-toggle {
+      font-size: 0.78em;
+      padding: 2px 8px;
+      border: 1px solid var(--cw-border-strong);
+      border-radius: var(--cw-radius-xs);
+      cursor: pointer;
+      background: var(--cw-surface-subtle);
+      color: inherit;
+      white-space: nowrap;
+      flex-shrink: 0;
+      transition: background 0.12s, color 0.12s, border-color 0.12s;
+    }
+    .group-toggle.active {
+      background: var(--cw-accent);
+      color: var(--cw-accent-text);
+      border-color: var(--cw-accent);
+    }
+    .group-toggle:hover:not(.active) {
+      background: var(--cw-surface-raised);
+    }
+
+    .month-header {
+      font-size: 0.82em;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      opacity: 0.6;
+      padding: 14px 0 4px;
+      margin: 0;
+      border-bottom: 1px solid var(--cw-border);
+      margin-bottom: 8px;
+    }
+    .month-header:first-child { padding-top: 4px; }
+    .month-section { margin-bottom: 8px; }
+
     /* Session hover overlay — styled as a distinct floating popup */
     #sessionOverlay {
       display: none;
@@ -380,6 +415,8 @@ export class PromptLibraryPanel {
   <div class="toolbar">
     <span id="promptCount">Loading&#8230;</span>
     <input id="searchInput" type="text" placeholder="Filter by text&#8230;" />
+    <button id="btnGroupSimilarity" class="group-toggle active" title="Group by Similarity">Similarity</button>
+    <button id="btnGroupMonth" class="group-toggle" title="Group by Month">By Month</button>
   </div>
   <div id="truncatedBanner"></div>
   <div class="prompts-list" id="promptsList"></div>
@@ -406,6 +443,30 @@ export class PromptLibraryPanel {
     const countEl      = document.getElementById('promptCount');
     const listEl       = document.getElementById('promptsList');
     const bannerEl     = document.getElementById('truncatedBanner');
+    const btnSimilarity = document.getElementById('btnGroupSimilarity');
+    const btnMonth      = document.getElementById('btnGroupMonth');
+
+    // 'similarity' | 'month'
+    var currentGroupMode = 'similarity';
+    // Cache last received data so mode switch can re-render without a new message
+    var _lastClusters = [];
+    var _lastTruncated = false;
+
+    function setGroupMode(mode) {
+      currentGroupMode = mode;
+      if (mode === 'similarity') {
+        btnSimilarity.classList.add('active');
+        btnMonth.classList.remove('active');
+        renderClusters(_lastClusters);
+      } else {
+        btnMonth.classList.add('active');
+        btnSimilarity.classList.remove('active');
+        renderByMonth(_lastClusters);
+      }
+    }
+
+    btnSimilarity.addEventListener('click', function() { setGroupMode('similarity'); });
+    btnMonth.addEventListener('click', function() { setGroupMode('month'); });
 
     function applyFilter() {
       const query = searchInput.value.toLowerCase();
@@ -434,26 +495,176 @@ export class PromptLibraryPanel {
       if (window.cwMorphCopy) { window.cwMorphCopy(btn, btn.textContent); }
     });
 
-    function renderClusters(clusters) {
+    // -----------------------------------------------------------------
+    // Month grouping helper
+    // -----------------------------------------------------------------
+    var MONTH_NAMES = ['January','February','March','April','May','June',
+      'July','August','September','October','November','December'];
+
+    function clusterMonthKey(cluster) {
+      var iso = (cluster.canonical && cluster.canonical.firstSeen) || '';
+      if (!iso) { return 'Unknown'; }
+      var d = new Date(iso);
+      if (isNaN(d.getTime())) { return 'Unknown'; }
+      return MONTH_NAMES[d.getMonth()] + ' ' + d.getFullYear();
+    }
+
+    function monthKeyOrder(key) {
+      if (key === 'Unknown') { return Number.MAX_SAFE_INTEGER; }
+      var parts = key.split(' ');
+      var mi = MONTH_NAMES.indexOf(parts[0]);
+      var yr = parseInt(parts[1], 10) || 0;
+      return -(yr * 12 + mi);
+    }
+
+    function buildMonthBuckets(clusters) {
+      var buckets = new Map();
+      clusters.forEach(function(c) {
+        var key = clusterMonthKey(c);
+        if (!buckets.has(key)) { buckets.set(key, []); }
+        buckets.get(key).push(c);
+      });
+      var entries = Array.from(buckets.entries());
+      entries.sort(function(a, b) { return monthKeyOrder(a[0]) - monthKeyOrder(b[0]); });
+      return entries;
+    }
+
+    function clusterCardHtml(cluster, i) {
+      const canonical      = cluster.canonical;
+      const variants       = cluster.variants || [];
+      const totalFrequency = cluster.totalFrequency;
+      const allProjectIds  = cluster.allProjectIds || [];
+      const projectCount   = allProjectIds.length;
+
+      const statsLabel = 'Asked ' + totalFrequency + ' time' + (totalFrequency === 1 ? '' : 's')
+        + (projectCount > 0 ? ' across ' + projectCount + ' project' + (projectCount === 1 ? '' : 's') : '');
+
+      const escapedText      = escHtml(canonical.text);
+      const displayText      = escHtml(truncateDisplay(canonical.text, MAX_PROMPT_DISPLAY));
+      const escapedTextLower = escHtml(canonical.text.toLowerCase());
+
+      let variantsHtml = '';
+      if (variants.length > 0) {
+        const variantItems = variants.map(function(v) {
+          const escapedV      = escHtml(v.text);
+          const displayV      = escHtml(truncateDisplay(v.text, MAX_PROMPT_DISPLAY));
+          const vMeta = v.sessionMeta || [];
+          const vSessionsAttr = escHtml(JSON.stringify(vMeta));
+          const vDirectAttr = vMeta.length === 1 ? (' data-direct="' + escHtml(vMeta[0].sessionId) + '"') : '';
+          const vTitleAttr = vMeta.length === 1
+            ? (' title="Click to open \u201c' + escHtml(vMeta[0].title) + '\u201d"')
+            : (vMeta.length > 1 ? ' title="Hover or click to pick a session"' : '');
+          const sessionInfoParts = vMeta.map(function(m) {
+            const date = m.updatedAt ? m.updatedAt.substring(0, 10) : '';
+            return escHtml(m.title + (date ? ' \u00b7 ' + date : ''));
+          });
+          const sessionInfoHtml = sessionInfoParts.length > 0
+            ? '<span class="variant-session">' + sessionInfoParts.join(', ') + '</span>'
+            : '';
+          return '<li class="variant-item" data-sessions="' + vSessionsAttr + '" data-prompt="' + escapedV + '"' + vDirectAttr + vTitleAttr + '>'
+            + '<div class="variant-body">'
+            + '<span class="variant-text">' + displayV + '</span>'
+            + sessionInfoHtml
+            + '</div>'
+            + '<span class="variant-freq">' + v.frequency + '\u00d7</span>'
+            + '<button class="copy-btn copy-btn-sm" data-text="' + escapedV + '" title="Copy variant">Copy</button>'
+            + '</li>';
+        }).join('');
+        variantsHtml = '<details class="variants-details">'
+          + '<summary class="variants-summary">' + variants.length + ' similar variant' + (variants.length === 1 ? '' : 's') + '</summary>'
+          + '<ul class="variants-list">' + variantItems + '</ul>'
+          + '</details>';
+      }
+
+      const fadeAttr = i < 15 ? ' style="--cw-i:' + i + '"' : '';
+      const sessionMeta = cluster.canonical.sessionMeta || [];
+      const canonicalSessionsAttr = escHtml(JSON.stringify(sessionMeta));
+      const canonicalDirectAttr = sessionMeta.length === 1 ? (' data-direct="' + escHtml(sessionMeta[0].sessionId) + '"') : '';
+      const canonicalTitleAttr = sessionMeta.length === 1
+        ? (' title="Click to open \u201c' + escHtml(sessionMeta[0].title) + '\u201d"')
+        : (sessionMeta.length > 1 ? ' title="Hover or click to pick a session"' : '');
+      return '<div class="prompt-card cw-fade-item"' + fadeAttr + ' data-text="' + escapedTextLower + '">'
+        + '\\n  <div class="card-header">'
+        + '\\n    <span class="freq-badge">' + totalFrequency + '\\u00d7</span>'
+        + '\\n    <span class="stats-label">' + escHtml(statsLabel) + '</span>'
+        + '\\n    <button class="copy-btn" data-text="' + escapedText + '" title="Copy prompt">Copy</button>'
+        + '\\n  </div>'
+        + '\\n  <div class="prompt-text" data-sessions="' + canonicalSessionsAttr + '" data-prompt="' + escapedText + '"' + canonicalDirectAttr + canonicalTitleAttr + '>' + displayText + '</div>'
+        + variantsHtml
+        + '\\n</div>';
+    }
+
+    function emptyStateHtml() {
+      return '<div class="empty-state-guided">'
+        + '<p class="empty-state-title">No prompts indexed yet.</p>'
+        + '<p class="empty-state-body">Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure the data paths are configured correctly.</p>'
+        + '<div class="empty-state-actions">'
+        + '<button class="copy-btn" id="btn-open-settings">Configure Paths</button>'
+        + '<button class="copy-btn" id="btn-rescan">Rescan</button>'
+        + '</div></div>';
+    }
+
+    function attachEmptyStateHandlers() {
+      var btnCfg = document.getElementById('btn-open-settings');
+      var btnScan = document.getElementById('btn-rescan');
+      if (btnCfg) { btnCfg.addEventListener('click', function() { vscode.postMessage({ command: 'openSettings' }); }); }
+      if (btnScan) { btnScan.addEventListener('click', function() { vscode.postMessage({ command: 'rescan' }); }); }
+    }
+
+    function renderByMonth(clusters) {
       var newJson = JSON.stringify(clusters);
-      if (newJson === _lastClustersJson) { return; }
+      if (currentGroupMode !== 'month') { return; }
+      if (newJson === _lastClustersJson && listEl.dataset.mode === 'month') { return; }
       _lastClustersJson = newJson;
+      listEl.dataset.mode = 'month';
 
       const scrollTop = window.scrollY;
       const savedQuery = searchInput.value;
 
       if (clusters.length === 0) {
-        listEl.innerHTML = '<div class="empty-state-guided">'
-          + '<p class="empty-state-title">No prompts indexed yet.</p>'
-          + '<p class="empty-state-body">Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure the data paths are configured correctly.</p>'
-          + '<div class="empty-state-actions">'
-          + '<button class="copy-btn" id="btn-open-settings">Configure Paths</button>'
-          + '<button class="copy-btn" id="btn-rescan">Rescan</button>'
-          + '</div></div>';
-        var btnCfg = document.getElementById('btn-open-settings');
-        var btnScan = document.getElementById('btn-rescan');
-        if (btnCfg) { btnCfg.addEventListener('click', function() { vscode.postMessage({ command: 'openSettings' }); }); }
-        if (btnScan) { btnScan.addEventListener('click', function() { vscode.postMessage({ command: 'rescan' }); }); }
+        listEl.innerHTML = emptyStateHtml();
+        attachEmptyStateHandlers();
+        countEl.textContent = '0 prompts';
+        searchInput.value = savedQuery;
+        return;
+      }
+
+      const buckets = buildMonthBuckets(clusters);
+      let totalEntries = 0;
+      let html = '';
+
+      buckets.forEach(function(bucket) {
+        const monthKey = bucket[0];
+        const monthClusters = bucket[1];
+        totalEntries += monthClusters.length;
+
+        const headerHtml = '<p class="month-header">' + escHtml(monthKey)
+          + ' <span style="opacity:0.5;font-weight:400;">(' + monthClusters.length + ')</span></p>';
+        const cardsHtml = monthClusters.map(function(c, i) {
+          return clusterCardHtml(c, i);
+        }).join('');
+        html += '<div class="month-section">' + headerHtml + cardsHtml + '</div>';
+      });
+
+      listEl.innerHTML = html;
+      searchInput.value = savedQuery;
+      applyFilter();
+      countEl.textContent = totalEntries + ' prompt' + (totalEntries === 1 ? '' : 's');
+      window.scrollTo(0, scrollTop);
+    }
+
+    function renderClusters(clusters) {
+      var newJson = JSON.stringify(clusters);
+      if (newJson === _lastClustersJson && listEl.dataset.mode !== 'month') { return; }
+      _lastClustersJson = newJson;
+      listEl.dataset.mode = 'similarity';
+
+      const scrollTop = window.scrollY;
+      const savedQuery = searchInput.value;
+
+      if (clusters.length === 0) {
+        listEl.innerHTML = emptyStateHtml();
+        attachEmptyStateHandlers();
         countEl.textContent = '0 prompts';
         searchInput.value = savedQuery;
         return;
@@ -463,71 +674,8 @@ export class PromptLibraryPanel {
       let cardsHtml = '';
 
       clusters.forEach(function(cluster, i) {
-        const canonical      = cluster.canonical;
-        const variants       = cluster.variants || [];
-        const totalFrequency = cluster.totalFrequency;
-        const allProjectIds  = cluster.allProjectIds || [];
-        const projectCount   = allProjectIds.length;
-        totalEntries += 1 + variants.length;
-
-        const statsLabel = 'Asked ' + totalFrequency + ' time' + (totalFrequency === 1 ? '' : 's')
-          + (projectCount > 0 ? ' across ' + projectCount + ' project' + (projectCount === 1 ? '' : 's') : '');
-
-        const escapedText      = escHtml(canonical.text);
-        const displayText      = escHtml(truncateDisplay(canonical.text, MAX_PROMPT_DISPLAY));
-        const escapedTextLower = escHtml(canonical.text.toLowerCase());
-
-        let variantsHtml = '';
-        if (variants.length > 0) {
-          const variantItems = variants.map(function(v) {
-            const escapedV      = escHtml(v.text);
-            const displayV      = escHtml(truncateDisplay(v.text, MAX_PROMPT_DISPLAY));
-            const vMeta = v.sessionMeta || [];
-            const vSessionsAttr = escHtml(JSON.stringify(vMeta));
-            const vDirectAttr = vMeta.length === 1 ? (' data-direct="' + escHtml(vMeta[0].sessionId) + '"') : '';
-            const vTitleAttr = vMeta.length === 1
-              ? (' title="Click to open \u201c' + escHtml(vMeta[0].title) + '\u201d"')
-              : (vMeta.length > 1 ? ' title="Hover or click to pick a session"' : '');
-            const sessionInfoParts = vMeta.map(function(m) {
-              const date = m.updatedAt ? m.updatedAt.substring(0, 10) : '';
-              return escHtml(m.title + (date ? ' \u00b7 ' + date : ''));
-            });
-            const sessionInfoHtml = sessionInfoParts.length > 0
-              ? '<span class="variant-session">' + sessionInfoParts.join(', ') + '</span>'
-              : '';
-            return '<li class="variant-item" data-sessions="' + vSessionsAttr + '" data-prompt="' + escapedV + '"' + vDirectAttr + vTitleAttr + '>'
-              + '<div class="variant-body">'
-              + '<span class="variant-text">' + displayV + '</span>'
-              + sessionInfoHtml
-              + '</div>'
-              + '<span class="variant-freq">' + v.frequency + '\u00d7</span>'
-              + '<button class="copy-btn copy-btn-sm" data-text="' + escapedV + '" title="Copy variant">Copy</button>'
-              + '</li>';
-          }).join('');
-          variantsHtml = '<details class="variants-details">'
-            + '<summary class="variants-summary">' + variants.length + ' similar variant' + (variants.length === 1 ? '' : 's') + '</summary>'
-            + '<ul class="variants-list">' + variantItems + '</ul>'
-            + '</details>';
-        }
-
-        const fadeAttr = i < 15 ? ' style="--cw-i:' + i + '"' : '';
-        const sessionMeta = cluster.canonical.sessionMeta || [];
-        const canonicalSessionsAttr = escHtml(JSON.stringify(sessionMeta));
-        const canonicalDirectAttr = sessionMeta.length === 1 ? (' data-direct="' + escHtml(sessionMeta[0].sessionId) + '"') : '';
-        const canonicalTitleAttr = sessionMeta.length === 1
-          ? (' title="Click to open \u201c' + escHtml(sessionMeta[0].title) + '\u201d"')
-          : (sessionMeta.length > 1 ? ' title="Hover or click to pick a session"' : '');
-        const promptTextAttr = escapedText;
-        cardsHtml +=
-          '<div class="prompt-card cw-fade-item"' + fadeAttr + ' data-text="' + escapedTextLower + '">'
-          + '\\n  <div class="card-header">'
-          + '\\n    <span class="freq-badge">' + totalFrequency + '\\u00d7</span>'
-          + '\\n    <span class="stats-label">' + escHtml(statsLabel) + '</span>'
-          + '\\n    <button class="copy-btn" data-text="' + escapedText + '" title="Copy prompt">Copy</button>'
-          + '\\n  </div>'
-          + '\\n  <div class="prompt-text" data-sessions="' + canonicalSessionsAttr + '" data-prompt="' + promptTextAttr + '"' + canonicalDirectAttr + canonicalTitleAttr + '>' + displayText + '</div>'
-          + variantsHtml
-          + '\\n</div>';
+        totalEntries += 1 + (cluster.variants || []).length;
+        cardsHtml += clusterCardHtml(cluster, i);
       });
 
       listEl.innerHTML = cardsHtml;
@@ -543,8 +691,14 @@ export class PromptLibraryPanel {
     window.addEventListener('message', function(event) {
       const msg = event.data;
       if (msg && msg.type === 'update') {
-        renderClusters(msg.data.clusters || []);
-        if (msg.data.truncated) {
+        _lastClusters = msg.data.clusters || [];
+        _lastTruncated = !!msg.data.truncated;
+        if (currentGroupMode === 'month') {
+          renderByMonth(_lastClusters);
+        } else {
+          renderClusters(_lastClusters);
+        }
+        if (_lastTruncated) {
           bannerEl.style.display = '';
           bannerEl.textContent = 'Results truncated \\u2014 showing top entries only.';
         } else {
