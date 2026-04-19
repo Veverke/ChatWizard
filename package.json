@@ -9,6 +9,13 @@
   "keywords": [
     "copilot",
     "claude",
+    "cline",
+    "roo",
+    "roocode",
+    "windsurf",
+    "cursor",
+    "aider",
+    "codeium",
     "ai",
     "chat",
     "history",
@@ -22,7 +29,9 @@
     "history-viewer",
     "token-usage",
     "ai-productivity",
-    "llm"
+    "llm",
+    "vscode",
+    "ide"
   ],
   "repository": {
     "type": "git",
