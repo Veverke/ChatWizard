@@ -1,7 +1,7 @@
 // src/types/index.ts
 
 /** Which AI chat extension produced the session */
-export type SessionSource = 'copilot' | 'claude';
+export type SessionSource = 'copilot' | 'claude' | 'cline' | 'roocode' | 'cursor' | 'windsurf' | 'aider';
 
 /** Role of a message participant */
 export type MessageRole = 'user' | 'assistant';
@@ -67,6 +67,8 @@ export interface Session {
     /** Non-fatal parse errors encountered while reading the source file (e.g. invalid JSON lines).
      *  Skipped-line placeholders are NOT included here — they appear as Message entries instead. */
     parseErrors?: string[];
+    /** Informational notes (e.g. Cursor recovered prompts from aiService only) — not parse failures */
+    sourceNotes?: string[];
 }
 
 /** A fenced code block with session metadata attached, for the Code Blocks panel */
@@ -126,10 +128,17 @@ export interface SessionSummary {
     hasParseErrors?: boolean;
 }
 
+/** Per-assistant request count within a WorkspaceUsage */
+export interface AssistantUsage {
+    assistant: string;   // SessionSource value, e.g. 'claude', 'cline', 'copilot'
+    userRequests: number;
+}
+
 /** Per-workspace request count within a ModelEntry */
 export interface WorkspaceUsage {
     workspace: string;   // workspacePath, or workspaceId when no path is known
     userRequests: number;
+    assistantBreakdown: AssistantUsage[];  // sorted by userRequests desc
 }
 
 /** Per-session request count within a ModelEntry */
@@ -139,15 +148,25 @@ export interface SessionUsage {
     userRequests: number;
 }
 
+/** Per-assistant breakdown within a ModelEntry, used for the Summary table rows */
+export interface SourceBreakdown {
+    source: SessionSource;
+    sessionCount: number;
+    userRequests: number;
+    percentage: number;           // (userRequests / totalUserRequests) * 100, rounded 2dp
+    sessionBreakdown: SessionUsage[];  // sorted by userRequests desc
+}
+
 /** Per-model usage entry for the Model Usage view */
 export interface ModelEntry {
     model: string;               // e.g. "GPT-4o", "Claude Sonnet 4", "Unknown"
-    source: SessionSource;       // which account/service produced these sessions
+    sources: SessionSource[];    // all assistants that used this model
     sessionCount: number;
-    userRequests: number;        // sum of SessionSummary.userMessageCount
+    userRequests: number;        // sum of SessionSummary.userMessageCount across all sources
     percentage: number;          // (userRequests / totalUserRequests) * 100, rounded 2dp
-    workspaceBreakdown: WorkspaceUsage[];  // sorted by userRequests desc
+    workspaceBreakdown: WorkspaceUsage[];  // for chart tooltip, sorted by userRequests desc
     sessionBreakdown: SessionUsage[];     // sorted by userRequests desc
+    sourceBreakdown: SourceBreakdown[];  // one entry per assistant, sorted by userRequests desc
 }
 
 /** Top-level output for the Model Usage view */
@@ -157,6 +176,26 @@ export interface ModelUsageData {
     totalSessions: number;
     totalUserRequests: number;
     models: ModelEntry[];        // sorted by userRequests desc
+}
+
+/** Descriptor for a discovered Cline task directory */
+export interface ClineTaskInfo {
+    /** Directory name (UUID-like task ID) */
+    taskId: string;
+    /** Absolute path to the task directory */
+    storageDir: string;
+    /** Absolute path to api_conversation_history.json */
+    conversationFile: string;
+}
+
+/** Descriptor for a discovered Aider history file */
+export interface AiderHistoryInfo {
+    /** Absolute path to .aider.chat.history.md */
+    historyFile: string;
+    /** Parent directory (the project root where Aider was run) */
+    workspacePath: string;
+    /** Absolute path to .aider.conf.yml if present */
+    configFile?: string;
 }
 
 /** Result of parsing a raw JSONL file */
@@ -177,7 +216,7 @@ export interface ScopedWorkspace {
     /** Unique per source — Copilot storage hash or Claude project directory name */
     id: string;
     /** Which AI extension produced this workspace */
-    source: 'copilot' | 'claude';
+    source: 'copilot' | 'claude' | 'cline' | 'roocode' | 'cursor' | 'windsurf' | 'aider';
     /** Human-readable absolute path to the workspace root */
     workspacePath: string;
     /** Physical directory containing the session files */

@@ -1,28 +1,25 @@
 name: Release (tag-based)
 
+# Triggered by a version tag push (e.g. v1.2.3).
+# Each platform VSIX is built on its matching OS so that better-sqlite3's
+# native binary is compiled for the correct platform.
+
 on:
   push:
     tags:
       - 'v*.*.*'
 
 jobs:
-  build-and-publish:
+
+  # ── Verify the pushed tag matches package.json version ───────────────────────
+  verify-version:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Use Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 20
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Bundle extension (esbuild)
-        run: npm run bundle        
 
       - name: Verify tag version matches package.json
         run: |
@@ -32,21 +29,73 @@ jobs:
             echo "Tag version ($TAG_VERSION) does not match package.json version ($PKG_VERSION)"
             exit 1
           fi
-          
-      - name: Install vsce
-        run: npm install -g @vscode/vsce
 
-      - name: Build extension for all targets
-        run: |
-          vsce package --target win32-x64
-          vsce package --target linux-x64
-          vsce package --target darwin-x64
+  # ── Build one VSIX per platform on its matching OS ───────────────────────────
+  build:
+    needs: verify-version
+    strategy:
+      matrix:
+        include:
+          - target: win32-x64
+            runs-on: windows-latest
+          - target: linux-x64
+            runs-on: ubuntu-latest
+          - target: darwin-x64
+            runs-on: macos-13        # Intel (x64) runner
+          - target: darwin-arm64
+            runs-on: macos-latest    # Apple Silicon (arm64) runner
+    runs-on: ${{ matrix.runs-on }}
+    steps:
+      - uses: actions/checkout@v4
 
-      - name: Upload VSIX artifacts
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build VSIX (${{ matrix.target }})
+        run: npm run package:vsix:${{ matrix.target }}
+
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: vsix-files
-          path: "*.vsix"
+          name: vsix-${{ matrix.target }}
+          path: chatwizard-${{ matrix.target }}.vsix
+
+  # ── Publish all platform VSIXs to the all supported Marketplaces (MS, Open VSX) ────────────────────
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Download all VSIX artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: vsix-*
+          merge-multiple: true
+
+      - name: Install vsce and ovsx
+        run: npm install -g @vscode/vsce ovsx
 
       - name: Publish to VS Code Marketplace
-        run: vsce publish -p ${{ secrets.VSCE_TOKEN }}
+        run: |
+          vsce publish \
+            --packagePath chatwizard-win32-x64.vsix \
+            --packagePath chatwizard-linux-x64.vsix \
+            --packagePath chatwizard-darwin-x64.vsix \
+            --packagePath chatwizard-darwin-arm64.vsix \
+            -p ${{ secrets.VSCE_TOKEN }}
+
+      - name: Publish to Open VSX Registry
+        run: |
+          ovsx publish chatwizard-win32-x64.vsix -p ${{ secrets.OVSX_TOKEN }}
+          ovsx publish chatwizard-linux-x64.vsix -p ${{ secrets.OVSX_TOKEN }}
+          ovsx publish chatwizard-darwin-x64.vsix -p ${{ secrets.OVSX_TOKEN }}
+          ovsx publish chatwizard-darwin-arm64.vsix -p ${{ secrets.OVSX_TOKEN }}

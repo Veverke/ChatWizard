@@ -425,7 +425,11 @@ export class CodeBlocksPanel {
         const langDisplay  = lang || 'plain';
         const langLower    = lang.toLowerCase();
         const roleLabel    = block.messageRole === 'user' ? 'User' : 'AI';
-        const sourceLabel  = block.sessionSource === 'copilot' ? 'Copilot' : 'Claude';
+        const SRC_LABEL = {
+          claude: 'Claude Code', copilot: 'GitHub Copilot', cline: 'Cline',
+          roocode: 'Roo Code', cursor: 'Cursor', windsurf: 'Windsurf', aider: 'Aider'
+        };
+        const sourceLabel  = SRC_LABEL[block.sessionSource] || block.sessionSource;
         const sourceBadge  = block.sessionSource === 'copilot' ? 'cw-badge-copilot' : 'cw-badge-claude';
         const dateStr      = block.sessionUpdatedAt ? block.sessionUpdatedAt.slice(0, 10) : '';
         const wsPath       = block.sessionWorkspacePath || '';

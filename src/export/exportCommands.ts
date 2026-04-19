@@ -4,6 +4,7 @@ import { SessionIndex } from '../index/sessionIndex';
 import { Session, SessionSummary } from '../types/index';
 import { SessionTreeItem } from '../views/sessionTreeProvider';
 import { serializeSession, serializeSessions } from '../export/markdownSerializer';
+import { friendlySourceName, sourceCodiconId } from '../ui/sourceUi';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -134,7 +135,7 @@ export function registerExportCommands(
             const items: SummaryItem[] = allSummaries.map((s: SessionSummary) => ({
                 label: s.title || 'Untitled Session',
                 description: `${path.basename(s.workspacePath ?? s.workspaceId)} · ${s.updatedAt.slice(0, 10)}`,
-                detail: `${s.source === 'copilot' ? 'Copilot' : 'Claude'} · ${s.messageCount} messages`,
+                detail: `${friendlySourceName(s.source)} · ${s.messageCount} messages`,
                 id: s.id,
             }));
 
@@ -175,11 +176,12 @@ export function registerExportCommands(
             }
 
             const visible = session.messages.filter(m => m.content.trim() !== '');
-            const assistantLabel = session.source === 'copilot' ? 'Copilot' : 'Claude';
+            const assistantLabel = friendlySourceName(session.source);
+            const assistantIcon = sourceCodiconId(session.source);
 
             type MsgItem = vscode.QuickPickItem & { msgIndex: number };
             const items: MsgItem[] = visible.map((msg, i) => ({
-                label: msg.role === 'user' ? '$(account) You' : `$(hubot) ${assistantLabel}`,
+                label: msg.role === 'user' ? '$(account) You' : `$(${assistantIcon}) ${assistantLabel}`,
                 description: msg.content.split('\n')[0].slice(0, 90),
                 msgIndex: i,
             }));

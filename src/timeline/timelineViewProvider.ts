@@ -8,9 +8,10 @@ import {
     HeatMapCell, WorkBurst, WeekTerms, TimelineStats,
 } from './timelineFeatures';
 import { cwThemeCss, cwInteractiveJs } from '../webview/cwTheme';
+import { SessionSource } from '../types/index';
 
 export interface TimelineFilter {
-    source?: 'copilot' | 'claude'; // filter by source
+    source?: SessionSource; // filter by source
 }
 
 const INITIAL_MONTHS = 3;
@@ -606,6 +607,11 @@ export class TimelineViewProvider implements vscode.WebviewViewProvider {
       .replace(/'/g, '&#39;');
   }
 
+  const SRC_LABEL = {
+    claude: 'Claude Code', copilot: 'GitHub Copilot', cline: 'Cline',
+    roocode: 'Roo Code', cursor: 'Cursor', windsurf: 'Windsurf', aider: 'Aider'
+  };
+
   function applyFilter() {
     const src = document.getElementById('srcFilter').value;
     vscode.postMessage({ command: 'setFilter', filter: { source: src || undefined } });
@@ -737,7 +743,7 @@ export class TimelineViewProvider implements vscode.WebviewViewProvider {
 
   function renderEntryHtml(entry, fadeIdx) {
     const fadeAttr     = fadeIdx < 25 ? ' style="--cw-i:' + fadeIdx + '"' : '';
-    const sourceLabel  = entry.source === 'copilot' ? 'Copilot' : 'Claude';
+    const sourceLabel  = (SRC_LABEL && SRC_LABEL[entry.source]) ? SRC_LABEL[entry.source] : entry.source;
     const badgeClass   = entry.source === 'copilot' ? 'cw-badge-copilot' : 'cw-badge-claude';
     const wsMeta       = entry.workspaceName || '(unknown workspace)';
     const promptText   = entry.firstPrompt   || '(no prompt)';

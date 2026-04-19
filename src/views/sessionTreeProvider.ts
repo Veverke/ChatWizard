@@ -1,13 +1,27 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { SessionIndex } from '../index/sessionIndex';
-import { SessionSummary } from '../types/index';
+import { SessionSummary, SessionSource } from '../types/index';
+import { friendlySourceName, sourceCodiconId } from '../ui/sourceUi';
+import { sourceBrandIconUris } from '../ui/sourceBrandIcons';
+
+/**
+ * Returns a brand icon `{ light, dark }` URI pair for sources that have bundled SVGs.
+ * Falls back to a ThemeIcon for copilot and claude (which use built-in codicons).
+ */
+function sourceBrandIcon(
+    source: SessionSource,
+    extensionUri: vscode.Uri
+): { light: vscode.Uri; dark: vscode.Uri } | vscode.ThemeIcon {
+    const brand = sourceBrandIconUris(source, extensionUri);
+    return brand ?? new vscode.ThemeIcon(sourceCodiconId(source));
+}
 
 export class SessionTreeItem extends vscode.TreeItem {
     readonly summary: SessionSummary;
     readonly pinned: boolean;
 
-    constructor(summary: SessionSummary, pinned = false) {
+    constructor(summary: SessionSummary, pinned = false, extensionUri?: vscode.Uri) {
         super(summary.title || 'Untitled Session', vscode.TreeItemCollapsibleState.None);
 
         this.summary = summary;
@@ -24,7 +38,7 @@ export class SessionTreeItem extends vscode.TreeItem {
             ? `${workspaceName} · ${date} · ${msgCount} msgs · ${sizeKb}`
             : `${workspaceName} · ${date} · ${msgCount} msgs`;
 
-        const sourceName = summary.source === 'copilot' ? 'GitHub Copilot' : 'Claude Code';
+        const sourceName = friendlySourceName(summary.source);
         const modelLine = summary.model ? `\n\n**Model:** ${summary.model}` : '';
         const sizeLine = sizeKb ? `\n\n**Size:** ${msgCount} messages · ${sizeKb}` : `\n\n**Size:** ${msgCount} messages`;
         const pinnedLine = pinned ? `\n\n📌 *Pinned*` : '';
@@ -65,20 +79,20 @@ export class SessionTreeItem extends vscode.TreeItem {
 
         if (pinned) {
             this.iconPath = new vscode.ThemeIcon('pinned');
+        } else if (extensionUri && sourceBrandIconUris(summary.source, extensionUri)) {
+            // Prefer bundled brand SVGs (Cursor, Cline, …) even when interrupted / parse warnings —
+            // codicon fallbacks like $(edit) are misleading for product identity.
+            this.iconPath = sourceBrandIcon(summary.source, extensionUri);
         } else if (summary.interrupted) {
             const red = new vscode.ThemeColor('list.errorForeground');
-            this.iconPath = summary.source === 'copilot'
-                ? new vscode.ThemeIcon('github', red)
-                : new vscode.ThemeIcon('hubot', red);
+            this.iconPath = new vscode.ThemeIcon(sourceCodiconId(summary.source), red);
         } else if (summary.hasParseErrors) {
             const yellow = new vscode.ThemeColor('list.warningForeground');
-            this.iconPath = summary.source === 'copilot'
-                ? new vscode.ThemeIcon('github', yellow)
-                : new vscode.ThemeIcon('hubot', yellow);
+            this.iconPath = new vscode.ThemeIcon(sourceCodiconId(summary.source), yellow);
+        } else if (extensionUri) {
+            this.iconPath = sourceBrandIcon(summary.source, extensionUri);
         } else {
-            this.iconPath = summary.source === 'copilot'
-                ? new vscode.ThemeIcon('github')
-                : new vscode.ThemeIcon('hubot');
+            this.iconPath = new vscode.ThemeIcon(sourceCodiconId(summary.source));
         }
 
         if (summary.hasParseErrors) {
@@ -148,7 +162,7 @@ export const SORT_KEY_LABELS: Record<SortKey, string> = {
     length: 'Message Count',
     title: 'Title (A–Z)',
     model: 'AI Model',
-    source: 'Source (Copilot / Claude)',
+    source: 'Source',
 };
 
 const SHORT_LABEL: Record<SortKey, string> = {
@@ -169,6 +183,7 @@ export interface SessionFilter {
     dateFrom?: string;     // YYYY-MM-DD lower bound (inclusive)
     dateTo?: string;       // YYYY-MM-DD upper bound (inclusive)
     model?: string;        // case-insensitive substring
+    source?: SessionSource; // exact source to show
     minMessages?: number;
     maxMessages?: number;
     hideInterrupted?: boolean;   // when true, hide sessions whose last message has no assistant reply
@@ -244,7 +259,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeI
     /** True until the first change event fires (initial batch index complete) */
     private _loading = true;
 
-    constructor(private readonly index: SessionIndex) {
+    constructor(private readonly index: SessionIndex, private readonly extensionUri?: vscode.Uri) {
         index.addChangeListener(() => {
             this._loading = false;
             this._sortedCache = null;
@@ -346,7 +361,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeI
 
     hasActiveFilter(): boolean {
         const f = this._filter;
-        return !!(f.title || f.dateFrom || f.dateTo || f.model ||
+        return !!(f.title || f.dateFrom || f.dateTo || f.model || f.source ||
                   f.minMessages !== undefined || f.maxMessages !== undefined ||
                   f.hideInterrupted || f.onlyWithWarnings);
     }
@@ -360,6 +375,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeI
         if (f.model !== undefined && f.model !== '') {
             if (!(s.model ?? '').toLowerCase().includes(f.model.toLowerCase())) { return false; }
         }
+        if (f.source && s.source !== f.source) { return false; }
         if (f.minMessages !== undefined && s.messageCount < f.minMessages) { return false; }
         if (f.maxMessages !== undefined && s.messageCount > f.maxMessages) { return false; }
         if (f.hideInterrupted && s.interrupted) { return false; }
@@ -373,6 +389,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeI
         if (f.title) { parts.push(`title:"${f.title}"`); }
         if (f.dateFrom || f.dateTo) { parts.push(`date:${f.dateFrom ?? '*'}→${f.dateTo ?? '*'}`); }
         if (f.model) { parts.push(`model:"${f.model}"`); }
+        if (f.source) { parts.push(`source:${friendlySourceName(f.source)}`); }
         if (f.minMessages !== undefined || f.maxMessages !== undefined) {
             parts.push(`msgs:${f.minMessages ?? 0}–${f.maxMessages ?? '∞'}`);
         }
@@ -479,7 +496,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeI
         const pinnedSet = new Set(this._pinnedIds);
         const all = this._buildOrderedSummaries();
         const visible = all.slice(0, this._visibleCount);
-        const items: (SessionTreeItem | LoadMoreTreeItem)[] = visible.map(s => new SessionTreeItem(s, pinnedSet.has(s.id)));
+        const items: (SessionTreeItem | LoadMoreTreeItem)[] = visible.map(s => new SessionTreeItem(s, pinnedSet.has(s.id), this.extensionUri));
         const remaining = all.length - visible.length;
         if (remaining > 0) {
             items.push(new LoadMoreTreeItem(remaining));

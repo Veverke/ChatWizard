@@ -144,6 +144,28 @@ suite('friendlyModelName', () => {
         assert.strictEqual(friendlyModelName('gemini-pro'), 'Gemini Pro');
     });
 
+    // ── Cursor-native ────────────────────────────────────────────────────────
+    test('cursor-fast → Cursor Fast', () => {
+        assert.strictEqual(friendlyModelName('cursor-fast'), 'Cursor Fast');
+    });
+
+    test('cursor-small → Cursor Small', () => {
+        assert.strictEqual(friendlyModelName('cursor-small'), 'Cursor Small');
+    });
+
+    test('cursor-fast case-insensitive → Cursor Fast', () => {
+        assert.strictEqual(friendlyModelName('CURSOR-FAST'), 'Cursor Fast');
+    });
+
+    // Cursor surfaces Claude/GPT/Gemini model IDs — verify they pass through correctly
+    test('claude-3-5-sonnet-20241022 (surfaced by Cursor) → Claude 3.5 Sonnet', () => {
+        assert.strictEqual(friendlyModelName('claude-3-5-sonnet-20241022'), 'Claude 3.5 Sonnet');
+    });
+
+    test('gemini-2.0-flash (surfaced by Cursor) → Gemini 2.0 Flash', () => {
+        assert.strictEqual(friendlyModelName('gemini-2.0-flash'), 'Gemini 2.0 Flash');
+    });
+
     // ── Fallback ─────────────────────────────────────────────────────────────
     test('unrecognised model passes through as-is', () => {
         assert.strictEqual(friendlyModelName('some-future-model-x'), 'some-future-model-x');

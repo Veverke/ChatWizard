@@ -7,6 +7,7 @@ import { ChatWizardWatcher } from '../watcher/fileWatcher';
 import { SessionIndex } from '../index/sessionIndex';
 import { discoverCopilotWorkspacesAsync } from '../readers/copilotWorkspace';
 import { discoverClaudeWorkspacesAsync } from '../readers/claudeWorkspace';
+import { discoverCursorWorkspacesAsync } from '../readers/cursorWorkspace';
 
 /** One row in the QuickPick — represents a workspace folder regardless of how many sources it has. */
 type WorkspaceItem = vscode.QuickPickItem & {
@@ -41,8 +42,8 @@ export function registerManageWorkspacesCommand(
 ): void {
     context.subscriptions.push(
         vscode.commands.registerCommand('chatwizard.manageWatchedWorkspaces', async () => {
-            // 1. Discover all available workspaces (Copilot + Claude) in parallel.
-            const [copilotWs, claudeWs] = await Promise.all([
+            // 1. Discover all available workspaces (Copilot + Claude + Cursor) in parallel.
+            const [copilotWs, claudeWs, cursorWs] = await Promise.all([
                 discoverCopilotWorkspacesAsync().then(list =>
                     list.map(ws => ({
                         id: ws.workspaceId,
@@ -52,12 +53,13 @@ export function registerManageWorkspacesCommand(
                     }) satisfies ScopedWorkspace)
                 ).catch(() => [] as ScopedWorkspace[]),
                 discoverClaudeWorkspacesAsync().catch(() => [] as ScopedWorkspace[]),
+                discoverCursorWorkspacesAsync().catch(() => [] as ScopedWorkspace[]),
             ]);
-            const allAvailable: ScopedWorkspace[] = [...copilotWs, ...claudeWs];
+            const allAvailable: ScopedWorkspace[] = [...copilotWs, ...claudeWs, ...cursorWs];
 
             if (allAvailable.length === 0) {
                 void vscode.window.showInformationMessage(
-                    'Chat Wizard: No Copilot or Claude workspaces found to manage.'
+                    'Chat Wizard: No Copilot, Claude, or Cursor workspaces found to manage.'
                 );
                 return;
             }

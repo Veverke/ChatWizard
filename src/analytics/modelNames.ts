@@ -15,6 +15,8 @@ export function friendlyModelName(raw: string | undefined | null): string {
     if (!raw) { return 'Unknown'; }
     const s = raw.trim();
     if (!s || s === '<synthetic>') { return 'Unknown'; }
+    // Some sources store a non-model sentinel like "Auto" / "Unknown".
+    if (/^(auto|unknown)$/i.test(s)) { return 'Unknown'; }
 
     // ── Anthropic Claude ──────────────────────────────────────────────────────
 
@@ -66,6 +68,11 @@ export function friendlyModelName(raw: string | undefined | null): string {
     if (/^o3-mini$/i.test(s))    { return 'o3 mini'; }
     if (/^o3$/i.test(s))         { return 'o3'; }
     if (/^o4-mini$/i.test(s))    { return 'o4 mini'; }
+
+    // ── Cursor-native models ───────────────────────────────────────────────────
+
+    if (/^cursor-fast$/i.test(s))  { return 'Cursor Fast'; }
+    if (/^cursor-small$/i.test(s)) { return 'Cursor Small'; }
 
     // ── Google Gemini ──────────────────────────────────────────────────────────
 

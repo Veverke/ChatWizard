@@ -1,0 +1,17 @@
+[
+  {
+    "role": "user",
+    "content": "Help me refactor this function to be more readable"
+  },
+  {
+    "role": "assistant",
+    "content": [
+      { "type": "text", "text": "Sure, here is a cleaner version:\n\n```typescript\nfunction greet(name: string): string {\n  return `Hello, ${name}!`;\n}\n```\n\nThis is simpler and more readable." },
+      { "type": "tool_use", "id": "tool1", "name": "read_file", "input": { "path": "src/greet.ts" } }
+    ]
+  },
+  {
+    "role": "user",
+    "content": "Thanks! Can you also add a test for it?"
+  }
+]

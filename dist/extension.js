@@ -34,7 +34,7 @@ __export(extension_exports, {
   deactivate: () => deactivate
 });
 module.exports = __toCommonJS(extension_exports);
-var vscode14 = __toESM(require("vscode"));
+var vscode15 = __toESM(require("vscode"));
 
 // src/index/sessionIndex.ts
 function toSummary(session) {
@@ -124,6 +124,21 @@ var SessionIndex = class {
       this._notifyListeners();
     }
     return removed;
+  }
+  /**
+   * After re-parsing a `state.vscdb`, drop indexed sessions from the same file/source
+   * whose ids are no longer present (e.g. old merged `…-cursor-aiservice` vs per-composer ids).
+   */
+  removeSessionsForStateFileNotIn(filePath, source, keepIds) {
+    const toRemove = [];
+    for (const [id, session] of this.sessions) {
+      if (session.filePath === filePath && session.source === source && !keepIds.has(id)) {
+        toRemove.push(id);
+      }
+    }
+    for (const id of toRemove) {
+      this.remove(id);
+    }
   }
   /**
    * Insert or replace all sessions in the array, then fire one typed 'batch' event
@@ -276,8 +291,8 @@ var SessionIndex = class {
 
 // src/watcher/fileWatcher.ts
 var vscode = __toESM(require("vscode"));
-var path6 = __toESM(require("path"));
-var fs5 = __toESM(require("fs"));
+var path12 = __toESM(require("path"));
+var fs11 = __toESM(require("fs"));
 
 // src/parsers/copilot.ts
 var fs = __toESM(require("fs"));
@@ -774,27 +789,391 @@ async function listSessionFilesAsync(storageHashDir) {
 }
 
 // src/watcher/configPaths.ts
+var path7 = __toESM(require("path"));
+var os5 = __toESM(require("os"));
+
+// src/readers/clineWorkspace.ts
+var fs4 = __toESM(require("fs"));
 var path4 = __toESM(require("path"));
 var os2 = __toESM(require("os"));
+var MAX_TASK_DIRS = 1e4;
+function getClineStorageRoot() {
+  return getClineCompatStorageRoot("saoudrizwan.claude-dev");
+}
+function getClineCompatStorageRoot(extensionId) {
+  const platform = process.platform;
+  let globalStorageBase;
+  if (platform === "win32") {
+    globalStorageBase = path4.join(
+      process.env["APPDATA"] || os2.homedir(),
+      "Code",
+      "User",
+      "globalStorage"
+    );
+  } else if (platform === "darwin") {
+    globalStorageBase = path4.join(
+      os2.homedir(),
+      "Library",
+      "Application Support",
+      "Code",
+      "User",
+      "globalStorage"
+    );
+  } else {
+    globalStorageBase = path4.join(
+      process.env["XDG_CONFIG_HOME"] || path4.join(os2.homedir(), ".config"),
+      "Code",
+      "User",
+      "globalStorage"
+    );
+  }
+  return path4.join(globalStorageBase, extensionId, "tasks");
+}
+function getRooCodeStorageRoot() {
+  return getClineCompatStorageRoot("rooveterinaryinc.roo-cline");
+}
+async function discoverClineTasksAsync(override) {
+  const root = override !== void 0 && override !== "" ? override : getClineStorageRoot();
+  let entries;
+  try {
+    entries = await fs4.promises.readdir(root, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  if (entries.length > MAX_TASK_DIRS) {
+    console.warn(
+      `[Chat Wizard] Cline: found ${entries.length} task directories \u2014 only the first ${MAX_TASK_DIRS} will be scanned.`
+    );
+    entries = entries.slice(0, MAX_TASK_DIRS);
+  }
+  const results = await Promise.all(entries.map(async (entry) => {
+    if (!entry.isDirectory()) {
+      return null;
+    }
+    const taskDir = path4.join(root, entry.name);
+    try {
+      const lstat = await fs4.promises.lstat(taskDir);
+      if (lstat.isSymbolicLink()) {
+        return null;
+      }
+    } catch {
+      return null;
+    }
+    const conversationFile = path4.join(taskDir, "api_conversation_history.json");
+    try {
+      const stat = await fs4.promises.stat(conversationFile);
+      if (!stat.isFile()) {
+        return null;
+      }
+    } catch {
+      return null;
+    }
+    return { taskId: entry.name, storageDir: taskDir, conversationFile };
+  }));
+  return results.filter((r) => r !== null);
+}
+async function discoverRooCodeTasksAsync(override) {
+  const root = override !== void 0 && override !== "" ? override : getRooCodeStorageRoot();
+  return discoverClineTasksAsync(root);
+}
+
+// src/readers/cursorWorkspace.ts
+var fs5 = __toESM(require("fs"));
+var path5 = __toESM(require("path"));
+var os3 = __toESM(require("os"));
+var MAX_VSCDB_BYTES = 500 * 1024 * 1024;
+function getCursorGlobalDbPath(override) {
+  if (override !== void 0 && override !== "") {
+    return override;
+  }
+  const platform = process.platform;
+  let base;
+  if (platform === "win32") {
+    base = path5.join(process.env["APPDATA"] || os3.homedir(), "Cursor", "User");
+  } else if (platform === "darwin") {
+    base = path5.join(os3.homedir(), "Library", "Application Support", "Cursor", "User");
+  } else {
+    base = path5.join(
+      process.env["XDG_CONFIG_HOME"] || path5.join(os3.homedir(), ".config"),
+      "Cursor",
+      "User"
+    );
+  }
+  return path5.join(base, "globalStorage", "state.vscdb");
+}
+function getCursorStorageRoot() {
+  const platform = process.platform;
+  if (platform === "win32") {
+    return path5.join(
+      process.env["APPDATA"] || os3.homedir(),
+      "Cursor",
+      "User",
+      "workspaceStorage"
+    );
+  } else if (platform === "darwin") {
+    return path5.join(
+      os3.homedir(),
+      "Library",
+      "Application Support",
+      "Cursor",
+      "User",
+      "workspaceStorage"
+    );
+  } else {
+    return path5.join(
+      process.env["XDG_CONFIG_HOME"] || path5.join(os3.homedir(), ".config"),
+      "Cursor",
+      "User",
+      "workspaceStorage"
+    );
+  }
+}
+async function readWorkspaceJsonAsync2(storageHashDir) {
+  try {
+    const workspaceJsonPath = path5.join(storageHashDir, "workspace.json");
+    const raw = await fs5.promises.readFile(workspaceJsonPath, "utf8");
+    const parsed = JSON.parse(raw);
+    const folder = parsed.folder;
+    if (!folder) {
+      return void 0;
+    }
+    let decoded = decodeURIComponent(folder.replace("file://", ""));
+    if (process.platform === "win32" && decoded.startsWith("/")) {
+      decoded = decoded.slice(1);
+    }
+    return decoded;
+  } catch {
+    return void 0;
+  }
+}
+async function discoverCursorWorkspacesAsync(override) {
+  const root = override !== void 0 && override !== "" ? override : getCursorStorageRoot();
+  let entries;
+  try {
+    entries = await fs5.promises.readdir(root);
+  } catch {
+    return [];
+  }
+  const results = await Promise.all(entries.map(async (entry) => {
+    const storageDir = path5.join(root, entry);
+    try {
+      const lstat = await fs5.promises.lstat(storageDir);
+      if (!lstat.isDirectory() || lstat.isSymbolicLink()) {
+        return null;
+      }
+    } catch {
+      return null;
+    }
+    const vscdbPath = path5.join(storageDir, "state.vscdb");
+    try {
+      const lstat = await fs5.promises.lstat(vscdbPath);
+      if (!lstat.isFile() || lstat.isSymbolicLink()) {
+        return null;
+      }
+      if (lstat.size > MAX_VSCDB_BYTES) {
+        return null;
+      }
+    } catch {
+      return null;
+    }
+    const workspacePath = await readWorkspaceJsonAsync2(storageDir);
+    if (workspacePath === void 0) {
+      return null;
+    }
+    try {
+      await fs5.promises.access(workspacePath);
+    } catch {
+      return null;
+    }
+    return {
+      id: entry,
+      source: "cursor",
+      workspacePath,
+      storageDir
+    };
+  }));
+  return results.filter((r) => r !== null);
+}
+
+// src/readers/windsurfWorkspace.ts
+var fs6 = __toESM(require("fs"));
+var path6 = __toESM(require("path"));
+var os4 = __toESM(require("os"));
+var MAX_VSCDB_BYTES2 = 500 * 1024 * 1024;
+function getWindsurfStorageRoot() {
+  const platform = process.platform;
+  if (platform === "win32") {
+    return path6.join(
+      process.env["APPDATA"] || os4.homedir(),
+      "Windsurf",
+      "User",
+      "workspaceStorage"
+    );
+  } else if (platform === "darwin") {
+    return path6.join(
+      os4.homedir(),
+      "Library",
+      "Application Support",
+      "Windsurf",
+      "User",
+      "workspaceStorage"
+    );
+  } else {
+    return path6.join(
+      process.env["XDG_CONFIG_HOME"] || path6.join(os4.homedir(), ".config"),
+      "Windsurf",
+      "User",
+      "workspaceStorage"
+    );
+  }
+}
+async function readWorkspaceJsonAsync3(storageHashDir) {
+  try {
+    const workspaceJsonPath = path6.join(storageHashDir, "workspace.json");
+    const raw = await fs6.promises.readFile(workspaceJsonPath, "utf8");
+    const parsed = JSON.parse(raw);
+    const folder = parsed.folder;
+    if (!folder) {
+      return void 0;
+    }
+    let decoded = decodeURIComponent(folder.replace("file://", ""));
+    if (process.platform === "win32" && decoded.startsWith("/")) {
+      decoded = decoded.slice(1);
+    }
+    return decoded;
+  } catch {
+    return void 0;
+  }
+}
+async function discoverWindsurfWorkspacesAsync(override) {
+  const root = override !== void 0 && override !== "" ? override : getWindsurfStorageRoot();
+  let entries;
+  try {
+    entries = await fs6.promises.readdir(root);
+  } catch {
+    return [];
+  }
+  const results = await Promise.all(entries.map(async (entry) => {
+    const storageDir = path6.join(root, entry);
+    try {
+      const lstat = await fs6.promises.lstat(storageDir);
+      if (!lstat.isDirectory() || lstat.isSymbolicLink()) {
+        return null;
+      }
+    } catch {
+      return null;
+    }
+    const vscdbPath = path6.join(storageDir, "state.vscdb");
+    try {
+      const lstat = await fs6.promises.lstat(vscdbPath);
+      if (!lstat.isFile() || lstat.isSymbolicLink()) {
+        return null;
+      }
+      if (lstat.size > MAX_VSCDB_BYTES2) {
+        return null;
+      }
+    } catch {
+      return null;
+    }
+    const workspacePath = await readWorkspaceJsonAsync3(storageDir);
+    if (workspacePath === void 0) {
+      return null;
+    }
+    try {
+      await fs6.promises.access(workspacePath);
+    } catch {
+      return null;
+    }
+    return {
+      id: entry,
+      source: "windsurf",
+      workspacePath,
+      storageDir
+    };
+  }));
+  return results.filter((r) => r !== null);
+}
+
+// src/watcher/configPaths.ts
 function resolveClaudeProjectsPath(override) {
   if (override !== void 0 && override !== "") {
     return override;
   }
   try {
-    const vscode15 = require("vscode");
-    const cfg = vscode15.workspace.getConfiguration("chatwizard");
+    const vscode16 = require("vscode");
+    const cfg = vscode16.workspace.getConfiguration("chatwizard");
     const configured = cfg.get("claudeProjectsPath");
     if (configured && configured !== "") {
       return configured;
     }
   } catch {
   }
-  return path4.join(os2.homedir(), ".claude", "projects");
+  return path7.join(os5.homedir(), ".claude", "projects");
+}
+function resolveClineStoragePath(override) {
+  if (override !== void 0 && override !== "") {
+    return override;
+  }
+  try {
+    const vscode16 = require("vscode");
+    const cfg = vscode16.workspace.getConfiguration("chatwizard");
+    const configured = cfg.get("clineStoragePath");
+    if (configured && configured !== "") {
+      return configured;
+    }
+  } catch {
+  }
+  return getClineStorageRoot();
+}
+function resolveRooCodeStoragePath(override) {
+  if (override !== void 0 && override !== "") {
+    return override;
+  }
+  try {
+    const vscode16 = require("vscode");
+    const cfg = vscode16.workspace.getConfiguration("chatwizard");
+    const configured = cfg.get("rooCodeStoragePath");
+    if (configured && configured !== "") {
+      return configured;
+    }
+  } catch {
+  }
+  return getRooCodeStorageRoot();
+}
+function resolveCursorStoragePath(override) {
+  if (override !== void 0 && override !== "") {
+    return override;
+  }
+  try {
+    const vscode16 = require("vscode");
+    const cfg = vscode16.workspace.getConfiguration("chatwizard");
+    const configured = cfg.get("cursorStoragePath");
+    if (configured && configured !== "") {
+      return configured;
+    }
+  } catch {
+  }
+  return getCursorStorageRoot();
+}
+function resolveWindsurfStoragePath(override) {
+  if (override !== void 0 && override !== "") {
+    return override;
+  }
+  try {
+    const vscode16 = require("vscode");
+    const cfg = vscode16.workspace.getConfiguration("chatwizard");
+    const configured = cfg.get("windsurfStoragePath");
+    if (configured && configured !== "") {
+      return configured;
+    }
+  } catch {
+  }
+  return getWindsurfStorageRoot();
 }
 
 // src/watcher/workspaceScope.ts
-var fs4 = __toESM(require("fs"));
-var path5 = __toESM(require("path"));
+var fs7 = __toESM(require("fs"));
+var path8 = __toESM(require("path"));
 var STORAGE_KEY = "chatwizard.selectedWorkspaceIds";
 var LEGACY_MANUAL_KEY = "chatwizard.workspaceScopeManuallySet";
 var WorkspaceScopeManager = class {
@@ -805,9 +1184,9 @@ var WorkspaceScopeManager = class {
   /** Returns the normalised, lowercase paths of currently open VS Code workspace folders. */
   _getOpenFolderPaths() {
     try {
-      const vscode15 = require("vscode");
-      return (vscode15.workspace.workspaceFolders ?? []).map(
-        (f) => path5.normalize(f.uri.fsPath).toLowerCase()
+      const vscode16 = require("vscode");
+      return (vscode16.workspace.workspaceFolders ?? []).map(
+        (f) => path8.normalize(f.uri.fsPath).toLowerCase()
       );
     } catch {
       return [];
@@ -829,7 +1208,7 @@ var WorkspaceScopeManager = class {
     if (openFolderPaths.length === 0) {
       ids = [];
     } else {
-      ids = available.filter((ws) => openFolderPaths.includes(path5.normalize(ws.workspacePath).toLowerCase())).map((ws) => ws.id);
+      ids = available.filter((ws) => openFolderPaths.includes(path8.normalize(ws.workspacePath).toLowerCase())).map((ws) => ws.id);
     }
     await this._context.globalState.update(STORAGE_KEY, ids);
   }
@@ -852,32 +1231,1320 @@ var WorkspaceScopeManager = class {
 };
 async function calcWorkspaceSizeBytes(storageDir, source) {
   try {
-    const dir = source === "copilot" ? path5.join(storageDir, "chatSessions") : storageDir;
-    const entries = await fs4.promises.readdir(dir);
-    const jsonlFiles = entries.filter((e) => e.endsWith(".jsonl"));
-    const sizes = await Promise.all(
-      jsonlFiles.map(async (f) => {
-        try {
-          const stat = await fs4.promises.stat(path5.join(dir, f));
-          return stat.size;
-        } catch {
-          return 0;
-        }
-      })
-    );
-    return sizes.reduce((acc, s) => acc + s, 0);
+    if (source === "copilot") {
+      const dir = path8.join(storageDir, "chatSessions");
+      const entries = await fs7.promises.readdir(dir);
+      const sizes = await Promise.all(
+        entries.filter((e) => e.endsWith(".jsonl")).map(async (f) => {
+          try {
+            return (await fs7.promises.stat(path8.join(dir, f))).size;
+          } catch {
+            return 0;
+          }
+        })
+      );
+      return sizes.reduce((acc, s) => acc + s, 0);
+    }
+    if (source === "claude") {
+      const entries = await fs7.promises.readdir(storageDir);
+      const sizes = await Promise.all(
+        entries.filter((e) => e.endsWith(".jsonl")).map(async (f) => {
+          try {
+            return (await fs7.promises.stat(path8.join(storageDir, f))).size;
+          } catch {
+            return 0;
+          }
+        })
+      );
+      return sizes.reduce((acc, s) => acc + s, 0);
+    }
+    if (source === "cline" || source === "roocode") {
+      const entries = await fs7.promises.readdir(storageDir, { withFileTypes: true });
+      const sizes = await Promise.all(
+        entries.filter((e) => e.isDirectory()).map(async (entry) => {
+          const convFile = path8.join(storageDir, entry.name, "api_conversation_history.json");
+          try {
+            return (await fs7.promises.stat(convFile)).size;
+          } catch {
+            return 0;
+          }
+        })
+      );
+      return sizes.reduce((acc, s) => acc + s, 0);
+    }
+    if (source === "cursor" || source === "windsurf") {
+      const vscdb = path8.join(storageDir, "state.vscdb");
+      try {
+        return (await fs7.promises.stat(vscdb)).size;
+      } catch {
+        return 0;
+      }
+    }
+    if (source === "aider") {
+      const histFile = path8.join(storageDir, ".aider.chat.history.md");
+      try {
+        return (await fs7.promises.stat(histFile)).size;
+      } catch {
+        return 0;
+      }
+    }
+    return 0;
   } catch {
     return 0;
   }
 }
 async function countWorkspaceSessions(storageDir, source) {
   try {
-    const dir = source === "copilot" ? path5.join(storageDir, "chatSessions") : storageDir;
-    const entries = await fs4.promises.readdir(dir);
-    return entries.filter((e) => e.endsWith(".jsonl")).length;
+    if (source === "copilot") {
+      const dir = path8.join(storageDir, "chatSessions");
+      const entries = await fs7.promises.readdir(dir);
+      return entries.filter((e) => e.endsWith(".jsonl")).length;
+    }
+    if (source === "claude") {
+      const entries = await fs7.promises.readdir(storageDir);
+      return entries.filter((e) => e.endsWith(".jsonl")).length;
+    }
+    if (source === "cline" || source === "roocode") {
+      const entries = await fs7.promises.readdir(storageDir, { withFileTypes: true });
+      const counts = await Promise.all(
+        entries.filter((e) => e.isDirectory()).map(async (entry) => {
+          const convFile = path8.join(storageDir, entry.name, "api_conversation_history.json");
+          try {
+            await fs7.promises.access(convFile);
+            return 1;
+          } catch {
+            return 0;
+          }
+        })
+      );
+      return counts.reduce((acc, c) => acc + c, 0);
+    }
+    if (source === "cursor" || source === "windsurf") {
+      const vscdb = path8.join(storageDir, "state.vscdb");
+      try {
+        await fs7.promises.access(vscdb);
+        return 1;
+      } catch {
+        return 0;
+      }
+    }
+    if (source === "aider") {
+      const histFile = path8.join(storageDir, ".aider.chat.history.md");
+      try {
+        await fs7.promises.access(histFile);
+        return 1;
+      } catch {
+        return 0;
+      }
+    }
+    return 0;
   } catch {
     return 0;
   }
+}
+
+// src/parsers/cline.ts
+var fs8 = __toESM(require("fs"));
+var path9 = __toESM(require("path"));
+var MAX_FILE_BYTES = 50 * 1024 * 1024;
+var MAX_ARRAY_LENGTH = 5e4;
+var MAX_TITLE_CHARS = 120;
+function extractContent(content) {
+  if (typeof content === "string") {
+    return content;
+  }
+  return content.filter((p) => p.type === "text" && typeof p.text === "string").map((p) => p.text).join("");
+}
+function extractClineCodeBlocks(content, sessionId, messageIndex) {
+  return extractCodeBlocks2(content, sessionId, messageIndex);
+}
+async function parseClineTask(taskDir, _maxLineChars, source = "cline") {
+  const taskId = path9.basename(taskDir);
+  const errors = [];
+  const emptySession = {
+    id: taskId,
+    title: "Untitled Task",
+    source,
+    workspaceId: taskId,
+    workspacePath: void 0,
+    messages: [],
+    filePath: taskDir,
+    createdAt: (/* @__PURE__ */ new Date(0)).toISOString(),
+    updatedAt: (/* @__PURE__ */ new Date(0)).toISOString()
+  };
+  const conversationFile = path9.join(taskDir, "api_conversation_history.json");
+  let apiEntries = [];
+  try {
+    const stat = await fs8.promises.stat(conversationFile);
+    if (stat.size > MAX_FILE_BYTES) {
+      errors.push(`api_conversation_history.json exceeds 50 MB size limit (${stat.size} bytes) \u2014 skipped`);
+      return { session: emptySession, errors };
+    }
+    const raw = await fs8.promises.readFile(conversationFile, "utf-8");
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      errors.push("api_conversation_history.json root value is not an array");
+      return { session: emptySession, errors };
+    }
+    if (parsed.length > MAX_ARRAY_LENGTH) {
+      errors.push(`api_conversation_history.json has ${parsed.length} entries \u2014 truncating to ${MAX_ARRAY_LENGTH}`);
+      apiEntries = parsed.slice(0, MAX_ARRAY_LENGTH);
+    } else {
+      apiEntries = parsed;
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    errors.push(`Failed to read/parse api_conversation_history.json: ${msg}`);
+    return { session: emptySession, errors };
+  }
+  let uiMessages = [];
+  const uiFile = path9.join(taskDir, "ui_messages.json");
+  try {
+    const stat = await fs8.promises.stat(uiFile);
+    if (stat.size <= MAX_FILE_BYTES) {
+      const raw = await fs8.promises.readFile(uiFile, "utf-8");
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        uiMessages = parsed;
+      }
+    }
+  } catch {
+  }
+  let createdAt;
+  let updatedAt;
+  let workspacePath;
+  let model;
+  for (const ui of uiMessages) {
+    if (typeof ui.ts === "number" && ui.ts > 0) {
+      const iso = new Date(ui.ts).toISOString();
+      if (!createdAt) {
+        createdAt = iso;
+      }
+      updatedAt = iso;
+    }
+    if (!workspacePath && typeof ui.cwd === "string" && ui.cwd) {
+      workspacePath = ui.cwd;
+    }
+    if (!model && typeof ui.modelInfo?.modelId === "string" && ui.modelInfo.modelId) {
+      model = ui.modelInfo.modelId;
+    }
+    if (!model && typeof ui.model === "string" && ui.model) {
+      model = ui.model;
+    }
+    if (!model && ui.say === "api_req_started" && typeof ui.text === "string") {
+      try {
+        const parsed = JSON.parse(ui.text);
+        if (typeof parsed["model"] === "string" && parsed["model"]) {
+          model = parsed["model"];
+        }
+      } catch {
+      }
+    }
+  }
+  if (!workspacePath) {
+    const RE_CWD = /# Current Working Directory \(([^)]+)\)/;
+    for (const entry of apiEntries) {
+      if (entry.role === "user") {
+        const text = extractContent(entry.content);
+        const m = text.match(RE_CWD);
+        if (m) {
+          workspacePath = m[1];
+        }
+        break;
+      }
+    }
+  }
+  const messages = [];
+  for (const entry of apiEntries) {
+    const role = entry.role === "user" ? "user" : "assistant";
+    const content = extractContent(entry.content);
+    if (!content.trim()) {
+      continue;
+    }
+    const messageIndex = messages.length;
+    messages.push({
+      id: `${taskId}-${messageIndex}`,
+      role,
+      content,
+      codeBlocks: extractClineCodeBlocks(content, taskId, messageIndex)
+    });
+  }
+  let title = "Untitled Task";
+  const taskUiMsg = uiMessages.find((m) => m.say === "task" && typeof m.text === "string" && m.text?.trim());
+  if (taskUiMsg) {
+    const text = taskUiMsg.text.trim();
+    const firstLine = text.split("\n")[0] || text;
+    title = firstLine.length > MAX_TITLE_CHARS ? firstLine.slice(0, MAX_TITLE_CHARS) + "\u2026" : firstLine;
+  } else {
+    const firstUserMsg = messages.find((m) => m.role === "user");
+    if (firstUserMsg) {
+      const taskMatch = firstUserMsg.content.match(/<task>\s*([\s\S]*?)\s*<\/task>/);
+      const base = taskMatch ? taskMatch[1].split("\n")[0] || taskMatch[1] : firstUserMsg.content.split("\n").find((l) => l.trim() && !l.startsWith("<")) ?? firstUserMsg.content;
+      title = base.length > MAX_TITLE_CHARS ? base.slice(0, MAX_TITLE_CHARS) + "\u2026" : base;
+    }
+  }
+  let fileSizeBytes;
+  if (!createdAt || !updatedAt) {
+    try {
+      const stat = await fs8.promises.stat(conversationFile);
+      fileSizeBytes = stat.size;
+      const mtime = stat.mtime.toISOString();
+      if (!createdAt) {
+        createdAt = mtime;
+      }
+      if (!updatedAt) {
+        updatedAt = mtime;
+      }
+    } catch {
+    }
+  } else {
+    try {
+      fileSizeBytes = (await fs8.promises.stat(conversationFile)).size;
+    } catch {
+    }
+  }
+  return {
+    session: {
+      id: taskId,
+      title,
+      source,
+      workspaceId: taskId,
+      workspacePath,
+      model,
+      messages,
+      filePath: taskDir,
+      fileSizeBytes,
+      createdAt: createdAt ?? (/* @__PURE__ */ new Date(0)).toISOString(),
+      updatedAt: updatedAt ?? (/* @__PURE__ */ new Date(0)).toISOString()
+    },
+    errors
+  };
+}
+
+// src/parsers/cursor.ts
+var path10 = __toESM(require("path"));
+var MAX_COMPOSERS = 5e3;
+var MAX_TITLE_CHARS2 = 120;
+function extractItemRole(item) {
+  if (item.type === 1) {
+    return "user";
+  }
+  if (item.type === 2) {
+    return "assistant";
+  }
+  if (item.isUser === true) {
+    return "user";
+  }
+  if (item.isUser === false) {
+    return "assistant";
+  }
+  if (typeof item.role === "string") {
+    const r = item.role.toLowerCase();
+    if (r === "user") {
+      return "user";
+    }
+    if (r === "assistant" || r === "model" || r === "ai") {
+      return "assistant";
+    }
+  }
+  return null;
+}
+function extractItemText(item) {
+  if (typeof item.text === "string" && item.text.trim()) {
+    return item.text;
+  }
+  if (typeof item.richText === "string" && item.richText.trim()) {
+    return item.richText;
+  }
+  if (typeof item.content === "string" && item.content.trim()) {
+    return item.content;
+  }
+  if (typeof item.message === "string" && item.message.trim()) {
+    return item.message;
+  }
+  if (typeof item.markdown === "string" && item.markdown.trim()) {
+    return item.markdown;
+  }
+  if (Array.isArray(item.parts)) {
+    const fromParts = item.parts.map((p) => typeof p.text === "string" && p.text ? p.text : typeof p.content === "string" ? p.content : "").filter(Boolean).join("\n").trim();
+    if (fromParts) {
+      return fromParts;
+    }
+  }
+  return "";
+}
+var AISERVICE_SOURCE_NOTE = "This session was rebuilt from Cursor's aiService.prompts data. Cursor does not store full assistant replies in workspace state.vscdb for this build \u2014 only your prompts are available here. This is not a parse failure.";
+function extractPromptComposerId(p) {
+  if (!p || typeof p !== "object") {
+    return void 0;
+  }
+  const o = p;
+  const keys = ["composerId", "composerID", "composerSessionId", "sessionId", "chatId", "composer_id"];
+  for (const k of keys) {
+    const v = o[k];
+    if (typeof v === "string" && v.trim()) {
+      return v.trim();
+    }
+  }
+  return void 0;
+}
+function extractPromptText(p) {
+  if (!p || typeof p !== "object") {
+    return "";
+  }
+  const o = p;
+  if (typeof o.text === "string" && o.text.trim()) {
+    return o.text.trim();
+  }
+  if (typeof o.prompt === "string" && o.prompt.trim()) {
+    return o.prompt.trim();
+  }
+  if (typeof o.content === "string" && o.content.trim()) {
+    return o.content.trim();
+  }
+  return "";
+}
+function composerTimeEnd(c) {
+  const lai = c.activeBranch?.lastInteractionAt ?? 0;
+  const lu = c.lastUpdatedAt ?? c.updatedAt ?? 0;
+  const best = Math.max(lai, lu);
+  const cr = c.createdAt ?? 0;
+  return (best > 0 ? best : cr) || cr;
+}
+function buildAiServiceFallbackSessions(vscdbPath, workspaceId, workspacePath, composers, promptsJson, generationsJson) {
+  const generationEntries = [];
+  const textToTimestamp = /* @__PURE__ */ new Map();
+  if (generationsJson) {
+    try {
+      const gens = JSON.parse(generationsJson);
+      if (Array.isArray(gens)) {
+        for (const g of gens) {
+          if (typeof g !== "object" || g === null) {
+            continue;
+          }
+          const go = g;
+          const text = typeof go.textDescription === "string" ? go.textDescription.trim() : "";
+          const ts = typeof go.unixMs === "number" && go.unixMs > 0 ? go.unixMs : 0;
+          if (text && ts) {
+            generationEntries.push({ text, unixMs: ts });
+            if (!textToTimestamp.has(text)) {
+              textToTimestamp.set(text, ts);
+            }
+          }
+        }
+      }
+    } catch {
+    }
+  }
+  const flat = [];
+  if (generationEntries.length > 0) {
+    for (let i = 0; i < generationEntries.length; i++) {
+      flat.push({ index: i, text: generationEntries[i].text, unixMs: generationEntries[i].unixMs });
+    }
+  } else {
+    let prompts;
+    try {
+      prompts = JSON.parse(promptsJson);
+    } catch {
+      return null;
+    }
+    if (!Array.isArray(prompts) || prompts.length === 0) {
+      return null;
+    }
+    for (let i = 0; i < prompts.length; i++) {
+      const text = extractPromptText(prompts[i]);
+      if (!text) {
+        continue;
+      }
+      const ts = textToTimestamp.get(text.trim());
+      const cid = extractPromptComposerId(prompts[i]);
+      flat.push({ index: i, text, unixMs: ts, composerId: cid });
+    }
+  }
+  if (flat.length === 0) {
+    return null;
+  }
+  const withIds = composers.filter((c) => typeof c.composerId === "string" && c.composerId.trim());
+  const buildMergedOrSingleComposerSession = (composer) => {
+    const sid = composer?.composerId && composer.composerId.trim() ? composer.composerId.trim() : `${workspaceId}-cursor-aiservice`;
+    const messages = [];
+    for (let j = 0; j < flat.length; j++) {
+      const fp = flat[j];
+      const messageIndex = messages.length;
+      messages.push({
+        id: `${sid}-${messageIndex}`,
+        role: "user",
+        content: fp.text,
+        codeBlocks: extractCursorCodeBlocks(fp.text, sid, messageIndex),
+        timestamp: fp.unixMs !== void 0 ? new Date(fp.unixMs).toISOString() : void 0
+      });
+    }
+    const firstLine = messages[0].content.split("\n")[0] || messages[0].content;
+    let title;
+    if (composer && typeof composer.name === "string" && composer.name.trim()) {
+      title = composer.name.trim();
+    } else {
+      title = firstLine.length > MAX_TITLE_CHARS2 ? firstLine.slice(0, MAX_TITLE_CHARS2) + "\u2026" : firstLine;
+    }
+    const createdAt = composer && typeof composer.createdAt === "number" && composer.createdAt > 0 ? new Date(composer.createdAt).toISOString() : messages.find((m) => m.timestamp)?.timestamp ?? (/* @__PURE__ */ new Date()).toISOString();
+    const updatedAt = [...messages].reverse().find((m) => m.timestamp)?.timestamp ?? createdAt;
+    return {
+      session: {
+        id: sid,
+        title,
+        source: "cursor",
+        workspaceId,
+        workspacePath,
+        model: composer?.model,
+        messages,
+        filePath: vscdbPath,
+        createdAt,
+        updatedAt,
+        sourceNotes: [AISERVICE_SOURCE_NOTE]
+      },
+      errors: []
+    };
+  };
+  if (withIds.length <= 1) {
+    return [buildMergedOrSingleComposerSession(withIds[0])];
+  }
+  const byComposer = /* @__PURE__ */ new Map();
+  for (const c of withIds) {
+    byComposer.set(c.composerId, []);
+  }
+  const unassigned = [];
+  for (const fp of flat) {
+    if (fp.composerId && byComposer.has(fp.composerId)) {
+      byComposer.get(fp.composerId).push(fp);
+    } else {
+      unassigned.push(fp);
+    }
+  }
+  if (unassigned.length > 0) {
+    const sorted = [...withIds].sort((a, b) => {
+      const aEnd = composerTimeEnd(a);
+      const aStart = a.createdAt ?? 0;
+      const bEnd = composerTimeEnd(b);
+      const bStart = b.createdAt ?? 0;
+      const aSize = aEnd > 0 && aEnd > aStart ? aEnd - aStart : Number.MAX_SAFE_INTEGER;
+      const bSize = bEnd > 0 && bEnd > bStart ? bEnd - bStart : Number.MAX_SAFE_INTEGER;
+      return aSize - bSize;
+    });
+    for (const fp of unassigned) {
+      const ts = fp.unixMs;
+      if (ts === void 0) {
+        continue;
+      }
+      let best;
+      for (const c of sorted) {
+        const start = c.createdAt ?? 0;
+        const end = composerTimeEnd(c);
+        if (end >= start && ts >= start && ts <= end + 2e3) {
+          best = c;
+          break;
+        }
+      }
+      if (!best) {
+        let bestDist = Infinity;
+        for (const c of sorted) {
+          const start = c.createdAt ?? 0;
+          const end = composerTimeEnd(c);
+          const mid = start && end ? (start + end) / 2 : start || end || ts;
+          const dist = Math.abs(ts - mid);
+          if (dist < bestDist) {
+            bestDist = dist;
+            best = c;
+          }
+        }
+      }
+      if (best?.composerId) {
+        byComposer.get(best.composerId).push(fp);
+      }
+    }
+  }
+  const claimed = /* @__PURE__ */ new Set();
+  for (const [, arr] of byComposer) {
+    for (const p of arr) {
+      claimed.add(`${p.index}`);
+    }
+  }
+  const stillFloating = [];
+  for (const fp of flat) {
+    if (!claimed.has(`${fp.index}`)) {
+      stillFloating.push(fp);
+    }
+  }
+  if (stillFloating.length > 0) {
+    const sortedC = [...withIds].sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
+    for (const fp of stillFloating) {
+      const firstLine = fp.text.split("\n")[0]?.trim() ?? fp.text;
+      let matched;
+      for (const c of sortedC) {
+        const name = typeof c.name === "string" ? c.name.trim() : "";
+        if (!name) {
+          continue;
+        }
+        if (firstLine === name || firstLine.toLowerCase().startsWith(name.toLowerCase())) {
+          matched = c;
+          break;
+        }
+      }
+      if (matched?.composerId) {
+        byComposer.get(matched.composerId).push(fp);
+      }
+    }
+  }
+  const claimed2 = /* @__PURE__ */ new Set();
+  for (const [, arr] of byComposer) {
+    for (const p of arr) {
+      claimed2.add(`${p.index}`);
+    }
+  }
+  const still2 = [];
+  for (const fp of flat) {
+    if (!claimed2.has(`${fp.index}`)) {
+      still2.push(fp);
+    }
+  }
+  if (still2.length > 0) {
+    const sortedC = [...withIds].sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
+    const k = sortedC.length;
+    const n = still2.length;
+    const base = Math.floor(n / k);
+    const rem = n % k;
+    let offset = 0;
+    for (let i = 0; i < k; i++) {
+      const len = base + (i < rem ? 1 : 0);
+      const slice = still2.slice(offset, offset + len);
+      offset += len;
+      const cid = sortedC[i].composerId;
+      byComposer.get(cid).push(...slice);
+    }
+  }
+  const results = [];
+  const ordered = [...withIds].sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
+  for (const c of ordered) {
+    const cid = c.composerId;
+    const items = (byComposer.get(cid) ?? []).slice().sort((a, b) => a.index - b.index);
+    if (items.length === 0) {
+      continue;
+    }
+    const messages = [];
+    for (let j = 0; j < items.length; j++) {
+      const fp = items[j];
+      const messageIndex = messages.length;
+      messages.push({
+        id: `${cid}-${messageIndex}`,
+        role: "user",
+        content: fp.text,
+        codeBlocks: extractCursorCodeBlocks(fp.text, cid, messageIndex),
+        timestamp: fp.unixMs !== void 0 ? new Date(fp.unixMs).toISOString() : void 0
+      });
+    }
+    let title;
+    if (typeof c.name === "string" && c.name.trim()) {
+      title = c.name.trim();
+    } else {
+      const firstLine = messages[0].content.split("\n")[0] || messages[0].content;
+      title = firstLine.length > MAX_TITLE_CHARS2 ? firstLine.slice(0, MAX_TITLE_CHARS2) + "\u2026" : firstLine;
+    }
+    const createdAt = typeof c.createdAt === "number" && c.createdAt > 0 ? new Date(c.createdAt).toISOString() : messages.find((m) => m.timestamp)?.timestamp ?? (/* @__PURE__ */ new Date()).toISOString();
+    const updatedAt = [...messages].reverse().find((m) => m.timestamp)?.timestamp ?? createdAt;
+    results.push({
+      session: {
+        id: cid,
+        title,
+        source: "cursor",
+        workspaceId,
+        workspacePath,
+        model: c.model,
+        messages,
+        filePath: vscdbPath,
+        createdAt,
+        updatedAt,
+        sourceNotes: [AISERVICE_SOURCE_NOTE]
+      },
+      errors: []
+    });
+  }
+  return results.length > 0 ? results : null;
+}
+async function parseCursorGlobalDb(globalDbPath) {
+  let composerRows = [];
+  let bubbleRows = [];
+  try {
+    const Database = require("better-sqlite3");
+    const db = new Database(globalDbPath, { readonly: true, fileMustExist: true });
+    try {
+      const tableCheck = db.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='cursorDiskKV'"
+      ).get();
+      if (!tableCheck) {
+        return [];
+      }
+      composerRows = db.prepare(
+        "SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%'"
+      ).all();
+      bubbleRows = db.prepare(
+        "SELECT key, value FROM cursorDiskKV WHERE key LIKE 'bubbleId:%'"
+      ).all();
+    } finally {
+      db.close();
+    }
+  } catch {
+    return [];
+  }
+  if (composerRows.length === 0) {
+    return [];
+  }
+  const bubblesByComposer = /* @__PURE__ */ new Map();
+  for (const row of bubbleRows) {
+    const firstColon = row.key.indexOf(":");
+    if (firstColon < 0) {
+      continue;
+    }
+    const remainder = row.key.slice(firstColon + 1);
+    const secondColon = remainder.indexOf(":");
+    if (secondColon < 0) {
+      continue;
+    }
+    const composerId = remainder.slice(0, secondColon);
+    const bubbleId = remainder.slice(secondColon + 1);
+    if (!composerId || !bubbleId) {
+      continue;
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(row.value);
+    } catch {
+      continue;
+    }
+    const type = typeof parsed.type === "number" ? parsed.type : 0;
+    const text = typeof parsed.text === "string" ? parsed.text.trim() : "";
+    const unixMs = typeof parsed.unixMs === "number" && parsed.unixMs > 0 ? parsed.unixMs : void 0;
+    if (!text || type !== 1 && type !== 2) {
+      continue;
+    }
+    let list = bubblesByComposer.get(composerId);
+    if (!list) {
+      list = [];
+      bubblesByComposer.set(composerId, list);
+    }
+    list.push({ bubbleId, type, text, unixMs });
+  }
+  const results = [];
+  for (const row of composerRows) {
+    const composerId = row.key.slice("composerData:".length);
+    if (!composerId) {
+      continue;
+    }
+    let composerMeta;
+    try {
+      composerMeta = JSON.parse(row.value);
+    } catch {
+      continue;
+    }
+    const rawBubbles = bubblesByComposer.get(composerId) ?? [];
+    if (rawBubbles.length === 0) {
+      continue;
+    }
+    const headers = Array.isArray(composerMeta.fullConversationHeadersOnly) ? composerMeta.fullConversationHeadersOnly : [];
+    let orderedBubbles;
+    if (headers.length > 0) {
+      const orderMap = /* @__PURE__ */ new Map();
+      for (let i = 0; i < headers.length; i++) {
+        const bid = headers[i].bubbleId;
+        if (bid) {
+          orderMap.set(bid, i);
+        }
+      }
+      orderedBubbles = [...rawBubbles].sort((a, b) => {
+        const ai = orderMap.get(a.bubbleId) ?? Number.MAX_SAFE_INTEGER;
+        const bi = orderMap.get(b.bubbleId) ?? Number.MAX_SAFE_INTEGER;
+        if (ai !== bi) {
+          return ai - bi;
+        }
+        return (a.unixMs ?? 0) - (b.unixMs ?? 0);
+      });
+    } else {
+      orderedBubbles = [...rawBubbles].sort((a, b) => (a.unixMs ?? 0) - (b.unixMs ?? 0));
+    }
+    const messages = [];
+    for (const bubble of orderedBubbles) {
+      const role = bubble.type === 1 ? "user" : "assistant";
+      const messageIndex = messages.length;
+      messages.push({
+        id: `${composerId}-${messageIndex}`,
+        role,
+        content: bubble.text,
+        codeBlocks: extractCursorCodeBlocks(bubble.text, composerId, messageIndex),
+        timestamp: bubble.unixMs !== void 0 ? new Date(bubble.unixMs).toISOString() : void 0
+      });
+    }
+    const name = typeof composerMeta.name === "string" ? composerMeta.name.trim() : "";
+    let title;
+    if (name) {
+      title = name;
+    } else {
+      const firstUser = messages.find((m) => m.role === "user");
+      if (firstUser) {
+        const firstLine = firstUser.content.split("\n")[0] || firstUser.content;
+        title = firstLine.length > MAX_TITLE_CHARS2 ? firstLine.slice(0, MAX_TITLE_CHARS2) + "\u2026" : firstLine;
+      } else {
+        title = "Untitled";
+      }
+    }
+    const createdAt = typeof composerMeta.createdAt === "number" && composerMeta.createdAt > 0 ? new Date(composerMeta.createdAt).toISOString() : messages.find((m) => m.timestamp)?.timestamp ?? (/* @__PURE__ */ new Date()).toISOString();
+    const lastTimestampMsg = [...messages].reverse().find((m) => m.timestamp);
+    const updatedAt = lastTimestampMsg?.timestamp ?? createdAt;
+    const model = typeof composerMeta.model === "string" && composerMeta.model.trim() ? composerMeta.model.trim() : void 0;
+    results.push({
+      session: {
+        id: composerId,
+        title,
+        source: "cursor",
+        // workspaceId / workspacePath will be enriched by the caller
+        // using per-workspace metadata when available.
+        workspaceId: "cursor-global",
+        workspacePath: void 0,
+        model,
+        messages,
+        filePath: globalDbPath,
+        createdAt,
+        updatedAt
+      },
+      errors: []
+    });
+  }
+  return results;
+}
+function extractCursorCodeBlocks(content, sessionId, messageIndex) {
+  return extractCodeBlocks2(content, sessionId, messageIndex);
+}
+async function parseCursorWorkspace(vscdbPath, workspaceId, workspacePath) {
+  const fatalResult = (msg) => [{
+    session: {
+      id: `${workspaceId}-cursor-error`,
+      title: "Cursor workspace (parse error)",
+      source: "cursor",
+      workspaceId,
+      workspacePath,
+      messages: [],
+      filePath: vscdbPath,
+      createdAt: (/* @__PURE__ */ new Date(0)).toISOString(),
+      updatedAt: (/* @__PURE__ */ new Date(0)).toISOString()
+    },
+    errors: [msg]
+  }];
+  let rawValue = null;
+  let usedKey = "composer.composerData";
+  let rawPrompts = null;
+  let rawGenerations = null;
+  try {
+    const Database = require("better-sqlite3");
+    const db = new Database(vscdbPath, { readonly: true, fileMustExist: true });
+    try {
+      const row = db.prepare(
+        "SELECT value FROM ItemTable WHERE key = 'composer.composerData'"
+      ).get();
+      rawValue = row?.value ?? null;
+      if (rawValue == null) {
+        const probeRows = db.prepare(
+          "SELECT key, value FROM ItemTable WHERE key LIKE '%composer%' ORDER BY key LIMIT 100"
+        ).all();
+        for (const pr of probeRows) {
+          try {
+            const parsed = JSON.parse(pr.value);
+            if (Array.isArray(parsed?.allComposers) || Array.isArray(parsed?.composers)) {
+              rawValue = pr.value;
+              usedKey = pr.key;
+              break;
+            }
+          } catch {
+          }
+        }
+      }
+      const prRow = db.prepare(
+        "SELECT value FROM ItemTable WHERE key = 'aiService.prompts'"
+      ).get();
+      rawPrompts = prRow?.value ?? null;
+      const genRow = db.prepare(
+        "SELECT value FROM ItemTable WHERE key = 'aiService.generations'"
+      ).get();
+      rawGenerations = genRow?.value ?? null;
+    } finally {
+      db.close();
+    }
+  } catch (err) {
+    return fatalResult(
+      `Failed to open/query state.vscdb: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+  if (rawValue == null) {
+    if (rawPrompts) {
+      const fb2 = buildAiServiceFallbackSessions(
+        vscdbPath,
+        workspaceId,
+        workspacePath,
+        [],
+        rawPrompts,
+        rawGenerations
+      );
+      return fb2 && fb2.length > 0 ? fb2 : fatalResult("Missing usable composer data key in state.vscdb");
+    }
+    return fatalResult("Missing usable composer data key in state.vscdb");
+  }
+  let composerData;
+  try {
+    composerData = JSON.parse(rawValue);
+  } catch (err) {
+    return fatalResult(
+      `Failed to parse composer.composerData JSON: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+  const allComposers = Array.isArray(composerData?.allComposers) ? composerData.allComposers : composerData?.composers;
+  if (!Array.isArray(allComposers)) {
+    return fatalResult(`${usedKey} does not contain allComposers/composers array`);
+  }
+  if (allComposers.length === 0) {
+    const fb2 = rawPrompts ? buildAiServiceFallbackSessions(
+      vscdbPath,
+      workspaceId,
+      workspacePath,
+      [],
+      rawPrompts,
+      rawGenerations
+    ) : null;
+    return fb2 && fb2.length > 0 ? fb2 : [];
+  }
+  const composers = allComposers.slice(0, MAX_COMPOSERS);
+  const perComposer = composers.map((composer) => {
+    const composerId = typeof composer.composerId === "string" && composer.composerId ? composer.composerId : `${workspaceId}-${path10.basename(vscdbPath)}-unknown`;
+    const errors = [];
+    const conversation = Array.isArray(composer.conversation) ? composer.conversation : Array.isArray(composer.messages) ? composer.messages : [];
+    const messages = [];
+    for (const item of conversation) {
+      const role = extractItemRole(item);
+      if (!role) {
+        continue;
+      }
+      const content = extractItemText(item);
+      if (!content.trim()) {
+        continue;
+      }
+      const messageIndex = messages.length;
+      messages.push({
+        id: `${composerId}-${messageIndex}`,
+        role,
+        content,
+        codeBlocks: extractCursorCodeBlocks(content, composerId, messageIndex),
+        timestamp: typeof item.unixMs === "number" && item.unixMs > 0 ? new Date(item.unixMs).toISOString() : typeof item.timestamp === "number" && item.timestamp > 0 ? new Date(item.timestamp).toISOString() : typeof item.createdAt === "number" && item.createdAt > 0 ? new Date(item.createdAt).toISOString() : void 0
+      });
+    }
+    const firstUserMsg = messages.find((m) => m.role === "user");
+    let title;
+    if (typeof composer.name === "string" && composer.name.trim()) {
+      title = composer.name.trim();
+    } else if (firstUserMsg) {
+      const firstLine = firstUserMsg.content.split("\n")[0];
+      const base = firstLine || firstUserMsg.content;
+      title = base.length > MAX_TITLE_CHARS2 ? base.slice(0, MAX_TITLE_CHARS2) + "\u2026" : base;
+    } else {
+      title = "Untitled";
+    }
+    const createdAt = typeof composer.createdAt === "number" && composer.createdAt > 0 ? new Date(composer.createdAt).toISOString() : typeof composer.updatedAt === "number" && composer.updatedAt > 0 ? new Date(composer.updatedAt).toISOString() : messages.find((m) => m.timestamp)?.timestamp ?? (/* @__PURE__ */ new Date()).toISOString();
+    const lastTimestampMsg = [...messages].reverse().find((m) => m.timestamp);
+    const updatedAt = lastTimestampMsg?.timestamp ?? createdAt;
+    return {
+      session: {
+        id: composerId,
+        title,
+        source: "cursor",
+        workspaceId,
+        workspacePath,
+        model: composer.model,
+        messages,
+        filePath: vscdbPath,
+        createdAt,
+        updatedAt
+      },
+      errors
+    };
+  });
+  const nonempty = perComposer.filter((r) => r.session.messages.length > 0);
+  if (nonempty.length > 0) {
+    return nonempty;
+  }
+  const fb = rawPrompts ? buildAiServiceFallbackSessions(
+    vscdbPath,
+    workspaceId,
+    workspacePath,
+    composers,
+    rawPrompts,
+    rawGenerations
+  ) : null;
+  return fb && fb.length > 0 ? fb : [];
+}
+
+// src/parsers/windsurf.ts
+var MAX_SESSIONS = 5e3;
+var MAX_TITLE_CHARS3 = 120;
+function extractWindsurfCodeBlocks(content, sessionId, messageIndex) {
+  return extractCodeBlocks2(content, sessionId, messageIndex);
+}
+async function parseWindsurfWorkspace(vscdbPath, workspaceId, workspacePath) {
+  const fatalResult = (msg) => [{
+    session: {
+      id: `${workspaceId}-windsurf-error`,
+      title: "Windsurf workspace (parse error)",
+      source: "windsurf",
+      workspaceId,
+      workspacePath,
+      messages: [],
+      filePath: vscdbPath,
+      createdAt: (/* @__PURE__ */ new Date(0)).toISOString(),
+      updatedAt: (/* @__PURE__ */ new Date(0)).toISOString()
+    },
+    errors: [msg]
+  }];
+  let rawValue = null;
+  try {
+    const Database = require("better-sqlite3");
+    const db = new Database(vscdbPath, { readonly: true, fileMustExist: true });
+    try {
+      const row = db.prepare(
+        "SELECT value FROM ItemTable WHERE key = 'cascade.sessionData'"
+      ).get();
+      rawValue = row?.value ?? null;
+    } finally {
+      db.close();
+    }
+  } catch (err) {
+    return fatalResult(
+      `Failed to open/query state.vscdb: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+  if (rawValue == null) {
+    return fatalResult("Missing 'cascade.sessionData' key in state.vscdb");
+  }
+  let cascadeData;
+  try {
+    cascadeData = JSON.parse(rawValue);
+  } catch (err) {
+    return fatalResult(
+      `Failed to parse cascade.sessionData JSON: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+  const allSessions = cascadeData?.sessions;
+  if (!Array.isArray(allSessions)) {
+    return fatalResult("cascade.sessionData.sessions is not an array");
+  }
+  if (allSessions.length === 0) {
+    return [];
+  }
+  const sessions = allSessions.slice(0, MAX_SESSIONS);
+  return sessions.map((cascadeSession) => {
+    const sessionId = typeof cascadeSession.sessionId === "string" && cascadeSession.sessionId ? cascadeSession.sessionId : `${workspaceId}-windsurf-unknown`;
+    const errors = [];
+    const rawMessages = Array.isArray(cascadeSession.messages) ? cascadeSession.messages : [];
+    const messages = [];
+    for (const msg of rawMessages) {
+      if (msg.role !== "user" && msg.role !== "assistant") {
+        continue;
+      }
+      const content = typeof msg.content === "string" ? msg.content : "";
+      if (!content.trim()) {
+        continue;
+      }
+      const messageIndex = messages.length;
+      messages.push({
+        id: `${sessionId}-${messageIndex}`,
+        role: msg.role,
+        content,
+        codeBlocks: extractWindsurfCodeBlocks(content, sessionId, messageIndex),
+        timestamp: typeof msg.timestamp === "number" && msg.timestamp > 0 ? new Date(msg.timestamp).toISOString() : void 0
+      });
+    }
+    const firstUserMsg = messages.find((m) => m.role === "user");
+    let title;
+    if (typeof cascadeSession.title === "string" && cascadeSession.title.trim()) {
+      title = cascadeSession.title.trim();
+    } else if (firstUserMsg) {
+      const firstLine = firstUserMsg.content.split("\n")[0];
+      const base = firstLine || firstUserMsg.content;
+      title = base.length > MAX_TITLE_CHARS3 ? base.slice(0, MAX_TITLE_CHARS3) + "\u2026" : base;
+    } else {
+      title = "Untitled";
+    }
+    const createdAt = typeof cascadeSession.createdAt === "number" && cascadeSession.createdAt > 0 ? new Date(cascadeSession.createdAt).toISOString() : messages.find((m) => m.timestamp)?.timestamp ?? (/* @__PURE__ */ new Date(0)).toISOString();
+    const lastTimestampMsg = [...messages].reverse().find((m) => m.timestamp);
+    const updatedAt = lastTimestampMsg?.timestamp ?? createdAt;
+    return {
+      session: {
+        id: sessionId,
+        title,
+        source: "windsurf",
+        workspaceId,
+        workspacePath,
+        messages,
+        filePath: vscdbPath,
+        createdAt,
+        updatedAt
+      },
+      errors
+    };
+  });
+}
+
+// src/readers/aiderWorkspace.ts
+var fs9 = __toESM(require("fs"));
+var path11 = __toESM(require("path"));
+var AIDER_HISTORY_FILENAME = ".aider.chat.history.md";
+var AIDER_CONFIG_FILENAME = ".aider.conf.yml";
+var MAX_HISTORY_BYTES = 20 * 1024 * 1024;
+var DEFAULT_AIDER_SEARCH_DEPTH = 3;
+var MAX_AIDER_SEARCH_DEPTH = 5;
+async function searchDirAsync(rootDir, maxDepth) {
+  const results = [];
+  await _walkAsync(rootDir, rootDir, 1, maxDepth, results);
+  return results;
+}
+async function _walkAsync(currentDir, _rootDir, currentDepth, maxDepth, results) {
+  let entries;
+  try {
+    entries = await fs9.promises.readdir(currentDir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (!entry.isFile() || entry.isSymbolicLink()) {
+      continue;
+    }
+    if (entry.name !== AIDER_HISTORY_FILENAME) {
+      continue;
+    }
+    const historyFile = path11.join(currentDir, entry.name);
+    try {
+      const lstat = await fs9.promises.lstat(historyFile);
+      if (!lstat.isFile() || lstat.isSymbolicLink()) {
+        continue;
+      }
+      if (lstat.size > MAX_HISTORY_BYTES) {
+        continue;
+      }
+    } catch {
+      continue;
+    }
+    const workspacePath = currentDir;
+    let configFile;
+    const candidate = path11.join(currentDir, AIDER_CONFIG_FILENAME);
+    try {
+      const cfgStat = await fs9.promises.lstat(candidate);
+      if (cfgStat.isFile() && !cfgStat.isSymbolicLink()) {
+        configFile = candidate;
+      }
+    } catch {
+    }
+    results.push({ historyFile, workspacePath, configFile });
+  }
+  if (currentDepth < maxDepth) {
+    await Promise.all(
+      entries.filter((e) => e.isDirectory() && !e.isSymbolicLink()).map((e) => _walkAsync(path11.join(currentDir, e.name), _rootDir, currentDepth + 1, maxDepth, results))
+    );
+  }
+}
+async function discoverAiderHistoryFilesAsync(roots, maxDepth = DEFAULT_AIDER_SEARCH_DEPTH) {
+  const depth = Math.min(Math.max(1, maxDepth), MAX_AIDER_SEARCH_DEPTH);
+  const allResults = await Promise.all(roots.map((r) => searchDirAsync(r, depth)));
+  const seen = /* @__PURE__ */ new Set();
+  const merged = [];
+  for (const batch of allResults) {
+    for (const info of batch) {
+      if (!seen.has(info.historyFile)) {
+        seen.add(info.historyFile);
+        merged.push(info);
+      }
+    }
+  }
+  return merged;
+}
+
+// src/parsers/aider.ts
+var fs10 = __toESM(require("fs"));
+var crypto = __toESM(require("crypto"));
+var DEFAULT_MAX_LINE_CHARS2 = 1e6;
+var MAX_MESSAGE_BYTES = 1024 * 1024;
+var MAX_TITLE_CHARS4 = 120;
+var RE_SESSION_START = /^#\s+aider chat started at\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})/i;
+var USER_PREFIX = "#### ";
+var CMD_PREFIX = "> ";
+function extractAiderCodeBlocks(content, sessionId, messageIndex) {
+  return extractCodeBlocks2(content, sessionId, messageIndex);
+}
+function parseAiderHistory(info, maxLineChars = DEFAULT_MAX_LINE_CHARS2) {
+  const sessionId = crypto.createHash("sha1").update(info.historyFile).digest("hex");
+  const errors = [];
+  let rawContent;
+  try {
+    rawContent = fs10.readFileSync(info.historyFile, "utf8");
+  } catch (err) {
+    const msg = `Failed to read ${info.historyFile}: ${err instanceof Error ? err.message : String(err)}`;
+    errors.push(msg);
+    return {
+      session: _emptySession(sessionId, info, errors),
+      errors
+    };
+  }
+  const model = _readModel(info.configFile);
+  let mtimeIso;
+  try {
+    const st = fs10.statSync(info.historyFile);
+    mtimeIso = st.mtime.toISOString();
+  } catch {
+    mtimeIso = (/* @__PURE__ */ new Date(0)).toISOString();
+  }
+  if (rawContent.trim() === "") {
+    return {
+      session: {
+        ..._emptySession(sessionId, info, errors),
+        model,
+        updatedAt: mtimeIso
+      },
+      errors
+    };
+  }
+  const lines = rawContent.split("\n");
+  let createdAt;
+  const messages = [];
+  let assistantLines = [];
+  let assistantByteCount = 0;
+  let assistantTruncated = false;
+  function flushAssistant() {
+    if (assistantLines.length === 0) {
+      return;
+    }
+    let content = assistantLines.join("\n").trim();
+    if (!content) {
+      assistantLines = [];
+      assistantByteCount = 0;
+      assistantTruncated = false;
+      return;
+    }
+    if (assistantTruncated) {
+      content += "\n[...truncated \u2014 exceeded 1 MB limit]";
+      errors.push(`Assistant message truncated at 1 MB in ${info.historyFile}`);
+    }
+    const messageIndex = messages.length;
+    messages.push({
+      id: `${sessionId}-${messageIndex}`,
+      role: "assistant",
+      content,
+      codeBlocks: extractAiderCodeBlocks(content, sessionId, messageIndex)
+    });
+    assistantLines = [];
+    assistantByteCount = 0;
+    assistantTruncated = false;
+  }
+  for (const rawLine of lines) {
+    if (rawLine.length > maxLineChars) {
+      errors.push(`Line skipped \u2014 length ${rawLine.length} exceeds limit ${maxLineChars} in ${info.historyFile}`);
+      continue;
+    }
+    const startMatch = RE_SESSION_START.exec(rawLine);
+    if (startMatch) {
+      createdAt = new Date(startMatch[1].replace(" ", "T")).toISOString();
+      continue;
+    }
+    if (rawLine.startsWith(USER_PREFIX)) {
+      flushAssistant();
+      const userText = rawLine.slice(USER_PREFIX.length).trim();
+      if (userText) {
+        const messageIndex = messages.length;
+        messages.push({
+          id: `${sessionId}-${messageIndex}`,
+          role: "user",
+          content: userText,
+          codeBlocks: extractAiderCodeBlocks(userText, sessionId, messageIndex)
+        });
+      }
+      continue;
+    }
+    if (rawLine.startsWith(CMD_PREFIX)) {
+      continue;
+    }
+    if (rawLine.trim() === "") {
+      if (assistantLines.length > 0) {
+        assistantLines.push("");
+      }
+      continue;
+    }
+    if (!assistantTruncated) {
+      const lineBytes = Buffer.byteLength(rawLine, "utf8");
+      if (assistantByteCount + lineBytes > MAX_MESSAGE_BYTES) {
+        assistantTruncated = true;
+      } else {
+        assistantLines.push(rawLine);
+        assistantByteCount += lineBytes;
+      }
+    }
+  }
+  flushAssistant();
+  const finalCreatedAt = createdAt ?? mtimeIso;
+  const finalUpdatedAt = mtimeIso;
+  const firstUserMsg = messages.find((m) => m.role === "user");
+  let title;
+  if (firstUserMsg) {
+    const firstLine = firstUserMsg.content.split("\n")[0];
+    const base = firstLine || firstUserMsg.content;
+    title = base.length > MAX_TITLE_CHARS4 ? base.slice(0, MAX_TITLE_CHARS4) + "\u2026" : base;
+  } else {
+    title = "Untitled Aider Session";
+  }
+  return {
+    session: {
+      id: sessionId,
+      title,
+      source: "aider",
+      workspaceId: sessionId,
+      workspacePath: info.workspacePath,
+      model,
+      messages,
+      filePath: info.historyFile,
+      createdAt: finalCreatedAt,
+      updatedAt: finalUpdatedAt
+    },
+    errors
+  };
+}
+function _emptySession(sessionId, info, errors) {
+  return {
+    id: sessionId,
+    title: "Untitled Aider Session",
+    source: "aider",
+    workspaceId: sessionId,
+    workspacePath: info.workspacePath,
+    messages: [],
+    filePath: info.historyFile,
+    createdAt: (/* @__PURE__ */ new Date(0)).toISOString(),
+    updatedAt: (/* @__PURE__ */ new Date(0)).toISOString(),
+    parseErrors: errors.length > 0 ? errors : void 0
+  };
+}
+function _readModel(configFile) {
+  if (!configFile) {
+    return void 0;
+  }
+  try {
+    const raw = fs10.readFileSync(configFile, "utf8");
+    for (const line of raw.split("\n")) {
+      const match = /^model:\s*(.+)/.exec(line.trim());
+      if (match) {
+        return match[1].trim().replace(/^["']|["']$/g, "");
+      }
+    }
+  } catch {
+  }
+  return void 0;
 }
 
 // src/watcher/fileWatcher.ts
@@ -899,16 +2566,16 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
    */
   static _isSafeFilePath(resolvedBase, filePath) {
     try {
-      const realPath = fs5.realpathSync(filePath);
-      return realPath.startsWith(resolvedBase + path6.sep) || realPath === resolvedBase;
+      const realPath = fs11.realpathSync(filePath);
+      return realPath.startsWith(resolvedBase + path12.sep) || realPath === resolvedBase;
     } catch {
       return false;
     }
   }
   static async _isSafeFilePathAsync(resolvedBase, filePath) {
     try {
-      const realPath = await fs5.promises.realpath(filePath);
-      return realPath.startsWith(resolvedBase + path6.sep) || realPath === resolvedBase;
+      const realPath = await fs11.promises.realpath(filePath);
+      return realPath.startsWith(resolvedBase + path12.sep) || realPath === resolvedBase;
     } catch {
       return false;
     }
@@ -918,12 +2585,17 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
     const enabled = cfg.get("enabled", true);
     const indexClaude = cfg.get("indexClaude", true);
     const indexCopilot = cfg.get("indexCopilot", true);
+    const indexCline = cfg.get("indexCline", true);
+    const indexRooCode = cfg.get("indexRooCode", true);
+    const indexCursor = cfg.get("indexCursor", true);
+    const indexWindsurf = cfg.get("indexWindsurf", true);
+    const indexAider = cfg.get("indexAider", true);
     if (!enabled) {
       this.channel.appendLine("[Chat Wizard] Extension disabled via chatwizard.enabled setting \u2014 skipping indexing and file watching.");
       this.index.batchUpsert([]);
       return;
     }
-    await this.buildInitialIndex(indexClaude, indexCopilot);
+    await this.buildInitialIndex(indexClaude, indexCopilot, indexCline, indexRooCode, indexCursor, indexWindsurf, indexAider);
     if (indexClaude) {
       const claudeBaseDir = resolveClaudeProjectsPath();
       const claudePattern = new vscode.RelativePattern(
@@ -934,7 +2606,7 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
       claudeWatcher.onDidCreate((uri) => this.onFileChanged(uri, "claude"));
       claudeWatcher.onDidChange((uri) => this.onFileChanged(uri, "claude"));
       claudeWatcher.onDidDelete((uri) => {
-        const sessionId = path6.basename(uri.fsPath, ".jsonl");
+        const sessionId = path12.basename(uri.fsPath, ".jsonl");
         this.index.remove(sessionId);
         this.channel.appendLine(`[live] removed session ${sessionId}`);
       });
@@ -950,7 +2622,7 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
         this.channel.appendLine(`[error] Failed to discover Copilot workspaces for watching: ${err}`);
       }
       for (const workspace7 of copilotWorkspaces) {
-        const chatSessionsDir = path6.join(workspace7.storageDir, "chatSessions");
+        const chatSessionsDir = path12.join(workspace7.storageDir, "chatSessions");
         const copilotPattern = new vscode.RelativePattern(
           vscode.Uri.file(chatSessionsDir),
           "*.jsonl"
@@ -963,12 +2635,85 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
           (uri) => this.onFileChanged(uri, "copilot", workspace7.workspaceId, workspace7.workspacePath)
         );
         copilotWatcher.onDidDelete((uri) => {
-          const sessionId = path6.basename(uri.fsPath, ".jsonl");
+          const sessionId = path12.basename(uri.fsPath, ".jsonl");
           this.index.remove(sessionId);
           this.channel.appendLine(`[live] removed session ${sessionId}`);
         });
         this.disposables.push(copilotWatcher);
       }
+    }
+    if (indexCline) {
+      const clineRoot = resolveClineStoragePath();
+      const clinePattern = new vscode.RelativePattern(
+        vscode.Uri.file(clineRoot),
+        "**/api_conversation_history.json"
+      );
+      const clineWatcher = vscode.workspace.createFileSystemWatcher(clinePattern);
+      clineWatcher.onDidCreate((uri) => this.onClineFileChanged(uri));
+      clineWatcher.onDidChange((uri) => this.onClineFileChanged(uri));
+      clineWatcher.onDidDelete((uri) => {
+        const taskId = path12.basename(path12.dirname(uri.fsPath));
+        this.index.remove(taskId);
+        this.channel.appendLine(`[live] removed cline session ${taskId}`);
+      });
+      this.disposables.push(clineWatcher);
+    }
+    if (indexRooCode) {
+      const rooCodeRoot = resolveRooCodeStoragePath();
+      const rooCodePattern = new vscode.RelativePattern(
+        vscode.Uri.file(rooCodeRoot),
+        "**/api_conversation_history.json"
+      );
+      const rooCodeWatcher = vscode.workspace.createFileSystemWatcher(rooCodePattern);
+      rooCodeWatcher.onDidCreate((uri) => this.onRooCodeFileChanged(uri));
+      rooCodeWatcher.onDidChange((uri) => this.onRooCodeFileChanged(uri));
+      rooCodeWatcher.onDidDelete((uri) => {
+        const taskId = path12.basename(path12.dirname(uri.fsPath));
+        this.index.remove(taskId);
+        this.channel.appendLine(`[live] removed roocode session ${taskId}`);
+      });
+      this.disposables.push(rooCodeWatcher);
+    }
+    if (indexCursor) {
+      const cursorRoot = resolveCursorStoragePath();
+      const cursorPattern = new vscode.RelativePattern(
+        vscode.Uri.file(cursorRoot),
+        "**/state.vscdb"
+      );
+      const cursorWatcher = vscode.workspace.createFileSystemWatcher(cursorPattern);
+      cursorWatcher.onDidCreate((uri) => this.onCursorFileChanged(uri));
+      cursorWatcher.onDidChange((uri) => this.onCursorFileChanged(uri));
+      cursorWatcher.onDidDelete((uri) => {
+        const vscdbPath = uri.fsPath;
+        this.channel.appendLine(`[live] cursor state.vscdb deleted: ${vscdbPath}`);
+      });
+      this.disposables.push(cursorWatcher);
+    }
+    if (indexWindsurf) {
+      const windsurfRoot = resolveWindsurfStoragePath();
+      const windsurfPattern = new vscode.RelativePattern(
+        vscode.Uri.file(windsurfRoot),
+        "**/state.vscdb"
+      );
+      const windsurfWatcher = vscode.workspace.createFileSystemWatcher(windsurfPattern);
+      windsurfWatcher.onDidCreate((uri) => this.onWindsurfFileChanged(uri));
+      windsurfWatcher.onDidChange((uri) => this.onWindsurfFileChanged(uri));
+      windsurfWatcher.onDidDelete((uri) => {
+        const vscdbPath = uri.fsPath;
+        this.channel.appendLine(`[live] windsurf state.vscdb deleted: ${vscdbPath}`);
+      });
+      this.disposables.push(windsurfWatcher);
+    }
+    if (indexAider) {
+      const aiderWatcher = vscode.workspace.createFileSystemWatcher("**/.aider.chat.history.md");
+      aiderWatcher.onDidCreate((uri) => this.onAiderFileChanged(uri));
+      aiderWatcher.onDidChange((uri) => this.onAiderFileChanged(uri));
+      aiderWatcher.onDidDelete((uri) => {
+        const sessionId = require("crypto").createHash("sha1").update(uri.fsPath).digest("hex");
+        this.index.remove(sessionId);
+        this.channel.appendLine(`[live] removed aider session ${uri.fsPath}`);
+      });
+      this.disposables.push(aiderWatcher);
     }
   }
   /**
@@ -986,7 +2731,7 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
     }
     this.disposables = [];
   }
-  async buildInitialIndex(indexClaude, indexCopilot) {
+  async buildInitialIndex(indexClaude, indexCopilot, indexCline, indexRooCode = true, indexCursor = true, indexWindsurf = true, indexAider = true) {
     await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Window,
@@ -1003,13 +2748,18 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
         } else {
           this.channel.appendLine(`[Chat Wizard] Building index with scope filter: [${selectedIds.join(", ")}]`);
         }
-        const [claudeSessions, copilotSessions] = await Promise.all([
+        const [claudeSessions, copilotSessions, clineSessions, rooCodeSessions, cursorSessions, windsurfSessions, aiderSessions] = await Promise.all([
           // Always pass selectedIds (even empty array) — empty = index nothing, no fallback to all.
           indexClaude ? this.collectClaudeSessionsAsync(onProgress, selectedIds) : Promise.resolve([]),
-          indexCopilot ? this.collectCopilotSessionsAsync(onProgress, selectedIds) : Promise.resolve([])
+          indexCopilot ? this.collectCopilotSessionsAsync(onProgress, selectedIds) : Promise.resolve([]),
+          indexCline ? this.collectClineTasksAsync(onProgress) : Promise.resolve([]),
+          indexRooCode ? this.collectRooCodeTasksAsync(onProgress) : Promise.resolve([]),
+          indexCursor ? this.collectCursorSessionsAsync(onProgress) : Promise.resolve([]),
+          indexWindsurf ? this.collectWindsurfSessionsAsync(onProgress) : Promise.resolve([]),
+          indexAider ? this.collectAiderSessionsAsync(onProgress) : Promise.resolve([])
         ]);
         const cfg = vscode.workspace.getConfiguration("chatwizard");
-        const all = applySessionFilters([...claudeSessions, ...copilotSessions], cfg, this.channel);
+        const all = applySessionFilters([...claudeSessions, ...copilotSessions, ...clineSessions, ...rooCodeSessions, ...cursorSessions, ...windsurfSessions, ...aiderSessions], cfg, this.channel);
         this.index.batchUpsert(all);
         this.channel.appendLine(`[init] Batch indexed ${all.length} sessions`);
       }
@@ -1027,20 +2777,20 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
     try {
       let exists = false;
       try {
-        exists = (await fs5.promises.stat(claudeProjectsDir)).isDirectory();
+        exists = (await fs11.promises.stat(claudeProjectsDir)).isDirectory();
       } catch {
       }
       if (!exists) {
         return [];
       }
-      const resolvedBase = await fs5.promises.realpath(claudeProjectsDir).catch(() => claudeProjectsDir);
-      const projectDirEntries = await fs5.promises.readdir(claudeProjectsDir, { withFileTypes: true });
+      const resolvedBase = await fs11.promises.realpath(claudeProjectsDir).catch(() => claudeProjectsDir);
+      const projectDirEntries = await fs11.promises.readdir(claudeProjectsDir, { withFileTypes: true });
       const allDirEntries = projectDirEntries.filter((d) => d.isDirectory());
       const dirEntries = selectedIds ? allDirEntries.filter((d) => selectedIds.includes(d.name)) : allDirEntries;
       const fileLists = await Promise.all(dirEntries.map(async (d) => {
-        const projectPath = path6.join(claudeProjectsDir, d.name);
+        const projectPath = path12.join(claudeProjectsDir, d.name);
         try {
-          const files = await fs5.promises.readdir(projectPath, { withFileTypes: true });
+          const files = await fs11.promises.readdir(projectPath, { withFileTypes: true });
           return { projectPath, files: files.filter((f) => f.isFile() && f.name.endsWith(".jsonl")) };
         } catch {
           return { projectPath, files: [] };
@@ -1051,7 +2801,7 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
       const dirResults = await Promise.all(fileLists.map(async ({ projectPath, files }) => {
         const dirSessions = [];
         for (const file of files) {
-          const filePath = path6.join(projectPath, file.name);
+          const filePath = path12.join(projectPath, file.name);
           if (!await _ChatWizardWatcher._isSafeFilePathAsync(resolvedBase, filePath)) {
             this.channel.appendLine(`[security] Skipping ${filePath}: resolves outside base directory`);
             current++;
@@ -1091,7 +2841,7 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
       const wsResults = await Promise.all(workspaces.map(async (workspace7, idx) => {
         const files = fileListsPerWorkspace[idx];
         const wsSessions = [];
-        const resolvedBase = await fs5.promises.realpath(workspace7.storageDir).catch(() => workspace7.storageDir);
+        const resolvedBase = await fs11.promises.realpath(workspace7.storageDir).catch(() => workspace7.storageDir);
         for (const filePath of files) {
           if (!await _ChatWizardWatcher._isSafeFilePathAsync(resolvedBase, filePath)) {
             this.channel.appendLine(`[security] Skipping ${filePath}: resolves outside workspace storage`);
@@ -1114,34 +2864,227 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
       return [];
     }
   }
+  /** Async: parse all Cline tasks using non-blocking directory reads. */
+  async collectClineTasksAsync(onProgress, _clineRootOverride) {
+    const root = _clineRootOverride ?? resolveClineStoragePath();
+    try {
+      const tasks = await discoverClineTasksAsync(root);
+      const total = tasks.length;
+      let current = 0;
+      const results = await Promise.all(tasks.map(async (task) => {
+        const result = await parseClineTask(task.storageDir);
+        current++;
+        onProgress?.(current, total);
+        if (result.errors.length > 0) {
+          this.channel.appendLine(`[warn] Cline parse errors in ${task.storageDir}: ${result.errors.join("; ")}`);
+        }
+        if (result.session.messages.length === 0 || result.session.createdAt === (/* @__PURE__ */ new Date(0)).toISOString()) {
+          return null;
+        }
+        return result.session;
+      }));
+      return results.filter((s) => s !== null);
+    } catch (err) {
+      this.channel.appendLine(`[error] Failed to collect Cline tasks: ${err}`);
+      return [];
+    }
+  }
+  /** Async: parse all Roo Code tasks using non-blocking directory reads. */
+  async collectRooCodeTasksAsync(onProgress, _rooCodeRootOverride) {
+    const root = _rooCodeRootOverride ?? resolveRooCodeStoragePath();
+    try {
+      const tasks = await discoverRooCodeTasksAsync(root);
+      const total = tasks.length;
+      let current = 0;
+      const results = await Promise.all(tasks.map(async (task) => {
+        const result = await parseClineTask(task.storageDir, void 0, "roocode");
+        current++;
+        onProgress?.(current, total);
+        if (result.errors.length > 0) {
+          this.channel.appendLine(`[warn] Roo Code parse errors in ${task.storageDir}: ${result.errors.join("; ")}`);
+        }
+        if (result.session.messages.length === 0 || result.session.createdAt === (/* @__PURE__ */ new Date(0)).toISOString()) {
+          return null;
+        }
+        return result.session;
+      }));
+      return results.filter((s) => s !== null);
+    } catch (err) {
+      this.channel.appendLine(`[error] Failed to collect Roo Code tasks: ${err}`);
+      return [];
+    }
+  }
+  /** Async: parse all Cursor sessions by reading state.vscdb files across discovered workspaces. */
+  async collectCursorSessionsAsync(onProgress, _cursorRootOverride, _globalDbPathOverride) {
+    const root = _cursorRootOverride ?? resolveCursorStoragePath();
+    try {
+      const workspaces = await discoverCursorWorkspacesAsync(root);
+      const total = workspaces.length;
+      let current = 0;
+      const composerIdToWorkspaceInfo = /* @__PURE__ */ new Map();
+      const wsSessionsById = /* @__PURE__ */ new Map();
+      const wsResults = await Promise.all(workspaces.map(async (ws) => {
+        const vscdbPath = require("path").join(ws.storageDir, "state.vscdb");
+        const parseResults = await parseCursorWorkspace(vscdbPath, ws.id, ws.workspacePath);
+        current++;
+        onProgress?.(current, total);
+        const sessions = [];
+        for (const result of parseResults) {
+          if (result.errors.length > 0) {
+            this.channel.appendLine(
+              `[warn] Cursor parse errors in ${vscdbPath}: ${result.errors.join("; ")}`
+            );
+          }
+          if (result.session.id && !result.session.id.endsWith("-cursor-error")) {
+            composerIdToWorkspaceInfo.set(result.session.id, {
+              workspaceId: ws.id,
+              workspacePath: ws.workspacePath
+            });
+          }
+          if (result.session.messages.length === 0 || result.session.createdAt === (/* @__PURE__ */ new Date(0)).toISOString()) {
+            continue;
+          }
+          sessions.push(result.session);
+        }
+        return sessions;
+      }));
+      for (const session of wsResults.flat()) {
+        wsSessionsById.set(session.id, session);
+      }
+      const globalDbPath = getCursorGlobalDbPath(_globalDbPathOverride);
+      let globalSessions = [];
+      try {
+        const globalResults = await parseCursorGlobalDb(globalDbPath);
+        for (const result of globalResults) {
+          if (result.errors.length > 0) {
+            this.channel.appendLine(`[warn] Cursor global DB errors: ${result.errors.join("; ")}`);
+          }
+          if (result.session.messages.length === 0 || result.session.createdAt === (/* @__PURE__ */ new Date(0)).toISOString()) {
+            continue;
+          }
+          const wsInfo = composerIdToWorkspaceInfo.get(result.session.id);
+          if (wsInfo) {
+            result.session.workspaceId = wsInfo.workspaceId;
+            result.session.workspacePath = wsInfo.workspacePath;
+          }
+          globalSessions.push(result.session);
+        }
+        if (globalSessions.length > 0) {
+          this.channel.appendLine(
+            `[init] Cursor global DB: ${globalSessions.length} sessions with full conversations`
+          );
+        }
+      } catch (err) {
+        this.channel.appendLine(`[warn] Failed to read Cursor global DB: ${err}`);
+      }
+      const globalById = /* @__PURE__ */ new Map();
+      for (const s of globalSessions) {
+        globalById.set(s.id, s);
+      }
+      const merged = [...globalSessions];
+      for (const s of wsSessionsById.values()) {
+        if (!globalById.has(s.id)) {
+          merged.push(s);
+        }
+      }
+      return merged;
+    } catch (err) {
+      this.channel.appendLine(`[error] Failed to collect Cursor sessions: ${err}`);
+      return [];
+    }
+  }
+  /** Async: parse all Windsurf sessions by reading state.vscdb files across discovered workspaces. */
+  async collectWindsurfSessionsAsync(onProgress, _windsurfRootOverride) {
+    const root = _windsurfRootOverride ?? resolveWindsurfStoragePath();
+    try {
+      const workspaces = await discoverWindsurfWorkspacesAsync(root);
+      const total = workspaces.length;
+      let current = 0;
+      const wsResults = await Promise.all(workspaces.map(async (ws) => {
+        const vscdbPath = require("path").join(ws.storageDir, "state.vscdb");
+        const parseResults = await parseWindsurfWorkspace(vscdbPath, ws.id, ws.workspacePath);
+        current++;
+        onProgress?.(current, total);
+        const sessions = [];
+        for (const result of parseResults) {
+          if (result.errors.length > 0) {
+            this.channel.appendLine(
+              `[warn] Windsurf parse errors in ${vscdbPath}: ${result.errors.join("; ")}`
+            );
+          }
+          if (result.session.messages.length === 0 || result.session.createdAt === (/* @__PURE__ */ new Date(0)).toISOString()) {
+            continue;
+          }
+          sessions.push(result.session);
+        }
+        return sessions;
+      }));
+      return wsResults.flat();
+    } catch (err) {
+      this.channel.appendLine(`[error] Failed to collect Windsurf sessions: ${err}`);
+      return [];
+    }
+  }
+  /**
+   * Async: parse all Aider sessions by scanning VS Code workspace folders and
+   * any user-configured extra roots for `.aider.chat.history.md` files.
+   */
+  async collectAiderSessionsAsync(onProgress, _rootsOverride) {
+    try {
+      const cfg = vscode.workspace.getConfiguration("chatwizard");
+      const extraRoots = cfg.get("aiderSearchRoots", []);
+      const maxDepth = cfg.get("aiderSearchDepth", 3);
+      const wsFolders = vscode.workspace.workspaceFolders?.map((f) => f.uri.fsPath) ?? [];
+      const roots = _rootsOverride ?? [...wsFolders, ...extraRoots];
+      const infos = await discoverAiderHistoryFilesAsync(roots, maxDepth);
+      const total = infos.length;
+      let current = 0;
+      const results = await Promise.all(infos.map(async (info) => {
+        const result = parseAiderHistory(info);
+        current++;
+        onProgress?.(current, total);
+        if (result.errors.length > 0) {
+          this.channel.appendLine(`[warn] Aider parse errors in ${info.historyFile}: ${result.errors.join("; ")}`);
+        }
+        if (result.session.messages.length === 0 || result.session.createdAt === (/* @__PURE__ */ new Date(0)).toISOString()) {
+          return null;
+        }
+        return result.session;
+      }));
+      return results.filter((s) => s !== null);
+    } catch (err) {
+      this.channel.appendLine(`[error] Failed to collect Aider sessions: ${err}`);
+      return [];
+    }
+  }
   /** Synchronous collectors kept for internal use by live-update code paths. */
   collectClaudeSessions() {
     const sessions = [];
     const claudeProjectsDir = resolveClaudeProjectsPath();
     try {
-      if (!fs5.existsSync(claudeProjectsDir)) {
+      if (!fs11.existsSync(claudeProjectsDir)) {
         return sessions;
       }
       const resolvedBase = (() => {
         try {
-          return fs5.realpathSync(claudeProjectsDir);
+          return fs11.realpathSync(claudeProjectsDir);
         } catch {
           return claudeProjectsDir;
         }
       })();
-      const projectDirs = fs5.readdirSync(claudeProjectsDir, { withFileTypes: true });
+      const projectDirs = fs11.readdirSync(claudeProjectsDir, { withFileTypes: true });
       for (const projectDir of projectDirs) {
         if (!projectDir.isDirectory()) {
           continue;
         }
-        const projectPath = path6.join(claudeProjectsDir, projectDir.name);
+        const projectPath = path12.join(claudeProjectsDir, projectDir.name);
         try {
-          const files = fs5.readdirSync(projectPath, { withFileTypes: true });
+          const files = fs11.readdirSync(projectPath, { withFileTypes: true });
           for (const file of files) {
             if (!file.isFile() || !file.name.endsWith(".jsonl")) {
               continue;
             }
-            const filePath = path6.join(projectPath, file.name);
+            const filePath = path12.join(projectPath, file.name);
             if (!_ChatWizardWatcher._isSafeFilePath(resolvedBase, filePath)) {
               this.channel.appendLine(`[security] Skipping ${filePath}: resolves outside base directory`);
               continue;
@@ -1168,7 +3111,7 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
         try {
           const resolvedBase = (() => {
             try {
-              return fs5.realpathSync(workspace7.storageDir);
+              return fs11.realpathSync(workspace7.storageDir);
             } catch {
               return workspace7.storageDir;
             }
@@ -1247,10 +3190,171 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
       this.channel.appendLine(`[skip] empty/epoch session ${filePath}`);
     }
   }
+  async onClineFileChanged(uri) {
+    const taskDir = path12.dirname(uri.fsPath);
+    const taskId = path12.basename(taskDir);
+    const result = await parseClineTask(taskDir);
+    if (result.errors.length > 0) {
+      this.channel.appendLine(`[warn] Cline parse errors in ${taskDir}: ${result.errors.join("; ")}`);
+    }
+    if (result.session.messages.length === 0 || result.session.createdAt === (/* @__PURE__ */ new Date(0)).toISOString()) {
+      this.channel.appendLine(`[skip] empty/epoch cline session ${taskId}`);
+      return;
+    }
+    const before = this.index.size;
+    this.index.upsert(result.session);
+    const verb = this.index.size > before ? "added" : "updated";
+    this.channel.appendLine(`[live] ${verb} cline session ${taskId}`);
+  }
+  async onRooCodeFileChanged(uri) {
+    const taskDir = path12.dirname(uri.fsPath);
+    const taskId = path12.basename(taskDir);
+    const result = await parseClineTask(taskDir, void 0, "roocode");
+    if (result.errors.length > 0) {
+      this.channel.appendLine(`[warn] Roo Code parse errors in ${taskDir}: ${result.errors.join("; ")}`);
+    }
+    if (result.session.messages.length === 0 || result.session.createdAt === (/* @__PURE__ */ new Date(0)).toISOString()) {
+      this.channel.appendLine(`[skip] empty/epoch roocode session ${taskId}`);
+      return;
+    }
+    const before = this.index.size;
+    this.index.upsert(result.session);
+    const verb = this.index.size > before ? "added" : "updated";
+    this.channel.appendLine(`[live] ${verb} roocode session ${taskId}`);
+  }
+  async onCursorFileChanged(uri) {
+    const vscdbPath = uri.fsPath;
+    const workspaceId = path12.basename(path12.dirname(vscdbPath));
+    let workspacePath;
+    try {
+      const wsJson = path12.join(path12.dirname(vscdbPath), "workspace.json");
+      const raw = require("fs").readFileSync(wsJson, "utf8");
+      const parsed = JSON.parse(raw);
+      if (parsed.folder) {
+        let decoded = decodeURIComponent(parsed.folder.replace("file://", ""));
+        if (process.platform === "win32" && decoded.startsWith("/")) {
+          decoded = decoded.slice(1);
+        }
+        workspacePath = decoded;
+      }
+    } catch {
+    }
+    const wsParseResults = await parseCursorWorkspace(vscdbPath, workspaceId, workspacePath);
+    const composerIdToWsInfo = /* @__PURE__ */ new Map();
+    const wsSessionsById = /* @__PURE__ */ new Map();
+    for (const result of wsParseResults) {
+      if (result.errors.length > 0) {
+        this.channel.appendLine(`[warn] Cursor parse errors in ${vscdbPath}: ${result.errors.join("; ")}`);
+      }
+      if (result.session.id && !result.session.id.endsWith("-cursor-error")) {
+        composerIdToWsInfo.set(result.session.id, { workspaceId, workspacePath });
+        wsSessionsById.set(result.session.id, result.session);
+      }
+    }
+    const globalDbPath = getCursorGlobalDbPath();
+    const globalById = /* @__PURE__ */ new Map();
+    try {
+      const globalResults = await parseCursorGlobalDb(globalDbPath);
+      for (const result of globalResults) {
+        if (result.session.messages.length === 0 || result.session.createdAt === (/* @__PURE__ */ new Date(0)).toISOString()) {
+          continue;
+        }
+        const wsInfo = composerIdToWsInfo.get(result.session.id);
+        if (wsInfo) {
+          result.session.workspaceId = wsInfo.workspaceId;
+          result.session.workspacePath = wsInfo.workspacePath;
+        }
+        if (composerIdToWsInfo.has(result.session.id)) {
+          globalById.set(result.session.id, result.session);
+        }
+      }
+    } catch {
+    }
+    const keepIds = /* @__PURE__ */ new Set();
+    let upsertCount = 0;
+    for (const session of globalById.values()) {
+      keepIds.add(session.id);
+      this.index.upsert(session);
+      upsertCount++;
+    }
+    for (const session of wsSessionsById.values()) {
+      if (!globalById.has(session.id)) {
+        if (session.messages.length === 0 || session.createdAt === (/* @__PURE__ */ new Date(0)).toISOString()) {
+          continue;
+        }
+        keepIds.add(session.id);
+        this.index.upsert(session);
+        upsertCount++;
+      }
+    }
+    this.index.removeSessionsForStateFileNotIn(vscdbPath, "cursor", keepIds);
+    this.channel.appendLine(`[live] cursor updated ${upsertCount} session(s) from ${vscdbPath}`);
+  }
+  async onWindsurfFileChanged(uri) {
+    const vscdbPath = uri.fsPath;
+    const workspaceId = path12.basename(path12.dirname(vscdbPath));
+    let workspacePath;
+    try {
+      const wsJson = path12.join(path12.dirname(vscdbPath), "workspace.json");
+      const raw = require("fs").readFileSync(wsJson, "utf8");
+      const parsed = JSON.parse(raw);
+      if (parsed.folder) {
+        let decoded = decodeURIComponent(parsed.folder.replace("file://", ""));
+        if (process.platform === "win32" && decoded.startsWith("/")) {
+          decoded = decoded.slice(1);
+        }
+        workspacePath = decoded;
+      }
+    } catch {
+    }
+    const parseResults = await parseWindsurfWorkspace(vscdbPath, workspaceId, workspacePath);
+    const keepIds = /* @__PURE__ */ new Set();
+    let upsertCount = 0;
+    for (const result of parseResults) {
+      if (result.errors.length > 0) {
+        this.channel.appendLine(
+          `[warn] Windsurf parse errors in ${vscdbPath}: ${result.errors.join("; ")}`
+        );
+      }
+      if (result.session.messages.length === 0 || result.session.createdAt === (/* @__PURE__ */ new Date(0)).toISOString()) {
+        continue;
+      }
+      keepIds.add(result.session.id);
+      this.index.upsert(result.session);
+      upsertCount++;
+    }
+    this.index.removeSessionsForStateFileNotIn(vscdbPath, "windsurf", keepIds);
+    this.channel.appendLine(`[live] windsurf updated ${upsertCount} session(s) from ${vscdbPath}`);
+  }
+  onAiderFileChanged(uri) {
+    const historyFile = uri.fsPath;
+    const workspacePath = require("path").dirname(historyFile);
+    const configFile = (() => {
+      const candidate = require("path").join(workspacePath, ".aider.conf.yml");
+      try {
+        require("fs").accessSync(candidate);
+        return candidate;
+      } catch {
+        return void 0;
+      }
+    })();
+    const result = parseAiderHistory({ historyFile, workspacePath, configFile });
+    if (result.errors.length > 0) {
+      this.channel.appendLine(`[warn] Aider parse errors in ${historyFile}: ${result.errors.join("; ")}`);
+    }
+    if (result.session.messages.length === 0 || result.session.createdAt === (/* @__PURE__ */ new Date(0)).toISOString()) {
+      this.channel.appendLine(`[skip] empty/epoch aider session ${historyFile}`);
+      return;
+    }
+    const before = this.index.size;
+    this.index.upsert(result.session);
+    const verb = this.index.size > before ? "added" : "updated";
+    this.channel.appendLine(`[live] ${verb} aider session ${historyFile}`);
+  }
   onFileChanged(uri, source, workspaceId, workspacePath) {
     const before = this.index.size;
     this.indexFile(uri.fsPath, source, workspaceId, workspacePath);
-    const sessionId = path6.basename(uri.fsPath, ".jsonl");
+    const sessionId = path12.basename(uri.fsPath, ".jsonl");
     const verb = this.index.size > before ? "added" : "updated";
     this.channel.appendLine(`[live] ${verb} session ${sessionId} (${source})`);
   }
@@ -1287,8 +3391,8 @@ async function startWatcher(index, channel, scopeManager) {
 }
 
 // src/readers/claudeWorkspace.ts
-var fs6 = __toESM(require("fs"));
-var path7 = __toESM(require("path"));
+var fs12 = __toESM(require("fs"));
+var path13 = __toESM(require("path"));
 function resolveClaudeWorkspacePath(dirName) {
   if (!dirName || typeof dirName !== "string") {
     return void 0;
@@ -1309,13 +3413,13 @@ async function discoverClaudeWorkspacesAsync(override) {
   try {
     let exists = false;
     try {
-      exists = (await fs6.promises.stat(claudeProjectsDir)).isDirectory();
+      exists = (await fs12.promises.stat(claudeProjectsDir)).isDirectory();
     } catch {
     }
     if (!exists) {
       return [];
     }
-    const entries = await fs6.promises.readdir(claudeProjectsDir, { withFileTypes: true });
+    const entries = await fs12.promises.readdir(claudeProjectsDir, { withFileTypes: true });
     const results = [];
     for (const entry of entries) {
       if (!entry.isDirectory()) {
@@ -1329,7 +3433,7 @@ async function discoverClaudeWorkspacesAsync(override) {
         id: entry.name,
         source: "claude",
         workspacePath,
-        storageDir: path7.join(claudeProjectsDir, entry.name)
+        storageDir: path13.join(claudeProjectsDir, entry.name)
       });
     }
     return results;
@@ -1338,22 +3442,85 @@ async function discoverClaudeWorkspacesAsync(override) {
   }
 }
 
+// src/ui/sourceUi.ts
+function friendlySourceName(source) {
+  switch (source) {
+    case "copilot":
+      return "GitHub Copilot";
+    case "claude":
+      return "Claude Code";
+    case "cline":
+      return "Cline";
+    case "roocode":
+      return "Roo Code";
+    case "cursor":
+      return "Cursor";
+    case "windsurf":
+      return "Windsurf";
+    case "aider":
+      return "Aider";
+  }
+}
+function sourceCodiconId(source) {
+  switch (source) {
+    case "copilot":
+      return "github";
+    case "claude":
+      return "hubot";
+    case "cline":
+      return "plug";
+    case "roocode":
+      return "circuit-board";
+    case "cursor":
+      return "sparkle";
+    // fallback when no bundled brand SVG; never use "edit" (pencil)
+    case "windsurf":
+      return "cloud";
+    case "aider":
+      return "terminal";
+  }
+}
+
 // src/views/sessionTreeProvider.ts
+var vscode3 = __toESM(require("vscode"));
+var path14 = __toESM(require("path"));
+
+// src/ui/sourceBrandIcons.ts
 var vscode2 = __toESM(require("vscode"));
-var path8 = __toESM(require("path"));
-var SessionTreeItem = class extends vscode2.TreeItem {
+function sourceBrandIconUris(source, extensionUri) {
+  switch (source) {
+    case "cline":
+    case "roocode":
+    case "cursor":
+    case "windsurf":
+    case "aider":
+      return {
+        light: vscode2.Uri.joinPath(extensionUri, "resources", "icons", `${source}_light.svg`),
+        dark: vscode2.Uri.joinPath(extensionUri, "resources", "icons", `${source}_dark.svg`)
+      };
+    default:
+      return null;
+  }
+}
+
+// src/views/sessionTreeProvider.ts
+function sourceBrandIcon(source, extensionUri) {
+  const brand = sourceBrandIconUris(source, extensionUri);
+  return brand ?? new vscode3.ThemeIcon(sourceCodiconId(source));
+}
+var SessionTreeItem = class extends vscode3.TreeItem {
   summary;
   pinned;
-  constructor(summary, pinned = false) {
-    super(summary.title || "Untitled Session", vscode2.TreeItemCollapsibleState.None);
+  constructor(summary, pinned = false, extensionUri) {
+    super(summary.title || "Untitled Session", vscode3.TreeItemCollapsibleState.None);
     this.summary = summary;
     this.pinned = pinned;
-    const workspaceName = path8.basename(summary.workspacePath ?? summary.workspaceId);
+    const workspaceName = path14.basename(summary.workspacePath ?? summary.workspaceId);
     const date = summary.updatedAt.slice(0, 10);
     const msgCount = summary.messageCount;
     const sizeKb = summary.fileSizeBytes !== void 0 ? `${(summary.fileSizeBytes / 1024).toFixed(1)} KB` : void 0;
     this.description = sizeKb ? `${workspaceName} \xB7 ${date} \xB7 ${msgCount} msgs \xB7 ${sizeKb}` : `${workspaceName} \xB7 ${date} \xB7 ${msgCount} msgs`;
-    const sourceName = summary.source === "copilot" ? "GitHub Copilot" : "Claude Code";
+    const sourceName = friendlySourceName(summary.source);
     const modelLine = summary.model ? `
 
 **Model:** ${summary.model}` : "";
@@ -1371,13 +3538,13 @@ var SessionTreeItem = class extends vscode2.TreeItem {
     const parseErrorsLine = summary.hasParseErrors ? `
 
 \u26A0 *This session has parse errors \u2014 some lines could not be read*` : "";
-    const config = vscode2.workspace.getConfiguration("chatwizard");
+    const config = vscode3.workspace.getConfiguration("chatwizard");
     const labelColor = config.get("tooltipLabelColor", "");
     let tooltip;
     if (labelColor) {
       const lbl = (t) => `<span style="color:${labelColor};">${t}</span>`;
       const sizeText = sizeKb ? `${msgCount} messages \xB7 ${sizeKb}` : `${msgCount} messages`;
-      tooltip = new vscode2.MarkdownString(
+      tooltip = new vscode3.MarkdownString(
         `${lbl("Title:")} ${summary.title || "Untitled Session"}
 
 ${lbl("Source:")} ${sourceName}` + (summary.model ? `
@@ -1395,7 +3562,7 @@ ${summary.userMessageCount} prompts \xB7 ${summary.assistantMessageCount} respon
       tooltip.isTrusted = true;
       tooltip.supportHtml = true;
     } else {
-      tooltip = new vscode2.MarkdownString(
+      tooltip = new vscode3.MarkdownString(
         `**Title:** ${summary.title || "Untitled Session"}
 
 **Source:** ${sourceName}${modelLine}
@@ -1409,18 +3576,22 @@ ${summary.userMessageCount} prompts \xB7 ${summary.assistantMessageCount} respon
     }
     this.tooltip = tooltip;
     if (pinned) {
-      this.iconPath = new vscode2.ThemeIcon("pinned");
+      this.iconPath = new vscode3.ThemeIcon("pinned");
+    } else if (extensionUri && sourceBrandIconUris(summary.source, extensionUri)) {
+      this.iconPath = sourceBrandIcon(summary.source, extensionUri);
     } else if (summary.interrupted) {
-      const red = new vscode2.ThemeColor("list.errorForeground");
-      this.iconPath = summary.source === "copilot" ? new vscode2.ThemeIcon("github", red) : new vscode2.ThemeIcon("hubot", red);
+      const red = new vscode3.ThemeColor("list.errorForeground");
+      this.iconPath = new vscode3.ThemeIcon(sourceCodiconId(summary.source), red);
     } else if (summary.hasParseErrors) {
-      const yellow = new vscode2.ThemeColor("list.warningForeground");
-      this.iconPath = summary.source === "copilot" ? new vscode2.ThemeIcon("github", yellow) : new vscode2.ThemeIcon("hubot", yellow);
+      const yellow = new vscode3.ThemeColor("list.warningForeground");
+      this.iconPath = new vscode3.ThemeIcon(sourceCodiconId(summary.source), yellow);
+    } else if (extensionUri) {
+      this.iconPath = sourceBrandIcon(summary.source, extensionUri);
     } else {
-      this.iconPath = summary.source === "copilot" ? new vscode2.ThemeIcon("github") : new vscode2.ThemeIcon("hubot");
+      this.iconPath = new vscode3.ThemeIcon(sourceCodiconId(summary.source));
     }
     if (summary.hasParseErrors) {
-      this.resourceUri = vscode2.Uri.from({ scheme: "chatwizard-warn", path: "/" + summary.id });
+      this.resourceUri = vscode3.Uri.from({ scheme: "chatwizard-warn", path: "/" + summary.id });
     }
     this.contextValue = pinned ? "session.pinned" : "session";
     this.command = {
@@ -1430,17 +3601,17 @@ ${summary.userMessageCount} prompts \xB7 ${summary.assistantMessageCount} respon
     };
   }
 };
-var LoadingTreeItem = class extends vscode2.TreeItem {
+var LoadingTreeItem = class extends vscode3.TreeItem {
   constructor() {
-    super("Indexing sessions\u2026", vscode2.TreeItemCollapsibleState.None);
-    this.iconPath = new vscode2.ThemeIcon("loading~spin");
+    super("Indexing sessions\u2026", vscode3.TreeItemCollapsibleState.None);
+    this.iconPath = new vscode3.ThemeIcon("loading~spin");
     this.contextValue = "loading";
   }
 };
-var LoadMoreTreeItem = class extends vscode2.TreeItem {
+var LoadMoreTreeItem = class extends vscode3.TreeItem {
   remaining;
   constructor(remaining) {
-    super(`\u22EF Load more (${remaining} remaining)`, vscode2.TreeItemCollapsibleState.None);
+    super(`\u22EF Load more (${remaining} remaining)`, vscode3.TreeItemCollapsibleState.None);
     this.remaining = remaining;
     this.contextValue = "loadMore";
     this.command = {
@@ -1464,7 +3635,7 @@ var SORT_KEY_LABELS = {
   length: "Message Count",
   title: "Title (A\u2013Z)",
   model: "AI Model",
-  source: "Source (Copilot / Claude)"
+  source: "Source"
 };
 var SHORT_LABEL = {
   date: "Date",
@@ -1479,8 +3650,8 @@ function compareBy(key, a, b) {
     case "date":
       return a.updatedAt.localeCompare(b.updatedAt);
     case "workspace": {
-      const wa = path8.basename(a.workspacePath ?? a.workspaceId);
-      const wb = path8.basename(b.workspacePath ?? b.workspaceId);
+      const wa = path14.basename(a.workspacePath ?? a.workspaceId);
+      const wb = path14.basename(b.workspacePath ?? b.workspaceId);
       return wa.localeCompare(wb);
     }
     case "length":
@@ -1501,7 +3672,7 @@ var SessionParseWarningDecorationProvider = class {
     if (uri.scheme === "chatwizard-warn") {
       return {
         badge: "\u26A0",
-        color: new vscode2.ThemeColor("list.warningForeground"),
+        color: new vscode3.ThemeColor("list.warningForeground"),
         tooltip: "This session has parse errors",
         propagate: false
       };
@@ -1509,15 +3680,16 @@ var SessionParseWarningDecorationProvider = class {
   }
 };
 var SessionTreeProvider = class {
-  constructor(index) {
+  constructor(index, extensionUri) {
     this.index = index;
+    this.extensionUri = extensionUri;
     index.addChangeListener(() => {
       this._loading = false;
       this._sortedCache = null;
       this.refresh();
     });
   }
-  _onDidChangeTreeData = new vscode2.EventEmitter();
+  _onDidChangeTreeData = new vscode3.EventEmitter();
   onDidChangeTreeData = this._onDidChangeTreeData.event;
   sortStack = [{ key: "date", direction: "desc" }];
   _filter = {};
@@ -1622,7 +3794,7 @@ var SessionTreeProvider = class {
   }
   hasActiveFilter() {
     const f = this._filter;
-    return !!(f.title || f.dateFrom || f.dateTo || f.model || f.minMessages !== void 0 || f.maxMessages !== void 0 || f.hideInterrupted || f.onlyWithWarnings);
+    return !!(f.title || f.dateFrom || f.dateTo || f.model || f.source || f.minMessages !== void 0 || f.maxMessages !== void 0 || f.hideInterrupted || f.onlyWithWarnings);
   }
   _matchesFilter(s) {
     const f = this._filter;
@@ -1640,6 +3812,9 @@ var SessionTreeProvider = class {
       if (!(s.model ?? "").toLowerCase().includes(f.model.toLowerCase())) {
         return false;
       }
+    }
+    if (f.source && s.source !== f.source) {
+      return false;
     }
     if (f.minMessages !== void 0 && s.messageCount < f.minMessages) {
       return false;
@@ -1666,6 +3841,9 @@ var SessionTreeProvider = class {
     }
     if (f.model) {
       parts.push(`model:"${f.model}"`);
+    }
+    if (f.source) {
+      parts.push(`source:${friendlySourceName(f.source)}`);
     }
     if (f.minMessages !== void 0 || f.maxMessages !== void 0) {
       parts.push(`msgs:${f.minMessages ?? 0}\u2013${f.maxMessages ?? "\u221E"}`);
@@ -1762,7 +3940,7 @@ var SessionTreeProvider = class {
     const pinnedSet = new Set(this._pinnedIds);
     const all = this._buildOrderedSummaries();
     const visible = all.slice(0, this._visibleCount);
-    const items = visible.map((s) => new SessionTreeItem(s, pinnedSet.has(s.id)));
+    const items = visible.map((s) => new SessionTreeItem(s, pinnedSet.has(s.id), this.extensionUri));
     const remaining = all.length - visible.length;
     if (remaining > 0) {
       items.push(new LoadMoreTreeItem(remaining));
@@ -1776,7 +3954,7 @@ var SessionTreeProvider = class {
 };
 
 // src/views/codeBlockTreeProvider.ts
-var vscode3 = __toESM(require("vscode"));
+var vscode4 = __toESM(require("vscode"));
 var CB_SORT_KEY_LABELS = {
   date: "Date",
   workspace: "Workspace",
@@ -1920,14 +4098,14 @@ function groupBySession(blocks) {
   }
   return Array.from(map.values());
 }
-var CodeBlockGroupItem = class extends vscode3.TreeItem {
+var CodeBlockGroupItem = class extends vscode4.TreeItem {
   sessionRef;
   constructor(group) {
-    super(group.sessionTitle, vscode3.TreeItemCollapsibleState.Collapsed);
+    super(group.sessionTitle, vscode4.TreeItemCollapsibleState.Collapsed);
     this.sessionRef = { sessionId: group.sessionId, blocks: group.blocks };
     const dateStr = group.sessionUpdatedAt ? group.sessionUpdatedAt.slice(0, 10) : "";
     const blockCount = group.blocks.length;
-    const sourceLabel = group.sessionSource === "copilot" ? "Copilot" : "Claude";
+    const sourceLabel = friendlySourceName(group.sessionSource);
     this.description = [
       dateStr,
       `${blockCount} snippet${blockCount === 1 ? "" : "s"}`,
@@ -1935,10 +4113,10 @@ var CodeBlockGroupItem = class extends vscode3.TreeItem {
     ].filter(Boolean).join(" \xB7 ");
     const lang = group.primaryLanguage.toLowerCase().trim();
     if (lang === "css") {
-      this.iconPath = new vscode3.ThemeIcon("symbol-misc");
+      this.iconPath = new vscode4.ThemeIcon("symbol-misc");
     } else {
       const ext = langToExtension(group.primaryLanguage);
-      this.resourceUri = vscode3.Uri.file(`file.${ext}`);
+      this.resourceUri = vscode4.Uri.file(`file.${ext}`);
     }
     const workspaceName = group.sessionWorkspacePath ? group.sessionWorkspacePath.replace(/\\/g, "/").split("/").pop() ?? "" : "";
     const shownBlocks = group.blocks.slice(0, 3);
@@ -1958,7 +4136,7 @@ ${preview}
       `**Language:** ${langLabel}  |  **Source:** ${sourceLabel}  |  **Snippets:** ${blockCount}${dateStr ? `  |  **Date:** ${dateStr}` : ""}`,
       workspaceName ? `**Workspace:** ${workspaceName}` : ""
     ].filter(Boolean).join("\n\n");
-    this.tooltip = new vscode3.MarkdownString(
+    this.tooltip = new vscode4.MarkdownString(
       [`**${group.sessionTitle}**`, meta, "", ...blockPreviews].join("\n\n")
     );
     this.contextValue = "codeblock";
@@ -1969,19 +4147,19 @@ ${preview}
     };
   }
 };
-var CodeBlockLeafItem = class extends vscode3.TreeItem {
+var CodeBlockLeafItem = class extends vscode4.TreeItem {
   block;
   sessionRef;
   constructor(block) {
     const langLabel = block.language || "plain";
     const preview = block.content.length > 60 ? block.content.slice(0, 60).replace(/\n/g, " ") + "\u2026" : block.content.replace(/\n/g, " ");
-    super(`${langLabel}: ${preview}`, vscode3.TreeItemCollapsibleState.None);
+    super(`${langLabel}: ${preview}`, vscode4.TreeItemCollapsibleState.None);
     this.block = block;
     this.sessionRef = { sessionId: block.sessionId, blocks: [block] };
     const ext = langToExtension(block.language || "");
-    this.resourceUri = vscode3.Uri.file(`file.${ext}`);
+    this.resourceUri = vscode4.Uri.file(`file.${ext}`);
     const fullPreview = block.content.length > 300 ? block.content.slice(0, 300) + "\u2026" : block.content;
-    this.tooltip = new vscode3.MarkdownString(
+    this.tooltip = new vscode4.MarkdownString(
       `**${langLabel}** \xB7 ${block.messageRole}
 
 \`\`\`${langLabel}
@@ -1996,10 +4174,10 @@ ${fullPreview}
     };
   }
 };
-var CodeBlockLoadMoreItem = class extends vscode3.TreeItem {
+var CodeBlockLoadMoreItem = class extends vscode4.TreeItem {
   remaining;
   constructor(remaining) {
-    super(`\u22EF Load more (${remaining} remaining)`, vscode3.TreeItemCollapsibleState.None);
+    super(`\u22EF Load more (${remaining} remaining)`, vscode4.TreeItemCollapsibleState.None);
     this.remaining = remaining;
     this.contextValue = "cbLoadMore";
     this.command = {
@@ -2018,7 +4196,7 @@ var CodeBlockTreeProvider = class {
       this.refresh();
     });
   }
-  _onDidChangeTreeData = new vscode3.EventEmitter();
+  _onDidChangeTreeData = new vscode4.EventEmitter();
   onDidChangeTreeData = this._onDidChangeTreeData.event;
   _filter = {};
   _sortMode = "date";
@@ -2193,7 +4371,7 @@ var CodeBlockTreeProvider = class {
 };
 
 // src/views/sessionWebviewPanel.ts
-var vscode4 = __toESM(require("vscode"));
+var vscode5 = __toESM(require("vscode"));
 
 // src/webview/cwTheme.ts
 function cwThemeCss() {
@@ -2514,6 +4692,9 @@ function friendlyModelName(raw) {
   if (!s || s === "<synthetic>") {
     return "Unknown";
   }
+  if (/^(auto|unknown)$/i.test(s)) {
+    return "Unknown";
+  }
   const c4 = s.match(/^claude-(opus|sonnet|haiku)-4(-(\d{1,2}))?(?:-\d{8})?$/i);
   if (c4) {
     const variant = cap(c4[1]);
@@ -2564,6 +4745,12 @@ function friendlyModelName(raw) {
   }
   if (/^o4-mini$/i.test(s)) {
     return "o4 mini";
+  }
+  if (/^cursor-fast$/i.test(s)) {
+    return "Cursor Fast";
+  }
+  if (/^cursor-small$/i.test(s)) {
+    return "Cursor Small";
   }
   const gemVer = s.match(/^gemini-(\d+\.\d+)-(\w+)$/i);
   if (gemVer) {
@@ -2662,12 +4849,21 @@ function renderMessage(msg, origIdx, visibleIdx, visibleMessages, assistantLabel
   <div class="message-body" data-raw="${escapeHtml(msg.content)}">${renderedContent}</div>
 </div>`;
   const nextEntry = visibleMessages[visibleIdx + 1];
+  const hasAssistant = visibleMessages.some((vm) => vm.msg.role === "assistant");
   if (msg.role === "user" && (!nextEntry || nextEntry.msg.role === "user")) {
-    html += `
+    if (hasAssistant) {
+      html += `
 <div class="message assistant cw-role-response aborted">
   <div class="message-header"><span class="role-label">${assistantLabel}</span></div>
   <div class="message-body aborted-notice">&#9888; Response not available &mdash; cancelled or incomplete</div>
 </div>`;
+    } else {
+      html += `
+<div class="message assistant cw-role-response aborted">
+  <div class="message-header"><span class="role-label">${assistantLabel}</span></div>
+  <div class="message-body aborted-notice" style="opacity:0.55">&#8505; Response not stored locally for this source</div>
+</div>`;
+    }
   }
   return html;
 }
@@ -2883,11 +5079,11 @@ var SessionWebviewPanel = class _SessionWebviewPanel {
   static _panelState = /* @__PURE__ */ new Map();
   // ── Public entry point ────────────────────────────────────────────────────
   static show(context, session, searchTerm, scrollToCodeBlock, targetBlockMessageIndex, _targetBlockContent, targetBlockIdx, highlightContainer) {
-    const config = vscode4.workspace.getConfiguration("chatwizard");
+    const config = vscode5.workspace.getConfiguration("chatwizard");
     const userColor = config.get("userMessageColor", "#007acc") || "#007acc";
     const cbHighlightColor = scrollToCodeBlock ? config.get("codeBlockHighlightColor", "#EA5C00") || "" : "";
     const cbScroll = scrollToCodeBlock ? config.get("scrollToFirstCodeBlock", true) ?? false : false;
-    const assistantLabel = session.source === "copilot" ? "Copilot" : "Claude";
+    const assistantLabel = friendlySourceName(session.source);
     const visibleMessages = session.messages.map((msg, origIdx) => ({ msg, origIdx })).filter(({ msg }) => msg.content.trim() !== "" || !!msg.skipped);
     const total = visibleMessages.length;
     const initialSz = INITIAL_WINDOW;
@@ -2915,7 +5111,7 @@ var SessionWebviewPanel = class _SessionWebviewPanel {
     const initialWindowEnd = Math.min(windowStart + initialSz, total);
     const existing = _SessionWebviewPanel._panels.get(session.id);
     if (existing) {
-      existing.reveal(vscode4.ViewColumn.One);
+      existing.reveal(vscode5.ViewColumn.One);
       const prev = _SessionWebviewPanel._panelState.get(session.id);
       const newVersion = (prev?.streamVersion ?? 0) + 1;
       _SessionWebviewPanel._panelState.set(session.id, {
@@ -2938,10 +5134,10 @@ var SessionWebviewPanel = class _SessionWebviewPanel {
       );
       return;
     }
-    const panel = vscode4.window.createWebviewPanel(
+    const panel = vscode5.window.createWebviewPanel(
       "chatwizardSession3",
       session.title,
-      vscode4.ViewColumn.One,
+      vscode5.ViewColumn.One,
       { enableScripts: true }
     );
     panel.webview.html = _SessionWebviewPanel._getShellHtml();
@@ -2971,7 +5167,7 @@ var SessionWebviewPanel = class _SessionWebviewPanel {
         } else if (msg.type === "loadMoreMessages") {
           void _SessionWebviewPanel._loadMoreMessages(session.id);
         } else if (msg.command === "exportExcerpt") {
-          void vscode4.commands.executeCommand("chatwizard.exportExcerpt", session.id);
+          void vscode5.commands.executeCommand("chatwizard.exportExcerpt", session.id);
         } else if (msg.command === "exportSelection" && msg.text) {
           void _SessionWebviewPanel._saveSelection(msg.text, session.title);
         }
@@ -3008,6 +5204,7 @@ var SessionWebviewPanel = class _SessionWebviewPanel {
       type: "render",
       title: session.title,
       source: session.source,
+      assistantLabel,
       userColor,
       term: searchTerm ?? null,
       scrollInit: null,
@@ -3020,6 +5217,7 @@ var SessionWebviewPanel = class _SessionWebviewPanel {
       userRequestCount: session.messages.filter((m) => m.role === "user").length,
       model: friendlyModelName(session.model),
       parseErrors: session.parseErrors ?? [],
+      sourceNotes: session.sourceNotes ?? [],
       filePath: session.filePath
     });
     let cursor = firstEnd;
@@ -3271,6 +5469,17 @@ var SessionWebviewPanel = class _SessionWebviewPanel {
     }
     .parse-errors-banner ul { margin: 6px 0 0; padding-left: 1.5em; }
     .parse-errors-banner li { margin: 3px 0; font-family: var(--vscode-editor-font-family, monospace); font-size: 0.9em; }
+    .source-notes-banner {
+      background: rgba(0, 120, 212, 0.08);
+      border: 1px solid rgba(0, 120, 212, 0.35);
+      border-left: 3px solid var(--vscode-textLink-foreground, #3794ff);
+      border-radius: var(--cw-radius);
+      padding: 10px 14px;
+      margin-bottom: 14px;
+      font-size: 0.85em;
+      color: var(--vscode-foreground, #ccc);
+    }
+    .source-notes-banner strong { color: var(--vscode-textLink-foreground, #3794ff); }
     .parse-error-path { word-break: break-all; font-family: var(--vscode-editor-font-family, monospace); opacity: 0.8; }
     .skipped-notice { font-style: italic; color: var(--vscode-editorWarning-foreground, #c8a800); }
     mark {
@@ -3757,7 +5966,7 @@ ${cwInteractiveJs()}
       document.getElementById('session-title').textContent = data.title;
       document.documentElement.style.setProperty('--cw-user-color', data.userColor || '#007acc');
       if (data.source) {
-        var srcLabel = data.source === 'copilot' ? 'GitHub Copilot' : 'Claude';
+        var srcLabel = data.assistantLabel || data.source;
         var respLabelEl = document.getElementById('filter-responses-label');
         if (respLabelEl) { respLabelEl.textContent = srcLabel; }
       }
@@ -3783,7 +5992,19 @@ ${cwInteractiveJs()}
       }
       container.innerHTML = data.messagesHtml;
 
-      // Parse-errors banner \u2014 prepended before messages when the session has read errors
+      // Informational source notes (e.g. Cursor aiService-only recovery) \u2014 not parse failures
+      if (data.sourceNotes && data.sourceNotes.length > 0) {
+        var noteBanner = document.createElement('div');
+        noteBanner.className = 'source-notes-banner';
+        noteBanner.innerHTML =
+          '<strong>About this session</strong>' +
+          (data.filePath ? ' &mdash; <span class="parse-error-path">' + escH(data.filePath) + '</span>' : '') +
+          '<ul style="margin:6px 0 0;padding-left:1.5em">' +
+          data.sourceNotes.map(function(n) { return '<li>' + escH(n) + '</li>'; }).join('') +
+          '</ul>';
+        container.insertBefore(noteBanner, container.firstChild);
+      }
+      // Parse-errors banner \u2014 real read/parse failures only
       if (data.parseErrors && data.parseErrors.length > 0) {
         var banner = document.createElement('div');
         banner.className = 'parse-errors-banner';
@@ -3860,8 +6081,8 @@ ${cwInteractiveJs()}
   static async _saveSelection(text, sessionTitle) {
     const safe = sessionTitle.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "session";
     const home = process.env["USERPROFILE"] ?? process.env["HOME"] ?? "/";
-    const defaultUri = vscode4.Uri.file(`${home}/${safe}-selection.md`);
-    const uri = await vscode4.window.showSaveDialog({
+    const defaultUri = vscode5.Uri.file(`${home}/${safe}-selection.md`);
+    const uri = await vscode5.window.showSaveDialog({
       defaultUri,
       filters: { "Markdown": ["md"] },
       title: "Export Selection as Markdown"
@@ -3873,8 +6094,8 @@ ${cwInteractiveJs()}
 
 ${text}
 `;
-    await vscode4.workspace.fs.writeFile(uri, Buffer.from(content, "utf8"));
-    await vscode4.window.showTextDocument(uri);
+    await vscode5.workspace.fs.writeFile(uri, Buffer.from(content, "utf8"));
+    await vscode5.window.showTextDocument(uri);
   }
 };
 
@@ -4213,7 +6434,7 @@ var FullTextSearchEngine = class {
 };
 
 // src/search/searchPanel.ts
-var vscode5 = __toESM(require("vscode"));
+var vscode6 = __toESM(require("vscode"));
 function nextSourceState(current) {
   if (current === "all") {
     return "copilot";
@@ -4225,12 +6446,12 @@ function nextSourceState(current) {
 }
 function sourceButtonIcon(state) {
   if (state === "copilot") {
-    return new vscode5.ThemeIcon("github");
+    return new vscode6.ThemeIcon("github");
   }
   if (state === "claude") {
-    return new vscode5.ThemeIcon("hubot");
+    return new vscode6.ThemeIcon("hubot");
   }
-  return new vscode5.ThemeIcon("list-filter");
+  return new vscode6.ThemeIcon("list-filter");
 }
 function sourceButtonTooltip(state) {
   if (state === "all") {
@@ -4252,12 +6473,12 @@ function nextMsgTypeState(current) {
 }
 function msgTypeIcon(state) {
   if (state === "prompts") {
-    return new vscode5.ThemeIcon("person");
+    return new vscode6.ThemeIcon("person");
   }
   if (state === "responses") {
-    return new vscode5.ThemeIcon("hubot");
+    return new vscode6.ThemeIcon("hubot");
   }
-  return new vscode5.ThemeIcon("comment-discussion");
+  return new vscode6.ThemeIcon("comment-discussion");
 }
 function msgTypeTooltip(state) {
   if (state === "all") {
@@ -4284,7 +6505,7 @@ var SearchPanel = class {
       iconPath: msgTypeIcon(msgTypeFilter),
       tooltip: msgTypeTooltip(msgTypeFilter)
     };
-    const quickPick = vscode5.window.createQuickPick();
+    const quickPick = vscode6.window.createQuickPick();
     quickPick.placeholder = "Search chat history\u2026 (prefix with / for regex)";
     quickPick.matchOnDescription = false;
     quickPick.matchOnDetail = true;
@@ -4324,11 +6545,11 @@ var SearchPanel = class {
         if (!summary) {
           continue;
         }
-        const srcIcon = summary.source === "copilot" ? "$(github)" : "$(hubot)";
+        const srcIcon = `$(${sourceCodiconId(summary.source)})`;
         const label = `${srcIcon}  ${summary.title}`;
         const workspace7 = summary.workspacePath ?? summary.workspaceId;
         const description = `${workspace7}  \xB7  ${summary.updatedAt.slice(0, 10)}`;
-        const assistantName = summary.source === "copilot" ? "Copilot" : "Claude";
+        const assistantName = friendlySourceName(summary.source);
         const rolePrefix = result.messageRole === "user" ? "You" : assistantName;
         const detail = `${rolePrefix}:  ${result.snippet}`;
         const prefixLen = rolePrefix.length + 3;
@@ -4367,7 +6588,7 @@ var SearchPanel = class {
       if (active && active.result) {
         const raw = quickPick.value;
         const term = raw.startsWith("/") ? raw.slice(1) : raw;
-        vscode5.commands.executeCommand("chatwizard.openSession", active.summary, term);
+        vscode6.commands.executeCommand("chatwizard.openSession", active.summary, term);
       }
     });
     quickPick.onDidHide(() => {
@@ -4381,8 +6602,8 @@ var SearchPanel = class {
 };
 
 // src/export/exportCommands.ts
-var vscode6 = __toESM(require("vscode"));
-var path9 = __toESM(require("path"));
+var vscode7 = __toESM(require("vscode"));
+var path15 = __toESM(require("path"));
 
 // src/export/markdownSerializer.ts
 function truncate(text, maxLen) {
@@ -4400,7 +6621,7 @@ function serializeSession(session, sanitize = true) {
   const lines = [];
   lines.push(`# ${session.title || "Untitled Session"}`);
   lines.push("");
-  lines.push(`- **Source:** ${session.source === "copilot" ? "GitHub Copilot" : "Claude Code"}`);
+  lines.push(`- **Source:** ${friendlySourceName(session.source)}`);
   if (session.model) {
     lines.push(`- **Model:** ${session.model}`);
   }
@@ -4457,23 +6678,23 @@ function safeFilename(title) {
   return title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "session";
 }
 function defaultFolderUri() {
-  const folders = vscode6.workspace.workspaceFolders;
+  const folders = vscode7.workspace.workspaceFolders;
   if (folders && folders.length > 0) {
     return folders[0].uri;
   }
   const home = process.env["USERPROFILE"] ?? process.env["HOME"] ?? "/";
-  return vscode6.Uri.file(home);
+  return vscode7.Uri.file(home);
 }
 async function performExport(sessions) {
   if (sessions.length === 0) {
-    vscode6.window.showInformationMessage("No sessions to export");
+    vscode7.window.showInformationMessage("No sessions to export");
     return;
   }
   const modeItems = [
     { label: "$(file)  One file per session", description: "Creates a .md file for each session in a chosen folder", id: "separate" },
     { label: "$(files)  Single combined file", description: "All sessions in one .md file with a table of contents", id: "combined" }
   ];
-  const modePick = await vscode6.window.showQuickPick(modeItems, {
+  const modePick = await vscode7.window.showQuickPick(modeItems, {
     title: "Export Sessions",
     placeHolder: "Choose export format"
   });
@@ -4481,7 +6702,7 @@ async function performExport(sessions) {
     return;
   }
   if (modePick.id === "separate") {
-    const folderUris = await vscode6.window.showOpenDialog({
+    const folderUris = await vscode7.window.showOpenDialog({
       canSelectFiles: false,
       canSelectFolders: true,
       canSelectMany: false,
@@ -4493,64 +6714,64 @@ async function performExport(sessions) {
     }
     const folder = folderUris[0];
     for (const session of sessions) {
-      const fileUri = vscode6.Uri.joinPath(folder, `${safeFilename(session.title)}.md`);
-      await vscode6.workspace.fs.writeFile(fileUri, Buffer.from(serializeSession(session), "utf8"));
+      const fileUri = vscode7.Uri.joinPath(folder, `${safeFilename(session.title)}.md`);
+      await vscode7.workspace.fs.writeFile(fileUri, Buffer.from(serializeSession(session), "utf8"));
     }
-    vscode6.window.showInformationMessage(`Exported ${sessions.length} session(s) to ${folder.fsPath}`);
+    vscode7.window.showInformationMessage(`Exported ${sessions.length} session(s) to ${folder.fsPath}`);
     return;
   }
-  const saveUri = await vscode6.window.showSaveDialog({
+  const saveUri = await vscode7.window.showSaveDialog({
     filters: { "Markdown": ["md"] },
     title: "Save combined export",
-    defaultUri: vscode6.Uri.joinPath(defaultFolderUri(), "chatwizard-export.md")
+    defaultUri: vscode7.Uri.joinPath(defaultFolderUri(), "chatwizard-export.md")
   });
   if (!saveUri) {
     return;
   }
-  await vscode6.workspace.fs.writeFile(saveUri, Buffer.from(serializeSessions(sessions, "combined"), "utf8"));
-  await vscode6.window.showTextDocument(saveUri);
+  await vscode7.workspace.fs.writeFile(saveUri, Buffer.from(serializeSessions(sessions, "combined"), "utf8"));
+  await vscode7.window.showTextDocument(saveUri);
 }
 function registerExportCommands(context, index, getOrderedSummaries) {
   context.subscriptions.push(
-    vscode6.commands.registerCommand("chatwizard.exportSession", async (item) => {
+    vscode7.commands.registerCommand("chatwizard.exportSession", async (item) => {
       const session = index.get(item.summary.id);
       if (!session) {
-        vscode6.window.showErrorMessage(`Session not found: ${item.summary.id}`);
+        vscode7.window.showErrorMessage(`Session not found: ${item.summary.id}`);
         return;
       }
       const filename = `${safeFilename(session.title)}.md`;
-      const uri = await vscode6.window.showSaveDialog({
-        defaultUri: vscode6.Uri.joinPath(defaultFolderUri(), filename),
+      const uri = await vscode7.window.showSaveDialog({
+        defaultUri: vscode7.Uri.joinPath(defaultFolderUri(), filename),
         filters: { "Markdown": ["md"] },
         title: "Export Session as Markdown"
       });
       if (!uri) {
         return;
       }
-      await vscode6.workspace.fs.writeFile(uri, Buffer.from(serializeSession(session), "utf8"));
-      await vscode6.window.showTextDocument(uri);
+      await vscode7.workspace.fs.writeFile(uri, Buffer.from(serializeSession(session), "utf8"));
+      await vscode7.window.showTextDocument(uri);
     })
   );
   context.subscriptions.push(
-    vscode6.commands.registerCommand("chatwizard.exportAll", async () => {
+    vscode7.commands.registerCommand("chatwizard.exportAll", async () => {
       const sessions = index.getAllSummaries().map((s) => index.get(s.id)).filter((s) => s != null);
       await performExport(sessions);
     })
   );
   context.subscriptions.push(
-    vscode6.commands.registerCommand("chatwizard.exportSelected", async () => {
+    vscode7.commands.registerCommand("chatwizard.exportSelected", async () => {
       const allSummaries = getOrderedSummaries ? getOrderedSummaries() : index.getAllSummaries();
       if (allSummaries.length === 0) {
-        vscode6.window.showInformationMessage("No sessions to export");
+        vscode7.window.showInformationMessage("No sessions to export");
         return;
       }
       const items = allSummaries.map((s) => ({
         label: s.title || "Untitled Session",
-        description: `${path9.basename(s.workspacePath ?? s.workspaceId)} \xB7 ${s.updatedAt.slice(0, 10)}`,
-        detail: `${s.source === "copilot" ? "Copilot" : "Claude"} \xB7 ${s.messageCount} messages`,
+        description: `${path15.basename(s.workspacePath ?? s.workspaceId)} \xB7 ${s.updatedAt.slice(0, 10)}`,
+        detail: `${friendlySourceName(s.source)} \xB7 ${s.messageCount} messages`,
         id: s.id
       }));
-      const qp = vscode6.window.createQuickPick();
+      const qp = vscode7.window.createQuickPick();
       qp.items = items;
       qp.canSelectMany = true;
       qp.title = "Export Selected Sessions";
@@ -4576,20 +6797,21 @@ function registerExportCommands(context, index, getOrderedSummaries) {
     })
   );
   context.subscriptions.push(
-    vscode6.commands.registerCommand("chatwizard.exportExcerpt", async (sessionId) => {
+    vscode7.commands.registerCommand("chatwizard.exportExcerpt", async (sessionId) => {
       const session = index.get(sessionId);
       if (!session) {
-        vscode6.window.showErrorMessage(`Session not found: ${sessionId}`);
+        vscode7.window.showErrorMessage(`Session not found: ${sessionId}`);
         return;
       }
       const visible = session.messages.filter((m) => m.content.trim() !== "");
-      const assistantLabel = session.source === "copilot" ? "Copilot" : "Claude";
+      const assistantLabel = friendlySourceName(session.source);
+      const assistantIcon = sourceCodiconId(session.source);
       const items = visible.map((msg, i) => ({
-        label: msg.role === "user" ? "$(account) You" : `$(hubot) ${assistantLabel}`,
+        label: msg.role === "user" ? "$(account) You" : `$(${assistantIcon}) ${assistantLabel}`,
         description: msg.content.split("\n")[0].slice(0, 90),
         msgIndex: i
       }));
-      const picked = await vscode6.window.showQuickPick(items, {
+      const picked = await vscode7.window.showQuickPick(items, {
         canPickMany: true,
         title: `Export Excerpt \u2014 ${session.title}`,
         placeHolder: "Select messages to include (Space to toggle, Enter to confirm)"
@@ -4603,16 +6825,16 @@ function registerExportCommands(context, index, getOrderedSummaries) {
         messages: picked.map((p) => visible[p.msgIndex])
       };
       const filename = `${safeFilename(session.title)}-excerpt.md`;
-      const uri = await vscode6.window.showSaveDialog({
-        defaultUri: vscode6.Uri.joinPath(defaultFolderUri(), filename),
+      const uri = await vscode7.window.showSaveDialog({
+        defaultUri: vscode7.Uri.joinPath(defaultFolderUri(), filename),
         filters: { "Markdown": ["md"] },
         title: "Export Excerpt as Markdown"
       });
       if (!uri) {
         return;
       }
-      await vscode6.workspace.fs.writeFile(uri, Buffer.from(serializeSession(excerptSession), "utf8"));
-      await vscode6.window.showTextDocument(uri);
+      await vscode7.workspace.fs.writeFile(uri, Buffer.from(serializeSession(excerptSession), "utf8"));
+      await vscode7.window.showTextDocument(uri);
     })
   );
 }
@@ -4676,24 +6898,24 @@ var CodeBlockSearchEngine = class {
 };
 
 // src/codeblocks/codeBlocksPanel.ts
-var vscode7 = __toESM(require("vscode"));
+var vscode8 = __toESM(require("vscode"));
 var CodeBlocksPanel = class _CodeBlocksPanel {
   static _panel;
   static show(context, index, engine) {
     const blocks = index.getAllCodeBlocks();
     engine.index(blocks);
     if (_CodeBlocksPanel._panel) {
-      _CodeBlocksPanel._panel.reveal(vscode7.ViewColumn.One);
+      _CodeBlocksPanel._panel.reveal(vscode8.ViewColumn.One);
       void _CodeBlocksPanel._panel.webview.postMessage({
         type: "update",
         data: _CodeBlocksPanel.buildPayload(blocks, engine)
       });
       return;
     }
-    const panel = vscode7.window.createWebviewPanel(
+    const panel = vscode8.window.createWebviewPanel(
       "chatwizardCodeBlocks",
       "Code Blocks",
-      vscode7.ViewColumn.One,
+      vscode8.ViewColumn.One,
       { enableScripts: true, retainContextWhenHidden: true }
     );
     _CodeBlocksPanel._panel = panel;
@@ -4703,12 +6925,12 @@ var CodeBlocksPanel = class _CodeBlocksPanel {
     }, null, context.subscriptions);
     panel.webview.onDidReceiveMessage((message) => {
       if (message.command === "copy") {
-        void vscode7.env.clipboard.writeText(message.text ?? "");
-        void vscode7.window.showInformationMessage("Code block copied to clipboard.");
+        void vscode8.env.clipboard.writeText(message.text ?? "");
+        void vscode8.window.showInformationMessage("Code block copied to clipboard.");
       } else if (message.command === "openSettings") {
-        void vscode7.commands.executeCommand("workbench.action.openSettings", "chatwizard");
+        void vscode8.commands.executeCommand("workbench.action.openSettings", "chatwizard");
       } else if (message.command === "rescan") {
-        void vscode7.commands.executeCommand("chatwizard.rescan");
+        void vscode8.commands.executeCommand("chatwizard.rescan");
       } else if (message.type === "ready") {
         void panel.webview.postMessage({
           type: "update",
@@ -5065,7 +7287,11 @@ var CodeBlocksPanel = class _CodeBlocksPanel {
         const langDisplay  = lang || 'plain';
         const langLower    = lang.toLowerCase();
         const roleLabel    = block.messageRole === 'user' ? 'User' : 'AI';
-        const sourceLabel  = block.sessionSource === 'copilot' ? 'Copilot' : 'Claude';
+        const SRC_LABEL = {
+          claude: 'Claude Code', copilot: 'GitHub Copilot', cline: 'Cline',
+          roocode: 'Roo Code', cursor: 'Cursor', windsurf: 'Windsurf', aider: 'Aider'
+        };
+        const sourceLabel  = SRC_LABEL[block.sessionSource] || block.sessionSource;
         const sourceBadge  = block.sessionSource === 'copilot' ? 'cw-badge-copilot' : 'cw-badge-claude';
         const dateStr      = block.sessionUpdatedAt ? block.sessionUpdatedAt.slice(0, 10) : '';
         const wsPath       = block.sessionWorkspacePath || '';
@@ -5171,7 +7397,7 @@ var CodeBlocksPanel = class _CodeBlocksPanel {
 };
 
 // src/prompts/promptLibraryPanel.ts
-var vscode8 = __toESM(require("vscode"));
+var vscode9 = __toESM(require("vscode"));
 
 // src/prompts/promptExtractor.ts
 function normalizePromptText(text) {
@@ -5379,17 +7605,17 @@ var PromptLibraryPanel = class _PromptLibraryPanel {
     const entries = buildPromptLibrary(index);
     const clusters = clusterPrompts(entries);
     if (_PromptLibraryPanel._panel) {
-      _PromptLibraryPanel._panel.reveal(vscode8.ViewColumn.One);
+      _PromptLibraryPanel._panel.reveal(vscode9.ViewColumn.One);
       void _PromptLibraryPanel._panel.webview.postMessage({
         type: "update",
         data: { clusters, truncated: false }
       });
       return;
     }
-    const panel = vscode8.window.createWebviewPanel(
+    const panel = vscode9.window.createWebviewPanel(
       "chatwizardPromptLibrary",
       "Prompt Library",
-      vscode8.ViewColumn.One,
+      vscode9.ViewColumn.One,
       { enableScripts: true, retainContextWhenHidden: true }
     );
     _PromptLibraryPanel._panel = panel;
@@ -5399,14 +7625,14 @@ var PromptLibraryPanel = class _PromptLibraryPanel {
     }, null, context.subscriptions);
     panel.webview.onDidReceiveMessage((message) => {
       if (message.command === "copy") {
-        void vscode8.env.clipboard.writeText(message.text ?? "");
-        void vscode8.window.showInformationMessage("Prompt copied to clipboard.");
+        void vscode9.env.clipboard.writeText(message.text ?? "");
+        void vscode9.window.showInformationMessage("Prompt copied to clipboard.");
       } else if (message.command === "openSession" && message.sessionId) {
-        void vscode8.commands.executeCommand("chatwizard.openSession", { id: message.sessionId }, message.searchTerm, message.highlightContainer);
+        void vscode9.commands.executeCommand("chatwizard.openSession", { id: message.sessionId }, message.searchTerm, message.highlightContainer);
       } else if (message.command === "openSettings") {
-        void vscode8.commands.executeCommand("workbench.action.openSettings", "chatwizard");
+        void vscode9.commands.executeCommand("workbench.action.openSettings", "chatwizard");
       } else if (message.command === "rescan") {
-        void vscode8.commands.executeCommand("chatwizard.rescan");
+        void vscode9.commands.executeCommand("chatwizard.rescan");
       } else if (message.type === "ready") {
         void panel.webview.postMessage({
           type: "update",
@@ -5957,7 +8183,11 @@ var PromptLibraryPanel = class _PromptLibraryPanel {
 
       var rows = sessions.map(function(m) {
         var date = m.updatedAt ? m.updatedAt.substring(0, 10) : '';
-        var srcLabel = m.source === 'copilot' ? 'Copilot' : 'Claude';
+        var SRC_LABEL = {
+          claude: 'Claude Code', copilot: 'GitHub Copilot', cline: 'Cline',
+          roocode: 'Roo Code', cursor: 'Cursor', windsurf: 'Windsurf', aider: 'Aider'
+        };
+        var srcLabel = SRC_LABEL[m.source] || m.source;
         return '<div class="overlay-session-row" data-sid="' + escHtml(m.sessionId) + '" data-prompt="' + escHtml(promptText) + '">'
           + '<span class="overlay-session-icon">\\u27A4</span>'
           + '<div class="overlay-session-body">'
@@ -6344,7 +8574,7 @@ var PromptLibraryPanel = class _PromptLibraryPanel {
 };
 
 // src/prompts/promptLibraryViewProvider.ts
-var vscode9 = __toESM(require("vscode"));
+var vscode10 = __toESM(require("vscode"));
 var PromptLibraryViewProvider = class {
   constructor(_index) {
     this._index = _index;
@@ -6364,14 +8594,14 @@ var PromptLibraryViewProvider = class {
     });
     webviewView.webview.onDidReceiveMessage((message) => {
       if (message.command === "copy") {
-        void vscode9.env.clipboard.writeText(message.text ?? "");
-        void vscode9.window.showInformationMessage("Prompt copied to clipboard.");
+        void vscode10.env.clipboard.writeText(message.text ?? "");
+        void vscode10.window.showInformationMessage("Prompt copied to clipboard.");
       } else if (message.command === "openSession" && message.sessionId) {
-        void vscode9.commands.executeCommand("chatwizard.openSession", { id: message.sessionId }, message.searchTerm, message.highlightContainer);
+        void vscode10.commands.executeCommand("chatwizard.openSession", { id: message.sessionId }, message.searchTerm, message.highlightContainer);
       } else if (message.command === "openSettings") {
-        void vscode9.commands.executeCommand("workbench.action.openSettings", "chatwizard");
+        void vscode10.commands.executeCommand("workbench.action.openSettings", "chatwizard");
       } else if (message.command === "rescan") {
-        void vscode9.commands.executeCommand("chatwizard.rescan");
+        void vscode10.commands.executeCommand("chatwizard.rescan");
       } else if (message.type === "ready") {
         void this._sendData();
       }
@@ -6410,7 +8640,7 @@ var PromptLibraryViewProvider = class {
 };
 
 // src/analytics/analyticsPanel.ts
-var vscode10 = __toESM(require("vscode"));
+var vscode11 = __toESM(require("vscode"));
 
 // src/analytics/analyticsEngine.ts
 var STOP_WORDS = /* @__PURE__ */ new Set([
@@ -6601,17 +8831,17 @@ var AnalyticsPanel = class _AnalyticsPanel {
   static _panel;
   static show(context, index) {
     if (_AnalyticsPanel._panel) {
-      _AnalyticsPanel._panel.reveal(vscode10.ViewColumn.One);
+      _AnalyticsPanel._panel.reveal(vscode11.ViewColumn.One);
       void _AnalyticsPanel._panel.webview.postMessage({
         type: "update",
         data: _AnalyticsPanel.build(index)
       });
       return;
     }
-    const panel = vscode10.window.createWebviewPanel(
+    const panel = vscode11.window.createWebviewPanel(
       "chatwizardAnalytics",
       "Chat Analytics",
-      vscode10.ViewColumn.One,
+      vscode11.ViewColumn.One,
       {
         enableScripts: true,
         retainContextWhenHidden: true
@@ -6630,11 +8860,11 @@ var AnalyticsPanel = class _AnalyticsPanel {
           }
         });
       } else if (msg.command === "openSession" && msg.sessionId) {
-        void vscode10.commands.executeCommand("chatwizard.openSession", { id: msg.sessionId });
+        void vscode11.commands.executeCommand("chatwizard.openSession", { id: msg.sessionId });
       } else if (msg.command === "openSettings") {
-        void vscode10.commands.executeCommand("workbench.action.openSettings", "chatwizard");
+        void vscode11.commands.executeCommand("workbench.action.openSettings", "chatwizard");
       } else if (msg.command === "rescan") {
-        void vscode10.commands.executeCommand("chatwizard.rescan");
+        void vscode11.commands.executeCommand("chatwizard.rescan");
       }
     }, void 0, context.subscriptions);
     panel.onDidDispose(() => {
@@ -7264,7 +9494,7 @@ var AnalyticsPanel = class _AnalyticsPanel {
 };
 
 // src/analytics/analyticsViewProvider.ts
-var vscode11 = __toESM(require("vscode"));
+var vscode12 = __toESM(require("vscode"));
 var AnalyticsViewProvider = class {
   constructor(_index) {
     this._index = _index;
@@ -7280,7 +9510,7 @@ var AnalyticsViewProvider = class {
       if (msg.type === "ready") {
         this._sendData();
       } else if (msg.command === "openSession" && msg.sessionId) {
-        void vscode11.commands.executeCommand("chatwizard.openSession", { id: msg.sessionId });
+        void vscode12.commands.executeCommand("chatwizard.openSession", { id: msg.sessionId });
       }
     });
     webviewView.onDidChangeVisibility(() => {
@@ -7323,6 +9553,23 @@ var AnalyticsViewProvider = class {
 function toDateStr(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
+function normalizeWsKey(raw) {
+  return raw.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+}
+var SOURCE_AUTO_MODEL = {
+  cursor: "Cursor Auto",
+  cline: "Cline Auto",
+  roocode: "Roo Code Auto",
+  windsurf: "Windsurf Auto",
+  aider: "Aider Auto"
+};
+function resolveModel(raw, source) {
+  const name = friendlyModelName(raw);
+  if (name !== "Unknown") {
+    return name;
+  }
+  return SOURCE_AUTO_MODEL[source] ?? "Unknown";
+}
 function computeModelUsage(summaries, from, to) {
   const fromStr = toDateStr(from);
   const toStr = toDateStr(to);
@@ -7334,37 +9581,68 @@ function computeModelUsage(summaries, from, to) {
     if (dateStr < fromStr || dateStr > toStr) {
       continue;
     }
-    const model = friendlyModelName(s.model);
-    const key = `${s.source}::${model}`;
-    let entry = modelMap.get(key);
+    const model = resolveModel(s.model, s.source);
+    let entry = modelMap.get(model);
     if (!entry) {
-      entry = { source: s.source, model, sessionCount: 0, userRequests: 0, wsMap: /* @__PURE__ */ new Map(), sessionMap: /* @__PURE__ */ new Map() };
-      modelMap.set(key, entry);
+      entry = { sources: /* @__PURE__ */ new Set(), model, sessionCount: 0, userRequests: 0, wsMap: /* @__PURE__ */ new Map(), sessionMap: /* @__PURE__ */ new Map(), sourceMap: /* @__PURE__ */ new Map() };
+      modelMap.set(model, entry);
     }
+    entry.sources.add(s.source);
     entry.sessionCount++;
     entry.userRequests += s.userMessageCount;
     totalSessions++;
     totalUserRequests += s.userMessageCount;
-    const wsLabel = s.workspacePath ?? s.workspaceId;
-    entry.wsMap.set(wsLabel, (entry.wsMap.get(wsLabel) ?? 0) + s.userMessageCount);
+    const rawWs = s.workspacePath ?? s.workspaceId;
+    const wsKey = normalizeWsKey(rawWs);
+    let wsEntry = entry.wsMap.get(wsKey);
+    if (!wsEntry) {
+      wsEntry = { displayPath: rawWs, total: 0, assistantMap: /* @__PURE__ */ new Map() };
+      entry.wsMap.set(wsKey, wsEntry);
+    }
+    wsEntry.total += s.userMessageCount;
+    wsEntry.assistantMap.set(s.source, (wsEntry.assistantMap.get(s.source) ?? 0) + s.userMessageCount);
     const prevSess = entry.sessionMap.get(s.id);
     if (prevSess) {
       prevSess.userRequests += s.userMessageCount;
     } else {
       entry.sessionMap.set(s.id, { title: s.title, userRequests: s.userMessageCount });
     }
+    let srcEntry = entry.sourceMap.get(s.source);
+    if (!srcEntry) {
+      srcEntry = { sessionCount: 0, userRequests: 0, sessionMap: /* @__PURE__ */ new Map() };
+      entry.sourceMap.set(s.source, srcEntry);
+    }
+    srcEntry.sessionCount++;
+    srcEntry.userRequests += s.userMessageCount;
+    const prevSrcSess = srcEntry.sessionMap.get(s.id);
+    if (prevSrcSess) {
+      prevSrcSess.userRequests += s.userMessageCount;
+    } else {
+      srcEntry.sessionMap.set(s.id, { title: s.title, userRequests: s.userMessageCount });
+    }
   }
   const models = [...modelMap.values()].map((e) => {
-    const workspaceBreakdown = [...e.wsMap.entries()].map(([workspace7, userRequests]) => ({ workspace: workspace7, userRequests })).sort((a, b) => b.userRequests - a.userRequests);
+    const workspaceBreakdown = [...e.wsMap.values()].map((ws) => {
+      const assistantBreakdown = [...ws.assistantMap.entries()].map(([assistant, userRequests]) => ({ assistant, userRequests })).sort((a, b) => b.userRequests - a.userRequests);
+      return { workspace: ws.displayPath, userRequests: ws.total, assistantBreakdown };
+    }).sort((a, b) => b.userRequests - a.userRequests);
     const sessionBreakdown = [...e.sessionMap.entries()].map(([sessionId, v]) => ({ sessionId, sessionTitle: v.title, userRequests: v.userRequests })).sort((a, b) => b.userRequests - a.userRequests);
+    const sourceBreakdown = [...e.sourceMap.entries()].map(([source, sv]) => ({
+      source,
+      sessionCount: sv.sessionCount,
+      userRequests: sv.userRequests,
+      percentage: totalUserRequests === 0 ? 0 : Math.round(sv.userRequests / totalUserRequests * 1e4) / 100,
+      sessionBreakdown: [...sv.sessionMap.entries()].map(([sessionId, v]) => ({ sessionId, sessionTitle: v.title, userRequests: v.userRequests })).sort((a, b) => b.userRequests - a.userRequests)
+    })).sort((a, b) => b.userRequests - a.userRequests);
     return {
       model: e.model,
-      source: e.source,
+      sources: [...e.sources],
       sessionCount: e.sessionCount,
       userRequests: e.userRequests,
       percentage: totalUserRequests === 0 ? 0 : Math.round(e.userRequests / totalUserRequests * 1e4) / 100,
       workspaceBreakdown,
-      sessionBreakdown
+      sessionBreakdown,
+      sourceBreakdown
     };
   }).sort((a, b) => b.userRequests - a.userRequests);
   return { from: fromStr, to: toStr, totalSessions, totalUserRequests, models };
@@ -7580,26 +9858,88 @@ var ModelUsageViewProvider = class {
       background: var(--cw-surface-subtle);
     }
 
-    .data-table tbody tr[data-sessions]:hover {
+    .data-table tbody tr[data-sessions-idx]:hover {
       background: var(--cw-surface-raised);
       cursor: default;
     }
 
-    /* -- Session hover overlay ------------------------------------ */
-    #session-overlay {
+    .data-table td.model-sub {
+      opacity: 0.55;
+      font-size: 0.9em;
+    }
+
+    /* -- Shared overlay base -------------------------------------- */
+    #session-overlay,
+    #chart-overlay {
       position: fixed;
       z-index: 9999;
       background: var(--vscode-menu-background, #252526);
       border: 1px solid var(--vscode-menu-border, #454545);
       border-radius: 5px;
-      padding: 8px 0;
       box-shadow: 0 4px 16px rgba(0,0,0,0.5);
       display: none;
-      min-width: 280px;
       max-width: 420px;
-      max-height: 320px;
+      max-height: calc(100vh - 80px);
       overflow-y: auto;
       font-size: 0.88em;
+    }
+
+    /* -- Session hover overlay ------------------------------------ */
+    #session-overlay {
+      padding: 8px 0;
+      min-width: 280px;
+    }
+
+    /* -- Chart bar tooltip overlay -------------------------------- */
+    #chart-overlay {
+      padding: 0;
+      min-width: 220px;
+    }
+
+    .co-header {
+      padding: 7px 14px 6px 14px;
+      font-weight: 600;
+      border-bottom: 1px solid var(--vscode-menu-border, #454545);
+    }
+
+    .co-ws-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 5px 14px 2px 14px;
+      font-weight: 600;
+    }
+
+    .co-ws-name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex: 1;
+    }
+
+    .co-ws-count { flex-shrink: 0; }
+
+    .co-asst-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 1px 14px 1px 26px;
+      opacity: 0.8;
+      font-size: 0.93em;
+    }
+
+    .co-asst-name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex: 1;
+    }
+
+    .co-asst-count { flex-shrink: 0; }
+
+    .co-asst-pct {
+      opacity: 0.6;
+      font-size: 0.9em;
     }
 
     .session-overlay-item {
@@ -7708,19 +10048,19 @@ var ModelUsageViewProvider = class {
     </div>
   </div>
 
-  <!-- Claude account section -->
+  <!-- Claude models section -->
   <div class="section account-section" id="section-claude">
     <h2 class="account-heading">
-      <span class="cw-badge-claude">Claude</span> Anthropic account
+      <span class="cw-badge-claude">Claude</span> models
       <span class="sel-total" id="sel-total-claude"></span>
     </h2>
     <div id="chart-claude"></div>
   </div>
 
-  <!-- GitHub Copilot section -->
+  <!-- Other models section -->
   <div class="section account-section" id="section-copilot">
     <h2 class="account-heading">
-      <span class="cw-badge-copilot">Copilot</span> GitHub account
+      <span class="cw-badge-copilot">Other</span> models
       <span class="sel-total" id="sel-total-copilot"></span>
     </h2>
     <div id="chart-copilot"></div>
@@ -7732,8 +10072,9 @@ var ModelUsageViewProvider = class {
     <table class="data-table">
       <thead>
         <tr>
-          <th>Account</th>
+          <th>Provider</th>
           <th>Model</th>
+          <th>Coding Assistant</th>
           <th class="num">Sessions</th>
           <th class="num">Requests</th>
           <th class="num">% of Total</th>
@@ -7748,15 +10089,20 @@ var ModelUsageViewProvider = class {
 <!-- Session breakdown overlay -->
 <div id="session-overlay"></div>
 
+<!-- Chart bar tooltip overlay -->
+<div id="chart-overlay"></div>
+
 <script>
 (function() {
   var vscode = acquireVsCodeApi();
   var charts = { claude: null, copilot: null };
   // Tooltip lookup maps \u2014 mutated in-place so existing Chart.js closures always read latest data
   var tooltipMaps = {
-    claude:  { pct: {}, ws: {} },
-    copilot: { pct: {}, ws: {} }
+    claude:  { pct: {}, ws: {}, total: 0 },
+    copilot: { pct: {}, ws: {}, total: 0 }
   };
+  /** Session lists for Summary table rows \u2014 avoids broken JSON in HTML attributes (titles with quotes, &, etc.). */
+  var sessionRowSessions = [];
   // Bar selection state \u2014 cleared on data update
   var selectedBars   = { claude: {}, copilot: {} }; // model \u2192 true
   var requestCounts  = { claude: {}, copilot: {} }; // model \u2192 userRequests (refreshed per update)
@@ -7875,6 +10221,7 @@ var ModelUsageViewProvider = class {
     var tm = tooltipMaps[source];
     for (var k in tm.pct) { delete tm.pct[k]; }
     for (var k in tm.ws)  { delete tm.ws[k]; }
+    tm.total = totalUserRequests;
     models.forEach(function(m) {
       tm.pct[m.model] = m.percentage;
       tm.ws[m.model]  = m.workspaceBreakdown || [];
@@ -7937,27 +10284,54 @@ var ModelUsageViewProvider = class {
           plugins: {
             legend: { display: false },
             tooltip: {
-              callbacks: {
-                label: function(ctx) {
-                  var tm = tooltipMaps[source];
-                  var count = ctx.parsed.x;
-                  var pct = tm.pct[ctx.label] !== undefined ? tm.pct[ctx.label] : 0;
-                  var lines = [count + ' requests (' + pct + '% of total)'];
-                  var ws = tm.ws[ctx.label] || [];
-                  if (ws.length > 0) {
-                    lines.push('\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500');
-                    ws.forEach(function(w) {
-                      var name = w.workspace;
-                      // trim long paths to last 2 segments
-                      // use charCode 92 (backslash) to avoid regex escape issues in template literal
-                      var normalized = name.split(String.fromCharCode(92)).join('/');
-                      var parts = normalized.split('/').filter(Boolean);
-                      var display = parts.length > 0 ? parts[parts.length - 1] : name;
-                      lines.push(display + ': ' + w.userRequests);
+              enabled: false,
+              external: function(context) {
+                var tooltipModel = context.tooltip;
+                if (tooltipModel.opacity === 0 || !tooltipModel.dataPoints || !tooltipModel.dataPoints.length) {
+                  if (!isChartOverlayHovered) { scheduleHideChartOverlay(); }
+                  return;
+                }
+                cancelHideChartOverlay();
+                var modelName = tooltipModel.dataPoints[0].label;
+                var tm = tooltipMaps[source];
+                var count = tooltipModel.dataPoints[0].parsed.x;
+                var pct = tm.pct[modelName] !== undefined ? tm.pct[modelName] : 0;
+                var ws = tm.ws[modelName] || [];
+
+                var html = '<div class="co-header">' + escHtml(modelName) + '<br>'
+                  + count.toLocaleString() + ' requests (' + pct + '% of total)</div>';
+                ws.forEach(function(w) {
+                  var norm = w.workspace.split(String.fromCharCode(92)).join('/');
+                  var parts = norm.split('/').filter(Boolean);
+                  var display = parts.length > 0 ? parts[parts.length - 1] : w.workspace;
+                  html += '<div class="co-ws-row"><span class="co-ws-name" title="' + escHtml(w.workspace) + '">'
+                    + escHtml(display) + '</span><span class="co-ws-count">' + w.userRequests.toLocaleString() + '</span></div>';
+                  if (w.assistantBreakdown && w.assistantBreakdown.length > 0) {
+                    var grandTotal = tm.total || 1;
+                    w.assistantBreakdown.forEach(function(a) {
+                      var label = ASST_LABEL[a.assistant] || a.assistant;
+                      var pctOfTotal = (a.userRequests / grandTotal * 100).toFixed(1);
+                      html += '<div class="co-asst-row"><span class="co-asst-name">\u2514 ' + escHtml(label)
+                        + '</span><span class="co-asst-count">' + a.userRequests.toLocaleString()
+                        + ' <span class="co-asst-pct">(' + pctOfTotal + '%)</span></span></div>';
                     });
                   }
-                  return lines;
-                }
+                });
+                chartOverlay.innerHTML = html;
+
+                // position:fixed \u2014 viewport coords only, no scrollY/scrollX.
+                var canvasRect = context.chart.canvas.getBoundingClientRect();
+                var top  = canvasRect.top  + tooltipModel.caretY;
+                var left = canvasRect.left + tooltipModel.caretX + 12;
+                chartOverlay.style.display = 'block';
+                chartOverlay.style.left = '0';
+                chartOverlay.style.top  = '0';
+                var ow = chartOverlay.offsetWidth;
+                var oh = chartOverlay.offsetHeight;
+                if (left + ow > window.innerWidth - 8) { left = Math.max(4, canvasRect.left + tooltipModel.caretX - ow - 8); }
+                if (top  + oh > window.innerHeight - 8) { top = Math.max(0, window.innerHeight - oh - 8); }
+                chartOverlay.style.left = left + 'px';
+                chartOverlay.style.top  = top  + 'px';
               }
             }
           },
@@ -7971,51 +10345,125 @@ var ModelUsageViewProvider = class {
   function renderTable(data) {
     var tbody = document.getElementById('summary-tbody');
     var tfoot = document.getElementById('summary-tfoot');
+    sessionRowSessions = [];
 
     if (data.models.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="5" class="empty-state">No data for selected range.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No data for selected range.</td></tr>';
       tfoot.innerHTML = '';
       return;
     }
 
-    // Group rows: claude entries first, then copilot, within each sorted by userRequests desc (already sorted)
-    var claudeRows  = data.models.filter(function(m) { return m.source === 'claude'; });
-    var copilotRows = data.models.filter(function(m) { return m.source === 'copilot'; });
+    // Group rows: Claude models first, then others; within each sorted by userRequests desc (already sorted)
+    var claudeRows = data.models.filter(function(m) { return m.model.startsWith('Claude'); });
+    var otherRows  = data.models.filter(function(m) { return !m.model.startsWith('Claude'); });
 
-    function accountBadge(source) {
-      return source === 'claude'
+    function accountBadge(model) {
+      return model.startsWith('Claude')
         ? '<span class="cw-badge-claude">Claude</span>'
-        : '<span class="cw-badge-copilot">Copilot</span>';
+        : '<span class="cw-badge-copilot">Other</span>';
     }
 
     function makeRows(rows) {
-      return rows.map(function(m, i) {
-        // Only show the badge on the first row of each account group
-        var badge = i === 0 ? accountBadge(m.source) : '';
-        var sessData = m.sessionBreakdown ? escHtml(JSON.stringify(m.sessionBreakdown)) : '';
-        return '<tr' + (sessData ? ' data-sessions="' + sessData + '"' : '') + '>'
-          + '<td>' + badge + '</td>'
-          + '<td title="' + escHtml(m.model) + '">' + escHtml(m.model) + '</td>'
-          + '<td class="num">' + m.sessionCount.toLocaleString() + '</td>'
-          + '<td class="num">' + m.userRequests.toLocaleString() + '</td>'
-          + '<td class="num">' + m.percentage.toFixed(2) + '%</td>'
-          + '</tr>';
+      return rows.map(function(m) {
+        var badge = accountBadge(m.model);
+        // One row per contributing assistant (sourceBreakdown), or fall back to single row
+        var srcRows = (m.sourceBreakdown && m.sourceBreakdown.length > 0)
+          ? m.sourceBreakdown
+          : [{ source: (m.sources || [])[0] || '', sessionCount: m.sessionCount, userRequests: m.userRequests, percentage: m.percentage, sessionBreakdown: m.sessionBreakdown || [] }];
+
+        return srcRows.map(function(sr, si) {
+          var sess = sr.sessionBreakdown && sr.sessionBreakdown.length > 0 ? sr.sessionBreakdown : null;
+          var sessIdxAttr = '';
+          if (sess) {
+            var sidx = sessionRowSessions.length;
+            sessionRowSessions.push(sess);
+            sessIdxAttr = ' data-sessions-idx="' + sidx + '"';
+          }
+          var asstLabel = ASST_LABEL[sr.source] || sr.source;
+          // Show provider badge and model name only on the first source row for this model
+          var providerCell = si === 0 ? '<td>' + badge + '</td>' : '<td></td>';
+          var modelCell    = si === 0
+            ? '<td title="' + escHtml(m.model) + '">' + escHtml(m.model) + '</td>'
+            : '<td class="model-sub" title="' + escHtml(m.model) + '">' + escHtml(m.model) + '</td>';
+          return '<tr' + sessIdxAttr + '>'
+            + providerCell
+            + modelCell
+            + '<td title="' + escHtml(asstLabel) + '">' + escHtml(asstLabel) + '</td>'
+            + '<td class="num">' + sr.sessionCount.toLocaleString() + '</td>'
+            + '<td class="num">' + sr.userRequests.toLocaleString() + '</td>'
+            + '<td class="num">' + sr.percentage.toFixed(2) + '%</td>'
+            + '</tr>';
+        }).join('');
       }).join('');
     }
 
-    tbody.innerHTML = makeRows(claudeRows) + makeRows(copilotRows);
+    tbody.innerHTML = makeRows(claudeRows) + makeRows(otherRows);
+
+    // Per-row mouseenter/mouseleave: delegated pointerover on tbody is unreliable in some VS Code webviews (e.g. Cursor).
+    var overlayEl = document.getElementById('session-overlay');
+    tbody.querySelectorAll('tr[data-sessions-idx]').forEach(function(tr) {
+      tr.addEventListener('mouseenter', function() {
+        isRowHovered = true;
+        cancelHide();
+        var sidx = tr.getAttribute('data-sessions-idx');
+        var idx = sidx === null || sidx === '' ? NaN : parseInt(sidx, 10);
+        var sessions = !isNaN(idx) ? sessionRowSessions[idx] : null;
+        if (sessions) { showOverlay(sessions, tr.getBoundingClientRect()); }
+      });
+      tr.addEventListener('mouseleave', function(e) {
+        var rt = e.relatedTarget;
+        if (rt && overlayEl && overlayEl.contains(rt)) { return; }
+        isRowHovered = false;
+        scheduleHide();
+      });
+    });
 
     tfoot.innerHTML = '<tr>'
-      + '<td colspan="2"><strong>Total</strong></td>'
+      + '<td colspan="3"><strong>Total</strong></td>'
       + '<td class="num"><strong>' + data.totalSessions.toLocaleString() + '</strong></td>'
       + '<td class="num"><strong>' + data.totalUserRequests.toLocaleString() + '</strong></td>'
       + '<td class="num"><strong>100%</strong></td>'
       + '</tr>';
   }
 
+  // -- Chart bar tooltip overlay ---------------------------------
+  var chartOverlay = document.getElementById('chart-overlay');
+  var chartOverlayHideTimer = null;
+  var isChartOverlayHovered = false;
+
+  function hideChartOverlay() {
+    chartOverlay.style.display = 'none';
+    chartOverlay.innerHTML = '';
+  }
+
+  function scheduleHideChartOverlay() {
+    if (chartOverlayHideTimer) { clearTimeout(chartOverlayHideTimer); }
+    chartOverlayHideTimer = setTimeout(hideChartOverlay, 400);
+  }
+
+  function cancelHideChartOverlay() {
+    if (chartOverlayHideTimer) { clearTimeout(chartOverlayHideTimer); chartOverlayHideTimer = null; }
+  }
+
+  chartOverlay.addEventListener('mouseenter', function() {
+    isChartOverlayHovered = true;
+    cancelHideChartOverlay();
+  });
+  chartOverlay.addEventListener('mouseleave', function() {
+    isChartOverlayHovered = false;
+    scheduleHideChartOverlay();
+  });
+
   // -- Session hover overlay -------------------------------------
   var overlay = document.getElementById('session-overlay');
   var overlayHideTimer = null;
+  var isOverlayHovered = false;
+  var isRowHovered = false;
+
+  var ASST_LABEL = {
+    claude: 'Claude Code', copilot: 'GitHub Copilot', cline: 'Cline',
+    roocode: 'Roo Code', cursor: 'Cursor', windsurf: 'Windsurf', aider: 'Aider'
+  };
 
   function showOverlay(sessions, anchorRect) {
     if (!sessions || sessions.length === 0) { return; }
@@ -8029,9 +10477,10 @@ var ModelUsageViewProvider = class {
     });
     overlay.innerHTML = html;
 
-    // Position: prefer below-left of the row, flip if off-screen
-    var top = anchorRect.bottom + window.scrollY + 2;
-    var left = anchorRect.left + window.scrollX;
+    // position:fixed uses viewport coordinates \u2014 do NOT add scrollY/scrollX.
+    // Overlap row by several px so the pointer path can reach the overlay.
+    var top  = anchorRect.bottom - 6;
+    var left = anchorRect.left;
     overlay.style.display = 'block';
     overlay.style.left = '0';
     overlay.style.top = '0';
@@ -8039,7 +10488,7 @@ var ModelUsageViewProvider = class {
     var ow = overlay.offsetWidth;
     var oh = overlay.offsetHeight;
     if (left + ow > window.innerWidth) { left = Math.max(0, window.innerWidth - ow - 8); }
-    if (top + oh > window.innerHeight + window.scrollY) { top = anchorRect.top + window.scrollY - oh - 2; }
+    if (top + oh > window.innerHeight) { top = Math.max(0, anchorRect.top - oh - 2); }
     overlay.style.left = left + 'px';
     overlay.style.top  = top  + 'px';
   }
@@ -8050,35 +10499,43 @@ var ModelUsageViewProvider = class {
   }
 
   function scheduleHide() {
-    overlayHideTimer = setTimeout(hideOverlay, 200);
+    if (overlayHideTimer) { clearTimeout(overlayHideTimer); }
+    overlayHideTimer = setTimeout(function() {
+      if (!isRowHovered && !isOverlayHovered) { hideOverlay(); }
+    }, 900);
   }
 
   function cancelHide() {
     if (overlayHideTimer) { clearTimeout(overlayHideTimer); overlayHideTimer = null; }
   }
 
-  document.getElementById('summary-tbody').addEventListener('mouseover', function(e) {
-    var tr = e.target.closest('tr[data-sessions]');
-    if (!tr) { scheduleHide(); return; }
-    cancelHide();
-    try {
-      var sessions = JSON.parse(tr.getAttribute('data-sessions'));
-      showOverlay(sessions, tr.getBoundingClientRect());
-    } catch (err) { /* ignore */ }
-  });
+  var tbody = document.getElementById('summary-tbody');
 
-  document.getElementById('summary-tbody').addEventListener('mouseleave', function() {
+  overlay.addEventListener('pointerenter', function() {
+    isOverlayHovered = true;
+    cancelHide();
+  });
+  overlay.addEventListener('pointerleave', function(e) {
+    isOverlayHovered = false;
+    var rt = e.relatedTarget;
+    if (rt && tbody.contains(rt)) { return; } // moving back onto the table
     scheduleHide();
   });
-
-  overlay.addEventListener('mouseenter', cancelHide);
-  overlay.addEventListener('mouseleave', scheduleHide);
 
   overlay.addEventListener('click', function(e) {
     var item = e.target.closest('.session-overlay-item');
     if (!item) { return; }
     var sid = item.getAttribute('data-session-id');
     if (sid) { vscode.postMessage({ type: 'openSession', sessionId: sid }); }
+  });
+
+  // Hide both overlays immediately when the pointer leaves the webview entirely.
+  document.addEventListener('mouseleave', function() {
+    isRowHovered = false;
+    isOverlayHovered = false;
+    isChartOverlayHovered = false;
+    hideOverlay();
+    hideChartOverlay();
   });
 
   // -- Message handler -------------------------------------------
@@ -8094,11 +10551,11 @@ var ModelUsageViewProvider = class {
       document.getElementById('to-input').value   = msg.dateRange.to;
     }
 
-    var claudeModels  = msg.data.models.filter(function(m) { return m.source === 'claude'; });
-    var copilotModels = msg.data.models.filter(function(m) { return m.source === 'copilot'; });
+    var claudeModels = msg.data.models.filter(function(m) { return m.model.startsWith('Claude'); });
+    var otherModels  = msg.data.models.filter(function(m) { return !m.model.startsWith('Claude'); });
 
-    renderAccountChart('claude',  claudeModels,  msg.data.totalUserRequests);
-    renderAccountChart('copilot', copilotModels, msg.data.totalUserRequests);
+    renderAccountChart('claude',  claudeModels, msg.data.totalUserRequests);
+    renderAccountChart('copilot', otherModels,  msg.data.totalUserRequests);
     renderTable(msg.data);
   });
 
@@ -8112,7 +10569,7 @@ var ModelUsageViewProvider = class {
 };
 
 // src/timeline/timelineViewProvider.ts
-var vscode12 = __toESM(require("vscode"));
+var vscode13 = __toESM(require("vscode"));
 
 // src/timeline/timelineBuilder.ts
 function extractWorkspaceName(workspacePath) {
@@ -8504,7 +10961,7 @@ var TimelineViewProvider = class _TimelineViewProvider {
     webviewView.webview.html = _TimelineViewProvider.getShellHtml();
     webviewView.webview.onDidReceiveMessage((msg) => {
       if (msg.command === "openSession") {
-        void vscode12.commands.executeCommand("chatwizard.openSession", { id: msg.sessionId });
+        void vscode13.commands.executeCommand("chatwizard.openSession", { id: msg.sessionId });
       } else if (msg.command === "setFilter") {
         this._filter = msg.filter ?? {};
         this._dayFilter = void 0;
@@ -8514,7 +10971,7 @@ var TimelineViewProvider = class _TimelineViewProvider {
       } else if (msg.command === "jumpToMonth") {
         this._sendMore(msg.month);
       } else if (msg.command === "openSettings") {
-        void vscode12.commands.executeCommand("workbench.action.openSettings", "chatwizard");
+        void vscode13.commands.executeCommand("workbench.action.openSettings", "chatwizard");
       } else if (msg.command === "filterByDay") {
         this._dayFilter = msg.date || void 0;
         this._sendInitial();
@@ -9041,6 +11498,11 @@ var TimelineViewProvider = class _TimelineViewProvider {
       .replace(/'/g, '&#39;');
   }
 
+  const SRC_LABEL = {
+    claude: 'Claude Code', copilot: 'GitHub Copilot', cline: 'Cline',
+    roocode: 'Roo Code', cursor: 'Cursor', windsurf: 'Windsurf', aider: 'Aider'
+  };
+
   function applyFilter() {
     const src = document.getElementById('srcFilter').value;
     vscode.postMessage({ command: 'setFilter', filter: { source: src || undefined } });
@@ -9172,7 +11634,7 @@ var TimelineViewProvider = class _TimelineViewProvider {
 
   function renderEntryHtml(entry, fadeIdx) {
     const fadeAttr     = fadeIdx < 25 ? ' style="--cw-i:' + fadeIdx + '"' : '';
-    const sourceLabel  = entry.source === 'copilot' ? 'Copilot' : 'Claude';
+    const sourceLabel  = (SRC_LABEL && SRC_LABEL[entry.source]) ? SRC_LABEL[entry.source] : entry.source;
     const badgeClass   = entry.source === 'copilot' ? 'cw-badge-copilot' : 'cw-badge-claude';
     const wsMeta       = entry.workspaceName || '(unknown workspace)';
     const promptText   = entry.firstPrompt   || '(no prompt)';
@@ -9462,8 +11924,8 @@ var TimelineViewProvider = class _TimelineViewProvider {
 };
 
 // src/telemetry/telemetryRecorder.ts
-var fs7 = __toESM(require("fs"));
-var path10 = __toESM(require("path"));
+var fs13 = __toESM(require("fs"));
+var path16 = __toESM(require("path"));
 var MAX_LOG_BYTES = 1e6;
 var MAX_LOG_AGE_MS = 30 * 24 * 60 * 60 * 1e3;
 var TelemetryRecorder = class {
@@ -9474,7 +11936,7 @@ var TelemetryRecorder = class {
    *                     Typically `context.globalStoragePath` from the VS Code extension context.
    */
   constructor(storagePath) {
-    this.filePath = path10.join(storagePath, "telemetry.jsonl");
+    this.filePath = path16.join(storagePath, "telemetry.jsonl");
   }
   /** Whether telemetry recording is currently enabled. */
   get enabled() {
@@ -9505,8 +11967,8 @@ var TelemetryRecorder = class {
       ...properties !== void 0 ? { properties } : {}
     };
     try {
-      fs7.mkdirSync(path10.dirname(this.filePath), { recursive: true });
-      fs7.appendFileSync(this.filePath, JSON.stringify(entry) + "\n", "utf8");
+      fs13.mkdirSync(path16.dirname(this.filePath), { recursive: true });
+      fs13.appendFileSync(this.filePath, JSON.stringify(entry) + "\n", "utf8");
     } catch {
     }
   }
@@ -9517,7 +11979,7 @@ var TelemetryRecorder = class {
    */
   getEvents() {
     try {
-      const content = fs7.readFileSync(this.filePath, "utf8");
+      const content = fs13.readFileSync(this.filePath, "utf8");
       return content.split("\n").filter((line) => line.trim().length > 0).flatMap((line) => {
         try {
           return [JSON.parse(line)];
@@ -9541,13 +12003,13 @@ var TelemetryRecorder = class {
     try {
       let stat;
       try {
-        stat = fs7.statSync(this.filePath);
+        stat = fs13.statSync(this.filePath);
       } catch {
         return;
       }
       const needsRotation = stat.size > MAX_LOG_BYTES;
       const cutoff = Date.now() - MAX_LOG_AGE_MS;
-      const content = fs7.readFileSync(this.filePath, "utf8");
+      const content = fs13.readFileSync(this.filePath, "utf8");
       const lines = content.split("\n").filter((l) => l.trim().length > 0);
       let hadOld = false;
       const surviving = lines.filter((line) => {
@@ -9563,7 +12025,7 @@ var TelemetryRecorder = class {
         }
       });
       if (needsRotation || hadOld || surviving.length < lines.length) {
-        fs7.writeFileSync(this.filePath, surviving.map((l) => l.trim()).join("\n") + (surviving.length > 0 ? "\n" : ""), "utf8");
+        fs13.writeFileSync(this.filePath, surviving.map((l) => l.trim()).join("\n") + (surviving.length > 0 ? "\n" : ""), "utf8");
       }
     } catch {
     }
@@ -9574,7 +12036,7 @@ var TelemetryRecorder = class {
    */
   clear() {
     try {
-      fs7.unlinkSync(this.filePath);
+      fs13.unlinkSync(this.filePath);
     } catch {
     }
   }
@@ -9585,12 +12047,12 @@ var TelemetryRecorder = class {
 };
 
 // src/commands/manageWorkspaces.ts
-var vscode13 = __toESM(require("vscode"));
-var path11 = __toESM(require("path"));
+var vscode14 = __toESM(require("vscode"));
+var path17 = __toESM(require("path"));
 function registerManageWorkspacesCommand(context, scopeManager, getWatcher, channel, index) {
   context.subscriptions.push(
-    vscode13.commands.registerCommand("chatwizard.manageWatchedWorkspaces", async () => {
-      const [copilotWs, claudeWs] = await Promise.all([
+    vscode14.commands.registerCommand("chatwizard.manageWatchedWorkspaces", async () => {
+      const [copilotWs, claudeWs, cursorWs] = await Promise.all([
         discoverCopilotWorkspacesAsync().then(
           (list) => list.map((ws) => ({
             id: ws.workspaceId,
@@ -9599,12 +12061,13 @@ function registerManageWorkspacesCommand(context, scopeManager, getWatcher, chan
             storageDir: ws.storageDir
           }))
         ).catch(() => []),
-        discoverClaudeWorkspacesAsync().catch(() => [])
+        discoverClaudeWorkspacesAsync().catch(() => []),
+        discoverCursorWorkspacesAsync().catch(() => [])
       ]);
-      const allAvailable = [...copilotWs, ...claudeWs];
+      const allAvailable = [...copilotWs, ...claudeWs, ...cursorWs];
       if (allAvailable.length === 0) {
-        void vscode13.window.showInformationMessage(
-          "Chat Wizard: No Copilot or Claude workspaces found to manage."
+        void vscode14.window.showInformationMessage(
+          "Chat Wizard: No Copilot, Claude, or Cursor workspaces found to manage."
         );
         return;
       }
@@ -9631,24 +12094,24 @@ function registerManageWorkspacesCommand(context, scopeManager, getWatcher, chan
       function indexCountForIds(ids) {
         const dirs = ids.map((id) => {
           const ws = allAvailable.find((w) => w.id === id);
-          return path11.normalize(ws.storageDir);
+          return path17.normalize(ws.storageDir);
         });
         return allSummaries.filter(
-          (s) => dirs.some((dir) => path11.normalize(s.filePath).startsWith(dir + path11.sep))
+          (s) => dirs.some((dir) => path17.normalize(s.filePath).startsWith(dir + path17.sep))
         ).length;
       }
       const countCache = context.globalState.get("cwSessionCountCache", {});
       const updatedCache = { ...countCache };
       const pathGroups = /* @__PURE__ */ new Map();
       for (const ws of allAvailable) {
-        const key = path11.normalize(ws.workspacePath).toLowerCase();
+        const key = path17.normalize(ws.workspacePath).toLowerCase();
         const group = pathGroups.get(key) ?? [];
         group.push(ws);
         pathGroups.set(key, group);
       }
       const allKeys = [...pathGroups.keys()];
       for (const key of allKeys) {
-        const prefix = key.endsWith(path11.sep) ? key : key + path11.sep;
+        const prefix = key.endsWith(path17.sep) ? key : key + path17.sep;
         if (allKeys.some((other) => other !== key && other.startsWith(prefix))) {
           pathGroups.delete(key);
         }
@@ -9659,7 +12122,7 @@ function registerManageWorkspacesCommand(context, scopeManager, getWatcher, chan
         const representative = group[0];
         const allIds = group.map((ws) => ws.id);
         const groupBytes = allIds.reduce((sum, id) => sum + (byteMap.get(id) ?? 0), 0);
-        const cacheKey = path11.normalize(representative.workspacePath).toLowerCase();
+        const cacheKey = path17.normalize(representative.workspacePath).toLowerCase();
         const isSelected = allIds.some((id) => currentSelectedIds.includes(id));
         const indexCount = indexCountForIds(allIds);
         let sessionCount;
@@ -9685,7 +12148,7 @@ function registerManageWorkspacesCommand(context, scopeManager, getWatcher, chan
           totalBytes: groupBytes,
           sessionCount,
           sessionCountApprox: approx,
-          label: path11.basename(representative.workspacePath),
+          label: path17.basename(representative.workspacePath),
           description: representative.workspacePath,
           detail: `${formatSize(groupBytes)}  \u2014  ${countLabel}`,
           picked: isSelected
@@ -9701,7 +12164,7 @@ function registerManageWorkspacesCommand(context, scopeManager, getWatcher, chan
       const picked = await new Promise((resolve) => {
         let accepted = false;
         const initialReal = workspaceItems.filter((i) => i.picked);
-        const qp = vscode13.window.createQuickPick();
+        const qp = vscode14.window.createQuickPick();
         qp.canSelectMany = true;
         qp.keepScrollPosition = true;
         qp.items = workspaceItems;
@@ -9709,10 +12172,10 @@ function registerManageWorkspacesCommand(context, scopeManager, getWatcher, chan
         qp.title = makeTitle(initialReal);
         qp.placeholder = "Select workspaces to index";
         const openPaths = new Set(
-          (vscode13.workspace.workspaceFolders ?? []).map((f) => path11.normalize(f.uri.fsPath).toLowerCase())
+          (vscode14.workspace.workspaceFolders ?? []).map((f) => path17.normalize(f.uri.fsPath).toLowerCase())
         );
         const currentWsItems = workspaceItems.filter(
-          (item) => openPaths.has(path11.normalize(item.workspacePath).toLowerCase())
+          (item) => openPaths.has(path17.normalize(item.workspacePath).toLowerCase())
         );
         qp.onDidChangeSelection((selected) => {
           if (selected.length === 0) {
@@ -9777,30 +12240,30 @@ function registerManageWorkspacesCommand(context, scopeManager, getWatcher, chan
 // src/extension.ts
 var watcher;
 async function activate(context) {
-  const channel = vscode14.window.createOutputChannel("Chat Wizard");
+  const channel = vscode15.window.createOutputChannel("Chat Wizard");
   context.subscriptions.push(channel);
   const telemetry = new TelemetryRecorder(context.globalStorageUri.fsPath);
-  const telemetryCfg = vscode14.workspace.getConfiguration("chatwizard");
+  const telemetryCfg = vscode15.workspace.getConfiguration("chatwizard");
   telemetry.setEnabled(telemetryCfg.get("enableTelemetry") ?? false);
   const index = new SessionIndex();
   const promptLibraryViewProvider = new PromptLibraryViewProvider(index);
   context.subscriptions.push(
-    vscode14.window.registerWebviewViewProvider(PromptLibraryViewProvider.viewType, promptLibraryViewProvider)
+    vscode15.window.registerWebviewViewProvider(PromptLibraryViewProvider.viewType, promptLibraryViewProvider)
   );
   const analyticsViewProvider = new AnalyticsViewProvider(index);
   context.subscriptions.push(
-    vscode14.window.registerWebviewViewProvider(AnalyticsViewProvider.viewType, analyticsViewProvider)
+    vscode15.window.registerWebviewViewProvider(AnalyticsViewProvider.viewType, analyticsViewProvider)
   );
   const modelUsageViewProvider = new ModelUsageViewProvider(context, index);
   context.subscriptions.push(
-    vscode14.window.registerWebviewViewProvider(ModelUsageViewProvider.viewType, modelUsageViewProvider)
+    vscode15.window.registerWebviewViewProvider(ModelUsageViewProvider.viewType, modelUsageViewProvider)
   );
   const timelineViewProvider = new TimelineViewProvider(index, context);
   context.subscriptions.push(
-    vscode14.window.registerWebviewViewProvider(TimelineViewProvider.viewType, timelineViewProvider)
+    vscode15.window.registerWebviewViewProvider(TimelineViewProvider.viewType, timelineViewProvider)
   );
   context.subscriptions.push(
-    vscode14.window.registerFileDecorationProvider(new SessionParseWarningDecorationProvider())
+    vscode15.window.registerFileDecorationProvider(new SessionParseWarningDecorationProvider())
   );
   const engine = new FullTextSearchEngine();
   const searchIndexListener = index.addTypedChangeListener((event) => {
@@ -9823,7 +12286,7 @@ async function activate(context) {
   context.subscriptions.push(searchIndexListener);
   const codeBlockEngine = new CodeBlockSearchEngine();
   context.subscriptions.push(
-    vscode14.window.registerWebviewPanelSerializer("chatwizardAnalytics", {
+    vscode15.window.registerWebviewPanelSerializer("chatwizardAnalytics", {
       async deserializeWebviewPanel(webviewPanel) {
         webviewPanel.webview.options = { enableScripts: true };
         webviewPanel.webview.html = AnalyticsPanel.getShellHtml();
@@ -9839,7 +12302,7 @@ async function activate(context) {
     })
   );
   context.subscriptions.push(
-    vscode14.window.registerWebviewPanelSerializer("chatwizardCodeBlocks", {
+    vscode15.window.registerWebviewPanelSerializer("chatwizardCodeBlocks", {
       async deserializeWebviewPanel(webviewPanel) {
         webviewPanel.webview.options = { enableScripts: true };
         webviewPanel.webview.html = CodeBlocksPanel.getShellHtml();
@@ -9848,7 +12311,7 @@ async function activate(context) {
         const blocks = index.getAllCodeBlocks();
         webviewPanel.webview.onDidReceiveMessage((msg) => {
           if (msg.command === "copy") {
-            void vscode14.env.clipboard.writeText(msg.text ?? "");
+            void vscode15.env.clipboard.writeText(msg.text ?? "");
           } else if (msg.type === "ready") {
             void webviewPanel.webview.postMessage({ type: "update", data: CodeBlocksPanel.buildPayload(blocks, codeBlockEngine) });
           }
@@ -9858,14 +12321,14 @@ async function activate(context) {
     })
   );
   context.subscriptions.push(
-    vscode14.window.registerWebviewPanelSerializer("chatwizardPromptLibrary", {
+    vscode15.window.registerWebviewPanelSerializer("chatwizardPromptLibrary", {
       async deserializeWebviewPanel(webviewPanel) {
         webviewPanel.dispose();
       }
     })
   );
   context.subscriptions.push(
-    vscode14.window.registerWebviewPanelSerializer("chatwizardSession3", {
+    vscode15.window.registerWebviewPanelSerializer("chatwizardSession3", {
       async deserializeWebviewPanel(webviewPanel) {
         webviewPanel.dispose();
       }
@@ -9898,7 +12361,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
     timelineViewProvider.refresh();
   });
   context.subscriptions.push(timelineListener);
-  const provider = new SessionTreeProvider(index);
+  const provider = new SessionTreeProvider(index, context.extensionUri);
   const savedStackJson = context.globalState.get("sortStack");
   if (savedStackJson) {
     try {
@@ -9923,9 +12386,9 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
   }
   function syncContext() {
     const primary = provider.getPrimary();
-    void vscode14.commands.executeCommand("setContext", "chatwizard.sortKey", primary.key);
-    void vscode14.commands.executeCommand("setContext", "chatwizard.sortDir", primary.direction);
-    void vscode14.commands.executeCommand("setContext", "chatwizard.hasFilter", provider.hasActiveFilter());
+    void vscode15.commands.executeCommand("setContext", "chatwizard.sortKey", primary.key);
+    void vscode15.commands.executeCommand("setContext", "chatwizard.sortDir", primary.direction);
+    void vscode15.commands.executeCommand("setContext", "chatwizard.hasFilter", provider.hasActiveFilter());
   }
   syncContext();
   function savePins() {
@@ -9938,7 +12401,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
     handleDrag(items, dataTransfer) {
       dataTransfer.set(
         "application/vnd.chatwizard.session",
-        new vscode14.DataTransferItem(items.map((i) => i.summary.id))
+        new vscode15.DataTransferItem(items.map((i) => i.summary.id))
       );
     },
     async handleDrop(target, dataTransfer) {
@@ -9953,7 +12416,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
       savePins();
     }
   };
-  const treeView = vscode14.window.createTreeView("chatwizardSessions", {
+  const treeView = vscode15.window.createTreeView("chatwizardSessions", {
     treeDataProvider: provider,
     dragAndDropController: dragDropController,
     canSelectMany: true
@@ -9965,7 +12428,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
     treeView.message = index.size === 0 ? makeEmptyStateMsg("sessions") : void 0;
   });
   context.subscriptions.push(sessionDescListener);
-  const codeBlockTreeView = vscode14.window.createTreeView("chatwizardCodeBlocks", {
+  const codeBlockTreeView = vscode15.window.createTreeView("chatwizardCodeBlocks", {
     treeDataProvider: codeBlockProvider,
     canSelectMany: false
   });
@@ -9987,8 +12450,8 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
     void context.globalState.update("sortStack", JSON.stringify(provider.getSortStack()));
   }
   function syncCbContext() {
-    void vscode14.commands.executeCommand("setContext", "chatwizard.cbSortKey", codeBlockProvider.getSortMode());
-    void vscode14.commands.executeCommand("setContext", "chatwizard.cbSortDir", codeBlockProvider.getSortDir());
+    void vscode15.commands.executeCommand("setContext", "chatwizard.cbSortKey", codeBlockProvider.getSortMode());
+    void vscode15.commands.executeCommand("setContext", "chatwizard.cbSortDir", codeBlockProvider.getSortDir());
   }
   syncCbContext();
   function applyCbSort(mode) {
@@ -10000,29 +12463,29 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
   const sortModes = ["date", "workspace", "length", "title", "model"];
   for (const mode of sortModes) {
     context.subscriptions.push(
-      vscode14.commands.registerCommand(`chatwizard.sortBy${capitalise(mode)}`, () => applySort(mode))
+      vscode15.commands.registerCommand(`chatwizard.sortBy${capitalise(mode)}`, () => applySort(mode))
     );
     context.subscriptions.push(
-      vscode14.commands.registerCommand(`chatwizard.sortBy${capitalise(mode)}.asc`, () => applySort(mode))
+      vscode15.commands.registerCommand(`chatwizard.sortBy${capitalise(mode)}.asc`, () => applySort(mode))
     );
     context.subscriptions.push(
-      vscode14.commands.registerCommand(`chatwizard.sortBy${capitalise(mode)}.desc`, () => applySort(mode))
+      vscode15.commands.registerCommand(`chatwizard.sortBy${capitalise(mode)}.desc`, () => applySort(mode))
     );
   }
   const cbSortModes = ["date", "workspace", "length", "title", "language"];
   for (const mode of cbSortModes) {
     context.subscriptions.push(
-      vscode14.commands.registerCommand(`chatwizard.cbSortBy${capitalise(mode)}`, () => applyCbSort(mode))
+      vscode15.commands.registerCommand(`chatwizard.cbSortBy${capitalise(mode)}`, () => applyCbSort(mode))
     );
     context.subscriptions.push(
-      vscode14.commands.registerCommand(`chatwizard.cbSortBy${capitalise(mode)}.asc`, () => applyCbSort(mode))
+      vscode15.commands.registerCommand(`chatwizard.cbSortBy${capitalise(mode)}.asc`, () => applyCbSort(mode))
     );
     context.subscriptions.push(
-      vscode14.commands.registerCommand(`chatwizard.cbSortBy${capitalise(mode)}.desc`, () => applyCbSort(mode))
+      vscode15.commands.registerCommand(`chatwizard.cbSortBy${capitalise(mode)}.desc`, () => applyCbSort(mode))
     );
   }
   context.subscriptions.push(
-    vscode14.commands.registerCommand("chatwizard.configureSortOrder", async () => {
+    vscode15.commands.registerCommand("chatwizard.configureSortOrder", async () => {
       const allKeys = ["date", "workspace", "length", "title", "model", "source"];
       const newStack = [];
       for (let round = 0; round < 3; round++) {
@@ -10035,7 +12498,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
         if (round > 0) {
           items.push({ label: "$(check)  Done \u2014 apply current sort", key: "_done", alwaysShow: true });
         }
-        const keyPick = await vscode14.window.showQuickPick(items, {
+        const keyPick = await vscode15.window.showQuickPick(items, {
           title: `Sort order \u2014 ${ordinal} criterion`,
           placeHolder: round === 0 ? "Pick the primary sort key" : "Pick an additional key, or Done to finish"
         });
@@ -10046,7 +12509,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
           { label: "$(arrow-down)  Descending", description: "Newest \xB7 Largest \xB7 Z\u2192A", dir: "desc" },
           { label: "$(arrow-up)  Ascending", description: "Oldest \xB7 Smallest \xB7 A\u2192Z", dir: "asc" }
         ];
-        const dirPick = await vscode14.window.showQuickPick(dirItems, {
+        const dirPick = await vscode15.window.showQuickPick(dirItems, {
           title: `Direction for "${SORT_KEY_LABELS[keyPick.key]}"`
         });
         if (!dirPick) {
@@ -10060,7 +12523,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
     })
   );
   context.subscriptions.push(
-    vscode14.commands.registerCommand("chatwizard.filterSessions", async () => {
+    vscode15.commands.registerCommand("chatwizard.filterSessions", async () => {
       const current = provider.getFilter();
       const items = [
         {
@@ -10082,6 +12545,11 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
           id: "model",
           label: "$(symbol-event)  Model contains\u2026",
           description: current.model ? `current: "${current.model}"` : void 0
+        },
+        {
+          id: "source",
+          label: "$(extensions)  Source (AI assistant)\u2026",
+          description: current.source ? `current: ${friendlySourceName(current.source)}` : void 0
         },
         {
           id: "minMessages",
@@ -10109,7 +12577,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
           alwaysShow: true
         }
       ];
-      const pick = await vscode14.window.showQuickPick(items, {
+      const pick = await vscode15.window.showQuickPick(items, {
         title: "Filter Sessions",
         placeHolder: "Choose a filter criterion to set (or clear all)"
       });
@@ -10120,12 +12588,12 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
         provider.clearFilter();
         treeView.description = provider.getDescription();
         provider.refresh();
-        void vscode14.commands.executeCommand("setContext", "chatwizard.hasFilter", false);
+        void vscode15.commands.executeCommand("setContext", "chatwizard.hasFilter", false);
         return;
       }
       const newFilter = { ...current };
       if (pick.id === "title") {
-        const val = await vscode14.window.showInputBox({
+        const val = await vscode15.window.showInputBox({
           title: "Filter by title (case-insensitive substring)",
           value: current.title ?? "",
           placeHolder: "Leave blank to remove this filter"
@@ -10135,7 +12603,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
         }
         newFilter.title = val.trim() || void 0;
       } else if (pick.id === "dateFrom") {
-        const val = await vscode14.window.showInputBox({
+        const val = await vscode15.window.showInputBox({
           title: "Updated from (YYYY-MM-DD, inclusive)",
           value: current.dateFrom ?? "",
           placeHolder: "e.g. 2024-01-01  \u2014  blank to remove",
@@ -10146,7 +12614,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
         }
         newFilter.dateFrom = val.trim() || void 0;
       } else if (pick.id === "dateTo") {
-        const val = await vscode14.window.showInputBox({
+        const val = await vscode15.window.showInputBox({
           title: "Updated until (YYYY-MM-DD, inclusive)",
           value: current.dateTo ?? "",
           placeHolder: "e.g. 2024-12-31  \u2014  blank to remove",
@@ -10157,7 +12625,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
         }
         newFilter.dateTo = val.trim() || void 0;
       } else if (pick.id === "model") {
-        const val = await vscode14.window.showInputBox({
+        const val = await vscode15.window.showInputBox({
           title: "Filter by model (case-insensitive substring)",
           value: current.model ?? "",
           placeHolder: "e.g. gpt-4  \u2014  blank to remove"
@@ -10166,8 +12634,25 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
           return;
         }
         newFilter.model = val.trim() || void 0;
+      } else if (pick.id === "source") {
+        const allSources = ["claude", "copilot", "cline", "roocode", "cursor", "windsurf", "aider"];
+        const sourceItems = [
+          { label: "$(close)  Show all sources", value: void 0 },
+          ...allSources.map((s) => ({
+            label: `$(${sourceCodiconId(s)})  ${friendlySourceName(s)}`,
+            value: s,
+            description: current.source === s ? "current" : void 0
+          }))
+        ];
+        const chosen = await vscode15.window.showQuickPick(sourceItems, {
+          title: "Filter by source (AI assistant)"
+        });
+        if (chosen === void 0) {
+          return;
+        }
+        newFilter.source = chosen.value;
       } else if (pick.id === "minMessages") {
-        const val = await vscode14.window.showInputBox({
+        const val = await vscode15.window.showInputBox({
           title: "Minimum message count (inclusive)",
           value: current.minMessages !== void 0 ? String(current.minMessages) : "",
           placeHolder: "e.g. 10  \u2014  blank to remove",
@@ -10178,7 +12663,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
         }
         newFilter.minMessages = val.trim() ? parseInt(val.trim(), 10) : void 0;
       } else if (pick.id === "maxMessages") {
-        const val = await vscode14.window.showInputBox({
+        const val = await vscode15.window.showInputBox({
           title: "Maximum message count (inclusive)",
           value: current.maxMessages !== void 0 ? String(current.maxMessages) : "",
           placeHolder: "e.g. 100  \u2014  blank to remove",
@@ -10196,11 +12681,11 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
       provider.setFilter(newFilter);
       treeView.description = provider.getDescription();
       provider.refresh();
-      void vscode14.commands.executeCommand("setContext", "chatwizard.hasFilter", provider.hasActiveFilter());
+      void vscode15.commands.executeCommand("setContext", "chatwizard.hasFilter", provider.hasActiveFilter());
     })
   );
   context.subscriptions.push(
-    vscode14.commands.registerCommand("chatwizard.filterCodeBlocks", async () => {
+    vscode15.commands.registerCommand("chatwizard.filterCodeBlocks", async () => {
       const current = codeBlockProvider.getFilter();
       const items = [
         {
@@ -10215,7 +12700,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
         },
         {
           id: "sessionSource",
-          label: "$(github)  Source (Copilot/Claude)",
+          label: "$(symbol-class)  Source",
           description: current.sessionSource ? `current: ${current.sessionSource}` : void 0
         },
         {
@@ -10229,7 +12714,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
           alwaysShow: true
         }
       ];
-      const pick = await vscode14.window.showQuickPick(items, {
+      const pick = await vscode15.window.showQuickPick(items, {
         title: "Filter Code Blocks",
         placeHolder: "Choose a filter criterion to set (or clear all)"
       });
@@ -10244,7 +12729,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
       }
       const newFilter = { ...current };
       if (pick.id === "language") {
-        const val = await vscode14.window.showInputBox({
+        const val = await vscode15.window.showInputBox({
           title: "Filter by language (case-insensitive substring)",
           value: current.language ?? "",
           placeHolder: "e.g. typescript, python, javascript"
@@ -10254,7 +12739,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
         }
         newFilter.language = val.trim() || void 0;
       } else if (pick.id === "content") {
-        const val = await vscode14.window.showInputBox({
+        const val = await vscode15.window.showInputBox({
           title: "Filter by content (case-insensitive substring)",
           value: current.content ?? "",
           placeHolder: "Search within code block content"
@@ -10264,12 +12749,15 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
         }
         newFilter.content = val.trim() || void 0;
       } else if (pick.id === "sessionSource") {
+        const allSources = ["copilot", "claude", "cline", "roocode", "cursor", "windsurf", "aider"];
         const sourceItems = [
-          { label: "$(github)  GitHub Copilot", source: "copilot" },
-          { label: "$(hubot)  Claude Code", source: "claude" },
+          ...allSources.map((s) => ({
+            label: `$(${sourceCodiconId(s)})  ${friendlySourceName(s)}`,
+            source: s
+          })),
           { label: "$(close)  Clear filter", source: void 0 }
         ];
-        const sourcePick = await vscode14.window.showQuickPick(sourceItems, {
+        const sourcePick = await vscode15.window.showQuickPick(sourceItems, {
           title: "Filter by source"
         });
         if (!sourcePick) {
@@ -10282,7 +12770,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
           { label: "$(hubot)  AI Assistant", role: "assistant" },
           { label: "$(close)  Clear filter", role: void 0 }
         ];
-        const rolePick = await vscode14.window.showQuickPick(roleItems, {
+        const rolePick = await vscode15.window.showQuickPick(roleItems, {
           title: "Filter by message role"
         });
         if (!rolePick) {
@@ -10296,30 +12784,30 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
     })
   );
   context.subscriptions.push(
-    vscode14.commands.registerCommand("chatwizard.pinSession", (item) => {
+    vscode15.commands.registerCommand("chatwizard.pinSession", (item) => {
       provider.pin(item.summary.id);
       provider.refresh();
       savePins();
     })
   );
   context.subscriptions.push(
-    vscode14.commands.registerCommand("chatwizard.unpinSession", (item) => {
+    vscode15.commands.registerCommand("chatwizard.unpinSession", (item) => {
       provider.unpin(item.summary.id);
       provider.refresh();
       savePins();
     })
   );
   context.subscriptions.push(
-    vscode14.commands.registerCommand("chatwizard.loadMoreSessions", () => provider.loadMore())
+    vscode15.commands.registerCommand("chatwizard.loadMoreSessions", () => provider.loadMore())
   );
   context.subscriptions.push(
-    vscode14.commands.registerCommand("chatwizard.loadMoreCodeBlocks", () => codeBlockProvider.loadMore())
+    vscode15.commands.registerCommand("chatwizard.loadMoreCodeBlocks", () => codeBlockProvider.loadMore())
   );
   context.subscriptions.push(
-    vscode14.commands.registerCommand("chatwizard.openSession", (summary, searchTerm, highlightContainer) => {
+    vscode15.commands.registerCommand("chatwizard.openSession", (summary, searchTerm, highlightContainer) => {
       const session = index.get(summary.id);
       if (!session) {
-        vscode14.window.showErrorMessage(`Session not found: ${summary.id}`);
+        vscode15.window.showErrorMessage(`Session not found: ${summary.id}`);
         return;
       }
       telemetry.record("session.opened", { source: session.source });
@@ -10327,10 +12815,10 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
     })
   );
   context.subscriptions.push(
-    vscode14.commands.registerCommand("chatwizard.openSessionFromCodeBlock", (ref) => {
+    vscode15.commands.registerCommand("chatwizard.openSessionFromCodeBlock", (ref) => {
       const session = index.get(ref.sessionId);
       if (!session) {
-        vscode14.window.showErrorMessage(`Session not found: ${ref.sessionId}`);
+        vscode15.window.showErrorMessage(`Session not found: ${ref.sessionId}`);
         return;
       }
       const isLeaf = ref.blocks.length === 1;
@@ -10340,53 +12828,53 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
     })
   );
   context.subscriptions.push(
-    vscode14.commands.registerCommand("chatwizard.search", () => {
+    vscode15.commands.registerCommand("chatwizard.search", () => {
       telemetry.record("search.opened");
       SearchPanel.show(context, index, engine);
     })
   );
   context.subscriptions.push(
-    vscode14.commands.registerCommand("chatwizard.showCodeBlocks", () => {
+    vscode15.commands.registerCommand("chatwizard.showCodeBlocks", () => {
       CodeBlocksPanel.show(context, index, codeBlockEngine);
     })
   );
   context.subscriptions.push(
-    vscode14.commands.registerCommand("chatwizard.showPromptLibrary", () => {
+    vscode15.commands.registerCommand("chatwizard.showPromptLibrary", () => {
       PromptLibraryPanel.show(context, index);
     })
   );
   context.subscriptions.push(
-    vscode14.commands.registerCommand("chatwizard.showAnalytics", () => {
+    vscode15.commands.registerCommand("chatwizard.showAnalytics", () => {
       AnalyticsPanel.show(context, index);
     })
   );
   context.subscriptions.push(
-    vscode14.commands.registerCommand("chatwizard.showTimeline", () => {
-      void vscode14.commands.executeCommand("chatwizardTimeline.focus");
+    vscode15.commands.registerCommand("chatwizard.showTimeline", () => {
+      void vscode15.commands.executeCommand("chatwizardTimeline.focus");
     })
   );
   context.subscriptions.push(
-    vscode14.commands.registerCommand("chatwizard.rescan", () => {
-      void vscode14.window.showInformationMessage(
+    vscode15.commands.registerCommand("chatwizard.rescan", () => {
+      void vscode15.window.showInformationMessage(
         "Chat Wizard indexes sessions automatically via file system events. If sessions are missing, reload the window to trigger a fresh scan.",
         "Reload Window"
       ).then((action) => {
         if (action === "Reload Window") {
-          void vscode14.commands.executeCommand("workbench.action.reloadWindow");
+          void vscode15.commands.executeCommand("workbench.action.reloadWindow");
         }
       });
     })
   );
   context.subscriptions.push(
-    vscode14.workspace.onDidChangeConfiguration((e) => {
+    vscode15.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("chatwizard.enableTelemetry")) {
-        const cfg = vscode14.workspace.getConfiguration("chatwizard");
+        const cfg = vscode15.workspace.getConfiguration("chatwizard");
         telemetry.setEnabled(cfg.get("enableTelemetry") ?? false);
       }
-      if (e.affectsConfiguration("chatwizard.claudeProjectsPath") || e.affectsConfiguration("chatwizard.copilotStoragePath")) {
+      if (e.affectsConfiguration("chatwizard.claudeProjectsPath") || e.affectsConfiguration("chatwizard.copilotStoragePath") || e.affectsConfiguration("chatwizard.cursorStoragePath")) {
         channel.appendLine("[Chat Wizard] Data path setting changed \u2014 re-discovering workspaces and restarting index...");
         void (async () => {
-          const [copilotWs, claudeWs] = await Promise.all([
+          const [copilotWs, claudeWs, cursorWs] = await Promise.all([
             discoverCopilotWorkspacesAsync().then(
               (list) => list.map((ws) => ({
                 id: ws.workspaceId,
@@ -10395,9 +12883,10 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
                 storageDir: ws.storageDir
               }))
             ).catch(() => []),
-            discoverClaudeWorkspacesAsync().catch(() => [])
+            discoverClaudeWorkspacesAsync().catch(() => []),
+            discoverCursorWorkspacesAsync().catch(() => [])
           ]);
-          const allAvailable = [...copilotWs, ...claudeWs];
+          const allAvailable = [...copilotWs, ...claudeWs, ...cursorWs];
           scopeManager.resetToDefault();
           await scopeManager.initDefault(allAvailable);
           const selectedIds = scopeManager.getSelectedIds();
@@ -10410,7 +12899,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
           }
         })().catch((err) => channel.appendLine(`[error] Path-change restart failed: ${err}`));
       }
-      if (e.affectsConfiguration("chatwizard.oldestSessionDate") || e.affectsConfiguration("chatwizard.maxSessions")) {
+      if (e.affectsConfiguration("chatwizard.oldestSessionDate") || e.affectsConfiguration("chatwizard.maxSessions") || e.affectsConfiguration("chatwizard.indexCursor")) {
         channel.appendLine("[Chat Wizard] Session filter setting changed \u2014 restarting index...");
         void watcher?.restart().then(() => channel.appendLine("[Chat Wizard] Watcher restarted after filter change.")).catch((err) => channel.appendLine(`[error] Filter-change restart failed: ${err}`));
       }
@@ -10418,7 +12907,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
   );
   registerExportCommands(context, index, () => provider.getSortedSummaries());
   context.subscriptions.push(
-    vscode14.commands.registerCommand(
+    vscode15.commands.registerCommand(
       "chatwizard.exportFromTreeSelection",
       async (item, allSelected) => {
         const items = allSelected && allSelected.length > 0 ? allSelected : item ? [item] : [];
@@ -10431,7 +12920,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
   registerManageWorkspacesCommand(context, scopeManager, () => watcher, channel, index);
   await new Promise((resolve) => setTimeout(resolve, 200));
   void (async () => {
-    const [copilotWs, claudeWs] = await Promise.all([
+    const [copilotWs, claudeWs, cursorWs] = await Promise.all([
       discoverCopilotWorkspacesAsync().then(
         (list) => list.map((ws) => ({
           id: ws.workspaceId,
@@ -10440,9 +12929,10 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
           storageDir: ws.storageDir
         }))
       ).catch(() => []),
-      discoverClaudeWorkspacesAsync().catch(() => [])
+      discoverClaudeWorkspacesAsync().catch(() => []),
+      discoverCursorWorkspacesAsync().catch(() => [])
     ]);
-    const allAvailable = [...copilotWs, ...claudeWs];
+    const allAvailable = [...copilotWs, ...claudeWs, ...cursorWs];
     channel.appendLine(
       `[Chat Wizard] Discovered ${allAvailable.length} workspace(s) for scope detection: ` + allAvailable.map((ws) => `${ws.source}:${ws.id} (${ws.workspacePath})`).join(", ")
     );
