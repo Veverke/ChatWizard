@@ -25,7 +25,7 @@ const path = require('path');
 // ── Fallback Electron version ────────────────────────────────────────────────
 // Keep this in sync with the Electron version shipped in the minimum required
 // VS Code release.  Check: https://github.com/microsoft/vscode/blob/main/version
-const FALLBACK_ELECTRON_VERSION = '39.8.0';
+const FALLBACK_ELECTRON_VERSION = '39.8.8';
 
 // ── Resolve Electron version ─────────────────────────────────────────────────
 
