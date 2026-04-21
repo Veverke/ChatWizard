@@ -55,6 +55,15 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Run tests
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" == "Linux" ]; then
+            xvfb-run -a npm test
+          else
+            npm test
+          fi
+
       - name: Build VSIX (${{ matrix.target }})
         run: npm run package:vsix:${{ matrix.target }}
 
