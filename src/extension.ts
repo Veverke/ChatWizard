@@ -917,7 +917,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 const items = (allSelected && allSelected.length > 0) ? allSelected : (item ? [item] : []);
                 const sessions = items
                     .map(i => index.get(i.summary.id))
-                    .filter((s): s is Session => s != null);
+                    .filter((s): s is Session => s !== null && s !== undefined);
                 await performExport(sessions);
             }
         )

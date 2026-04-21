@@ -642,7 +642,7 @@ export async function parseCursorWorkspace(
                 "SELECT value FROM ItemTable WHERE key = 'composer.composerData'"
             ).get() as { value: string } | undefined;
             rawValue = row?.value ?? null;
-            if (rawValue == null) {
+            if (rawValue === null || rawValue === undefined) {
                 const probeRows = db.prepare(
                     "SELECT key, value FROM ItemTable WHERE key LIKE '%composer%' ORDER BY key LIMIT 100"
                 ).all() as Array<{ key: string; value: string }>;
@@ -676,7 +676,7 @@ export async function parseCursorWorkspace(
         );
     }
 
-    if (rawValue == null) {
+    if (rawValue === null || rawValue === undefined) {
         if (rawPrompts) {
             const fb = buildAiServiceFallbackSessions(
                 vscdbPath, workspaceId, workspacePath, [], rawPrompts, rawGenerations

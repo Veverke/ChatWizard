@@ -115,7 +115,7 @@ export function registerExportCommands(
         vscode.commands.registerCommand('chatwizard.exportAll', async () => {
             const sessions = index.getAllSummaries()
                 .map(s => index.get(s.id))
-                .filter((s): s is Session => s != null);
+                .filter((s): s is Session => s !== null && s !== undefined);
             await performExport(sessions);
         })
     );
@@ -158,7 +158,7 @@ export function registerExportCommands(
 
             const sessions = picked
                 .map(p => index.get(p.id))
-                .filter((s): s is Session => s != null);
+                .filter((s): s is Session => s !== null && s !== undefined);
             await performExport(sessions);
         })
     );

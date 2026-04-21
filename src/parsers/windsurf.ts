@@ -91,7 +91,7 @@ export async function parseWindsurfWorkspace(
         );
     }
 
-    if (rawValue == null) {
+    if (rawValue === null || rawValue === undefined) {
         return fatalResult("Missing 'cascade.sessionData' key in state.vscdb");
     }
 

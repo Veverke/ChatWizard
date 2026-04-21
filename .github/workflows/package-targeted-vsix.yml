@@ -20,9 +20,9 @@ jobs:
   verify-version:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 20
 
@@ -59,9 +59,9 @@ jobs:
     timeout-minutes: ${{ matrix.job-timeout || 60 }}
     continue-on-error: ${{ matrix.allow-failure == true }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 20
 
@@ -84,7 +84,7 @@ jobs:
         run: npm run package:vsix:${{ matrix.target }}
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: vsix-${{ matrix.target }}
           path: chatwizard-${{ matrix.target }}.vsix
@@ -94,14 +94,14 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 20
 
       - name: Download all VSIX artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: vsix-*
           merge-multiple: true
