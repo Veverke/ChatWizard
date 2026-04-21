@@ -1,7 +1,8 @@
 # Change Log
 
-## [1.2.0] - 2026-03-24
+## [1.2.0] - 2026-04-21
 
+- **CI: unit tests on every release** — the release workflow now runs the full test suite on each target platform (Windows, Linux, macOS x64, macOS arm64) before building the VSIX, catching regressions before publication.
 - **Cline support** — indexes Cline (`saoudrizwan.claude-dev`) task history from `api_conversation_history.json` per task; mixed text/tool-use content is handled with tool calls silently skipped; model and workspace path read from `ui_messages.json`. Configurable via `chatwizard.indexCline` and `chatwizard.clineStoragePath`.
 - **Roo Code support** — indexes Roo Code (`rooveterinaryinc.roo-cline`) task history using the same parser as Cline (identical storage format, different extension ID). Configurable via `chatwizard.indexRooCode` and `chatwizard.rooCodeStoragePath`.
 - **Cursor support** — indexes Cursor chat and agent sessions from SQLite `state.vscdb` files (`composer.composerData` key); one `state.vscdb` can contain multiple sessions. Requires the bundled `better-sqlite3` native module. Configurable via `chatwizard.indexCursor` and `chatwizard.cursorStoragePath`.
@@ -10,6 +11,11 @@
 - All five new sources participate fully in full-text search, the prompt library, code block extraction, analytics, model usage, timeline, and workspace management.
 - Cursor-native model IDs normalised: `cursor-fast` → `Cursor Fast`, `cursor-small` → `Cursor Small`.
 - `better-sqlite3` native module bundled with the extension; VSIX packages are built per OS to include the correct platform binary.
+- **Session Reader streaming** — large sessions (500+ messages) now load only the most-recent messages on open, with a banner to load earlier history on demand; content is streamed to the webview in small batches so the panel is interactive immediately.
+- **Tree view pagination** — Sessions and Code Blocks panels now load items in pages; a "Load More (N remaining)" entry appears at the bottom so the UI stays fast regardless of session count.
+- **Session grouping by date** — the Sessions panel now groups sessions into date buckets (Today, Yesterday, This Week, This Month, Older) by default; a toolbar toggle switches between grouped and flat-list views, with the choice persisted across restarts.
+- **Code block grouping by language** — the Code Blocks panel now groups entries by language by default; a toolbar toggle switches between grouped and flat-list views, with the choice persisted across restarts.
+- **Prompt clustering performance** — near-duplicate detection now uses a MinHash pre-filter to skip full trigram comparison on unrelated pairs, runs in async `setImmediate`-chunked batches to avoid blocking the extension host, caps computation at 5,000 entries, and caches results until the prompt index changes.
 
 ## [1.1.0] - 2026-03-22
 

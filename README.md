@@ -65,6 +65,8 @@ A sortable, filterable, pinnable, and drag-and-drop reorderable TreeView listing
 
 **Organisation** — Pin important sessions to keep them at the top of the list (pins persist across restarts). Drag and drop sessions into a custom manual order (also persisted). Select multiple sessions (`Ctrl+Click`) for bulk export. Inline icon buttons on each row give quick access to pin and export without right-clicking.
 
+**Grouping** — A toolbar toggle button groups sessions into date buckets (Today, Yesterday, This Week, This Month, Older) — on by default. Click the same button to switch to a flat list. The chosen mode persists across VS Code restarts.
+
 **Pagination** — A "Load More (N remaining)" entry appears at the bottom when sessions exceed the page size.
 
 ### Session Reader
@@ -100,6 +102,8 @@ Browse every fenced code block the AI has ever generated across all sessions and
 **Filter** — Narrow the view by language substring, content substring, source (Copilot / Claude), or message role (user / assistant).
 
 **Sort** — Five sort keys (Date, Workspace, Length, Session Title, Language) each with ascending/descending direction, toggled via toolbar icon buttons.
+
+**Grouping** — A toolbar toggle button groups code blocks by language — on by default. Each language bucket shows the block count. Click the same button to switch to a flat list. The chosen mode persists across VS Code restarts.
 
 **Copy** — One-click clipboard copy for any code block.
 
@@ -163,9 +167,9 @@ Click the ChatWizard icon in the VS Code activity bar to open five sidebar panel
 
 | Panel | Also openable via Command Palette | Key toolbar actions |
 |-------|----------------------------------|---------------------|
-| **Sessions** | — | Filter, Configure Sort Order, sort buttons (Date / Workspace / Length / Title / Model ↑↓), Export All, Export Selected, Manage Watched Workspaces |
+| **Sessions** | — | Filter, Configure Sort Order, sort buttons (Date / Workspace / Length / Title / Model ↑↓), Group by Date toggle, Export All, Export Selected, Manage Watched Workspaces |
 | **Prompt Library** | `ChatWizard: Show Prompt Library` | Keyword search, Copy prompt, Merge duplicate cluster |
-| **Code Blocks** | `ChatWizard: Show Code Blocks` | Filter (language / content / source / role), sort buttons (Date / Workspace / Length / Title / Language ↑↓), Copy code block, Load More |
+| **Code Blocks** | `ChatWizard: Show Code Blocks` | Filter (language / content / source / role), sort buttons (Date / Workspace / Length / Title / Language ↑↓), Group by Language toggle, Copy code block, Load More |
 | **Analytics** | `ChatWizard: Show Analytics Dashboard` | (no toolbar; auto-refreshes) |
 | **Model Usage** | — | Date range from/to pickers; auto-refreshes |
 | **Timeline** | `ChatWizard: Show Timeline` | Source filter, Search, Jump-to-Date input, Load More; heat map + work bursts + topic drift + stats bar inline |
@@ -278,6 +282,8 @@ Capabilities not available in the built-in GitHub Copilot Chat panel or the Clau
 | `chatwizard.manageWatchedWorkspaces` | Manage Watched Workspaces | Command Palette / Sessions view toolbar |
 
 Sort commands (`chatwizard.sortByDate`, `chatwizard.sortByDate.asc`, `chatwizard.sortByDate.desc`, and equivalents for workspace, length, title, and model) are available in the Sessions view toolbar. Matching commands prefixed `chatwizard.cb` (date, workspace, length, title, language) are available in the Code Blocks view toolbar.
+
+Grouping commands (`chatwizard.enableSessionGrouping` / `chatwizard.disableSessionGrouping` and `chatwizard.enableCbGrouping` / `chatwizard.disableCbGrouping`) are available in the respective view toolbars; only the contextually relevant one is shown at a time.
 
 ---
 
