@@ -51,7 +51,7 @@ jobs:
             runs-on: ubuntu-latest
           - target: darwin-x64
             runs-on: macos-13        # Intel (x64) runner
-            job-timeout: 20          # bail out if no runner available within 20 min
+            job-timeout: 10          # bail out if no runner available within 10 min
             allow-failure: true      # don't block release if macos-13 times out
           - target: darwin-arm64
             runs-on: macos-latest    # Apple Silicon (arm64) runner
