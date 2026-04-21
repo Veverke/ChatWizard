@@ -303,11 +303,6 @@ Grouping commands (`chatwizard.enableSessionGrouping` / `chatwizard.disableSessi
 - **Claude Code epoch sessions** — sessions with a creation date of 1970-01-01 (epoch) or with zero messages are silently skipped during indexing. This matches Claude Code's own behavior of writing placeholder files before sessions are populated.
 - **Token counts are approximations.** ChatWizard uses character-based counting (characters / 4) for Claude sessions and word-based counting (words x 1.3) for Copilot/GPT sessions. These figures are estimates and will not exactly match the billing token counts reported by Anthropic or OpenAI.
 - **Cursor and Windsurf schema stability.** Both IDEs store chat data in private SQLite databases whose internal schema can change in any update without notice. Chat Wizard targets the current schema; a future Cursor or Windsurf release may require a matching Chat Wizard update before sessions from those sources are visible again.
-- **macOS Intel (x64) releases may lag behind — and Intel Mac support will eventually be dropped.**
-  The `darwin-x64` VSIX is built on GitHub's `macos-13` Intel runners, which are currently in a deprecation and brownout cycle. GitHub is actively reducing their capacity, causing queue times of 10+ minutes or indefinite waits. If a runner is not available within the timeout window the release pipeline sets, the new release ships *without* a fresh `darwin-x64` package — Intel Mac users will automatically receive the most recent previously-built version as a fallback. Apple Silicon Mac users (`darwin-arm64`) are completely unaffected.
-  **Each release's platform build status** (in-sync / out-of-sync / unavailable) is recorded in the GitHub Actions run summary for that release.
-  Once GitHub removes `macos-13` runners entirely, the `darwin-x64` build target will be retired. Users on Intel Macs are encouraged to plan a hardware upgrade; in the interim, Intel Macs can run the `darwin-arm64` VSIX via Rosetta 2 as a fallback if VS Code supports it.
-
 ---
 
 ## Release Notes
