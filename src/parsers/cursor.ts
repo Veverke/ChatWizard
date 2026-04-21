@@ -148,24 +148,28 @@ function buildAiServiceFallbackSessions(
     type IndexedPrompt = { index: number; text: string; unixMs?: number; composerId?: string };
     const flat: IndexedPrompt[] = [];
 
-    // Prefer aiService.generations as the source — it contains ALL prompts with
-    // correct timestamps (aiService.prompts is a rolling window that may be
-    // missing older messages and has no timestamps of its own).
-    if (generationEntries.length > 0) {
-        for (let i = 0; i < generationEntries.length; i++) {
-            flat.push({ index: i, text: generationEntries[i].text, unixMs: generationEntries[i].unixMs });
-        }
-    } else {
-        // Fall back to aiService.prompts, using text-matched timestamps from generations.
-        let prompts: unknown;
-        try { prompts = JSON.parse(promptsJson); } catch { return null; }
-        if (!Array.isArray(prompts) || prompts.length === 0) { return null; }
-        for (let i = 0; i < prompts.length; i++) {
-            const text = extractPromptText(prompts[i]);
+    // Prefer aiService.prompts as the text source — it carries structured prompt
+    // data including per-prompt composerId. aiService.generations is used only to
+    // supply accurate timestamps via text-matching. Fall back to generations as the
+    // text source only when prompts is absent or empty.
+    let parsedPrompts: unknown[] | null = null;
+    try {
+        const p = JSON.parse(promptsJson);
+        if (Array.isArray(p) && p.length > 0) { parsedPrompts = p; }
+    } catch { /* ignore */ }
+
+    if (parsedPrompts) {
+        for (let i = 0; i < parsedPrompts.length; i++) {
+            const text = extractPromptText(parsedPrompts[i]);
             if (!text) { continue; }
             const ts = textToTimestamp.get(text.trim());
-            const cid = extractPromptComposerId(prompts[i]);
+            const cid = extractPromptComposerId(parsedPrompts[i]);
             flat.push({ index: i, text, unixMs: ts, composerId: cid });
+        }
+    } else if (generationEntries.length > 0) {
+        // Fall back to aiService.generations when no prompts are available.
+        for (let i = 0; i < generationEntries.length; i++) {
+            flat.push({ index: i, text: generationEntries[i].text, unixMs: generationEntries[i].unixMs });
         }
     }
     if (flat.length === 0) { return null; }

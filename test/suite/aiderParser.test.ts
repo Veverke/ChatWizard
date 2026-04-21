@@ -6,7 +6,7 @@ import * as fs from 'fs';
 import { parseAiderHistory, extractAiderCodeBlocks } from '../../src/parsers/aider';
 import { AiderHistoryInfo } from '../../src/types/index';
 
-const FIXTURES_DIR = path.join(__dirname, '..', 'fixtures', 'aider');
+const FIXTURES_DIR = path.resolve(__dirname, '../../..', 'test', 'fixtures', 'aider');
 
 // ---------------------------------------------------------------------------
 // Helper

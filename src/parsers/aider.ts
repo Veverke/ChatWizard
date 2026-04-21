@@ -58,7 +58,7 @@ export function parseAiderHistory(
     // ── Read file ────────────────────────────────────────────────────────────
     let rawContent: string;
     try {
-        rawContent = fs.readFileSync(info.historyFile, 'utf8');
+        rawContent = fs.readFileSync(info.historyFile, 'utf8').replace(/\r\n/g, '\n');
     } catch (err) {
         const msg = `Failed to read ${info.historyFile}: ${err instanceof Error ? err.message : String(err)}`;
         errors.push(msg);
