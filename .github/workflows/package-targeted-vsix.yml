@@ -51,9 +51,13 @@ jobs:
             runs-on: ubuntu-latest
           - target: darwin-x64
             runs-on: macos-13        # Intel (x64) runner
+            job-timeout: 20          # bail out if no runner available within 20 min
+            allow-failure: true      # don't block release if macos-13 times out
           - target: darwin-arm64
             runs-on: macos-latest    # Apple Silicon (arm64) runner
     runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: ${{ matrix.job-timeout || 60 }}
+    continue-on-error: ${{ matrix.allow-failure == true }}
     steps:
       - uses: actions/checkout@v4
 
@@ -102,21 +106,76 @@ jobs:
           pattern: vsix-*
           merge-multiple: true
 
+      - name: Check darwin-x64 artifact
+        id: dx64
+        run: |
+          if [ -f chatwizard-darwin-x64.vsix ]; then
+            echo "present=true" >> $GITHUB_OUTPUT
+          else
+            echo "present=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Fallback — fetch darwin-x64 VSIX from latest previous run if missing
+        if: steps.dx64.outputs.present == 'false'
+        id: dx64_fallback
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "::warning::darwin-x64 VSIX missing (macos-13 runner timeout?) — fetching from latest previous run..."
+          PREV_RUN_ID=$(gh api "/repos/${{ github.repository }}/actions/artifacts?name=vsix-darwin-x64&per_page=20" \
+            --jq "[.artifacts[] | select(.expired == false and (.workflow_run.id | tostring) != \"${{ github.run_id }}\")] | sort_by(.created_at) | reverse | .[0].workflow_run.id")
+          if [ -z "$PREV_RUN_ID" ] || [ "$PREV_RUN_ID" = "null" ]; then
+            echo "::warning::No previous darwin-x64 artifact found. Releasing without darwin-x64."
+            echo "fallback_run_id=" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          echo "Fetching vsix-darwin-x64 from run $PREV_RUN_ID"
+          gh run download "$PREV_RUN_ID" --repo "${{ github.repository }}" --name vsix-darwin-x64 --dir .
+          echo "fallback_run_id=$PREV_RUN_ID" >> $GITHUB_OUTPUT
+
+      - name: Write release platform summary
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if [ "${{ steps.dx64.outputs.present }}" = "true" ]; then
+            DX64_STATUS="✅ in sync — built fresh for v${VERSION}"
+          elif [ -f chatwizard-darwin-x64.vsix ]; then
+            PREV_ID="${{ steps.dx64_fallback.outputs.fallback_run_id }}"
+            DX64_STATUS="⚠️ out of sync — macos-13 runner timed out; using artifact from run [${PREV_ID}](https://github.com/${{ github.repository }}/actions/runs/${PREV_ID}). Intel Mac users remain on the previous release."
+          else
+            DX64_STATUS="❌ unavailable — macos-13 runner timed out and no previous artifact exists. Intel Mac users cannot install this version."
+          fi
+          {
+            echo "## Release Platform Status — v${VERSION}"
+            echo ""
+            echo "| Platform | Status |"
+            echo "| --- | --- |"
+            echo "| win32-x64 | ✅ in sync |"
+            echo "| linux-x64 | ✅ in sync |"
+            echo "| darwin-arm64 | ✅ in sync |"
+            echo "| darwin-x64 (Intel Mac) | ${DX64_STATUS} |"
+          } >> $GITHUB_STEP_SUMMARY
+
       - name: Install vsce and ovsx
         run: npm install -g @vscode/vsce ovsx
 
       - name: Publish to VS Code Marketplace
         run: |
-          vsce publish \
-            --packagePath chatwizard-win32-x64.vsix \
+          VSIX_ARGS="--packagePath chatwizard-win32-x64.vsix \
             --packagePath chatwizard-linux-x64.vsix \
-            --packagePath chatwizard-darwin-x64.vsix \
-            --packagePath chatwizard-darwin-arm64.vsix \
-            -p ${{ secrets.VSCE_TOKEN }}
+            --packagePath chatwizard-darwin-arm64.vsix"
+          if [ -f chatwizard-darwin-x64.vsix ]; then
+            VSIX_ARGS="$VSIX_ARGS --packagePath chatwizard-darwin-x64.vsix"
+          else
+            echo "::warning::Publishing without darwin-x64 VSIX."
+          fi
+          vsce publish $VSIX_ARGS -p ${{ secrets.VSCE_TOKEN }}
 
       - name: Publish to Open VSX Registry
         run: |
           ovsx publish chatwizard-win32-x64.vsix -p ${{ secrets.OVSX_TOKEN }}
           ovsx publish chatwizard-linux-x64.vsix -p ${{ secrets.OVSX_TOKEN }}
-          ovsx publish chatwizard-darwin-x64.vsix -p ${{ secrets.OVSX_TOKEN }}
           ovsx publish chatwizard-darwin-arm64.vsix -p ${{ secrets.OVSX_TOKEN }}
+          if [ -f chatwizard-darwin-x64.vsix ]; then
+            ovsx publish chatwizard-darwin-x64.vsix -p ${{ secrets.OVSX_TOKEN }}
+          fi
