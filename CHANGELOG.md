@@ -1,5 +1,17 @@
 # Change Log
 
+## [1.3.0] - 2026-04-23
+
+- **Google Antigravity support** — indexes agent conversations from Google Antigravity (Google’s VS Code-fork AI IDE) stored as JSONL step logs at `~/.gemini/antigravity/brain/<uuid>/.system_generated/logs/overview.txt`. User messages are extracted from `<USER_REQUEST>` XML envelopes; tool-only model steps are skipped; AI responses come from `PLANNER_RESPONSE` steps that carry text content. Session title is derived from the first user message (max 120 chars). Configurable via `chatwizard.indexAntigravity` and `chatwizard.antigravityBrainPath`.
+- Antigravity sessions participate fully in full-text search, the prompt library, code block extraction, analytics, model usage, timeline, and source filtering across all panels.
+- Token counting for Antigravity sessions uses the character ÷ 4 Gemini approximation (same as Claude) rather than the GPT word-based heuristic.
+- `modelUsageEngine`: Antigravity sessions with no model field fall back to the label `Gemini Auto`.
+- Antigravity brand icon (gradient “A” arch in Google Blue / Yellow / Red) added to `resources/icons/`.
+- `--cw-antigravity` CSS variable and `.cw-badge-antigravity` badge class added to the shared theme (Google Blue `#4285F4` dark / `#1a73e8` light).
+- Analytics panel: added “Antigravity Sessions” summary card; per-source session counter is now explicit for all sources rather than using a catch-all `else` branch.
+- Timeline: Antigravity added to the source filter dropdown and `SRC_LABEL` map; timeline entries get the `cw-badge-antigravity` badge.
+- Search panel: source filter cycle expanded to include Antigravity (`All → Copilot → Claude → Antigravity → All`).
+
 ## [1.2.0] - 2026-04-21
 
 - **CI: unit tests on every release** — the release workflow now runs the full test suite on each target platform (Windows, Linux, macOS x64, macOS arm64) before building the VSIX, catching regressions before publication.

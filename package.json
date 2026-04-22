@@ -1,8 +1,8 @@
 {
   "name": "chatwizard",
   "displayName": "Chat Wizard",
-  "description": "Browse, search, and analyze AI coding-assistant conversation history from GitHub Copilot, Claude Code, Cline, Roo Code, Cursor, Windsurf, and Aider. Chat history viewer, prompt library, code block browser, token analytics, and timeline — all in one extension.",
-  "version": "1.2.0",
+  "description": "Browse, search, and analyze AI coding-assistant conversation history from GitHub Copilot, Claude Code, Cline, Roo Code, Cursor, Windsurf, Aider, and Google Antigravity. Chat history viewer, prompt library, code block browser, token analytics, and timeline — all in one extension.",
+  "version": "1.3.0",
   "publisher": "Veverke",
   "icon": "images/icon.png",
   "license": "SEE LICENSE IN LICENSE",
