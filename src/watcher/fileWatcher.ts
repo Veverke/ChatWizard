@@ -11,7 +11,7 @@ import {
     listSessionFilesAsync,
 } from '../readers/copilotWorkspace';
 import { Session, SessionSource } from '../types/index';
-import { resolveClaudeProjectsPath, resolveClineStoragePath, resolveRooCodeStoragePath, resolveCursorStoragePath, resolveWindsurfStoragePath } from './configPaths';
+import { resolveClaudeProjectsPath, resolveClineStoragePath, resolveRooCodeStoragePath, resolveCursorStoragePath, resolveWindsurfStoragePath, resolveAntigravityBrainPath } from './configPaths';
 import { WorkspaceScopeManager } from './workspaceScope';
 import { discoverClineTasksAsync, discoverRooCodeTasksAsync } from '../readers/clineWorkspace';
 import { parseClineTask } from '../parsers/cline';
@@ -21,6 +21,8 @@ import { discoverWindsurfWorkspacesAsync } from '../readers/windsurfWorkspace';
 import { parseWindsurfWorkspace } from '../parsers/windsurf';
 import { discoverAiderHistoryFilesAsync } from '../readers/aiderWorkspace';
 import { parseAiderHistory } from '../parsers/aider';
+import { discoverAntigravityConversationsAsync } from '../readers/antigravityWorkspace';
+import { parseAntigravityConversation } from '../parsers/antigravity';
 
 export class ChatWizardWatcher implements vscode.Disposable {
     private disposables: vscode.Disposable[] = [];
@@ -70,6 +72,7 @@ export class ChatWizardWatcher implements vscode.Disposable {
         const indexCursor   = cfg.get<boolean>('indexCursor', true);
         const indexWindsurf = cfg.get<boolean>('indexWindsurf', true);
         const indexAider    = cfg.get<boolean>('indexAider', true);
+        const indexAntigravity = cfg.get<boolean>('indexAntigravity', true);
 
         if (!enabled) {
             this.channel.appendLine('[Chat Wizard] Extension disabled via chatwizard.enabled setting — skipping indexing and file watching.');
@@ -78,7 +81,7 @@ export class ChatWizardWatcher implements vscode.Disposable {
             return;
         }
 
-        await this.buildInitialIndex(indexClaude, indexCopilot, indexCline, indexRooCode, indexCursor, indexWindsurf, indexAider);
+        await this.buildInitialIndex(indexClaude, indexCopilot, indexCline, indexRooCode, indexCursor, indexWindsurf, indexAider, indexAntigravity);
 
         if (indexClaude) {
             // Watch Claude sessions
@@ -233,6 +236,28 @@ export class ChatWizardWatcher implements vscode.Disposable {
 
             this.disposables.push(aiderWatcher);
         }
+
+        if (indexAntigravity) {
+            // Watch Antigravity overview.txt conversation logs
+            const antigravityRoot = resolveAntigravityBrainPath();
+            const antigravityPattern = new vscode.RelativePattern(
+                vscode.Uri.file(antigravityRoot),
+                '**/.system_generated/logs/overview.txt'
+            );
+            const antigravityWatcher = vscode.workspace.createFileSystemWatcher(antigravityPattern);
+
+            antigravityWatcher.onDidCreate((uri) => this.onAntigravityFileChanged(uri));
+            antigravityWatcher.onDidChange((uri) => this.onAntigravityFileChanged(uri));
+            antigravityWatcher.onDidDelete((uri) => {
+                // Conversation UUID is two levels above overview.txt:
+                //   <brainRoot>/<uuid>/.system_generated/logs/overview.txt
+                const conversationId = path.basename(path.dirname(path.dirname(path.dirname(uri.fsPath))));
+                this.index.remove(conversationId);
+                this.channel.appendLine(`[live] removed antigravity session ${conversationId}`);
+            });
+
+            this.disposables.push(antigravityWatcher);
+        }
     }
 
     /**
@@ -252,7 +277,7 @@ export class ChatWizardWatcher implements vscode.Disposable {
         this.disposables = [];
     }
 
-    private async buildInitialIndex(indexClaude: boolean, indexCopilot: boolean, indexCline: boolean, indexRooCode: boolean = true, indexCursor: boolean = true, indexWindsurf: boolean = true, indexAider: boolean = true): Promise<void> {
+    private async buildInitialIndex(indexClaude: boolean, indexCopilot: boolean, indexCline: boolean, indexRooCode: boolean = true, indexCursor: boolean = true, indexWindsurf: boolean = true, indexAider: boolean = true, indexAntigravity: boolean = true): Promise<void> {
         await vscode.window.withProgress(
             {
                 location: vscode.ProgressLocation.Window,
@@ -270,19 +295,20 @@ export class ChatWizardWatcher implements vscode.Disposable {
                 } else {
                     this.channel.appendLine(`[Chat Wizard] Building index with scope filter: [${selectedIds.join(', ')}]`);
                 }
-                const [claudeSessions, copilotSessions, clineSessions, rooCodeSessions, cursorSessions, windsurfSessions, aiderSessions] = await Promise.all([
+                const [claudeSessions, copilotSessions, clineSessions, rooCodeSessions, cursorSessions, windsurfSessions, aiderSessions, antigravitySessions] = await Promise.all([
                     // Always pass selectedIds (even empty array) — empty = index nothing, no fallback to all.
-                    indexClaude    ? this.collectClaudeSessionsAsync(onProgress, selectedIds)  : Promise.resolve([]),
-                    indexCopilot   ? this.collectCopilotSessionsAsync(onProgress, selectedIds) : Promise.resolve([]),
-                    indexCline     ? this.collectClineTasksAsync(onProgress)                   : Promise.resolve([]),
-                    indexRooCode   ? this.collectRooCodeTasksAsync(onProgress)                 : Promise.resolve([]),
-                    indexCursor    ? this.collectCursorSessionsAsync(onProgress)               : Promise.resolve([]),
-                    indexWindsurf  ? this.collectWindsurfSessionsAsync(onProgress)             : Promise.resolve([]),
-                    indexAider     ? this.collectAiderSessionsAsync(onProgress)                : Promise.resolve([]),
+                    indexClaude       ? this.collectClaudeSessionsAsync(onProgress, selectedIds)  : Promise.resolve([]),
+                    indexCopilot      ? this.collectCopilotSessionsAsync(onProgress, selectedIds) : Promise.resolve([]),
+                    indexCline        ? this.collectClineTasksAsync(onProgress)                   : Promise.resolve([]),
+                    indexRooCode      ? this.collectRooCodeTasksAsync(onProgress)                 : Promise.resolve([]),
+                    indexCursor       ? this.collectCursorSessionsAsync(onProgress)               : Promise.resolve([]),
+                    indexWindsurf     ? this.collectWindsurfSessionsAsync(onProgress)             : Promise.resolve([]),
+                    indexAider        ? this.collectAiderSessionsAsync(onProgress)                : Promise.resolve([]),
+                    indexAntigravity  ? this.collectAntigravitySessionsAsync(onProgress)          : Promise.resolve([]),
                 ]);
 
                 const cfg = vscode.workspace.getConfiguration('chatwizard');
-                const all = applySessionFilters([...claudeSessions, ...copilotSessions, ...clineSessions, ...rooCodeSessions, ...cursorSessions, ...windsurfSessions, ...aiderSessions], cfg, this.channel);
+                const all = applySessionFilters([...claudeSessions, ...copilotSessions, ...clineSessions, ...rooCodeSessions, ...cursorSessions, ...windsurfSessions, ...aiderSessions, ...antigravitySessions], cfg, this.channel);
                 this.index.batchUpsert(all);
                 this.channel.appendLine(`[init] Batch indexed ${all.length} sessions`);
             }
@@ -661,6 +687,38 @@ export class ChatWizardWatcher implements vscode.Disposable {
         }
     }
 
+    /** Async: parse all Antigravity conversations from the brain directory. */
+    async collectAntigravitySessionsAsync(
+        onProgress?: (current: number, total: number) => void,
+        _brainRootOverride?: string
+    ): Promise<Session[]> {
+        const root = _brainRootOverride ?? resolveAntigravityBrainPath();
+        try {
+            const infos = await discoverAntigravityConversationsAsync(root);
+            const total = infos.length;
+            let current = 0;
+
+            const results = await Promise.all(infos.map(async (info) => {
+                const result = parseAntigravityConversation(info);
+                current++;
+                onProgress?.(current, total);
+                if (result.errors.length > 0) {
+                    this.channel.appendLine(`[warn] Antigravity parse errors in ${info.overviewFile}: ${result.errors.join('; ')}`);
+                }
+                if (result.session.messages.length === 0 ||
+                    result.session.createdAt === new Date(0).toISOString()) {
+                    return null;
+                }
+                return result.session;
+            }));
+
+            return results.filter((s): s is Session => s !== null);
+        } catch (err) {
+            this.channel.appendLine(`[error] Failed to collect Antigravity sessions: ${err}`);
+            return [];
+        }
+    }
+
     /** Synchronous collectors kept for internal use by live-update code paths. */
     private collectClaudeSessions(): Session[] {
         const sessions: Session[] = [];
@@ -989,6 +1047,26 @@ export class ChatWizardWatcher implements vscode.Disposable {
         this.index.upsert(result.session);
         const verb = this.index.size > before ? 'added' : 'updated';
         this.channel.appendLine(`[live] ${verb} aider session ${historyFile}`);
+    }
+
+    private onAntigravityFileChanged(uri: vscode.Uri): void {
+        const overviewFile = uri.fsPath;
+        // UUID is the directory two levels above overview.txt:
+        //   <brainRoot>/<uuid>/.system_generated/logs/overview.txt
+        const conversationId = path.basename(path.dirname(path.dirname(path.dirname(overviewFile))));
+        const result = parseAntigravityConversation({ conversationId, overviewFile });
+        if (result.errors.length > 0) {
+            this.channel.appendLine(`[warn] Antigravity parse errors in ${overviewFile}: ${result.errors.join('; ')}`);
+        }
+        if (result.session.messages.length === 0 ||
+            result.session.createdAt === new Date(0).toISOString()) {
+            this.channel.appendLine(`[skip] empty/epoch antigravity session ${conversationId}`);
+            return;
+        }
+        const before = this.index.size;
+        this.index.upsert(result.session);
+        const verb = this.index.size > before ? 'added' : 'updated';
+        this.channel.appendLine(`[live] ${verb} antigravity session ${conversationId}`);
     }
 
     private onFileChanged(

@@ -793,6 +793,16 @@
           "minimum": 1,
           "maximum": 5,
           "description": "Maximum directory depth to recurse when searching for .aider.chat.history.md files (default: 3, max: 5)."
+        },
+        "chatwizard.indexAntigravity": {
+          "type": "boolean",
+          "default": true,
+          "description": "Index Google Antigravity agent conversation sessions from the ~/.gemini/antigravity/brain directory."
+        },
+        "chatwizard.antigravityBrainPath": {
+          "type": "string",
+          "default": "",
+          "description": "Override the Google Antigravity brain directory path. Leave empty to use the default OS location (~/.gemini/antigravity/brain)."
         }
       }
     }

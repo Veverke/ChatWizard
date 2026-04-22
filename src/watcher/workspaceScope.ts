@@ -152,6 +152,9 @@ export async function calcWorkspaceSizeBytes(
             try { return (await fs.promises.stat(histFile)).size; } catch { return 0; }
         }
 
+        // Antigravity is not workspace-scoped (brain dir is global); not reachable via ScopedWorkspace.
+        if (source === 'antigravity') { return 0; }
+
         return 0;
     } catch {
         return 0;
@@ -217,6 +220,9 @@ export async function countWorkspaceSessions(
             const histFile = path.join(storageDir, '.aider.chat.history.md');
             try { await fs.promises.access(histFile); return 1; } catch { return 0; }
         }
+
+        // Antigravity is not workspace-scoped (brain dir is global); not reachable via ScopedWorkspace.
+        if (source === 'antigravity') { return 0; }
 
         return 0;
     } catch {

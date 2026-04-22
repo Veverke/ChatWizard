@@ -536,7 +536,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 newFilter.model = val.trim() || undefined;
 
             } else if (pick.id === 'source') {
-                const allSources: SessionSource[] = ['claude', 'copilot', 'cline', 'roocode', 'cursor', 'windsurf', 'aider'];
+                const allSources: SessionSource[] = ['claude', 'copilot', 'cline', 'roocode', 'cursor', 'windsurf', 'aider', 'antigravity'];
                 type SourceItem = vscode.QuickPickItem & { value: SessionSource | undefined };
                 const sourceItems: SourceItem[] = [
                     { label: '$(close)  Show all sources', value: undefined },
@@ -656,7 +656,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 newFilter.content = val.trim() || undefined;
 
             } else if (pick.id === 'sessionSource') {
-                const allSources: SessionSource[] = ['copilot', 'claude', 'cline', 'roocode', 'cursor', 'windsurf', 'aider'];
+                const allSources: SessionSource[] = ['copilot', 'claude', 'cline', 'roocode', 'cursor', 'windsurf', 'aider', 'antigravity'];
                 const sourceItems: (vscode.QuickPickItem & { source?: SessionSource })[] = [
                     ...allSources.map(s => ({
                         label: `$(${sourceCodiconId(s)})  ${friendlySourceName(s)}`,

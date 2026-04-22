@@ -12,7 +12,7 @@ interface SearchResultItem extends vscode.QuickPickItem {
     summary: SessionSummary;
 }
 
-type SourceFilterState = 'all' | 'copilot' | 'claude';
+type SourceFilterState = 'all' | 'copilot' | 'claude' | 'antigravity';
 type MessageTypeState = 'all' | 'prompts' | 'responses';
 
 // ---------------------------------------------------------------------------
@@ -22,19 +22,22 @@ type MessageTypeState = 'all' | 'prompts' | 'responses';
 function nextSourceState(current: SourceFilterState): SourceFilterState {
     if (current === 'all') { return 'copilot'; }
     if (current === 'copilot') { return 'claude'; }
+    if (current === 'claude') { return 'antigravity'; }
     return 'all';
 }
 
 function sourceButtonIcon(state: SourceFilterState): vscode.ThemeIcon {
     if (state === 'copilot') { return new vscode.ThemeIcon('github'); }
     if (state === 'claude') { return new vscode.ThemeIcon('hubot'); }
+    if (state === 'antigravity') { return new vscode.ThemeIcon('rocket'); }
     return new vscode.ThemeIcon('list-filter');
 }
 
 function sourceButtonTooltip(state: SourceFilterState): string {
     if (state === 'all') { return 'Source: All — click for Copilot only'; }
     if (state === 'copilot') { return 'Source: Copilot — click for Claude only'; }
-    return 'Source: Claude — click for All';
+    if (state === 'claude') { return 'Source: Claude — click for Antigravity only'; }
+    return 'Source: Antigravity — click for All';
 }
 
 // ---------------------------------------------------------------------------
