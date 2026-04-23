@@ -95,12 +95,17 @@ export class SearchPanel {
             tooltip: msgTypeTooltip(msgTypeFilter),
         } as MutableButton;
 
+        const semanticButton: vscode.QuickInputButton = {
+            iconPath: new vscode.ThemeIcon('sparkle'),
+            tooltip: 'Switch to Semantic Search',
+        };
+
         const quickPick = vscode.window.createQuickPick<SearchResultItem>();
         quickPick.placeholder = 'Search chat history… (prefix with / for regex)';
         // matchOnDetail lets VS Code highlight the query text inside the snippet
         quickPick.matchOnDescription = false;
         quickPick.matchOnDetail = true;
-        quickPick.buttons = [sourceButton as vscode.QuickInputButton, msgTypeButton as vscode.QuickInputButton];
+        quickPick.buttons = [sourceButton as vscode.QuickInputButton, msgTypeButton as vscode.QuickInputButton, semanticButton];
 
         let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -177,6 +182,11 @@ export class SearchPanel {
         });
 
         quickPick.onDidTriggerButton((button) => {
+            if (button === semanticButton) {
+                vscode.commands.executeCommand('chatwizard.semanticSearch');
+                quickPick.hide();
+                return;
+            }
             if (button === sourceButton) {
                 sourceFilter = nextSourceState(sourceFilter);
                 sourceButton.iconPath = sourceButtonIcon(sourceFilter);
@@ -186,7 +196,7 @@ export class SearchPanel {
                 msgTypeButton.iconPath = msgTypeIcon(msgTypeFilter);
                 msgTypeButton.tooltip = msgTypeTooltip(msgTypeFilter);
             }
-            quickPick.buttons = [sourceButton as vscode.QuickInputButton, msgTypeButton as vscode.QuickInputButton];
+            quickPick.buttons = [sourceButton as vscode.QuickInputButton, msgTypeButton as vscode.QuickInputButton, semanticButton];
             runSearch(quickPick.value);
         });
 

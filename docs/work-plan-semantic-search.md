@@ -22,8 +22,7 @@ The goal is natural-language queries like _"find sessions where I discussed auth
 | Decision | Choice | Rationale |
 |---|---|---|
 | Library | `@xenova/transformers` v2 | Proven in Node.js, model loading built-in, pure-JS fallback available |
-| ONNX backend | `onnxruntime-node` (native binary) | Same pattern as `better-sqlite3`; per-platform VSIX already in place |
-| WASM fallback | `onnxruntime-web` WASM | If native binary shipping proves too complex, same API, ~2× slower, cross-platform by default |
+| ONNX backend | `onnxruntime-web` WASM (default in `@xenova/transformers`) | No native binary to compile or ship per platform; no changes to `rebuild-native.js` or CI; ~80–150 ms/embed is acceptable for background queue use |
 | Model | `Xenova/all-MiniLM-L6-v2` (int8 quantized) | ~22 MB download, 384-dim embeddings, purpose-built for semantic similarity, ~30–50 ms/inference on CPU |
 | Model cache location | `globalStorageUri/models/` | Inside extension storage — not the OS-level HF cache |
 | Embedding granularity | One vector per **session** | Per-message embeddings would spike memory; per-session is the practical trade-off |
@@ -45,93 +44,115 @@ The goal is natural-language queries like _"find sessions where I discussed auth
 
 ---
 
-## Phase 0 — Dependency & Build Config ⬜
+## Implementation Order
 
-**Goal:** Get `@xenova/transformers` and `onnxruntime-node` into the project without breaking the existing build, bundle, or packaging pipeline.
+Phase 0 is the only true prerequisite — it defines all TypeScript contracts and build config. Once it is merged, **Phases 1–4 are fully independent and can be worked in parallel**. Phase 5 is the single convergence point.
 
-**Depends on:** Nothing — purely additive.
+```
+Phase 0 — Foundation: contracts + build config   ← must complete first
+    │
+    ├─► Phase 1 — EmbeddingEngine                ┐
+    ├─► Phase 2 — SemanticIndex                  │  fully parallel
+    ├─► Phase 3 — SemanticIndexer                │  each codes to Phase 0 interfaces
+    └─► Phase 4 — SemanticSearchPanel            ┘
+            │
+            └─► Phase 5 — Extension Wiring       ← converges all four tracks
+```
 
-### Tasks
+Within each phase, tasks are listed as atomic units. Tasks inside a phase that do not call each other out as prerequisites are independent and **should be implemented in parallel** — assign them to different people or work them concurrently.
 
-- [ ] Add `@xenova/transformers` to `dependencies` in `package.json`
-- [ ] Add `onnxruntime-node` to `dependencies` in `package.json`
-- [ ] Add `--external:@xenova/transformers --external:onnxruntime-node` to the `bundle` esbuild script
-- [ ] Add the same externals to the `bundle:watch` esbuild script
-- [ ] Add `!node_modules/@xenova/transformers/**` to `.vscodeignore` (include in VSIX)
-- [ ] Add `!node_modules/onnxruntime-node/**` to `.vscodeignore` (include in VSIX)
-- [ ] Extend `scripts/rebuild-native.js` to rebuild `onnxruntime-node` alongside `better-sqlite3`
-- [ ] Add `chatwizard.semanticSearch` command declaration to `package.json` `"commands"` array
-- [ ] Add `chatwizard.enableSemanticSearch` boolean setting to `package.json` `"configuration"` (default: `false`)
-- [ ] Verify `npm run compile` and `npm run bundle` still succeed with the new externals
-- [ ] Verify `npm run package:vsix:win32-x64` produces a valid VSIX (size increase expected; confirm <50 MB delta)
+---
+
+## Phase 0 — Foundation: Contracts & Build Config ✅
+
+**Goal:** Define all TypeScript interfaces that the parallel phases will code against, and get the new npm packages into the build pipeline. This is the only strictly sequential prerequisite.
+
+**Depends on:** Nothing.
+
+### Tasks — Contracts (independent of build tasks)
+
+- [x] Add `SemanticSearchResult` to `src/search/types.ts`:
+  ```ts
+  export interface SemanticSearchResult {
+      sessionId: string;
+      score: number; // cosine similarity, 0–1
+  }
+  ```
+- [x] Create `src/search/semanticContracts.ts` — export shared constants and interfaces:
+  - `SEMANTIC_DIMS = 384` — embedding dimension; all phases import this instead of hardcoding
+  - `SEMANTIC_MAX_CHARS = 2048` — session text truncation ceiling
+  - `IEmbeddingEngine` — `isReady: boolean`, `load(onProgress?): Promise<void>`, `embed(text): Promise<Float32Array>`
+  - `ISemanticIndex` — `size: number`, `add()`, `remove()`, `has()`, `search()`, `save()`, `load()`
+  - `ISemanticIndexer` — `isReady: boolean`, `indexedCount: number`, `initialize()`, `scheduleSession()`, `removeSession()`, `search()`, `dispose()`
+
+### Tasks — Build config (independent of contract tasks)
+
+- [x] Add `@xenova/transformers` to `dependencies` in `package.json`
+- [x] Add `--external:@xenova/transformers` to the `bundle` and `bundle:watch` esbuild scripts in `package.json`
+- [x] Add `!node_modules/@xenova/transformers/**` to `.vscodeignore`
+
+### Tasks — package.json manifest (independent of both above groups)
+
+- [x] Add `chatwizard.semanticSearch` command declaration to the `"commands"` array
+- [x] Add `chatwizard.enableSemanticSearch` boolean setting to `"configuration"` (default: `false`, description: `"Enable local semantic (natural language) search. Downloads a ~22 MB model on first use."`)
 
 ### Deliverables
 
-- `package.json` with two new runtime dependencies and updated esbuild externals
-- `.vscodeignore` updated to include the new `node_modules` subtrees in the VSIX
-- `scripts/rebuild-native.js` updated to rebuild `onnxruntime-node`
-- Confirmed: existing `npm run bundle` and `npm run compile` pass with no new errors
-- Confirmed: VSIX packages successfully per platform
+- `src/search/types.ts` updated with `SemanticSearchResult`
+- `src/search/semanticContracts.ts` — all shared constants + interfaces
+- `package.json` — one new dependency (`@xenova/transformers`), updated esbuild externals, new command + setting
+- `.vscodeignore` — updated to include `node_modules/@xenova/transformers`
+- Confirmed: `npm run compile` and `npm run bundle` pass with no new errors
+- Confirmed: `npm run package:vsix:win32-x64` produces a valid VSIX
 
 ### Manual Testing
 
 1. Run `npm run bundle` — confirm no errors about missing modules or unresolved imports.
 2. Run `npm run compile` — confirm TypeScript compilation succeeds with zero new errors.
-3. Launch the Extension Development Host — confirm the extension activates normally (check the Output → "Chat Wizard" channel for the normal startup log; no new errors).
-4. Inspect the generated VSIX — confirm it contains `node_modules/@xenova/transformers` and `node_modules/onnxruntime-node` entries.
-5. Confirm the `chatwizard.semanticSearch` command appears in the Command Palette (even though it does nothing yet).
-6. Confirm `chatwizard.enableSemanticSearch` appears in VS Code Settings UI under "Chat Wizard".
+3. Launch the Extension Development Host — confirm the extension activates normally (Output → "Chat Wizard" channel shows the normal startup log; no new errors).
+4. Inspect the generated VSIX — confirm it contains `node_modules/@xenova/transformers` entries.
+5. Confirm `chatwizard.semanticSearch` appears in the Command Palette (does nothing yet — that is expected).
+6. Confirm `chatwizard.enableSemanticSearch` appears in the VS Code Settings UI under "Chat Wizard".
 
 ### Unit Tests
 
-No logic introduced in this phase; build pipeline checks serve as verification.
+No executable logic is introduced in this phase; build pipeline and type-check serve as verification.
 
 ---
 
-## Phase 1 — Core Embedding Engine ⬜
+## Phase 1 — EmbeddingEngine ⬜
 
-**Goal:** A thin, testable TypeScript wrapper around `@xenova/transformers` that loads the model, embeds text, and can be imported without side-effects.
+**Goal:** Implement `IEmbeddingEngine` — a thin wrapper around `@xenova/transformers` that loads the ONNX model and produces normalized embeddings.
 
-**Depends on:** Phase 0
+**Depends on:** Phase 0 (for `IEmbeddingEngine`, `SEMANTIC_DIMS`, `SEMANTIC_MAX_CHARS`).
+**Parallel with:** Phases 2, 3, 4.
 
 **New file:** `src/search/embeddingEngine.ts`
 
-### Tasks
+### Tasks (each independently assignable after the class skeleton exists)
 
-- [ ] Create `EmbeddingEngine` class
-- [ ] In constructor: accept `cacheDir: string` and store it; no I/O in the constructor
-- [ ] Implement `load(onProgress?: (msg: string) => void): Promise<void>`:
-  - Set `env.cacheDir` to the provided `cacheDir` before the first `pipeline()` call
-  - Call `pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2')` to download/load the model
-  - `onProgress` receives status strings for UI feedback (e.g. `"Downloading model… 45%"`)
-  - Idempotent: if already loaded, resolves immediately
-  - Does **not** catch errors — callers decide how to surface them
-- [ ] Implement `embed(text: string): Promise<Float32Array>`:
-  - Hard-clips input to `MAX_CHARS = 2048` chars before passing to the model
-  - Passes `{ pooling: 'mean', normalize: true }` options to the pipeline
-  - Returns a 384-element `Float32Array` (normalized, ready for cosine similarity)
-  - Throws if called before `load()` completes
-- [ ] Expose `get isReady(): boolean`
-- [ ] Export a `MAX_DIMS = 384` constant (used by `SemanticIndex` to validate saved files)
+- [ ] **Class skeleton** — `EmbeddingEngine` implementing `IEmbeddingEngine`; constructor accepts `cacheDir: string` and stores it; declares private fields; no I/O
+- [ ] **`isReady` getter** — returns `true` only after `load()` resolves successfully
+- [ ] **`load()` method** — sets `env.cacheDir`, calls `pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2')`; forwards download progress to the optional `onProgress` callback; idempotent (resolves immediately if already loaded); does not catch errors
+- [ ] **`embed()` method** — clips input to `SEMANTIC_MAX_CHARS`, calls the loaded pipeline with `{ pooling: 'mean', normalize: true }`, returns a `Float32Array` of length `SEMANTIC_DIMS`; throws if `isReady` is false
+- [ ] **Unit tests** — `test/suite/embeddingEngine.test.ts`; mock `@xenova/transformers` for the fast suite; add a real-model integration suite gated by `CW_RUN_INTEGRATION_TESTS=1`
 
 ### Deliverables
 
-- `src/search/embeddingEngine.ts` — `EmbeddingEngine` class with `load()`, `embed()`, `isReady`, `MAX_DIMS`
-- `test/suite/embeddingEngine.test.ts` — unit tests (see below)
+- `src/search/embeddingEngine.ts` — `EmbeddingEngine` class
+- `test/suite/embeddingEngine.test.ts`
 
 ### Manual Testing
 
-1. Write a temporary activation call in `extension.ts` (comment it out before committing):
+1. Add a temporary block in `extension.ts` (remove before merging):
    ```ts
    const eng = new EmbeddingEngine(context.globalStorageUri.fsPath + '/models');
    await eng.load(msg => channel.appendLine(msg));
    const v = await eng.embed('test authentication patterns');
    channel.appendLine(`Embed dims: ${v.length}, first value: ${v[0]}`);
    ```
-2. Launch the Extension Development Host with `chatwizard.enableSemanticSearch: true`.
-3. Confirm the Output channel shows download progress messages on first run.
-4. Confirm the channel shows `Embed dims: 384` with a float value on subsequent runs (model cached).
-5. Disable Wi-Fi after first run and restart VS Code — confirm the model loads from cache with no network call.
+2. Launch the Extension Development Host — confirm the Output channel shows download progress on first run, then `Embed dims: 384` with a float value on subsequent runs (model cached).
+3. Disable network after first run and restart VS Code — confirm the model loads from cache without any network call.
 
 ### Unit Tests
 
@@ -139,261 +160,189 @@ Write unit tests in `test/suite/embeddingEngine.test.ts` covering all public met
 
 ---
 
-## Phase 2 — Semantic Index with Persistence ⬜
+## Phase 2 — SemanticIndex ⬜
 
-**Goal:** An in-memory vector store that can serialize/deserialize embeddings to a compact binary file, so embeddings survive VS Code restarts.
+**Goal:** Implement `ISemanticIndex` — an in-memory vector store with binary file persistence so embeddings survive VS Code restarts.
 
-**Depends on:** Phase 1 (for `MAX_DIMS`)
+**Depends on:** Phase 0 (for `ISemanticIndex`, `SemanticSearchResult`, `SEMANTIC_DIMS`).
+**Parallel with:** Phases 1, 3, 4.
 
 **New file:** `src/search/semanticIndex.ts`
 
-### Tasks
+Binary file format used by `save()` / `load()`:
+```
+[4 bytes] magic: 0x43 0x57 0x53 0x45  ("CWSE")
+[4 bytes] version: 1 (uint32 LE)
+[4 bytes] dims: 384 (uint32 LE)
+[4 bytes] entry count N (uint32 LE)
+[N entries]
+  [4 bytes] sessionId byte length (uint32 LE)
+  [variable] sessionId bytes (UTF-8)
+  [384 × 4 bytes] float32 embedding (little-endian)
+```
 
-- [ ] Define `SemanticSearchResult` interface in `src/search/types.ts`:
-  ```ts
-  export interface SemanticSearchResult {
-      sessionId: string;
-      score: number; // cosine similarity, 0–1
-  }
-  ```
-- [ ] Create `SemanticIndex` class
-- [ ] Internal store: `Map<string, Float32Array>` (sessionId → embedding)
-- [ ] Implement `add(sessionId: string, vector: Float32Array): void`
-- [ ] Implement `remove(sessionId: string): void`
-- [ ] Implement `has(sessionId: string): boolean`
-- [ ] Implement `get size(): number`
-- [ ] Implement `search(queryVector: Float32Array, topK: number): SemanticSearchResult[]`:
-  - Iterates all stored vectors
-  - Computes cosine similarity (both vectors are pre-normalized, so `dot(a, b)` is sufficient)
-  - Returns top-K results sorted descending by score
-- [ ] Implement `save(filePath: string): Promise<void>` — binary format:
-  ```
-  [4 bytes] magic: 0x43 0x57 0x53 0x45  ("CWSE")
-  [4 bytes] version: 1 (uint32 LE)
-  [4 bytes] dims: 384 (uint32 LE)
-  [4 bytes] entry count N (uint32 LE)
-  [N entries]
-    [4 bytes] sessionId byte length (uint32 LE)
-    [variable] sessionId bytes (UTF-8)
-    [384 × 4 bytes] float32 embedding (little-endian)
-  ```
-- [ ] Implement `load(filePath: string): Promise<void>`:
-  - Reads and validates the magic bytes and version
-  - If the `dims` field ≠ 384, logs a warning and starts with an empty index (model changed)
-  - If the file does not exist or is corrupt, silently starts empty — never throws
+### Tasks (each independently assignable after the class skeleton exists)
+
+- [ ] **Class skeleton** — `SemanticIndex` implementing `ISemanticIndex`; internal store is `Map<string, Float32Array>`
+- [ ] **`add()`, `remove()`, `has()`, `size`** — basic CRUD on the internal map; all four are independent of each other
+- [ ] **`search()` method** — iterates all stored vectors; computes cosine similarity as `dot(a, b)` (both inputs are pre-normalized so this is sufficient); returns top-K results sorted descending by score
+- [ ] **`save()` method** — serializes the internal map to the binary format above using `Buffer` / `fs.promises.writeFile`
+- [ ] **`load()` method** — deserializes the binary file; validates magic bytes, version, and dims; starts empty without throwing on missing file, corrupt data, or dims mismatch (logs a warning on dims mismatch)
+- [ ] **Unit tests** — `test/suite/semanticIndex.test.ts`; no external dependencies needed, fully self-contained
 
 ### Deliverables
 
-- `src/search/types.ts` updated with `SemanticSearchResult`
 - `src/search/semanticIndex.ts` — `SemanticIndex` class
-- `test/suite/semanticIndex.test.ts` — unit tests (see below)
+- `test/suite/semanticIndex.test.ts`
 
 ### Manual Testing
 
-There is no UI surface yet. Manually verify via a temporary test harness in `extension.ts`:
+Add a temporary block in `extension.ts` (remove before merging):
 
-1. Add a temporary block that:
-   - Creates a `SemanticIndex`, adds 3 dummy 384-dim float arrays with known session IDs
-   - Calls `save('/tmp/test-index.bin')`
-   - Creates a new `SemanticIndex` and calls `load('/tmp/test-index.bin')`
-   - Calls `search()` with one of the stored vectors and confirms the matching session ID is rank 1
-   - Logs results to the Output channel
-2. Manually inspect `/tmp/test-index.bin` with a hex viewer: confirm magic bytes `43 57 53 45` at offset 0, version `01 00 00 00` at offset 4, dims `80 01 00 00` (384 = 0x180) at offset 8.
-3. Delete the file and call `load()` — confirm the extension does not crash and the index is empty.
-4. Corrupt the file (truncate it) and call `load()` — confirm the extension does not crash.
+1. Create a `SemanticIndex`, add 3 dummy 384-dim `Float32Array` entries with known session IDs, call `save('/tmp/test-cw.bin')`.
+2. Create a new `SemanticIndex`, call `load('/tmp/test-cw.bin')`, call `search()` with one of the stored vectors — confirm the matching session ID is rank 1 in the Output channel.
+3. Inspect `/tmp/test-cw.bin` with a hex viewer: confirm magic `43 57 53 45` at offset 0, version `01 00 00 00` at offset 4, dims `80 01 00 00` at offset 8.
+4. Delete the file and call `load()` — confirm no crash and `size === 0`.
+5. Truncate the file to 3 bytes and call `load()` — confirm no crash and `size === 0`.
 
 ### Unit Tests
 
-Write unit tests in `test/suite/semanticIndex.test.ts` covering all public methods of `SemanticIndex`, binary serialization round-trips, and graceful handling of missing/corrupt/version-mismatched files.
+Write unit tests in `test/suite/semanticIndex.test.ts` covering all public methods of `SemanticIndex`, binary serialization round-trips, and graceful handling of missing/corrupt/version-mismatched files. No external dependencies required.
 
 ---
 
-## Phase 3 — Background Indexing Orchestrator ⬜
+## Phase 3 — SemanticIndexer ⬜
 
-**Goal:** A single class that owns the embedding engine and the semantic index, manages the async work queue, persists the index, and exposes a clean `search(queryText)` interface for the UI layer.
+**Goal:** Implement `ISemanticIndexer` — the orchestrator that owns `IEmbeddingEngine` and `ISemanticIndex`, manages the async embedding queue, shows status bar progress, and persists the index.
 
-**Depends on:** Phase 1 (EmbeddingEngine), Phase 2 (SemanticIndex)
+**Depends on:** Phase 0 (for `ISemanticIndexer`, `IEmbeddingEngine`, `ISemanticIndex`, `SEMANTIC_MAX_CHARS`).
+**Parallel with:** Phases 1, 2, 4.
+**Note:** Phases 1 and 2 must be complete before integration-testing this phase end-to-end, but the `SemanticIndexer` code itself is written against the interfaces defined in Phase 0, so implementation proceeds without waiting.
 
 **New file:** `src/search/semanticIndexer.ts`
 
-### Tasks
+### Tasks (each independently assignable after the class skeleton exists)
 
-- [ ] Create `SemanticIndexer` class
-- [ ] Constructor: accepts `storagePath: string`; no I/O
-- [ ] Implement `initialize(): Promise<void>`:
-  - Instantiates `EmbeddingEngine` with `storagePath + '/models'`
-  - Shows VS Code consent dialog if model has never been downloaded (check if model cache dir exists):
-    > _"Semantic search requires downloading a ~22 MB model file from Hugging Face Hub. It will be saved to your extension storage and never downloaded again. Download now?"_
-    - Buttons: `Download` / `Cancel`
-    - If user cancels: resolves without error, sets `isEnabled = false` for the session; do not disable the setting — show dialog again next session
-  - Calls `EmbeddingEngine.load()` with a status bar progress message
-  - Calls `SemanticIndex.load(storagePath + '/semantic-embeddings.bin')`
-  - Sets `isReady = true`
-- [ ] Implement `scheduleSession(session: Session): void`:
-  - If `SemanticIndex.has(session.id)`, skip (already indexed; avoids re-embedding on every restart)
-  - Pushes to internal async queue
-  - Queue processor: one session at a time; calls `EmbeddingEngine.embed(buildText(session))` then `SemanticIndex.add()`; debounces `save()` by 5 s after each add
-  - Updates a VS Code status bar item during bulk indexing: `"$(loading~spin) Chat Wizard: semantic indexing… X/N"`; disposes when queue drains
-- [ ] Implement `removeSession(sessionId: string): void`:
-  - Calls `SemanticIndex.remove(sessionId)` synchronously
-  - Schedules a debounced `save()` (5 s)
-- [ ] Implement `search(queryText: string, topK?: number): Promise<SemanticSearchResult[]>`:
-  - Embeds `queryText`, delegates to `SemanticIndex.search()`
-  - Rejects if `isReady` is false (caller must handle)
-- [ ] Implement `get isReady(): boolean`
-- [ ] Implement `get indexedCount(): number` (delegates to `SemanticIndex.size`)
-- [ ] Implement `dispose(): void` — cancels the queue, disposes the status bar item, calls a final synchronous save
-- [ ] Implement private `buildText(session: Session): string`:
-  - Concatenates `session.title` + space + all `message.content` joined by `"\n"`
-  - Hard-clips to `MAX_CHARS = 2048` chars
+- [ ] **Class skeleton** — `SemanticIndexer` implementing `ISemanticIndexer`; constructor accepts `storagePath: string` and factory functions `(cacheDir: string) => IEmbeddingEngine` and `() => ISemanticIndex` (dependency injection enables unit testing without real implementations)
+- [ ] **`isReady` / `indexedCount` getters** — delegate to internal engine and index state
+- [ ] **`initialize()` method** — checks for model cache dir to determine first-use; shows VS Code consent dialog (`"Download"` / `"Cancel"`); on cancel resolves without error and marks session as declined; calls `engine.load()` with a status bar progress item; calls `index.load(storagePath + '/semantic-embeddings.bin')`; sets `isReady = true`
+- [ ] **`buildText()` private method** — concatenates `session.title` + `"\n"` + all `message.content` joined by `"\n"`; clips to `SEMANTIC_MAX_CHARS`; independent of all other methods
+- [ ] **`scheduleSession()` method** — skips if `index.has(session.id)`; pushes to internal async FIFO queue; queue processor embeds one session at a time via `engine.embed(buildText(session))` then calls `index.add()`; debounces `save()` by 5 s after each add; shows/updates a status bar item `"$(loading~spin) Chat Wizard: semantic indexing… X/N"` while the queue is non-empty; disposes the status bar item when the queue drains
+- [ ] **`removeSession()` method** — calls `index.remove()` synchronously; schedules a debounced `save()` (5 s)
+- [ ] **`search()` method** — rejects if `isReady` is false; embeds `queryText` via `engine.embed()`; delegates to `index.search(queryVector, topK ?? 20)`
+- [ ] **`dispose()` method** — drains/cancels the queue; disposes the status bar item; flushes a final `save()`
+- [ ] **Unit tests** — `test/suite/semanticIndexer.test.ts`; inject stub `IEmbeddingEngine` and stub `ISemanticIndex` via the constructor factory functions; no real model or file I/O needed
 
 ### Deliverables
 
 - `src/search/semanticIndexer.ts` — `SemanticIndexer` class
-- `test/suite/semanticIndexer.test.ts` — unit tests (see below)
+- `test/suite/semanticIndexer.test.ts`
 
 ### Manual Testing
 
-Wire the indexer to the real index temporarily in `extension.ts`:
+Wire the indexer temporarily in `extension.ts` (remove before merging):
 
 1. Set `chatwizard.enableSemanticSearch: true`.
-2. Launch the Extension Development Host — confirm:
-   - The consent dialog appears (if model has never been downloaded).
-   - A status bar message `"Chat Wizard: semantic indexing… 0/N"` appears while sessions are being embedded.
-   - The status bar item disappears when the queue drains.
-   - The Output channel logs `"Semantic index saved"` after the debounce period.
-3. Restart VS Code — confirm:
-   - The model loads from cache (no download progress messages).
-   - The status bar message does not reappear (sessions already in the index are skipped).
-4. Add a new session (send a message in Copilot/Claude) — confirm the session is scheduled and embedded within a few seconds.
-5. Call `semanticIndexer.search('authentication patterns')` from a temporary command and confirm non-empty results are logged.
+2. Launch the Extension Development Host — confirm: consent dialog on first use; status bar message `"Chat Wizard: semantic indexing… 0/N"` appears; disappears when the queue drains; Output channel logs `"Semantic index saved"` after the debounce.
+3. Restart VS Code — confirm: model loads from cache; status bar message does not reappear (sessions already indexed are skipped).
+4. Add a new session in Copilot/Claude — confirm the session is embedded and logged within a few seconds.
+5. Add a temporary `chatwizard.testSemanticSearch` command that calls `semanticIndexer.search('authentication patterns')` and logs results — confirm non-empty results appear.
 
 ### Unit Tests
 
-Write unit tests in `test/suite/semanticIndexer.test.ts` covering all public methods of `SemanticIndexer`. Use a mocked `EmbeddingEngine` stub and a real `SemanticIndex` backed by a temporary directory.
+Write unit tests in `test/suite/semanticIndexer.test.ts` covering all public methods of `SemanticIndexer`. Inject stub implementations of `IEmbeddingEngine` and `ISemanticIndex` via the constructor factory parameters; no real model or file I/O is needed.
 
 ---
 
-## Phase 4 — UI: Semantic Search Panel ⬜
+## Phase 4 — SemanticSearchPanel ⬜
 
-**Goal:** A keyboard-accessible quick-pick panel that shows session-level semantic results with similarity scores.
+**Goal:** Implement the user-facing quick-pick panel and add the mode-toggle button to the existing `SearchPanel`.
 
-**Depends on:** Phase 3 (SemanticIndexer)
+**Depends on:** Phase 0 (for `ISemanticIndexer`, `SemanticSearchResult`).
+**Parallel with:** Phases 1, 2, 3.
+**Note:** Phase 3 must be complete before manual end-to-end testing, but the panel code is written against `ISemanticIndexer` from Phase 0.
 
 **New file:** `src/search/semanticSearchPanel.ts`
+**Modified file:** `src/search/searchPanel.ts`
 
-### Tasks
+### Tasks (each independently assignable)
 
-- [ ] Create `SemanticSearchPanel` class with a static `show(context, semanticIndexer, index)` method
-- [ ] Create a `vscode.window.createQuickPick<SemanticResultItem>()` where `SemanticResultItem extends vscode.QuickPickItem` and carries `{ summary: SessionSummary; score: number }`
-- [ ] Set placeholder: `'Semantic search — describe a topic or question…'`
-- [ ] On `onDidChangeValue` (debounced 400 ms):
-  - If the indexer is not ready: show a single info item `'$(loading~spin) Semantic index still building (X/N sessions indexed)'`
-  - Otherwise: call `semanticIndexer.search(value, 20)`, build items
-- [ ] Result items:
-  - `label`: `$(sourceIcon)  sessionTitle`
-  - `description`: `workspace · date · Score: XX%` (score formatted as `Math.round(score * 100)`)
-  - `detail`: (empty — semantic results have no matching message snippet)
-- [ ] Add a source filter button (same `SourceFilterState` logic as `SearchPanel`) to narrow results client-side after the semantic search returns
-- [ ] On `onDidAccept`: call `vscode.commands.executeCommand('chatwizard.openSession', item.summary)`
-- [ ] On `onDidHide`: dispose the quick-pick
-- [ ] Add the `$(sparkle)` mode-toggle button to the **existing** `SearchPanel` in `src/search/searchPanel.ts`:
-  - Tooltip: `'Switch to Semantic Search'`
-  - On click: execute `chatwizard.semanticSearch` and call `quickPick.hide()`
+- [ ] **`SemanticResultItem` type** — `extends vscode.QuickPickItem` carrying `{ summary: SessionSummary; score: number }`; export from `semanticSearchPanel.ts`
+- [ ] **Panel lifecycle** — `SemanticSearchPanel.show(context, indexer, sessionIndex)` creates a `vscode.QuickPick<SemanticResultItem>`, sets placeholder `'Semantic search — describe a topic or question…'`, registers `onDidHide` to dispose; independent of search logic
+- [ ] **Result mapping** — private function `buildItems(results, summaryMap)` maps `SemanticSearchResult[]` to `SemanticResultItem[]`; label format: `$(sourceIcon)  title`; description format: `workspace · date · Score: XX%` (score as `Math.round(score * 100)`); independent of panel lifecycle
+- [ ] **Search-on-change handler** — `onDidChangeValue` debounced 400 ms; if indexer not ready shows a single `$(loading~spin) Semantic index still building (X/N)` info item; otherwise calls `indexer.search(value, 20)` and passes results to `buildItems`; independent of source filter
+- [ ] **Source filter button** — mirrors the existing `SourceFilterState` logic from `SearchPanel`; filters `SemanticResultItem[]` client-side after the search returns; independent of search-on-change handler
+- [ ] **`onDidAccept` handler** — calls `vscode.commands.executeCommand('chatwizard.openSession', item.summary)`; independent of all other tasks
+- [ ] **`$(sparkle)` mode-toggle in `SearchPanel`** — adds a third button to the existing `SearchPanel` quick-pick in `src/search/searchPanel.ts`; tooltip `'Switch to Semantic Search'`; on click: `vscode.commands.executeCommand('chatwizard.semanticSearch')` then `quickPick.hide()`; this task touches a separate file and is fully independent of all `SemanticSearchPanel` tasks
+- [ ] **Unit tests** — `test/suite/semanticSearchPanel.test.ts`; use a synchronous stub `ISemanticIndexer`
 
 ### Deliverables
 
 - `src/search/semanticSearchPanel.ts` — `SemanticSearchPanel` class
-- `src/search/searchPanel.ts` modified with the semantic mode-toggle button
-- `test/suite/semanticSearchPanel.test.ts` — unit tests (see below)
+- `src/search/searchPanel.ts` — `$(sparkle)` toggle button added
+- `test/suite/semanticSearchPanel.test.ts`
 
 ### Manual Testing
 
-1. Ensure `chatwizard.enableSemanticSearch: true` and the indexer has finished indexing at least a handful of sessions.
+1. Ensure `chatwizard.enableSemanticSearch: true` and the indexer has finished indexing.
 2. Run `Chat Wizard: Semantic Search` from the Command Palette — confirm the quick-pick opens with the correct placeholder.
-3. Type `"authentication"` — confirm results appear within ~500 ms (400 ms debounce + embed time), each showing title, workspace, date, and a `Score: XX%` percentage.
-4. Verify the source filter button cycles through All → Copilot → Claude → All and filters results client-side.
+3. Type `"authentication"` — confirm results appear within ~500 ms, each showing title, workspace, date, and `Score: XX%`.
+4. Verify the source filter button cycles All → Copilot → Claude → All and filters results client-side without re-querying.
 5. Press Enter on a result — confirm the session webview opens.
-6. Open the normal `chatwizard.search` panel — confirm the `$(sparkle)` button is present in the toolbar; click it and confirm it switches to the semantic search panel.
-7. Type in the semantic panel before indexing is complete — confirm the "still building (X/N)" info item is shown instead of results.
-8. With `chatwizard.enableSemanticSearch: false`, run `chatwizard.semanticSearch` — confirm a notification is shown explaining how to enable the feature.
+6. Open `chatwizard.search` — confirm the `$(sparkle)` button is present; click it and confirm it switches to the semantic panel.
+7. Type before indexing completes — confirm the "still building (X/N)" info item is shown.
+8. With `chatwizard.enableSemanticSearch: false`, run `chatwizard.semanticSearch` — confirm an info notification explains how to enable the feature.
 
 ### Unit Tests
 
-Write unit tests in `test/suite/semanticSearchPanel.test.ts` covering `SemanticSearchPanel` behaviour. Use a stubbed `SemanticIndexer` that resolves synchronously with fixture data.
+Write unit tests in `test/suite/semanticSearchPanel.test.ts` covering `SemanticSearchPanel` behaviour. Use a synchronous stub `ISemanticIndexer` that returns fixture data.
 
 ---
 
 ## Phase 5 — Extension Wiring ⬜
 
-**Goal:** Connect `SemanticIndexer` and `SemanticSearchPanel` into `extension.ts` and register the new command.
+**Goal:** Integrate the four parallel tracks into `extension.ts` — register the command, wire `SessionIndex` events to the indexer, and handle runtime config changes.
 
-**Depends on:** Phase 3 (SemanticIndexer), Phase 4 (SemanticSearchPanel)
+**Depends on:** Phases 1, 2, 3, 4 all complete.
 
-**File changed:** `src/extension.ts`
+**Modified file:** `src/extension.ts`
 
-### Tasks
+### Tasks (each independently assignable)
 
-- [ ] Import `SemanticIndexer` and `SemanticSearchPanel`
-- [ ] After `const engine = new FullTextSearchEngine();`, read the `chatwizard.enableSemanticSearch` config and conditionally instantiate `SemanticIndexer`
-- [ ] Add a `SessionIndex` typed change listener for semantic updates:
-  - `batch` event → `scheduleSession()` for each session not already in the index
-  - `upsert` event → `scheduleSession()`
-  - `remove` event → `removeSession()`
-  - `clear` event → dispose the current indexer and create a fresh one; delete the persisted binary file
-- [ ] Register the `chatwizard.semanticSearch` command:
-  - If `semanticIndexer` is not instantiated (setting is `false`): show `vscode.window.showInformationMessage("Enable 'chatwizard.enableSemanticSearch' in Settings to use semantic search.")` with a `"Open Settings"` button
-  - Otherwise: call `SemanticSearchPanel.show(context, semanticIndexer, index)`
-- [ ] Listen to `vscode.workspace.onDidChangeConfiguration` for `chatwizard.enableSemanticSearch`:
-  - Turned on at runtime: instantiate and initialize a new `SemanticIndexer`, schedule all currently indexed sessions
-  - Turned off at runtime: dispose the indexer, null the reference
-- [ ] Push `semanticIndexer` onto `context.subscriptions` (calls `dispose()` on extension deactivation)
+- [ ] **Import and instantiation** — import `SemanticIndexer` and `SemanticSearchPanel`; after `const engine = new FullTextSearchEngine();`, conditionally instantiate `SemanticIndexer` based on `chatwizard.enableSemanticSearch` config
+- [ ] **`SessionIndex` event listener** — register a typed change listener: `batch` → `scheduleSession()` for each session not already in the index; `upsert` → `scheduleSession()`; `remove` → `removeSession()`; `clear` → dispose and recreate the indexer, delete the persisted binary file; push the listener to `context.subscriptions`
+- [ ] **`chatwizard.semanticSearch` command handler** — if indexer not instantiated: show `vscode.window.showInformationMessage` with an `"Open Settings"` button; otherwise call `SemanticSearchPanel.show(context, semanticIndexer, index)`
+- [ ] **Runtime config change listener** — listen to `vscode.workspace.onDidChangeConfiguration` for `chatwizard.enableSemanticSearch`; on enable: instantiate, initialize, and schedule all currently indexed sessions; on disable: dispose and null the reference; push to `context.subscriptions`
+- [ ] **Lifecycle** — push `semanticIndexer` onto `context.subscriptions` so `dispose()` is called on extension deactivation
+- [ ] **Unit tests** — `test/suite/semanticWiring.test.ts`; mock `SemanticIndexer` and `SemanticSearchPanel`
 
 ### Deliverables
 
-- `src/extension.ts` updated with semantic indexer wiring and new command registration
-- `test/suite/semanticWiring.test.ts` — unit tests (see below)
+- `src/extension.ts` updated
+- `test/suite/semanticWiring.test.ts`
 
 ### Manual Testing
 
-1. Launch Extension Development Host with `chatwizard.enableSemanticSearch: false`.
-2. Run `Chat Wizard: Semantic Search` from Command Palette — confirm the info message appears with `"Open Settings"` button.
-3. Enable `chatwizard.enableSemanticSearch: true` via Settings (no restart) — confirm the semantic indexer starts and the status bar progress appears.
-4. Run `Chat Wizard: Semantic Search` — confirm the panel opens and returns results.
-5. Disable the setting again at runtime — confirm the status bar item disappears and the command shows the info message again.
-6. Deactivate the extension (reload window) — confirm `dispose()` is called (check Output channel for "Semantic index saved" or equivalent).
-7. Create a new session in Copilot/Claude with a distinctive topic — confirm it appears in semantic search results within ~10 seconds.
-8. Delete a session file on disk — confirm the session is removed from the semantic index (no stale results).
+1. Launch Extension Development Host with `chatwizard.enableSemanticSearch: false` — confirm the command shows the info message with `"Open Settings"`.
+2. Enable `chatwizard.enableSemanticSearch: true` via Settings without restarting — confirm the indexer starts and the status bar progress appears.
+3. Run `Chat Wizard: Semantic Search` — confirm the panel opens and returns results.
+4. Disable the setting at runtime — confirm the status bar item disappears and the command reverts to showing the info message.
+5. Reload the window — confirm `dispose()` is called (Output channel logs `"Semantic index saved"` or equivalent).
+6. Create a new session in Copilot/Claude — confirm it appears in semantic search results within ~10 seconds.
+7. Delete a session file on disk — confirm the session no longer appears in semantic search results.
 
 ### Unit Tests
 
-Write unit tests in `test/suite/semanticWiring.test.ts` covering the wiring logic in `extension.ts`. Use mocked `SemanticIndexer` and `SessionIndex` stubs.
+Write unit tests in `test/suite/semanticWiring.test.ts` covering the wiring logic in `extension.ts`. Mock both `SemanticIndexer` and `SemanticSearchPanel`.
 
 ---
 
-## Open Questions
+## Resolved Decisions
 
-These must be resolved before Phase 0 begins:
+1. **WASM vs native backend** ✅ — **Use WASM (`onnxruntime-web`).** `@xenova/transformers` defaults to WASM in Node.js with no extra configuration; no native binary to compile or ship, no changes to `rebuild-native.js` or the per-platform CI jobs. The ~80–150 ms/embed cost vs ~30–50 ms native is acceptable because embedding runs in a silent background queue. Switching to native later is a one-line config change if profiling shows it is needed. **Impact on Phase 0:** `onnxruntime-node` is NOT added as a dependency; `rebuild-native.js` is NOT changed; `.vscodeignore` only needs `!node_modules/@xenova/transformers/**`.
 
-1. **WASM vs native backend** — Start with WASM (`onnxruntime-web`) to skip per-platform native binary compilation, then switch to native once the feature is validated? WASM eliminates `onnxruntime-node` from the build matrix entirely at the cost of ~2× slower inference (~100 ms/embed instead of ~40 ms).
+2. **Search modes** ✅ — Keyword (exact/regex) and semantic search remain **strictly separate modes**. No hybrid ranking. The `$(sparkle)` toggle in `SearchPanel` switches between them; results are never mixed.
 
-2. **Hybrid search (stretch goal)** — Should semantic and keyword results eventually be merged in a single ranked list (reciprocal rank fusion), or always kept as separate modes? Hybrid is more powerful but significantly more complex — worth deferring to a v2 of this feature.
+3. **Model language coverage** ✅ — **English only** for now. `Xenova/all-MiniLM-L6-v2` (int8 quantized, ~22 MB) is the chosen model.
 
-3. **Model language coverage** — `all-MiniLM-L6-v2` is English-optimised. `paraphrase-multilingual-MiniLM-L12-v2` (~120 MB) handles multilingual sessions. Is the expected user base primarily English?
-
-4. **Result presentation** — Semantic results are session-level (no matching message snippet). On accepting a result, should the command open the session directly (current plan), or highlight the session in the Sessions tree first?
-
----
-
-## Implementation Order Summary
-
-```
-Phase 0 — Dependencies & build config      (no logic, no tests)
-  └─► Phase 1 — EmbeddingEngine             (core embedding, unit-tested with mocks + integration)
-        └─► Phase 2 — SemanticIndex          (vector store + binary persistence, unit-tested)
-              └─► Phase 3 — SemanticIndexer  (orchestrator, unit-tested with mocked engine)
-                    └─► Phase 4 — UI Panel   (QuickPick, unit-tested with mocked indexer)
-                          └─► Phase 5 — Wiring (extension.ts integration, unit-tested with mocks)
-```
-
-Each phase can be code-reviewed and merged independently before the next begins.
+4. **Result presentation on accept** ✅ — Pressing Enter on a semantic search result **opens the session directly in the webview panel** via `chatwizard.openSession`. No tree-view detour.

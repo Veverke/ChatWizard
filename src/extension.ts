@@ -36,6 +36,17 @@ import { ModelUsageViewProvider } from './analytics/modelUsageViewProvider';
 import { TimelineViewProvider } from './timeline/timelineViewProvider';
 import { TelemetryRecorder } from './telemetry/telemetryRecorder';
 import { registerManageWorkspacesCommand } from './commands/manageWorkspaces';
+import { SemanticIndexer } from './search/semanticIndexer';
+import { EmbeddingEngine } from './search/embeddingEngine';
+import { SemanticIndex } from './search/semanticIndex';
+import { SemanticSearchPanel } from './search/semanticSearchPanel';
+import { SEMANTIC_MAX_CHARS } from './search/semanticContracts';
+
+/** Build the text blob used for embedding a session: title + all message content, truncated. */
+export function buildSemanticText(session: Session): string {
+    const parts = [session.title, ...session.messages.map(m => m.content)];
+    return parts.join('\n').slice(0, SEMANTIC_MAX_CHARS);
+}
 
 let watcher: ChatWizardWatcher | undefined;
 
@@ -102,6 +113,59 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         }
     });
     context.subscriptions.push(searchIndexListener);
+
+    // ── Semantic search ──────────────────────────────────────────────────────────
+    // Instantiated only when chatwizard.enableSemanticSearch is true.
+    // The typed change listener below keeps it in sync with the main session index.
+    const semanticEmbeddingsUri = vscode.Uri.joinPath(context.globalStorageUri, 'semantic-embeddings.bin');
+    let semanticIndexer: SemanticIndexer | null = null;
+
+    function createAndInitSemanticIndexer(): void {
+        const indexer = new SemanticIndexer(
+            context.globalStorageUri.fsPath,
+            (cacheDir) => new EmbeddingEngine(cacheDir),
+            () => new SemanticIndex(),
+        );
+        semanticIndexer = indexer;
+        void indexer.initialize().then(() => {
+            // Schedule sessions already loaded into the main index (runtime-enable case)
+            for (const summary of index.getAllSummaries()) {
+                const session = index.get(summary.id);
+                if (session) {
+                    indexer.scheduleSession(session.id, buildSemanticText(session));
+                }
+            }
+        });
+    }
+
+    if (vscode.workspace.getConfiguration('chatwizard').get<boolean>('enableSemanticSearch') ?? false) {
+        createAndInitSemanticIndexer();
+    }
+
+    // Dispose on extension deactivation (proxy follows the current semanticIndexer reference)
+    context.subscriptions.push({ dispose: () => { semanticIndexer?.dispose(); } });
+
+    // Keep the semantic index in sync with the main session index
+    const semanticListener = index.addTypedChangeListener((event) => {
+        if (!semanticIndexer) { return; }
+        if (event.type === 'batch') {
+            for (const session of event.sessions) {
+                semanticIndexer.scheduleSession(session.id, buildSemanticText(session));
+            }
+        } else if (event.type === 'upsert') {
+            semanticIndexer.scheduleSession(event.session.id, buildSemanticText(event.session));
+        } else if (event.type === 'remove') {
+            semanticIndexer.removeSession(event.sessionId);
+        } else if (event.type === 'clear') {
+            semanticIndexer.dispose();
+            semanticIndexer = null;
+            void vscode.workspace.fs.delete(semanticEmbeddingsUri).then(undefined, () => { /* ignore missing file */ });
+            if (vscode.workspace.getConfiguration('chatwizard').get<boolean>('enableSemanticSearch') ?? false) {
+                createAndInitSemanticIndexer();
+            }
+        }
+    });
+    context.subscriptions.push(semanticListener);
 
     // Build code block engine — populated by the codeBlockListener when batchUpsert fires.
     const codeBlockEngine = new CodeBlockSearchEngine();
@@ -813,6 +877,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
 
     context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.semanticSearch', () => {
+            if (!semanticIndexer) {
+                void vscode.window.showInformationMessage(
+                    'Chat Wizard: Semantic search is disabled. Enable it in settings to use natural-language search.',
+                    'Open Settings',
+                ).then(action => {
+                    if (action === 'Open Settings') {
+                        void vscode.commands.executeCommand(
+                            'workbench.action.openSettings',
+                            'chatwizard.enableSemanticSearch',
+                        );
+                    }
+                });
+                return;
+            }
+            SemanticSearchPanel.show(context, semanticIndexer, index);
+        })
+    );
+
+    context.subscriptions.push(
         vscode.commands.registerCommand('chatwizard.showCodeBlocks', () => {
             CodeBlocksPanel.show(context, index, codeBlockEngine);
         })
@@ -856,6 +940,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             if (e.affectsConfiguration('chatwizard.enableTelemetry')) {
                 const cfg = vscode.workspace.getConfiguration('chatwizard');
                 telemetry.setEnabled(cfg.get<boolean>('enableTelemetry') ?? false);
+            }
+            if (e.affectsConfiguration('chatwizard.enableSemanticSearch')) {
+                const cfg = vscode.workspace.getConfiguration('chatwizard');
+                const enabled = cfg.get<boolean>('enableSemanticSearch') ?? false;
+                if (enabled && !semanticIndexer) {
+                    createAndInitSemanticIndexer();
+                } else if (!enabled && semanticIndexer) {
+                    semanticIndexer.dispose();
+                    semanticIndexer = null;
+                }
             }
             if (
                 e.affectsConfiguration('chatwizard.claudeProjectsPath') ||

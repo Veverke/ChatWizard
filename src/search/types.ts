@@ -46,6 +46,12 @@ export interface SearchResult {
     score: number;
 }
 
+/** A session-level result from semantic (vector) search */
+export interface SemanticSearchResult {
+    sessionId: string;
+    score: number; // cosine similarity, 0–1
+}
+
 /** Return value of FullTextSearchEngine.search() */
 export interface SearchResponse {
     /** Sorted result set, capped at MAX_RESULTS (500) */
