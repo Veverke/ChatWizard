@@ -15,6 +15,7 @@ export function sourceBrandIconUris(
         case 'cursor':
         case 'windsurf':
         case 'aider':
+        case 'antigravity':
             return {
                 light: vscode.Uri.joinPath(extensionUri, 'resources', 'icons', `${source}_light.svg`),
                 dark:  vscode.Uri.joinPath(extensionUri, 'resources', 'icons', `${source}_dark.svg`),

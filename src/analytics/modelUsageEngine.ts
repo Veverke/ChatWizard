@@ -14,11 +14,12 @@ function normalizeWsKey(raw: string): string {
 
 /** Source-aware model name: falls back to a branded label when model is unknown. */
 const SOURCE_AUTO_MODEL: Partial<Record<SessionSource, string>> = {
-    cursor:   'Cursor Auto',
-    cline:    'Cline Auto',
-    roocode:  'Roo Code Auto',
-    windsurf: 'Windsurf Auto',
-    aider:    'Aider Auto',
+    cursor:      'Cursor Auto',
+    cline:       'Cline Auto',
+    roocode:     'Roo Code Auto',
+    windsurf:    'Windsurf Auto',
+    aider:       'Aider Auto',
+    antigravity: 'Gemini Auto',
 };
 
 function resolveModel(raw: string | undefined, source: SessionSource): string {

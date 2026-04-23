@@ -22,6 +22,7 @@ export function cwThemeCss(): string {
   --cw-accent-text:    #ffffff;
   --cw-copilot:        #f0883e;
   --cw-claude:         #a67bf0;
+  --cw-antigravity:    #4285F4;
   --cw-surface:        #181c2a;
   --cw-surface-raised: #1f2438;
   --cw-surface-subtle: #252b40;
@@ -40,6 +41,7 @@ export function cwThemeCss(): string {
   --cw-accent-text:    #ffffff;
   --cw-copilot:        #c05c00;
   --cw-claude:         #7b4fd4;
+  --cw-antigravity:    #1a73e8;
   --cw-surface:        #f4f6fb;
   --cw-surface-raised: #ffffff;
   --cw-surface-subtle: #eef1f8;
@@ -144,6 +146,18 @@ export function cwThemeCss(): string {
   background:    rgba(166,123,240,0.18);
   color:         var(--cw-claude);
   border:        1px solid rgba(166,123,240,0.35);
+  white-space:   nowrap;
+}
+
+.cw-badge-antigravity {
+  display:       inline-block;
+  font-size:     0.73em;
+  font-weight:   600;
+  padding:       1px 6px;
+  border-radius: var(--cw-radius-xs);
+  background:    rgba(66,133,244,0.15);
+  color:         var(--cw-antigravity);
+  border:        1px solid rgba(66,133,244,0.35);
   white-space:   nowrap;
 }
 

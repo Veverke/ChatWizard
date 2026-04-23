@@ -545,6 +545,7 @@ export class TimelineViewProvider implements vscode.WebviewViewProvider {
       <option value="">All</option>
       <option value="copilot">Copilot</option>
       <option value="claude">Claude</option>
+      <option value="antigravity">Antigravity</option>
     </select>
     <label>Jump to</label>
     <select id="jumpDate" onchange="jumpToMonth(this.value)" aria-label="Jump to month">
@@ -609,7 +610,8 @@ export class TimelineViewProvider implements vscode.WebviewViewProvider {
 
   const SRC_LABEL = {
     claude: 'Claude Code', copilot: 'GitHub Copilot', cline: 'Cline',
-    roocode: 'Roo Code', cursor: 'Cursor', windsurf: 'Windsurf', aider: 'Aider'
+    roocode: 'Roo Code', cursor: 'Cursor', windsurf: 'Windsurf', aider: 'Aider',
+    antigravity: 'Google Antigravity'
   };
 
   function applyFilter() {
@@ -744,7 +746,9 @@ export class TimelineViewProvider implements vscode.WebviewViewProvider {
   function renderEntryHtml(entry, fadeIdx) {
     const fadeAttr     = fadeIdx < 25 ? ' style="--cw-i:' + fadeIdx + '"' : '';
     const sourceLabel  = (SRC_LABEL && SRC_LABEL[entry.source]) ? SRC_LABEL[entry.source] : entry.source;
-    const badgeClass   = entry.source === 'copilot' ? 'cw-badge-copilot' : 'cw-badge-claude';
+    const badgeClass   = entry.source === 'copilot' ? 'cw-badge-copilot'
+                       : entry.source === 'antigravity' ? 'cw-badge-antigravity'
+                       : 'cw-badge-claude';
     const wsMeta       = entry.workspaceName || '(unknown workspace)';
     const promptText   = entry.firstPrompt   || '(no prompt)';
     const ariaLabel    = escHtml(entry.sessionTitle) + ', ' + sourceLabel + ', ' + escHtml(entry.date);

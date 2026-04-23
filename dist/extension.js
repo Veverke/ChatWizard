@@ -291,8 +291,8 @@ var SessionIndex = class {
 
 // src/watcher/fileWatcher.ts
 var vscode = __toESM(require("vscode"));
-var path12 = __toESM(require("path"));
-var fs11 = __toESM(require("fs"));
+var path13 = __toESM(require("path"));
+var fs13 = __toESM(require("fs"));
 
 // src/parsers/copilot.ts
 var fs = __toESM(require("fs"));
@@ -794,8 +794,8 @@ async function listSessionFilesAsync(storageHashDir) {
 }
 
 // src/watcher/configPaths.ts
-var path7 = __toESM(require("path"));
-var os5 = __toESM(require("os"));
+var path8 = __toESM(require("path"));
+var os6 = __toESM(require("os"));
 
 // src/readers/clineWorkspace.ts
 var fs4 = __toESM(require("fs"));
@@ -1099,6 +1099,53 @@ async function discoverWindsurfWorkspacesAsync(override) {
   return results.filter((r) => r !== null);
 }
 
+// src/readers/antigravityWorkspace.ts
+var fs7 = __toESM(require("fs"));
+var path7 = __toESM(require("path"));
+var os5 = __toESM(require("os"));
+function getAntigravityBrainRoot() {
+  return path7.join(os5.homedir(), ".gemini", "antigravity", "brain");
+}
+async function discoverAntigravityConversationsAsync(override) {
+  const brainRoot = override !== void 0 && override !== "" ? override : getAntigravityBrainRoot();
+  let entries;
+  try {
+    entries = await fs7.promises.readdir(brainRoot);
+  } catch {
+    return [];
+  }
+  const results = await Promise.all(entries.map(async (entry) => {
+    const conversationDir = path7.join(brainRoot, entry);
+    try {
+      const lstat = await fs7.promises.lstat(conversationDir);
+      if (!lstat.isDirectory() || lstat.isSymbolicLink()) {
+        return null;
+      }
+    } catch {
+      return null;
+    }
+    const overviewFile = path7.join(
+      conversationDir,
+      ".system_generated",
+      "logs",
+      "overview.txt"
+    );
+    try {
+      const lstat = await fs7.promises.lstat(overviewFile);
+      if (!lstat.isFile() || lstat.isSymbolicLink()) {
+        return null;
+      }
+    } catch {
+      return null;
+    }
+    return {
+      conversationId: entry,
+      overviewFile
+    };
+  }));
+  return results.filter((r) => r !== null);
+}
+
 // src/watcher/configPaths.ts
 function resolveClaudeProjectsPath(override) {
   if (override !== void 0 && override !== "") {
@@ -1113,7 +1160,7 @@ function resolveClaudeProjectsPath(override) {
     }
   } catch {
   }
-  return path7.join(os5.homedir(), ".claude", "projects");
+  return path8.join(os6.homedir(), ".claude", "projects");
 }
 function resolveClineStoragePath(override) {
   if (override !== void 0 && override !== "") {
@@ -1175,10 +1222,25 @@ function resolveWindsurfStoragePath(override) {
   }
   return getWindsurfStorageRoot();
 }
+function resolveAntigravityBrainPath(override) {
+  if (override !== void 0 && override !== "") {
+    return override;
+  }
+  try {
+    const vscode16 = require("vscode");
+    const cfg = vscode16.workspace.getConfiguration("chatwizard");
+    const configured = cfg.get("antigravityBrainPath");
+    if (configured && configured !== "") {
+      return configured;
+    }
+  } catch {
+  }
+  return getAntigravityBrainRoot();
+}
 
 // src/watcher/workspaceScope.ts
-var fs7 = __toESM(require("fs"));
-var path8 = __toESM(require("path"));
+var fs8 = __toESM(require("fs"));
+var path9 = __toESM(require("path"));
 var STORAGE_KEY = "chatwizard.selectedWorkspaceIds";
 var LEGACY_MANUAL_KEY = "chatwizard.workspaceScopeManuallySet";
 var WorkspaceScopeManager = class {
@@ -1191,7 +1253,7 @@ var WorkspaceScopeManager = class {
     try {
       const vscode16 = require("vscode");
       return (vscode16.workspace.workspaceFolders ?? []).map(
-        (f) => path8.normalize(f.uri.fsPath).toLowerCase()
+        (f) => path9.normalize(f.uri.fsPath).toLowerCase()
       );
     } catch {
       return [];
@@ -1213,7 +1275,7 @@ var WorkspaceScopeManager = class {
     if (openFolderPaths.length === 0) {
       ids = [];
     } else {
-      ids = available.filter((ws) => openFolderPaths.includes(path8.normalize(ws.workspacePath).toLowerCase())).map((ws) => ws.id);
+      ids = available.filter((ws) => openFolderPaths.includes(path9.normalize(ws.workspacePath).toLowerCase())).map((ws) => ws.id);
     }
     await this._context.globalState.update(STORAGE_KEY, ids);
   }
@@ -1237,12 +1299,12 @@ var WorkspaceScopeManager = class {
 async function calcWorkspaceSizeBytes(storageDir, source) {
   try {
     if (source === "copilot") {
-      const dir = path8.join(storageDir, "chatSessions");
-      const entries = await fs7.promises.readdir(dir);
+      const dir = path9.join(storageDir, "chatSessions");
+      const entries = await fs8.promises.readdir(dir);
       const sizes = await Promise.all(
         entries.filter((e) => e.endsWith(".jsonl")).map(async (f) => {
           try {
-            return (await fs7.promises.stat(path8.join(dir, f))).size;
+            return (await fs8.promises.stat(path9.join(dir, f))).size;
           } catch {
             return 0;
           }
@@ -1251,11 +1313,11 @@ async function calcWorkspaceSizeBytes(storageDir, source) {
       return sizes.reduce((acc, s) => acc + s, 0);
     }
     if (source === "claude") {
-      const entries = await fs7.promises.readdir(storageDir);
+      const entries = await fs8.promises.readdir(storageDir);
       const sizes = await Promise.all(
         entries.filter((e) => e.endsWith(".jsonl")).map(async (f) => {
           try {
-            return (await fs7.promises.stat(path8.join(storageDir, f))).size;
+            return (await fs8.promises.stat(path9.join(storageDir, f))).size;
           } catch {
             return 0;
           }
@@ -1264,12 +1326,12 @@ async function calcWorkspaceSizeBytes(storageDir, source) {
       return sizes.reduce((acc, s) => acc + s, 0);
     }
     if (source === "cline" || source === "roocode") {
-      const entries = await fs7.promises.readdir(storageDir, { withFileTypes: true });
+      const entries = await fs8.promises.readdir(storageDir, { withFileTypes: true });
       const sizes = await Promise.all(
         entries.filter((e) => e.isDirectory()).map(async (entry) => {
-          const convFile = path8.join(storageDir, entry.name, "api_conversation_history.json");
+          const convFile = path9.join(storageDir, entry.name, "api_conversation_history.json");
           try {
-            return (await fs7.promises.stat(convFile)).size;
+            return (await fs8.promises.stat(convFile)).size;
           } catch {
             return 0;
           }
@@ -1278,20 +1340,23 @@ async function calcWorkspaceSizeBytes(storageDir, source) {
       return sizes.reduce((acc, s) => acc + s, 0);
     }
     if (source === "cursor" || source === "windsurf") {
-      const vscdb = path8.join(storageDir, "state.vscdb");
+      const vscdb = path9.join(storageDir, "state.vscdb");
       try {
-        return (await fs7.promises.stat(vscdb)).size;
+        return (await fs8.promises.stat(vscdb)).size;
       } catch {
         return 0;
       }
     }
     if (source === "aider") {
-      const histFile = path8.join(storageDir, ".aider.chat.history.md");
+      const histFile = path9.join(storageDir, ".aider.chat.history.md");
       try {
-        return (await fs7.promises.stat(histFile)).size;
+        return (await fs8.promises.stat(histFile)).size;
       } catch {
         return 0;
       }
+    }
+    if (source === "antigravity") {
+      return 0;
     }
     return 0;
   } catch {
@@ -1301,21 +1366,21 @@ async function calcWorkspaceSizeBytes(storageDir, source) {
 async function countWorkspaceSessions(storageDir, source) {
   try {
     if (source === "copilot") {
-      const dir = path8.join(storageDir, "chatSessions");
-      const entries = await fs7.promises.readdir(dir);
+      const dir = path9.join(storageDir, "chatSessions");
+      const entries = await fs8.promises.readdir(dir);
       return entries.filter((e) => e.endsWith(".jsonl")).length;
     }
     if (source === "claude") {
-      const entries = await fs7.promises.readdir(storageDir);
+      const entries = await fs8.promises.readdir(storageDir);
       return entries.filter((e) => e.endsWith(".jsonl")).length;
     }
     if (source === "cline" || source === "roocode") {
-      const entries = await fs7.promises.readdir(storageDir, { withFileTypes: true });
+      const entries = await fs8.promises.readdir(storageDir, { withFileTypes: true });
       const counts = await Promise.all(
         entries.filter((e) => e.isDirectory()).map(async (entry) => {
-          const convFile = path8.join(storageDir, entry.name, "api_conversation_history.json");
+          const convFile = path9.join(storageDir, entry.name, "api_conversation_history.json");
           try {
-            await fs7.promises.access(convFile);
+            await fs8.promises.access(convFile);
             return 1;
           } catch {
             return 0;
@@ -1325,22 +1390,25 @@ async function countWorkspaceSessions(storageDir, source) {
       return counts.reduce((acc, c) => acc + c, 0);
     }
     if (source === "cursor" || source === "windsurf") {
-      const vscdb = path8.join(storageDir, "state.vscdb");
+      const vscdb = path9.join(storageDir, "state.vscdb");
       try {
-        await fs7.promises.access(vscdb);
+        await fs8.promises.access(vscdb);
         return 1;
       } catch {
         return 0;
       }
     }
     if (source === "aider") {
-      const histFile = path8.join(storageDir, ".aider.chat.history.md");
+      const histFile = path9.join(storageDir, ".aider.chat.history.md");
       try {
-        await fs7.promises.access(histFile);
+        await fs8.promises.access(histFile);
         return 1;
       } catch {
         return 0;
       }
+    }
+    if (source === "antigravity") {
+      return 0;
     }
     return 0;
   } catch {
@@ -1349,8 +1417,8 @@ async function countWorkspaceSessions(storageDir, source) {
 }
 
 // src/parsers/cline.ts
-var fs8 = __toESM(require("fs"));
-var path9 = __toESM(require("path"));
+var fs9 = __toESM(require("fs"));
+var path10 = __toESM(require("path"));
 var MAX_FILE_BYTES = 50 * 1024 * 1024;
 var MAX_ARRAY_LENGTH = 5e4;
 var MAX_TITLE_CHARS = 120;
@@ -1364,7 +1432,7 @@ function extractClineCodeBlocks(content, sessionId, messageIndex) {
   return extractCodeBlocks2(content, sessionId, messageIndex);
 }
 async function parseClineTask(taskDir, _maxLineChars, source = "cline") {
-  const taskId = path9.basename(taskDir);
+  const taskId = path10.basename(taskDir);
   const errors = [];
   const emptySession = {
     id: taskId,
@@ -1377,15 +1445,15 @@ async function parseClineTask(taskDir, _maxLineChars, source = "cline") {
     createdAt: (/* @__PURE__ */ new Date(0)).toISOString(),
     updatedAt: (/* @__PURE__ */ new Date(0)).toISOString()
   };
-  const conversationFile = path9.join(taskDir, "api_conversation_history.json");
+  const conversationFile = path10.join(taskDir, "api_conversation_history.json");
   let apiEntries = [];
   try {
-    const stat = await fs8.promises.stat(conversationFile);
+    const stat = await fs9.promises.stat(conversationFile);
     if (stat.size > MAX_FILE_BYTES) {
       errors.push(`api_conversation_history.json exceeds 50 MB size limit (${stat.size} bytes) \u2014 skipped`);
       return { session: emptySession, errors };
     }
-    const raw = await fs8.promises.readFile(conversationFile, "utf-8");
+    const raw = await fs9.promises.readFile(conversationFile, "utf-8");
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) {
       errors.push("api_conversation_history.json root value is not an array");
@@ -1403,11 +1471,11 @@ async function parseClineTask(taskDir, _maxLineChars, source = "cline") {
     return { session: emptySession, errors };
   }
   let uiMessages = [];
-  const uiFile = path9.join(taskDir, "ui_messages.json");
+  const uiFile = path10.join(taskDir, "ui_messages.json");
   try {
-    const stat = await fs8.promises.stat(uiFile);
+    const stat = await fs9.promises.stat(uiFile);
     if (stat.size <= MAX_FILE_BYTES) {
-      const raw = await fs8.promises.readFile(uiFile, "utf-8");
+      const raw = await fs9.promises.readFile(uiFile, "utf-8");
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
         uiMessages = parsed;
@@ -1491,7 +1559,7 @@ async function parseClineTask(taskDir, _maxLineChars, source = "cline") {
   let fileSizeBytes;
   if (!createdAt || !updatedAt) {
     try {
-      const stat = await fs8.promises.stat(conversationFile);
+      const stat = await fs9.promises.stat(conversationFile);
       fileSizeBytes = stat.size;
       const mtime = stat.mtime.toISOString();
       if (!createdAt) {
@@ -1504,7 +1572,7 @@ async function parseClineTask(taskDir, _maxLineChars, source = "cline") {
     }
   } else {
     try {
-      fileSizeBytes = (await fs8.promises.stat(conversationFile)).size;
+      fileSizeBytes = (await fs9.promises.stat(conversationFile)).size;
     } catch {
     }
   }
@@ -1527,7 +1595,7 @@ async function parseClineTask(taskDir, _maxLineChars, source = "cline") {
 }
 
 // src/parsers/cursor.ts
-var path10 = __toESM(require("path"));
+var path11 = __toESM(require("path"));
 var MAX_COMPOSERS = 5e3;
 var MAX_TITLE_CHARS2 = 120;
 function extractItemRole(item) {
@@ -1642,28 +1710,27 @@ function buildAiServiceFallbackSessions(vscdbPath, workspaceId, workspacePath, c
     }
   }
   const flat = [];
-  if (generationEntries.length > 0) {
-    for (let i = 0; i < generationEntries.length; i++) {
-      flat.push({ index: i, text: generationEntries[i].text, unixMs: generationEntries[i].unixMs });
+  let parsedPrompts = null;
+  try {
+    const p = JSON.parse(promptsJson);
+    if (Array.isArray(p) && p.length > 0) {
+      parsedPrompts = p;
     }
-  } else {
-    let prompts;
-    try {
-      prompts = JSON.parse(promptsJson);
-    } catch {
-      return null;
-    }
-    if (!Array.isArray(prompts) || prompts.length === 0) {
-      return null;
-    }
-    for (let i = 0; i < prompts.length; i++) {
-      const text = extractPromptText(prompts[i]);
+  } catch {
+  }
+  if (parsedPrompts) {
+    for (let i = 0; i < parsedPrompts.length; i++) {
+      const text = extractPromptText(parsedPrompts[i]);
       if (!text) {
         continue;
       }
       const ts = textToTimestamp.get(text.trim());
-      const cid = extractPromptComposerId(prompts[i]);
+      const cid = extractPromptComposerId(parsedPrompts[i]);
       flat.push({ index: i, text, unixMs: ts, composerId: cid });
+    }
+  } else if (generationEntries.length > 0) {
+    for (let i = 0; i < generationEntries.length; i++) {
+      flat.push({ index: i, text: generationEntries[i].text, unixMs: generationEntries[i].unixMs });
     }
   }
   if (flat.length === 0) {
@@ -2053,7 +2120,7 @@ async function parseCursorWorkspace(vscdbPath, workspaceId, workspacePath) {
         "SELECT value FROM ItemTable WHERE key = 'composer.composerData'"
       ).get();
       rawValue = row?.value ?? null;
-      if (rawValue == null) {
+      if (rawValue === null || rawValue === void 0) {
         const probeRows = db.prepare(
           "SELECT key, value FROM ItemTable WHERE key LIKE '%composer%' ORDER BY key LIMIT 100"
         ).all();
@@ -2085,7 +2152,7 @@ async function parseCursorWorkspace(vscdbPath, workspaceId, workspacePath) {
       `Failed to open/query state.vscdb: ${err instanceof Error ? err.message : String(err)}`
     );
   }
-  if (rawValue == null) {
+  if (rawValue === null || rawValue === void 0) {
     if (rawPrompts) {
       const fb2 = buildAiServiceFallbackSessions(
         vscdbPath,
@@ -2124,7 +2191,7 @@ async function parseCursorWorkspace(vscdbPath, workspaceId, workspacePath) {
   }
   const composers = allComposers.slice(0, MAX_COMPOSERS);
   const perComposer = composers.map((composer) => {
-    const composerId = typeof composer.composerId === "string" && composer.composerId ? composer.composerId : `${workspaceId}-${path10.basename(vscdbPath)}-unknown`;
+    const composerId = typeof composer.composerId === "string" && composer.composerId ? composer.composerId : `${workspaceId}-${path11.basename(vscdbPath)}-unknown`;
     const errors = [];
     const conversation = Array.isArray(composer.conversation) ? composer.conversation : Array.isArray(composer.messages) ? composer.messages : [];
     const messages = [];
@@ -2229,7 +2296,7 @@ async function parseWindsurfWorkspace(vscdbPath, workspaceId, workspacePath) {
       `Failed to open/query state.vscdb: ${err instanceof Error ? err.message : String(err)}`
     );
   }
-  if (rawValue == null) {
+  if (rawValue === null || rawValue === void 0) {
     return fatalResult("Missing 'cascade.sessionData' key in state.vscdb");
   }
   let cascadeData;
@@ -2302,8 +2369,8 @@ async function parseWindsurfWorkspace(vscdbPath, workspaceId, workspacePath) {
 }
 
 // src/readers/aiderWorkspace.ts
-var fs9 = __toESM(require("fs"));
-var path11 = __toESM(require("path"));
+var fs10 = __toESM(require("fs"));
+var path12 = __toESM(require("path"));
 var AIDER_HISTORY_FILENAME = ".aider.chat.history.md";
 var AIDER_CONFIG_FILENAME = ".aider.conf.yml";
 var MAX_HISTORY_BYTES = 20 * 1024 * 1024;
@@ -2317,7 +2384,7 @@ async function searchDirAsync(rootDir, maxDepth) {
 async function _walkAsync(currentDir, _rootDir, currentDepth, maxDepth, results) {
   let entries;
   try {
-    entries = await fs9.promises.readdir(currentDir, { withFileTypes: true });
+    entries = await fs10.promises.readdir(currentDir, { withFileTypes: true });
   } catch {
     return;
   }
@@ -2328,9 +2395,9 @@ async function _walkAsync(currentDir, _rootDir, currentDepth, maxDepth, results)
     if (entry.name !== AIDER_HISTORY_FILENAME) {
       continue;
     }
-    const historyFile = path11.join(currentDir, entry.name);
+    const historyFile = path12.join(currentDir, entry.name);
     try {
-      const lstat = await fs9.promises.lstat(historyFile);
+      const lstat = await fs10.promises.lstat(historyFile);
       if (!lstat.isFile() || lstat.isSymbolicLink()) {
         continue;
       }
@@ -2342,9 +2409,9 @@ async function _walkAsync(currentDir, _rootDir, currentDepth, maxDepth, results)
     }
     const workspacePath = currentDir;
     let configFile;
-    const candidate = path11.join(currentDir, AIDER_CONFIG_FILENAME);
+    const candidate = path12.join(currentDir, AIDER_CONFIG_FILENAME);
     try {
-      const cfgStat = await fs9.promises.lstat(candidate);
+      const cfgStat = await fs10.promises.lstat(candidate);
       if (cfgStat.isFile() && !cfgStat.isSymbolicLink()) {
         configFile = candidate;
       }
@@ -2354,7 +2421,7 @@ async function _walkAsync(currentDir, _rootDir, currentDepth, maxDepth, results)
   }
   if (currentDepth < maxDepth) {
     await Promise.all(
-      entries.filter((e) => e.isDirectory() && !e.isSymbolicLink()).map((e) => _walkAsync(path11.join(currentDir, e.name), _rootDir, currentDepth + 1, maxDepth, results))
+      entries.filter((e) => e.isDirectory() && !e.isSymbolicLink()).map((e) => _walkAsync(path12.join(currentDir, e.name), _rootDir, currentDepth + 1, maxDepth, results))
     );
   }
 }
@@ -2375,7 +2442,7 @@ async function discoverAiderHistoryFilesAsync(roots, maxDepth = DEFAULT_AIDER_SE
 }
 
 // src/parsers/aider.ts
-var fs10 = __toESM(require("fs"));
+var fs11 = __toESM(require("fs"));
 var crypto = __toESM(require("crypto"));
 var DEFAULT_MAX_LINE_CHARS2 = 1e6;
 var MAX_MESSAGE_BYTES = 1024 * 1024;
@@ -2391,7 +2458,7 @@ function parseAiderHistory(info, maxLineChars = DEFAULT_MAX_LINE_CHARS2) {
   const errors = [];
   let rawContent;
   try {
-    rawContent = fs10.readFileSync(info.historyFile, "utf8");
+    rawContent = fs11.readFileSync(info.historyFile, "utf8").replace(/\r\n/g, "\n");
   } catch (err) {
     const msg = `Failed to read ${info.historyFile}: ${err instanceof Error ? err.message : String(err)}`;
     errors.push(msg);
@@ -2403,7 +2470,7 @@ function parseAiderHistory(info, maxLineChars = DEFAULT_MAX_LINE_CHARS2) {
   const model = _readModel(info.configFile);
   let mtimeIso;
   try {
-    const st = fs10.statSync(info.historyFile);
+    const st = fs11.statSync(info.historyFile);
     mtimeIso = st.mtime.toISOString();
   } catch {
     mtimeIso = (/* @__PURE__ */ new Date(0)).toISOString();
@@ -2540,7 +2607,7 @@ function _readModel(configFile) {
     return void 0;
   }
   try {
-    const raw = fs10.readFileSync(configFile, "utf8");
+    const raw = fs11.readFileSync(configFile, "utf8");
     for (const line of raw.split("\n")) {
       const match = /^model:\s*(.+)/.exec(line.trim());
       if (match) {
@@ -2550,6 +2617,158 @@ function _readModel(configFile) {
   } catch {
   }
   return void 0;
+}
+
+// src/parsers/antigravity.ts
+var fs12 = __toESM(require("fs"));
+var MAX_TITLE_CHARS5 = 120;
+function extractUserRequestText(content) {
+  const match = /<USER_REQUEST>\s*([\s\S]*?)\s*<\/USER_REQUEST>/.exec(content);
+  if (match) {
+    return stripTruncationMarker(match[1].trim());
+  }
+  return stripTruncationMarker(content.trim());
+}
+function stripTruncationMarker(text) {
+  return text.replace(/<truncated \d+ bytes>\s*$/, "").trimEnd();
+}
+function parseAntigravityConversation(info) {
+  const errors = [];
+  const { conversationId, overviewFile } = info;
+  const emptySession = {
+    id: conversationId,
+    title: conversationId,
+    source: "antigravity",
+    workspaceId: conversationId,
+    workspacePath: void 0,
+    messages: [],
+    filePath: overviewFile,
+    createdAt: (/* @__PURE__ */ new Date(0)).toISOString(),
+    updatedAt: (/* @__PURE__ */ new Date(0)).toISOString()
+  };
+  let raw;
+  try {
+    raw = fs12.readFileSync(overviewFile, "utf-8");
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    errors.push(`Failed to read file: ${message}`);
+    return { session: emptySession, errors };
+  }
+  const lines = raw.split("\n");
+  const messages = [];
+  let sessionCreatedAt;
+  let sessionUpdatedAt;
+  let title;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) {
+      continue;
+    }
+    let step;
+    try {
+      step = JSON.parse(line);
+    } catch {
+      errors.push(`Line ${i + 1}: invalid JSON \u2014 skipped`);
+      continue;
+    }
+    const { source, type, content, created_at } = step;
+    if (created_at) {
+      if (!sessionCreatedAt) {
+        sessionCreatedAt = created_at;
+      }
+      sessionUpdatedAt = created_at;
+    }
+    const msgIndex = messages.length;
+    if (source === "USER_EXPLICIT" && type === "USER_INPUT" && content) {
+      const text = extractUserRequestText(content);
+      if (!text) {
+        continue;
+      }
+      const codeBlocks = extractCodeBlocks2(text, conversationId, msgIndex);
+      const lastMsg = messages[messages.length - 1];
+      if (lastMsg && lastMsg.role === "user" && lastMsg.content === text) {
+        continue;
+      }
+      messages.push({
+        id: `${conversationId}-${msgIndex}`,
+        role: "user",
+        content: text,
+        codeBlocks,
+        timestamp: created_at
+      });
+      if (!title) {
+        title = text.slice(0, MAX_TITLE_CHARS5).replace(/\s+/g, " ").trim();
+      }
+    } else if (source === "MODEL" && type === "PLANNER_RESPONSE" && content) {
+      const text = stripTruncationMarker(content.trim());
+      if (!text) {
+        continue;
+      }
+      const codeBlocks = extractCodeBlocks2(text, conversationId, msgIndex);
+      messages.push({
+        id: `${conversationId}-${msgIndex}`,
+        role: "assistant",
+        content: text,
+        codeBlocks,
+        timestamp: created_at
+      });
+    }
+  }
+  if (messages.length === 0) {
+    return { session: emptySession, errors };
+  }
+  const createdAt = (() => {
+    if (sessionCreatedAt) {
+      try {
+        const date = new Date(sessionCreatedAt);
+        if (!isNaN(date.getTime())) {
+          return date.toISOString();
+        }
+        throw new Error("Invalid date");
+      } catch {
+        errors.push("Invalid sessionCreatedAt, falling back to epoch");
+      }
+    }
+    return (/* @__PURE__ */ new Date(0)).toISOString();
+  })();
+  const updatedAt = (() => {
+    if (sessionUpdatedAt) {
+      try {
+        const date = new Date(sessionUpdatedAt);
+        if (!isNaN(date.getTime())) {
+          return date.toISOString();
+        }
+        throw new Error("Invalid date");
+      } catch {
+        errors.push("Invalid sessionUpdatedAt, falling back to createdAt");
+      }
+    }
+    return createdAt;
+  })();
+  const fileSizeBytes = (() => {
+    try {
+      return fs12.statSync(overviewFile).size;
+    } catch {
+      return void 0;
+    }
+  })();
+  const session = {
+    id: conversationId,
+    title: title ?? conversationId,
+    source: "antigravity",
+    workspaceId: conversationId,
+    workspacePath: void 0,
+    messages,
+    filePath: overviewFile,
+    fileSizeBytes,
+    createdAt,
+    updatedAt,
+    parseErrors: errors.length > 0 ? errors : void 0,
+    sourceNotes: [
+      "Antigravity \u2014 prompts only. AI responses are not available from disk: Antigravity stores conversation content in an encrypted format that requires the running Language Server to decode. Only your prompts are shown here. Prompt Library, search, analytics, and timeline work fully."
+    ]
+  };
+  return { session, errors };
 }
 
 // src/watcher/fileWatcher.ts
@@ -2571,16 +2790,16 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
    */
   static _isSafeFilePath(resolvedBase, filePath) {
     try {
-      const realPath = fs11.realpathSync(filePath);
-      return realPath.startsWith(resolvedBase + path12.sep) || realPath === resolvedBase;
+      const realPath = fs13.realpathSync(filePath);
+      return realPath.startsWith(resolvedBase + path13.sep) || realPath === resolvedBase;
     } catch {
       return false;
     }
   }
   static async _isSafeFilePathAsync(resolvedBase, filePath) {
     try {
-      const realPath = await fs11.promises.realpath(filePath);
-      return realPath.startsWith(resolvedBase + path12.sep) || realPath === resolvedBase;
+      const realPath = await fs13.promises.realpath(filePath);
+      return realPath.startsWith(resolvedBase + path13.sep) || realPath === resolvedBase;
     } catch {
       return false;
     }
@@ -2595,12 +2814,13 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
     const indexCursor = cfg.get("indexCursor", true);
     const indexWindsurf = cfg.get("indexWindsurf", true);
     const indexAider = cfg.get("indexAider", true);
+    const indexAntigravity = cfg.get("indexAntigravity", true);
     if (!enabled) {
       this.channel.appendLine("[Chat Wizard] Extension disabled via chatwizard.enabled setting \u2014 skipping indexing and file watching.");
       this.index.batchUpsert([]);
       return;
     }
-    await this.buildInitialIndex(indexClaude, indexCopilot, indexCline, indexRooCode, indexCursor, indexWindsurf, indexAider);
+    await this.buildInitialIndex(indexClaude, indexCopilot, indexCline, indexRooCode, indexCursor, indexWindsurf, indexAider, indexAntigravity);
     if (indexClaude) {
       const claudeBaseDir = resolveClaudeProjectsPath();
       const claudePattern = new vscode.RelativePattern(
@@ -2611,7 +2831,7 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
       claudeWatcher.onDidCreate((uri) => this.onFileChanged(uri, "claude"));
       claudeWatcher.onDidChange((uri) => this.onFileChanged(uri, "claude"));
       claudeWatcher.onDidDelete((uri) => {
-        const sessionId = path12.basename(uri.fsPath, ".jsonl");
+        const sessionId = path13.basename(uri.fsPath, ".jsonl");
         this.index.remove(sessionId);
         this.channel.appendLine(`[live] removed session ${sessionId}`);
       });
@@ -2627,7 +2847,7 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
         this.channel.appendLine(`[error] Failed to discover Copilot workspaces for watching: ${err}`);
       }
       for (const workspace7 of copilotWorkspaces) {
-        const chatSessionsDir = path12.join(workspace7.storageDir, "chatSessions");
+        const chatSessionsDir = path13.join(workspace7.storageDir, "chatSessions");
         const copilotPattern = new vscode.RelativePattern(
           vscode.Uri.file(chatSessionsDir),
           "*.jsonl"
@@ -2640,7 +2860,7 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
           (uri) => this.onFileChanged(uri, "copilot", workspace7.workspaceId, workspace7.workspacePath)
         );
         copilotWatcher.onDidDelete((uri) => {
-          const sessionId = path12.basename(uri.fsPath, ".jsonl");
+          const sessionId = path13.basename(uri.fsPath, ".jsonl");
           this.index.remove(sessionId);
           this.channel.appendLine(`[live] removed session ${sessionId}`);
         });
@@ -2657,7 +2877,7 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
       clineWatcher.onDidCreate((uri) => this.onClineFileChanged(uri));
       clineWatcher.onDidChange((uri) => this.onClineFileChanged(uri));
       clineWatcher.onDidDelete((uri) => {
-        const taskId = path12.basename(path12.dirname(uri.fsPath));
+        const taskId = path13.basename(path13.dirname(uri.fsPath));
         this.index.remove(taskId);
         this.channel.appendLine(`[live] removed cline session ${taskId}`);
       });
@@ -2673,7 +2893,7 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
       rooCodeWatcher.onDidCreate((uri) => this.onRooCodeFileChanged(uri));
       rooCodeWatcher.onDidChange((uri) => this.onRooCodeFileChanged(uri));
       rooCodeWatcher.onDidDelete((uri) => {
-        const taskId = path12.basename(path12.dirname(uri.fsPath));
+        const taskId = path13.basename(path13.dirname(uri.fsPath));
         this.index.remove(taskId);
         this.channel.appendLine(`[live] removed roocode session ${taskId}`);
       });
@@ -2720,6 +2940,22 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
       });
       this.disposables.push(aiderWatcher);
     }
+    if (indexAntigravity) {
+      const antigravityRoot = resolveAntigravityBrainPath();
+      const antigravityPattern = new vscode.RelativePattern(
+        vscode.Uri.file(antigravityRoot),
+        "**/.system_generated/logs/overview.txt"
+      );
+      const antigravityWatcher = vscode.workspace.createFileSystemWatcher(antigravityPattern);
+      antigravityWatcher.onDidCreate((uri) => this.onAntigravityFileChanged(uri));
+      antigravityWatcher.onDidChange((uri) => this.onAntigravityFileChanged(uri));
+      antigravityWatcher.onDidDelete((uri) => {
+        const conversationId = path13.basename(path13.dirname(path13.dirname(path13.dirname(uri.fsPath))));
+        this.index.remove(conversationId);
+        this.channel.appendLine(`[live] removed antigravity session ${conversationId}`);
+      });
+      this.disposables.push(antigravityWatcher);
+    }
   }
   /**
    * Stops all active file watchers, clears the session index, and re-runs the full
@@ -2736,7 +2972,7 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
     }
     this.disposables = [];
   }
-  async buildInitialIndex(indexClaude, indexCopilot, indexCline, indexRooCode = true, indexCursor = true, indexWindsurf = true, indexAider = true) {
+  async buildInitialIndex(indexClaude, indexCopilot, indexCline, indexRooCode = true, indexCursor = true, indexWindsurf = true, indexAider = true, indexAntigravity = true) {
     await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Window,
@@ -2753,7 +2989,7 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
         } else {
           this.channel.appendLine(`[Chat Wizard] Building index with scope filter: [${selectedIds.join(", ")}]`);
         }
-        const [claudeSessions, copilotSessions, clineSessions, rooCodeSessions, cursorSessions, windsurfSessions, aiderSessions] = await Promise.all([
+        const [claudeSessions, copilotSessions, clineSessions, rooCodeSessions, cursorSessions, windsurfSessions, aiderSessions, antigravitySessions] = await Promise.all([
           // Always pass selectedIds (even empty array) — empty = index nothing, no fallback to all.
           indexClaude ? this.collectClaudeSessionsAsync(onProgress, selectedIds) : Promise.resolve([]),
           indexCopilot ? this.collectCopilotSessionsAsync(onProgress, selectedIds) : Promise.resolve([]),
@@ -2761,10 +2997,11 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
           indexRooCode ? this.collectRooCodeTasksAsync(onProgress) : Promise.resolve([]),
           indexCursor ? this.collectCursorSessionsAsync(onProgress) : Promise.resolve([]),
           indexWindsurf ? this.collectWindsurfSessionsAsync(onProgress) : Promise.resolve([]),
-          indexAider ? this.collectAiderSessionsAsync(onProgress) : Promise.resolve([])
+          indexAider ? this.collectAiderSessionsAsync(onProgress) : Promise.resolve([]),
+          indexAntigravity ? this.collectAntigravitySessionsAsync(onProgress) : Promise.resolve([])
         ]);
         const cfg = vscode.workspace.getConfiguration("chatwizard");
-        const all = applySessionFilters([...claudeSessions, ...copilotSessions, ...clineSessions, ...rooCodeSessions, ...cursorSessions, ...windsurfSessions, ...aiderSessions], cfg, this.channel);
+        const all = applySessionFilters([...claudeSessions, ...copilotSessions, ...clineSessions, ...rooCodeSessions, ...cursorSessions, ...windsurfSessions, ...aiderSessions, ...antigravitySessions], cfg, this.channel);
         this.index.batchUpsert(all);
         this.channel.appendLine(`[init] Batch indexed ${all.length} sessions`);
       }
@@ -2782,20 +3019,20 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
     try {
       let exists = false;
       try {
-        exists = (await fs11.promises.stat(claudeProjectsDir)).isDirectory();
+        exists = (await fs13.promises.stat(claudeProjectsDir)).isDirectory();
       } catch {
       }
       if (!exists) {
         return [];
       }
-      const resolvedBase = await fs11.promises.realpath(claudeProjectsDir).catch(() => claudeProjectsDir);
-      const projectDirEntries = await fs11.promises.readdir(claudeProjectsDir, { withFileTypes: true });
+      const resolvedBase = await fs13.promises.realpath(claudeProjectsDir).catch(() => claudeProjectsDir);
+      const projectDirEntries = await fs13.promises.readdir(claudeProjectsDir, { withFileTypes: true });
       const allDirEntries = projectDirEntries.filter((d) => d.isDirectory());
       const dirEntries = selectedIds ? allDirEntries.filter((d) => selectedIds.includes(d.name)) : allDirEntries;
       const fileLists = await Promise.all(dirEntries.map(async (d) => {
-        const projectPath = path12.join(claudeProjectsDir, d.name);
+        const projectPath = path13.join(claudeProjectsDir, d.name);
         try {
-          const files = await fs11.promises.readdir(projectPath, { withFileTypes: true });
+          const files = await fs13.promises.readdir(projectPath, { withFileTypes: true });
           return { projectPath, files: files.filter((f) => f.isFile() && f.name.endsWith(".jsonl")) };
         } catch {
           return { projectPath, files: [] };
@@ -2806,7 +3043,7 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
       const dirResults = await Promise.all(fileLists.map(async ({ projectPath, files }) => {
         const dirSessions = [];
         for (const file of files) {
-          const filePath = path12.join(projectPath, file.name);
+          const filePath = path13.join(projectPath, file.name);
           if (!await _ChatWizardWatcher._isSafeFilePathAsync(resolvedBase, filePath)) {
             this.channel.appendLine(`[security] Skipping ${filePath}: resolves outside base directory`);
             current++;
@@ -2846,7 +3083,7 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
       const wsResults = await Promise.all(workspaces.map(async (workspace7, idx) => {
         const files = fileListsPerWorkspace[idx];
         const wsSessions = [];
-        const resolvedBase = await fs11.promises.realpath(workspace7.storageDir).catch(() => workspace7.storageDir);
+        const resolvedBase = await fs13.promises.realpath(workspace7.storageDir).catch(() => workspace7.storageDir);
         for (const filePath of files) {
           if (!await _ChatWizardWatcher._isSafeFilePathAsync(resolvedBase, filePath)) {
             this.channel.appendLine(`[security] Skipping ${filePath}: resolves outside workspace storage`);
@@ -3062,34 +3299,59 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
       return [];
     }
   }
+  /** Async: parse all Antigravity conversations from the brain directory. */
+  async collectAntigravitySessionsAsync(onProgress, _brainRootOverride) {
+    const root = _brainRootOverride ?? resolveAntigravityBrainPath();
+    try {
+      const infos = await discoverAntigravityConversationsAsync(root);
+      const total = infos.length;
+      let current = 0;
+      const results = await Promise.all(infos.map(async (info) => {
+        const result = parseAntigravityConversation(info);
+        current++;
+        onProgress?.(current, total);
+        if (result.errors.length > 0) {
+          this.channel.appendLine(`[warn] Antigravity parse errors in ${info.overviewFile}: ${result.errors.join("; ")}`);
+        }
+        if (result.session.messages.length === 0 || result.session.createdAt === (/* @__PURE__ */ new Date(0)).toISOString()) {
+          return null;
+        }
+        return result.session;
+      }));
+      return results.filter((s) => s !== null);
+    } catch (err) {
+      this.channel.appendLine(`[error] Failed to collect Antigravity sessions: ${err}`);
+      return [];
+    }
+  }
   /** Synchronous collectors kept for internal use by live-update code paths. */
   collectClaudeSessions() {
     const sessions = [];
     const claudeProjectsDir = resolveClaudeProjectsPath();
     try {
-      if (!fs11.existsSync(claudeProjectsDir)) {
+      if (!fs13.existsSync(claudeProjectsDir)) {
         return sessions;
       }
       const resolvedBase = (() => {
         try {
-          return fs11.realpathSync(claudeProjectsDir);
+          return fs13.realpathSync(claudeProjectsDir);
         } catch {
           return claudeProjectsDir;
         }
       })();
-      const projectDirs = fs11.readdirSync(claudeProjectsDir, { withFileTypes: true });
+      const projectDirs = fs13.readdirSync(claudeProjectsDir, { withFileTypes: true });
       for (const projectDir of projectDirs) {
         if (!projectDir.isDirectory()) {
           continue;
         }
-        const projectPath = path12.join(claudeProjectsDir, projectDir.name);
+        const projectPath = path13.join(claudeProjectsDir, projectDir.name);
         try {
-          const files = fs11.readdirSync(projectPath, { withFileTypes: true });
+          const files = fs13.readdirSync(projectPath, { withFileTypes: true });
           for (const file of files) {
             if (!file.isFile() || !file.name.endsWith(".jsonl")) {
               continue;
             }
-            const filePath = path12.join(projectPath, file.name);
+            const filePath = path13.join(projectPath, file.name);
             if (!_ChatWizardWatcher._isSafeFilePath(resolvedBase, filePath)) {
               this.channel.appendLine(`[security] Skipping ${filePath}: resolves outside base directory`);
               continue;
@@ -3116,7 +3378,7 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
         try {
           const resolvedBase = (() => {
             try {
-              return fs11.realpathSync(workspace7.storageDir);
+              return fs13.realpathSync(workspace7.storageDir);
             } catch {
               return workspace7.storageDir;
             }
@@ -3196,8 +3458,8 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
     }
   }
   async onClineFileChanged(uri) {
-    const taskDir = path12.dirname(uri.fsPath);
-    const taskId = path12.basename(taskDir);
+    const taskDir = path13.dirname(uri.fsPath);
+    const taskId = path13.basename(taskDir);
     const result = await parseClineTask(taskDir);
     if (result.errors.length > 0) {
       this.channel.appendLine(`[warn] Cline parse errors in ${taskDir}: ${result.errors.join("; ")}`);
@@ -3212,8 +3474,8 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
     this.channel.appendLine(`[live] ${verb} cline session ${taskId}`);
   }
   async onRooCodeFileChanged(uri) {
-    const taskDir = path12.dirname(uri.fsPath);
-    const taskId = path12.basename(taskDir);
+    const taskDir = path13.dirname(uri.fsPath);
+    const taskId = path13.basename(taskDir);
     const result = await parseClineTask(taskDir, void 0, "roocode");
     if (result.errors.length > 0) {
       this.channel.appendLine(`[warn] Roo Code parse errors in ${taskDir}: ${result.errors.join("; ")}`);
@@ -3229,10 +3491,10 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
   }
   async onCursorFileChanged(uri) {
     const vscdbPath = uri.fsPath;
-    const workspaceId = path12.basename(path12.dirname(vscdbPath));
+    const workspaceId = path13.basename(path13.dirname(vscdbPath));
     let workspacePath;
     try {
-      const wsJson = path12.join(path12.dirname(vscdbPath), "workspace.json");
+      const wsJson = path13.join(path13.dirname(vscdbPath), "workspace.json");
       const raw = require("fs").readFileSync(wsJson, "utf8");
       const parsed = JSON.parse(raw);
       if (parsed.folder) {
@@ -3297,10 +3559,10 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
   }
   async onWindsurfFileChanged(uri) {
     const vscdbPath = uri.fsPath;
-    const workspaceId = path12.basename(path12.dirname(vscdbPath));
+    const workspaceId = path13.basename(path13.dirname(vscdbPath));
     let workspacePath;
     try {
-      const wsJson = path12.join(path12.dirname(vscdbPath), "workspace.json");
+      const wsJson = path13.join(path13.dirname(vscdbPath), "workspace.json");
       const raw = require("fs").readFileSync(wsJson, "utf8");
       const parsed = JSON.parse(raw);
       if (parsed.folder) {
@@ -3356,10 +3618,32 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
     const verb = this.index.size > before ? "added" : "updated";
     this.channel.appendLine(`[live] ${verb} aider session ${historyFile}`);
   }
+  async onAntigravityFileChanged(uri) {
+    const brainRoot = resolveAntigravityBrainPath();
+    const resolvedBase = await fs13.promises.realpath(brainRoot).catch(() => brainRoot);
+    const overviewFile = await fs13.promises.realpath(uri.fsPath).catch(() => uri.fsPath);
+    if (!await _ChatWizardWatcher._isSafeFilePathAsync(resolvedBase, overviewFile)) {
+      this.channel.appendLine(`[warn] Unsafe file path detected: ${overviewFile}`);
+      return;
+    }
+    const conversationId = path13.basename(path13.dirname(path13.dirname(path13.dirname(overviewFile))));
+    const result = parseAntigravityConversation({ conversationId, overviewFile });
+    if (result.errors.length > 0) {
+      this.channel.appendLine(`[warn] Antigravity parse errors in ${overviewFile}: ${result.errors.join("; ")}`);
+    }
+    if (result.session.messages.length === 0 || result.session.createdAt === (/* @__PURE__ */ new Date(0)).toISOString()) {
+      this.channel.appendLine(`[skip] empty/epoch antigravity session ${conversationId}`);
+      return;
+    }
+    const before = this.index.size;
+    this.index.upsert(result.session);
+    const verb = this.index.size > before ? "added" : "updated";
+    this.channel.appendLine(`[live] ${verb} antigravity session ${conversationId}`);
+  }
   onFileChanged(uri, source, workspaceId, workspacePath) {
     const before = this.index.size;
     this.indexFile(uri.fsPath, source, workspaceId, workspacePath);
-    const sessionId = path12.basename(uri.fsPath, ".jsonl");
+    const sessionId = path13.basename(uri.fsPath, ".jsonl");
     const verb = this.index.size > before ? "added" : "updated";
     this.channel.appendLine(`[live] ${verb} session ${sessionId} (${source})`);
   }
@@ -3396,8 +3680,8 @@ async function startWatcher(index, channel, scopeManager) {
 }
 
 // src/readers/claudeWorkspace.ts
-var fs12 = __toESM(require("fs"));
-var path13 = __toESM(require("path"));
+var fs14 = __toESM(require("fs"));
+var path14 = __toESM(require("path"));
 function resolveClaudeWorkspacePath(dirName) {
   if (!dirName || typeof dirName !== "string") {
     return void 0;
@@ -3418,13 +3702,13 @@ async function discoverClaudeWorkspacesAsync(override) {
   try {
     let exists = false;
     try {
-      exists = (await fs12.promises.stat(claudeProjectsDir)).isDirectory();
+      exists = (await fs14.promises.stat(claudeProjectsDir)).isDirectory();
     } catch {
     }
     if (!exists) {
       return [];
     }
-    const entries = await fs12.promises.readdir(claudeProjectsDir, { withFileTypes: true });
+    const entries = await fs14.promises.readdir(claudeProjectsDir, { withFileTypes: true });
     const results = [];
     for (const entry of entries) {
       if (!entry.isDirectory()) {
@@ -3438,7 +3722,7 @@ async function discoverClaudeWorkspacesAsync(override) {
         id: entry.name,
         source: "claude",
         workspacePath,
-        storageDir: path13.join(claudeProjectsDir, entry.name)
+        storageDir: path14.join(claudeProjectsDir, entry.name)
       });
     }
     return results;
@@ -3464,6 +3748,8 @@ function friendlySourceName(source) {
       return "Windsurf";
     case "aider":
       return "Aider";
+    case "antigravity":
+      return "Google Antigravity";
   }
 }
 function sourceCodiconId(source) {
@@ -3478,17 +3764,18 @@ function sourceCodiconId(source) {
       return "circuit-board";
     case "cursor":
       return "sparkle";
-    // fallback when no bundled brand SVG; never use "edit" (pencil)
     case "windsurf":
       return "cloud";
     case "aider":
       return "terminal";
+    case "antigravity":
+      return "rocket";
   }
 }
 
 // src/views/sessionTreeProvider.ts
 var vscode3 = __toESM(require("vscode"));
-var path14 = __toESM(require("path"));
+var path15 = __toESM(require("path"));
 
 // src/ui/sourceBrandIcons.ts
 var vscode2 = __toESM(require("vscode"));
@@ -3499,6 +3786,7 @@ function sourceBrandIconUris(source, extensionUri) {
     case "cursor":
     case "windsurf":
     case "aider":
+    case "antigravity":
       return {
         light: vscode2.Uri.joinPath(extensionUri, "resources", "icons", `${source}_light.svg`),
         dark: vscode2.Uri.joinPath(extensionUri, "resources", "icons", `${source}_dark.svg`)
@@ -3520,7 +3808,7 @@ var SessionTreeItem = class extends vscode3.TreeItem {
     super(summary.title || "Untitled Session", vscode3.TreeItemCollapsibleState.None);
     this.summary = summary;
     this.pinned = pinned;
-    const workspaceName = path14.basename(summary.workspacePath ?? summary.workspaceId);
+    const workspaceName = path15.basename(summary.workspacePath ?? summary.workspaceId);
     const date = summary.updatedAt.slice(0, 10);
     const msgCount = summary.messageCount;
     const sizeKb = summary.fileSizeBytes !== void 0 ? `${(summary.fileSizeBytes / 1024).toFixed(1)} KB` : void 0;
@@ -3742,8 +4030,8 @@ function compareBy(key, a, b) {
     case "date":
       return a.updatedAt.localeCompare(b.updatedAt);
     case "workspace": {
-      const wa = path14.basename(a.workspacePath ?? a.workspaceId);
-      const wb = path14.basename(b.workspacePath ?? b.workspaceId);
+      const wa = path15.basename(a.workspacePath ?? a.workspaceId);
+      const wb = path15.basename(b.workspacePath ?? b.workspaceId);
       return wa.localeCompare(wb);
     }
     case "length":
@@ -4597,6 +4885,7 @@ function cwThemeCss() {
   --cw-accent-text:    #ffffff;
   --cw-copilot:        #f0883e;
   --cw-claude:         #a67bf0;
+  --cw-antigravity:    #4285F4;
   --cw-surface:        #181c2a;
   --cw-surface-raised: #1f2438;
   --cw-surface-subtle: #252b40;
@@ -4615,6 +4904,7 @@ function cwThemeCss() {
   --cw-accent-text:    #ffffff;
   --cw-copilot:        #c05c00;
   --cw-claude:         #7b4fd4;
+  --cw-antigravity:    #1a73e8;
   --cw-surface:        #f4f6fb;
   --cw-surface-raised: #ffffff;
   --cw-surface-subtle: #eef1f8;
@@ -4719,6 +5009,18 @@ function cwThemeCss() {
   background:    rgba(166,123,240,0.18);
   color:         var(--cw-claude);
   border:        1px solid rgba(166,123,240,0.35);
+  white-space:   nowrap;
+}
+
+.cw-badge-antigravity {
+  display:       inline-block;
+  font-size:     0.73em;
+  font-weight:   600;
+  padding:       1px 6px;
+  border-radius: var(--cw-radius-xs);
+  background:    rgba(66,133,244,0.15);
+  color:         var(--cw-antigravity);
+  border:        1px solid rgba(66,133,244,0.35);
   white-space:   nowrap;
 }
 
@@ -5378,6 +5680,9 @@ var SessionWebviewPanel = class _SessionWebviewPanel {
           void vscode5.commands.executeCommand("chatwizard.exportExcerpt", session.id);
         } else if (msg.command === "exportSelection" && msg.text) {
           void _SessionWebviewPanel._saveSelection(msg.text, session.title);
+        } else if (msg.command === "copy" && msg.text) {
+          void vscode5.env.clipboard.writeText(msg.text);
+          void vscode5.window.showInformationMessage("Chat copied to clipboard.");
         }
       },
       void 0,
@@ -5868,6 +6173,26 @@ ${cwInteractiveJs()}
   filterResponsesEl.addEventListener('change', function() {
     if (filterResponsesEl.checked && filterPromptsEl.checked) { filterPromptsEl.checked = false; }
     applyRoleFilter();
+  });
+
+  // \u2500\u2500 Copy-all: when nothing is selected, Ctrl+C / context-menu Copy copies the whole chat
+  document.addEventListener('copy', function(e) {
+    var sel = window.getSelection();
+    if (sel && sel.toString().trim()) { return; } // normal selection copy \u2014 don't interfere
+    var parts = [];
+    document.querySelectorAll('.message').forEach(function(msgEl) {
+      if (msgEl.classList.contains('aborted')) { return; }
+      var roleEl = msgEl.querySelector('.role-label');
+      var bodyEl = msgEl.querySelector('.message-body[data-raw]');
+      if (roleEl && bodyEl) {
+        var role = roleEl.textContent || '';
+        var raw = bodyEl.getAttribute('data-raw') || bodyEl.textContent || '';
+        parts.push(role + '\\n' + raw);
+      }
+    });
+    if (!parts.length) { return; }
+    vscode.postMessage({ command: 'copy', text: parts.join('\\n\\n---\\n\\n') });
+    e.preventDefault();
   });
 
   // \u2500\u2500 Context menu \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
@@ -6650,6 +6975,9 @@ function nextSourceState(current) {
   if (current === "copilot") {
     return "claude";
   }
+  if (current === "claude") {
+    return "antigravity";
+  }
   return "all";
 }
 function sourceButtonIcon(state) {
@@ -6658,6 +6986,9 @@ function sourceButtonIcon(state) {
   }
   if (state === "claude") {
     return new vscode6.ThemeIcon("hubot");
+  }
+  if (state === "antigravity") {
+    return new vscode6.ThemeIcon("rocket");
   }
   return new vscode6.ThemeIcon("list-filter");
 }
@@ -6668,7 +6999,10 @@ function sourceButtonTooltip(state) {
   if (state === "copilot") {
     return "Source: Copilot \u2014 click for Claude only";
   }
-  return "Source: Claude \u2014 click for All";
+  if (state === "claude") {
+    return "Source: Claude \u2014 click for Antigravity only";
+  }
+  return "Source: Antigravity \u2014 click for All";
 }
 function nextMsgTypeState(current) {
   if (current === "all") {
@@ -6811,7 +7145,7 @@ var SearchPanel = class {
 
 // src/export/exportCommands.ts
 var vscode7 = __toESM(require("vscode"));
-var path15 = __toESM(require("path"));
+var path16 = __toESM(require("path"));
 
 // src/export/markdownSerializer.ts
 function truncate(text, maxLen) {
@@ -6962,7 +7296,7 @@ function registerExportCommands(context, index, getOrderedSummaries) {
   );
   context.subscriptions.push(
     vscode7.commands.registerCommand("chatwizard.exportAll", async () => {
-      const sessions = index.getAllSummaries().map((s) => index.get(s.id)).filter((s) => s != null);
+      const sessions = index.getAllSummaries().map((s) => index.get(s.id)).filter((s) => s !== null && s !== void 0);
       await performExport(sessions);
     })
   );
@@ -6975,7 +7309,7 @@ function registerExportCommands(context, index, getOrderedSummaries) {
       }
       const items = allSummaries.map((s) => ({
         label: s.title || "Untitled Session",
-        description: `${path15.basename(s.workspacePath ?? s.workspaceId)} \xB7 ${s.updatedAt.slice(0, 10)}`,
+        description: `${path16.basename(s.workspacePath ?? s.workspaceId)} \xB7 ${s.updatedAt.slice(0, 10)}`,
         detail: `${friendlySourceName(s.source)} \xB7 ${s.messageCount} messages`,
         id: s.id
       }));
@@ -7000,7 +7334,7 @@ function registerExportCommands(context, index, getOrderedSummaries) {
       if (!picked || picked.length === 0) {
         return;
       }
-      const sessions = picked.map((p) => index.get(p.id)).filter((s) => s != null);
+      const sessions = picked.map((p) => index.get(p.id)).filter((s) => s !== null && s !== void 0);
       await performExport(sessions);
     })
   );
@@ -9079,8 +9413,7 @@ function computeAnalytics(sessions, countTokens2) {
   let totalResponses = 0;
   let totalUserTokens = 0;
   let totalAssistantTokens = 0;
-  let copilotSessions = 0;
-  let claudeSessions = 0;
+  const sessionCountsBySource = {};
   for (const m of allMetrics) {
     totalPrompts += m.userMessageCount;
     totalResponses += m.assistantMessageCount;
@@ -9088,11 +9421,7 @@ function computeAnalytics(sessions, countTokens2) {
     totalAssistantTokens += m.assistantTokens;
   }
   for (const s of sessions) {
-    if (s.source === "copilot") {
-      copilotSessions++;
-    } else {
-      claudeSessions++;
-    }
+    sessionCountsBySource[s.source] = (sessionCountsBySource[s.source] || 0) + 1;
   }
   const totalTokens = totalUserTokens + totalAssistantTokens;
   const dailyMap = /* @__PURE__ */ new Map();
@@ -9163,8 +9492,7 @@ function computeAnalytics(sessions, countTokens2) {
     totalUserTokens,
     totalAssistantTokens,
     totalTokens,
-    copilotSessions,
-    claudeSessions,
+    sessionCountsBySource,
     dailyActivity,
     projectActivity,
     topTerms,
@@ -9181,7 +9509,7 @@ function countTokens(text, source) {
   if (!text) {
     return 0;
   }
-  if (source === "claude") {
+  if (source === "claude" || source === "antigravity") {
     return Math.ceil(text.length / 4);
   }
   const wordCount = text.split(/\s+/).filter((w) => w.length > 0).length;
@@ -9555,10 +9883,11 @@ var AnalyticsPanel = class _AnalyticsPanel {
       function getChartColors() {
         var style = getComputedStyle(document.body);
         return {
-          fg:       style.getPropertyValue('--vscode-editor-foreground').trim()        || '#cccccc',
-          border:   style.getPropertyValue('--vscode-textSeparator-foreground').trim() || 'rgba(128,128,128,0.3)',
-          accent:   style.getPropertyValue('--cw-accent').trim()                       || '#5B8AF5',
-          copilot:  style.getPropertyValue('--cw-copilot').trim()                      || '#f0883e',
+          fg:           style.getPropertyValue('--vscode-editor-foreground').trim()        || '#cccccc',
+          border:       style.getPropertyValue('--vscode-textSeparator-foreground').trim() || 'rgba(128,128,128,0.3)',
+          accent:       style.getPropertyValue('--cw-accent').trim()                       || '#5B8AF5',
+          copilot:      style.getPropertyValue('--cw-copilot').trim()                      || '#f0883e',
+          antigravity:  style.getPropertyValue('--cw-antigravity').trim()                  || '#4285F4',
         };
       }
 
@@ -9567,7 +9896,7 @@ var AnalyticsPanel = class _AnalyticsPanel {
           document.getElementById('summary-row').innerHTML =
             '<div class="empty-state-guided">'
             + '<p class="empty-state-title">No sessions indexed yet.</p>'
-            + '<p class="empty-state-body">Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure the data paths are configured correctly.</p>'
+            + '<p class="empty-state-body">Chat Wizard reads your Claude Code, GitHub Copilot, Google Antigravity, and other AI chat history. Make sure the data paths are configured correctly.</p>'
             + '<div class="empty-state-actions">'
             + '<button class="cw-action-btn" id="btn-cfg-paths">Configure Paths</button>'
             + '<button class="cw-action-btn" id="btn-rescan">Rescan</button>'
@@ -9589,8 +9918,9 @@ var AnalyticsPanel = class _AnalyticsPanel {
           { label: 'Total Prompts',    value: data.totalPrompts,     sub: '' },
           { label: 'Total Responses',  value: data.totalResponses,   sub: '' },
           { label: 'Est. Tokens *',    value: data.totalTokens,      sub: '' },
-          { label: 'Copilot Sessions', value: data.copilotSessions,  sub: '' },
-          { label: 'Claude Sessions',  value: data.claudeSessions,   sub: '' },
+          { label: 'Copilot Sessions',      value: data.copilotSessions,      sub: '' },
+          { label: 'Claude Sessions',       value: data.claudeSessions,       sub: '' },
+          { label: 'Antigravity Sessions',  value: data.antigravitySessions,  sub: '' },
           { label: 'Time Span',        value: timeSpanValue,         sub: timeSpanSub, noAnim: true },
         ];
 
@@ -9923,7 +10253,8 @@ var SOURCE_AUTO_MODEL = {
   cline: "Cline Auto",
   roocode: "Roo Code Auto",
   windsurf: "Windsurf Auto",
-  aider: "Aider Auto"
+  aider: "Aider Auto",
+  antigravity: "Gemini Auto"
 };
 function resolveModel(raw, source) {
   const name = friendlyModelName(raw);
@@ -11798,6 +12129,7 @@ var TimelineViewProvider = class _TimelineViewProvider {
       <option value="">All</option>
       <option value="copilot">Copilot</option>
       <option value="claude">Claude</option>
+      <option value="antigravity">Antigravity</option>
     </select>
     <label>Jump to</label>
     <select id="jumpDate" onchange="jumpToMonth(this.value)" aria-label="Jump to month">
@@ -11862,7 +12194,8 @@ var TimelineViewProvider = class _TimelineViewProvider {
 
   const SRC_LABEL = {
     claude: 'Claude Code', copilot: 'GitHub Copilot', cline: 'Cline',
-    roocode: 'Roo Code', cursor: 'Cursor', windsurf: 'Windsurf', aider: 'Aider'
+    roocode: 'Roo Code', cursor: 'Cursor', windsurf: 'Windsurf', aider: 'Aider',
+    antigravity: 'Google Antigravity'
   };
 
   function applyFilter() {
@@ -11997,7 +12330,9 @@ var TimelineViewProvider = class _TimelineViewProvider {
   function renderEntryHtml(entry, fadeIdx) {
     const fadeAttr     = fadeIdx < 25 ? ' style="--cw-i:' + fadeIdx + '"' : '';
     const sourceLabel  = (SRC_LABEL && SRC_LABEL[entry.source]) ? SRC_LABEL[entry.source] : entry.source;
-    const badgeClass   = entry.source === 'copilot' ? 'cw-badge-copilot' : 'cw-badge-claude';
+    const badgeClass   = entry.source === 'copilot' ? 'cw-badge-copilot'
+                       : entry.source === 'antigravity' ? 'cw-badge-antigravity'
+                       : 'cw-badge-claude';
     const wsMeta       = entry.workspaceName || '(unknown workspace)';
     const promptText   = entry.firstPrompt   || '(no prompt)';
     const ariaLabel    = escHtml(entry.sessionTitle) + ', ' + sourceLabel + ', ' + escHtml(entry.date);
@@ -12286,8 +12621,8 @@ var TimelineViewProvider = class _TimelineViewProvider {
 };
 
 // src/telemetry/telemetryRecorder.ts
-var fs13 = __toESM(require("fs"));
-var path16 = __toESM(require("path"));
+var fs15 = __toESM(require("fs"));
+var path17 = __toESM(require("path"));
 var MAX_LOG_BYTES = 1e6;
 var MAX_LOG_AGE_MS = 30 * 24 * 60 * 60 * 1e3;
 var TelemetryRecorder = class {
@@ -12298,7 +12633,7 @@ var TelemetryRecorder = class {
    *                     Typically `context.globalStoragePath` from the VS Code extension context.
    */
   constructor(storagePath) {
-    this.filePath = path16.join(storagePath, "telemetry.jsonl");
+    this.filePath = path17.join(storagePath, "telemetry.jsonl");
   }
   /** Whether telemetry recording is currently enabled. */
   get enabled() {
@@ -12329,8 +12664,8 @@ var TelemetryRecorder = class {
       ...properties !== void 0 ? { properties } : {}
     };
     try {
-      fs13.mkdirSync(path16.dirname(this.filePath), { recursive: true });
-      fs13.appendFileSync(this.filePath, JSON.stringify(entry) + "\n", "utf8");
+      fs15.mkdirSync(path17.dirname(this.filePath), { recursive: true });
+      fs15.appendFileSync(this.filePath, JSON.stringify(entry) + "\n", "utf8");
     } catch {
     }
   }
@@ -12341,7 +12676,7 @@ var TelemetryRecorder = class {
    */
   getEvents() {
     try {
-      const content = fs13.readFileSync(this.filePath, "utf8");
+      const content = fs15.readFileSync(this.filePath, "utf8");
       return content.split("\n").filter((line) => line.trim().length > 0).flatMap((line) => {
         try {
           return [JSON.parse(line)];
@@ -12365,13 +12700,13 @@ var TelemetryRecorder = class {
     try {
       let stat;
       try {
-        stat = fs13.statSync(this.filePath);
+        stat = fs15.statSync(this.filePath);
       } catch {
         return;
       }
       const needsRotation = stat.size > MAX_LOG_BYTES;
       const cutoff = Date.now() - MAX_LOG_AGE_MS;
-      const content = fs13.readFileSync(this.filePath, "utf8");
+      const content = fs15.readFileSync(this.filePath, "utf8");
       const lines = content.split("\n").filter((l) => l.trim().length > 0);
       let hadOld = false;
       const surviving = lines.filter((line) => {
@@ -12387,7 +12722,7 @@ var TelemetryRecorder = class {
         }
       });
       if (needsRotation || hadOld || surviving.length < lines.length) {
-        fs13.writeFileSync(this.filePath, surviving.map((l) => l.trim()).join("\n") + (surviving.length > 0 ? "\n" : ""), "utf8");
+        fs15.writeFileSync(this.filePath, surviving.map((l) => l.trim()).join("\n") + (surviving.length > 0 ? "\n" : ""), "utf8");
       }
     } catch {
     }
@@ -12398,7 +12733,7 @@ var TelemetryRecorder = class {
    */
   clear() {
     try {
-      fs13.unlinkSync(this.filePath);
+      fs15.unlinkSync(this.filePath);
     } catch {
     }
   }
@@ -12410,7 +12745,7 @@ var TelemetryRecorder = class {
 
 // src/commands/manageWorkspaces.ts
 var vscode14 = __toESM(require("vscode"));
-var path17 = __toESM(require("path"));
+var path18 = __toESM(require("path"));
 function registerManageWorkspacesCommand(context, scopeManager, getWatcher, channel, index) {
   context.subscriptions.push(
     vscode14.commands.registerCommand("chatwizard.manageWatchedWorkspaces", async () => {
@@ -12456,24 +12791,24 @@ function registerManageWorkspacesCommand(context, scopeManager, getWatcher, chan
       function indexCountForIds(ids) {
         const dirs = ids.map((id) => {
           const ws = allAvailable.find((w) => w.id === id);
-          return path17.normalize(ws.storageDir);
+          return path18.normalize(ws.storageDir);
         });
         return allSummaries.filter(
-          (s) => dirs.some((dir) => path17.normalize(s.filePath).startsWith(dir + path17.sep))
+          (s) => dirs.some((dir) => path18.normalize(s.filePath).startsWith(dir + path18.sep))
         ).length;
       }
       const countCache = context.globalState.get("cwSessionCountCache", {});
       const updatedCache = { ...countCache };
       const pathGroups = /* @__PURE__ */ new Map();
       for (const ws of allAvailable) {
-        const key = path17.normalize(ws.workspacePath).toLowerCase();
+        const key = path18.normalize(ws.workspacePath).toLowerCase();
         const group = pathGroups.get(key) ?? [];
         group.push(ws);
         pathGroups.set(key, group);
       }
       const allKeys = [...pathGroups.keys()];
       for (const key of allKeys) {
-        const prefix = key.endsWith(path17.sep) ? key : key + path17.sep;
+        const prefix = key.endsWith(path18.sep) ? key : key + path18.sep;
         if (allKeys.some((other) => other !== key && other.startsWith(prefix))) {
           pathGroups.delete(key);
         }
@@ -12484,7 +12819,7 @@ function registerManageWorkspacesCommand(context, scopeManager, getWatcher, chan
         const representative = group[0];
         const allIds = group.map((ws) => ws.id);
         const groupBytes = allIds.reduce((sum, id) => sum + (byteMap.get(id) ?? 0), 0);
-        const cacheKey = path17.normalize(representative.workspacePath).toLowerCase();
+        const cacheKey = path18.normalize(representative.workspacePath).toLowerCase();
         const isSelected = allIds.some((id) => currentSelectedIds.includes(id));
         const indexCount = indexCountForIds(allIds);
         let sessionCount;
@@ -12510,7 +12845,7 @@ function registerManageWorkspacesCommand(context, scopeManager, getWatcher, chan
           totalBytes: groupBytes,
           sessionCount,
           sessionCountApprox: approx,
-          label: path17.basename(representative.workspacePath),
+          label: path18.basename(representative.workspacePath),
           description: representative.workspacePath,
           detail: `${formatSize(groupBytes)}  \u2014  ${countLabel}`,
           picked: isSelected
@@ -12534,10 +12869,10 @@ function registerManageWorkspacesCommand(context, scopeManager, getWatcher, chan
         qp.title = makeTitle(initialReal);
         qp.placeholder = "Select workspaces to index";
         const openPaths = new Set(
-          (vscode14.workspace.workspaceFolders ?? []).map((f) => path17.normalize(f.uri.fsPath).toLowerCase())
+          (vscode14.workspace.workspaceFolders ?? []).map((f) => path18.normalize(f.uri.fsPath).toLowerCase())
         );
         const currentWsItems = workspaceItems.filter(
-          (item) => openPaths.has(path17.normalize(item.workspacePath).toLowerCase())
+          (item) => openPaths.has(path18.normalize(item.workspacePath).toLowerCase())
         );
         qp.onDidChangeSelection((selected) => {
           if (selected.length === 0) {
@@ -13010,7 +13345,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
         }
         newFilter.model = val.trim() || void 0;
       } else if (pick.id === "source") {
-        const allSources = ["claude", "copilot", "cline", "roocode", "cursor", "windsurf", "aider"];
+        const allSources = ["claude", "copilot", "cline", "roocode", "cursor", "windsurf", "aider", "antigravity"];
         const sourceItems = [
           { label: "$(close)  Show all sources", value: void 0 },
           ...allSources.map((s) => ({
@@ -13124,7 +13459,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
         }
         newFilter.content = val.trim() || void 0;
       } else if (pick.id === "sessionSource") {
-        const allSources = ["copilot", "claude", "cline", "roocode", "cursor", "windsurf", "aider"];
+        const allSources = ["copilot", "claude", "cline", "roocode", "cursor", "windsurf", "aider", "antigravity"];
         const sourceItems = [
           ...allSources.map((s) => ({
             label: `$(${sourceCodiconId(s)})  ${friendlySourceName(s)}`,
@@ -13299,7 +13634,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
       if (e.affectsConfiguration("chatwizard.claudeProjectsPath") || e.affectsConfiguration("chatwizard.copilotStoragePath") || e.affectsConfiguration("chatwizard.cursorStoragePath")) {
         channel.appendLine("[Chat Wizard] Data path setting changed \u2014 re-discovering workspaces and restarting index...");
         void (async () => {
-          const [copilotWs, claudeWs, cursorWs] = await Promise.all([
+          const [copilotWs, claudeWs, cursorWs, windsurfWs] = await Promise.all([
             discoverCopilotWorkspacesAsync().then(
               (list) => list.map((ws) => ({
                 id: ws.workspaceId,
@@ -13309,9 +13644,10 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
               }))
             ).catch(() => []),
             discoverClaudeWorkspacesAsync().catch(() => []),
-            discoverCursorWorkspacesAsync().catch(() => [])
+            discoverCursorWorkspacesAsync().catch(() => []),
+            discoverWindsurfWorkspacesAsync().catch(() => [])
           ]);
-          const allAvailable = [...copilotWs, ...claudeWs, ...cursorWs];
+          const allAvailable = [...copilotWs, ...claudeWs, ...cursorWs, ...windsurfWs];
           scopeManager.resetToDefault();
           await scopeManager.initDefault(allAvailable);
           const selectedIds = scopeManager.getSelectedIds();
@@ -13336,7 +13672,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
       "chatwizard.exportFromTreeSelection",
       async (item, allSelected) => {
         const items = allSelected && allSelected.length > 0 ? allSelected : item ? [item] : [];
-        const sessions = items.map((i) => index.get(i.summary.id)).filter((s) => s != null);
+        const sessions = items.map((i) => index.get(i.summary.id)).filter((s) => s !== null && s !== void 0);
         await performExport(sessions);
       }
     )
@@ -13345,7 +13681,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
   registerManageWorkspacesCommand(context, scopeManager, () => watcher, channel, index);
   await new Promise((resolve) => setTimeout(resolve, 200));
   void (async () => {
-    const [copilotWs, claudeWs, cursorWs] = await Promise.all([
+    const [copilotWs, claudeWs, cursorWs, windsurfWs] = await Promise.all([
       discoverCopilotWorkspacesAsync().then(
         (list) => list.map((ws) => ({
           id: ws.workspaceId,
@@ -13355,9 +13691,10 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
         }))
       ).catch(() => []),
       discoverClaudeWorkspacesAsync().catch(() => []),
-      discoverCursorWorkspacesAsync().catch(() => [])
+      discoverCursorWorkspacesAsync().catch(() => []),
+      discoverWindsurfWorkspacesAsync().catch(() => [])
     ]);
-    const allAvailable = [...copilotWs, ...claudeWs, ...cursorWs];
+    const allAvailable = [...copilotWs, ...claudeWs, ...cursorWs, ...windsurfWs];
     channel.appendLine(
       `[Chat Wizard] Discovered ${allAvailable.length} workspace(s) for scope detection: ` + allAvailable.map((ws) => `${ws.source}:${ws.id} (${ws.workspacePath})`).join(", ")
     );

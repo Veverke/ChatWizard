@@ -37,8 +37,8 @@ suite('computeAnalytics', () => {
         assert.strictEqual(result.totalUserTokens, 0);
         assert.strictEqual(result.totalAssistantTokens, 0);
         assert.strictEqual(result.totalTokens, 0);
-        assert.strictEqual(result.copilotSessions, 0);
-        assert.strictEqual(result.claudeSessions, 0);
+        assert.strictEqual(result.sessionCountsBySource.copilot, 0);
+        assert.strictEqual(result.sessionCountsBySource.claude, 0);
         assert.deepStrictEqual(result.dailyActivity, []);
         assert.deepStrictEqual(result.projectActivity, []);
         assert.deepStrictEqual(result.topTerms, []);
@@ -66,8 +66,8 @@ suite('computeAnalytics', () => {
         assert.strictEqual(result.totalUserTokens, 2);       // "hello world" = 2 tokens
         assert.strictEqual(result.totalAssistantTokens, 3);  // "hi there friend" = 3 tokens
         assert.strictEqual(result.totalTokens, 5);
-        assert.strictEqual(result.claudeSessions, 1);
-        assert.strictEqual(result.copilotSessions, 0);
+        assert.strictEqual(result.sessionCountsBySource.claude, 1);
+        assert.strictEqual(result.sessionCountsBySource.copilot, 0);
     });
 
     // â”€â”€ source counts â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -79,8 +79,8 @@ suite('computeAnalytics', () => {
             makeSession({ id: 'cl1', source: 'claude', messages: [] }),
         ];
         const result = computeAnalytics(sessions, countTokens);
-        assert.strictEqual(result.copilotSessions, 2);
-        assert.strictEqual(result.claudeSessions, 1);
+        assert.strictEqual(result.sessionCountsBySource.copilot, 2);
+        assert.strictEqual(result.sessionCountsBySource.claude, 1);
     });
 
     // â”€â”€ daily activity â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

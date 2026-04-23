@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <linearGradient id="g" x1="50" y1="95" x2="50" y2="4" gradientUnits="userSpaceOnUse">
+      <stop offset="0%"   stop-color="#4285F4"/>
+      <stop offset="55%"  stop-color="#FBBC04"/>
+      <stop offset="100%" stop-color="#EA4335"/>
+    </linearGradient>
+  </defs>
+  <path fill="url(#g)" fill-rule="evenodd" d="
+    M 8,95
+    C 5,82 8,65 15,48
+    C 22,32 34,15 42,8
+    C 45,5 47.5,4 50,4
+    C 52.5,4 55,5 58,8
+    C 66,15 78,32 85,48
+    C 92,65 95,82 92,95
+    Z
+    M 22,95
+    C 25,84 29,71 34,57
+    C 39,43 43,33 45,26
+    C 47,21 49,19 50,19
+    C 51,19 53,21 55,26
+    C 57,33 61,43 66,57
+    C 71,71 75,84 78,95
+    Z
+  "/>
+</svg>

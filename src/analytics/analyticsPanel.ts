@@ -388,10 +388,11 @@ export class AnalyticsPanel {
       function getChartColors() {
         var style = getComputedStyle(document.body);
         return {
-          fg:       style.getPropertyValue('--vscode-editor-foreground').trim()        || '#cccccc',
-          border:   style.getPropertyValue('--vscode-textSeparator-foreground').trim() || 'rgba(128,128,128,0.3)',
-          accent:   style.getPropertyValue('--cw-accent').trim()                       || '#5B8AF5',
-          copilot:  style.getPropertyValue('--cw-copilot').trim()                      || '#f0883e',
+          fg:           style.getPropertyValue('--vscode-editor-foreground').trim()        || '#cccccc',
+          border:       style.getPropertyValue('--vscode-textSeparator-foreground').trim() || 'rgba(128,128,128,0.3)',
+          accent:       style.getPropertyValue('--cw-accent').trim()                       || '#5B8AF5',
+          copilot:      style.getPropertyValue('--cw-copilot').trim()                      || '#f0883e',
+          antigravity:  style.getPropertyValue('--cw-antigravity').trim()                  || '#4285F4',
         };
       }
 
@@ -400,7 +401,7 @@ export class AnalyticsPanel {
           document.getElementById('summary-row').innerHTML =
             '<div class="empty-state-guided">'
             + '<p class="empty-state-title">No sessions indexed yet.</p>'
-            + '<p class="empty-state-body">Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure the data paths are configured correctly.</p>'
+            + '<p class="empty-state-body">Chat Wizard reads your Claude Code, GitHub Copilot, Google Antigravity, and other AI chat history. Make sure the data paths are configured correctly.</p>'
             + '<div class="empty-state-actions">'
             + '<button class="cw-action-btn" id="btn-cfg-paths">Configure Paths</button>'
             + '<button class="cw-action-btn" id="btn-rescan">Rescan</button>'
@@ -422,8 +423,9 @@ export class AnalyticsPanel {
           { label: 'Total Prompts',    value: data.totalPrompts,     sub: '' },
           { label: 'Total Responses',  value: data.totalResponses,   sub: '' },
           { label: 'Est. Tokens *',    value: data.totalTokens,      sub: '' },
-          { label: 'Copilot Sessions', value: data.copilotSessions,  sub: '' },
-          { label: 'Claude Sessions',  value: data.claudeSessions,   sub: '' },
+          { label: 'Copilot Sessions',      value: data.copilotSessions,      sub: '' },
+          { label: 'Claude Sessions',       value: data.claudeSessions,       sub: '' },
+          { label: 'Antigravity Sessions',  value: data.antigravitySessions,  sub: '' },
           { label: 'Time Span',        value: timeSpanValue,         sub: timeSpanSub, noAnim: true },
         ];
 

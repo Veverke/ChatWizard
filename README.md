@@ -9,14 +9,14 @@ Inspired by https://github.com/Veverke/bAInder, I decided to make a VS Code exte
 
 Your AI chat history — unified, searchable, and always yours. Chat Wizard reads session data from every major AI coding tool and gives you a single place to search, browse, and analyse it all. Your conversation history is no longer trapped inside whichever tool or IDE created it.
 
-> **Tags:** AI chat manager · Copilot chat manager · Claude chat manager · chat history viewer · prompt library · code block search · token usage analytics · LLM productivity · VS Code AI tools · conversation history manager · Cline chat manager · Roo code chat manager · Cursor chat manager · Windsurf chat manager · Aider chat manager
+> **Tags:** AI chat manager · Copilot chat manager · Claude chat manager · chat history viewer · prompt library · code block search · token usage analytics · LLM productivity · VS Code AI tools · conversation history manager · Cline chat manager · Roo code chat manager · Cursor chat manager · Windsurf chat manager · Aider chat manager · Google Antigravity chat manager
 
 ---
 
 ## Why ChatWizard?
 
 - **Your history travels with you.** Switch from Cursor to VS Code, try Windsurf for a project, add Cline to your workflow — your full conversation archive stays intact and searchable in one place. No more context lost when you change tools or IDEs.
-- **Everything in one view.** Whether you use one AI coding tool or five, Chat Wizard aggregates sessions from all of them. Search across a year of Copilot, Claude, Cline, Cursor, Windsurf, and Aider conversations in a single query.
+- **Everything in one view.** Whether you use one AI coding tool or five, Chat Wizard aggregates sessions from all of them. Search across a year of Copilot, Claude, Cline, Cursor, Windsurf, Aider, and Google Antigravity conversations in a single query.
 - **100% local, read-only, zero setup.** Chat Wizard never makes a network call, never modifies your session files, and requires no API key or account. It passively reads what your existing tools already write to disk.
 - **Not just a viewer.** Full-text search with regex, a deduplicated prompt library, a code block archive, per-model usage analytics, and a timeline with activity heat maps — capabilities that no individual AI tool exposes.
 
@@ -57,7 +57,7 @@ Your AI chat history — unified, searchable, and always yours. Chat Wizard read
 ## Features
 
 ### Session Management Panel
-A sortable, filterable, pinnable, and drag-and-drop reorderable TreeView listing every AI chat session across all your workspaces — from GitHub Copilot Chat, Claude Code, Cline, Roo Code, Cursor, Windsurf, and Aider. Each row shows workspace, date, message count, and file size. Hover over any session for a rich tooltip showing title, source, model, workspace, date, size, prompt/response split, and pin status. Click any session to open a full Markdown-rendered conversation reader.
+A sortable, filterable, pinnable, and drag-and-drop reorderable TreeView listing every AI chat session across all your workspaces — from GitHub Copilot Chat, Claude Code, Cline, Roo Code, Cursor, Windsurf, Aider, and Google Antigravity. Each row shows workspace, date, message count, and file size. Hover over any session for a rich tooltip showing title, source, model, workspace, date, size, prompt/response split, and pin status. Click any session to open a full Markdown-rendered conversation reader.
 
 **Sorting** — Toolbar buttons cycle through five sort keys: Date, Workspace, Length (message count), Title (alphabetical), and Model — each with an ascending/descending direction toggle. Open **Configure Sort Order…** to build a multi-key composite sort with up to 3 criteria, each with its own direction. Sort preferences persist across VS Code restarts.
 
@@ -78,7 +78,7 @@ For very large sessions (500+ messages) only the most-recent messages are shown 
 Open **ChatWizard: Search** from the Command Palette to launch an instant QuickPick panel covering all messages in all sessions across all workspaces. Results appear as you type, powered by an in-memory inverted index with no external dependencies.
 
 - **Regex mode** — prefix the query with `/` to switch to regular-expression matching.
-- **Source filter** — toggle between All sources or any individual source (Copilot, Claude, Cline, Roo Code, Cursor, Windsurf, Aider) with an in-panel toolbar button.
+- **Source filter** — toggle between All sources or any individual source (Copilot, Claude, Cline, Roo Code, Cursor, Windsurf, Aider, Antigravity) with an in-panel toolbar button.
 - **Role filter** — toggle between All messages / Prompts only / Responses only.
 - Each result shows a source icon, session title, workspace, date, and a role-labelled snippet (`You: …` or `Copilot: …`) with matched text highlighted.
 - When results exceed 500, a banner prompts you to refine the query.
@@ -154,10 +154,10 @@ A chronological month-grouped feed of all sessions across all workspaces. Each c
 - Clicking any card opens the session reader.
 
 ### Live File Watching
-A `FileSystemWatcher` monitors all configured source directories — Copilot Chat workspace storage, Claude Code projects, Cline/Roo Code task directories, Cursor and Windsurf `state.vscdb` files, and Aider `.aider.chat.history.md` files in open workspace folders. When a session file is created or updated, only that entry is re-parsed and re-indexed — no full rebuild. All views (Sessions, Code Blocks, Prompt Library, Analytics, Timeline) refresh automatically without user action.
+A `FileSystemWatcher` monitors all configured source directories — Copilot Chat workspace storage, Claude Code projects, Cline/Roo Code task directories, Cursor and Windsurf `state.vscdb` files, Aider `.aider.chat.history.md` files in open workspace folders, and Google Antigravity brain logs (`~/.gemini/antigravity/brain/**/.system_generated/logs/overview.txt`). When a session file is created or updated, only that entry is re-parsed and re-indexed — no full rebuild. All views (Sessions, Code Blocks, Prompt Library, Analytics, Timeline) refresh automatically without user action.
 
 ### Configurable Data Source Paths
-Override the default discovery paths for any supported source (Claude Code, Copilot Chat, Cline, Roo Code, Cursor, Windsurf) via extension settings — useful for non-standard installs or custom data directories. For Aider, configure additional search roots via `chatwizard.aiderSearchRoots`. Changing a path displays a prompt to reload the window so the new location takes effect immediately.
+Override the default discovery paths for any supported source (Claude Code, Copilot Chat, Cline, Roo Code, Cursor, Windsurf, Google Antigravity) via extension settings — useful for non-standard installs or custom data directories. For Aider, configure additional search roots via `chatwizard.aiderSearchRoots`. Changing a path displays a prompt to reload the window so the new location takes effect immediately.
 
 ---
 
@@ -217,6 +217,18 @@ Capabilities not available in the built-in GitHub Copilot Chat panel or the Clau
 | **Windsurf** (Codeium) | SQLite `state.vscdb` at `%APPDATA%/Windsurf/User/workspaceStorage/<hash>/` — Cascade chat history stored under the `cascade.sessionData` key. Reuses the same `better-sqlite3` driver. |
 | **Aider** | Markdown `.aider.chat.history.md` files written by Aider into each project root. ChatWizard scans all open VS Code workspace folders plus any paths listed in `chatwizard.aiderSearchRoots` (up to `chatwizard.aiderSearchDepth` levels deep, default 3). Optional `.aider.conf.yml` in the same directory is read for the `model:` key. No central storage directory — files live inside your project repos. |
 
+> For tools with partial support, see [Limited Support](#limited-support) below.
+
+---
+
+## Limited Support
+
+Some tools are supported with constraints. Features that operate on prompts alone — **Prompt Library**, **Full-Text Search**, **Analytics**, and **Timeline** — work fully. The session reader displays an informational banner explaining what is unavailable.
+
+| Tool | What works | Limitation |
+|------|-----------|------------|
+| **Google Antigravity** | Prompt Library, full-text search, analytics, timeline, session reader (prompts only) | AI responses are not available from disk. Antigravity stores conversation content in an encrypted format that requires the running Language Server to decode. Only prompts are indexed. Configurable via `chatwizard.indexAntigravity` / `chatwizard.antigravityBrainPath`. |
+
 ---
 
 ## Installation
@@ -230,7 +242,7 @@ Capabilities not available in the built-in GitHub Copilot Chat panel or the Clau
 ## Requirements
 
 - VS Code **1.85.0** or later.
-- At least one supported AI coding tool installed and actively used: **GitHub Copilot Chat**, **Claude Code**, **Cline**, **Roo Code**, **Cursor**, **Windsurf**, or **Aider**. Chat Wizard reads the session files these tools write — it does not create sessions itself and requires no additional configuration for standard installs.
+- At least one supported AI coding tool installed and actively used: **GitHub Copilot Chat**, **Claude Code**, **Cline**, **Roo Code**, **Cursor**, **Windsurf**, **Aider**, or **Google Antigravity** (limited support — prompts only; see [Limited Support](#limited-support)). Chat Wizard reads the session files these tools write — it does not create sessions itself and requires no additional configuration for standard installs.
 
 ---
 
@@ -252,6 +264,8 @@ Capabilities not available in the built-in GitHub Copilot Chat panel or the Clau
 | `chatwizard.cursorStoragePath` | `` | Custom path to the Cursor workspaceStorage directory (empty = platform default `%APPDATA%/Cursor/User/workspaceStorage`) |
 | `chatwizard.indexWindsurf` | `true` | Index Windsurf (Codeium) Cascade chat sessions |
 | `chatwizard.windsurfStoragePath` | `` | Custom path to the Windsurf workspaceStorage directory (empty = platform default `%APPDATA%/Windsurf/User/workspaceStorage`) |
+| `chatwizard.indexAntigravity` | `true` | Index Google Antigravity agent conversation sessions |
+| `chatwizard.antigravityBrainPath` | `` | Custom path to the Antigravity brain directory (empty = default `~/.gemini/antigravity/brain`) |
 | `chatwizard.enableTelemetry` | `false` | Enable local-only usage telemetry written to the extension's global storage directory (no external data transmission) |
 
 ---
@@ -301,11 +315,18 @@ Grouping commands (`chatwizard.enableSessionGrouping` / `chatwizard.disableSessi
 
 - **Copilot Chat session parsing** reconstructs conversation state by replaying an append-only operation log. Very large sessions (hundreds of messages) may take slightly longer to parse on first index build.
 - **Claude Code epoch sessions** — sessions with a creation date of 1970-01-01 (epoch) or with zero messages are silently skipped during indexing. This matches Claude Code's own behavior of writing placeholder files before sessions are populated.
-- **Token counts are approximations.** ChatWizard uses character-based counting (characters / 4) for Claude sessions and word-based counting (words x 1.3) for Copilot/GPT sessions. These figures are estimates and will not exactly match the billing token counts reported by Anthropic or OpenAI.
+- **Token counts are approximations.** ChatWizard uses character-based counting (characters / 4) for Claude and Google Antigravity (Gemini) sessions, and word-based counting (words x 1.3) for Copilot/GPT sessions. These figures are estimates and will not exactly match the billing token counts reported by the respective providers.
 - **Cursor and Windsurf schema stability.** Both IDEs store chat data in private SQLite databases whose internal schema can change in any update without notice. Chat Wizard targets the current schema; a future Cursor or Windsurf release may require a matching Chat Wizard update before sessions from those sources are visible again.
 ---
 
 ## Release Notes
+
+### 1.3.0
+
+- **Google Antigravity support (limited)** — indexes user prompts from Google Antigravity stored at `~/.gemini/antigravity/brain/<uuid>/.system_generated/logs/overview.txt` (JSONL step logs). AI responses are not available from disk (stored in an encrypted format). Configurable via `chatwizard.indexAntigravity` / `chatwizard.antigravityBrainPath`.
+- Antigravity prompts participate in search, prompt library, analytics, model usage, timeline, and source filtering. The session reader shows prompts only with an informational banner.
+- Token counting for Antigravity sessions uses the Gemini character ÷ 4 approximation.
+- Antigravity brand icon, CSS theme variable, and badge class added.
 
 ### 1.2.0
 

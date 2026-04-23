@@ -1,7 +1,7 @@
 // src/types/index.ts
 
 /** Which AI chat extension produced the session */
-export type SessionSource = 'copilot' | 'claude' | 'cline' | 'roocode' | 'cursor' | 'windsurf' | 'aider';
+export type SessionSource = 'copilot' | 'claude' | 'cline' | 'roocode' | 'cursor' | 'windsurf' | 'aider' | 'antigravity';
 
 /** Role of a message participant */
 export type MessageRole = 'user' | 'assistant';
@@ -221,4 +221,12 @@ export interface ScopedWorkspace {
     workspacePath: string;
     /** Physical directory containing the session files */
     storageDir: string;
+}
+
+/** Descriptor for a discovered Antigravity conversation */
+export interface AntigravityConversationInfo {
+    /** Conversation UUID (directory name under brain/) */
+    conversationId: string;
+    /** Absolute path to the JSONL overview.txt log file */
+    overviewFile: string;
 }

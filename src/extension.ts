@@ -6,6 +6,7 @@ import { WorkspaceScopeManager } from './watcher/workspaceScope';
 import { discoverCopilotWorkspacesAsync } from './readers/copilotWorkspace';
 import { discoverClaudeWorkspacesAsync } from './readers/claudeWorkspace';
 import { discoverCursorWorkspacesAsync } from './readers/cursorWorkspace';
+import { discoverWindsurfWorkspacesAsync } from './readers/windsurfWorkspace';
 import { friendlySourceName, sourceCodiconId } from './ui/sourceUi';
 import {
     SessionTreeProvider,
@@ -536,7 +537,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 newFilter.model = val.trim() || undefined;
 
             } else if (pick.id === 'source') {
-                const allSources: SessionSource[] = ['claude', 'copilot', 'cline', 'roocode', 'cursor', 'windsurf', 'aider'];
+                const allSources: SessionSource[] = ['claude', 'copilot', 'cline', 'roocode', 'cursor', 'windsurf', 'aider', 'antigravity'];
                 type SourceItem = vscode.QuickPickItem & { value: SessionSource | undefined };
                 const sourceItems: SourceItem[] = [
                     { label: '$(close)  Show all sources', value: undefined },
@@ -656,7 +657,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 newFilter.content = val.trim() || undefined;
 
             } else if (pick.id === 'sessionSource') {
-                const allSources: SessionSource[] = ['copilot', 'claude', 'cline', 'roocode', 'cursor', 'windsurf', 'aider'];
+                const allSources: SessionSource[] = ['copilot', 'claude', 'cline', 'roocode', 'cursor', 'windsurf', 'aider', 'antigravity'];
                 const sourceItems: (vscode.QuickPickItem & { source?: SessionSource })[] = [
                     ...allSources.map(s => ({
                         label: `$(${sourceCodiconId(s)})  ${friendlySourceName(s)}`,
@@ -864,7 +865,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 channel.appendLine('[Chat Wizard] Data path setting changed — re-discovering workspaces and restarting index...');
                 void (async () => {
                     // Re-discover available workspaces under the new paths.
-                    const [copilotWs, claudeWs, cursorWs] = await Promise.all([
+                    const [copilotWs, claudeWs, cursorWs, windsurfWs] = await Promise.all([
                         discoverCopilotWorkspacesAsync().then(list =>
                             list.map(ws => ({
                                 id: ws.workspaceId,
@@ -875,8 +876,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                         ).catch(() => [] as ScopedWorkspace[]),
                         discoverClaudeWorkspacesAsync().catch(() => [] as ScopedWorkspace[]),
                         discoverCursorWorkspacesAsync().catch(() => [] as ScopedWorkspace[]),
+                        discoverWindsurfWorkspacesAsync().catch(() => [] as ScopedWorkspace[]),
                     ]);
-                    const allAvailable: ScopedWorkspace[] = [...copilotWs, ...claudeWs, ...cursorWs];
+                    const allAvailable: ScopedWorkspace[] = [...copilotWs, ...claudeWs, ...cursorWs, ...windsurfWs];
 
                     // Reset to default so initDefault() re-detects from the new path.
                     scopeManager.resetToDefault();
@@ -935,7 +937,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await new Promise<void>(resolve => setTimeout(resolve, 200));
     void (async () => {
         // Discover all available workspaces to initialise the default scope.
-        const [copilotWs, claudeWs, cursorWs] = await Promise.all([
+        const [copilotWs, claudeWs, cursorWs, windsurfWs] = await Promise.all([
             discoverCopilotWorkspacesAsync().then(list =>
                 list.map(ws => ({
                     id: ws.workspaceId,
@@ -946,8 +948,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             ).catch(() => [] as ScopedWorkspace[]),
             discoverClaudeWorkspacesAsync().catch(() => [] as ScopedWorkspace[]),
             discoverCursorWorkspacesAsync().catch(() => [] as ScopedWorkspace[]),
+            discoverWindsurfWorkspacesAsync().catch(() => [] as ScopedWorkspace[]),
         ]);
-        const allAvailable: ScopedWorkspace[] = [...copilotWs, ...claudeWs, ...cursorWs];
+        const allAvailable: ScopedWorkspace[] = [...copilotWs, ...claudeWs, ...cursorWs, ...windsurfWs];
         channel.appendLine(
             `[Chat Wizard] Discovered ${allAvailable.length} workspace(s) for scope detection: ` +
             allAvailable.map(ws => `${ws.source}:${ws.id} (${ws.workspacePath})`).join(', ')
