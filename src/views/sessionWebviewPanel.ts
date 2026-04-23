@@ -152,6 +152,9 @@ export class SessionWebviewPanel {
                     void vscode.commands.executeCommand('chatwizard.exportExcerpt', session.id);
                 } else if (msg.command === 'exportSelection' && msg.text) {
                     void SessionWebviewPanel._saveSelection(msg.text, session.title);
+                } else if (msg.command === 'copy' && msg.text) {
+                    void vscode.env.clipboard.writeText(msg.text);
+                    void vscode.window.showInformationMessage('Chat copied to clipboard.');
                 }
             },
             undefined,
@@ -653,6 +656,26 @@ ${cwInteractiveJs()}
   filterResponsesEl.addEventListener('change', function() {
     if (filterResponsesEl.checked && filterPromptsEl.checked) { filterPromptsEl.checked = false; }
     applyRoleFilter();
+  });
+
+  // ── Copy-all: when nothing is selected, Ctrl+C / context-menu Copy copies the whole chat
+  document.addEventListener('copy', function(e) {
+    var sel = window.getSelection();
+    if (sel && sel.toString().trim()) { return; } // normal selection copy — don't interfere
+    var parts = [];
+    document.querySelectorAll('.message').forEach(function(msgEl) {
+      if (msgEl.classList.contains('aborted')) { return; }
+      var roleEl = msgEl.querySelector('.role-label');
+      var bodyEl = msgEl.querySelector('.message-body[data-raw]');
+      if (roleEl && bodyEl) {
+        var role = roleEl.textContent || '';
+        var raw = bodyEl.getAttribute('data-raw') || bodyEl.textContent || '';
+        parts.push(role + '\\n' + raw);
+      }
+    });
+    if (!parts.length) { return; }
+    vscode.postMessage({ command: 'copy', text: parts.join('\\n\\n---\\n\\n') });
+    e.preventDefault();
   });
 
   // ── Context menu ───────────────────────────────────────────────────────────

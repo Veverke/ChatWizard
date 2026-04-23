@@ -153,7 +153,7 @@ export class ChatWizardWatcher implements vscode.Disposable {
             clineWatcher.onDidDelete((uri) => {
                 // Task directory name is the parent of the changed file.
                 const taskId = path.basename(path.dirname(uri.fsPath));
-                this.index.remove(taskId);
+this.index.remove(taskId);
                 this.channel.appendLine(`[live] removed cline session ${taskId}`);
             });
 
@@ -249,7 +249,7 @@ export class ChatWizardWatcher implements vscode.Disposable {
             antigravityWatcher.onDidCreate((uri) => this.onAntigravityFileChanged(uri));
             antigravityWatcher.onDidChange((uri) => this.onAntigravityFileChanged(uri));
             antigravityWatcher.onDidDelete((uri) => {
-                // Conversation UUID is two levels above overview.txt:
+                // Conversation UUID is three levels above overview.txt:
                 //   <brainRoot>/<uuid>/.system_generated/logs/overview.txt
                 const conversationId = path.basename(path.dirname(path.dirname(path.dirname(uri.fsPath))));
                 this.index.remove(conversationId);
@@ -353,7 +353,6 @@ export class ChatWizardWatcher implements vscode.Disposable {
                     return { projectPath, files: [] };
                 }
             }));
-
             const total = fileLists.reduce((s, { files }) => s + files.length, 0);
             let current = 0;
 
@@ -952,11 +951,11 @@ export class ChatWizardWatcher implements vscode.Disposable {
                     result.session.workspacePath = wsInfo.workspacePath;
                 }
                 // Only index sessions belonging to this workspace vscdb
-                if (composerIdToWsInfo.has(result.session.id)) {
+if (composerIdToWsInfo.has(result.session.id)) {
                     globalById.set(result.session.id, result.session);
                 }
             }
-        } catch {
+} catch {
             // Global DB unavailable — fall through to workspace-only sessions
         }
 
@@ -1049,9 +1048,15 @@ export class ChatWizardWatcher implements vscode.Disposable {
         this.channel.appendLine(`[live] ${verb} aider session ${historyFile}`);
     }
 
-    private onAntigravityFileChanged(uri: vscode.Uri): void {
-        const overviewFile = uri.fsPath;
-        // UUID is the directory two levels above overview.txt:
+    private async onAntigravityFileChanged(uri: vscode.Uri): Promise<void> {
+        const brainRoot = resolveAntigravityBrainPath();
+        const resolvedBase = await fs.promises.realpath(brainRoot).catch(() => brainRoot);
+        const overviewFile = await fs.promises.realpath(uri.fsPath).catch(() => uri.fsPath);
+        if (!(await ChatWizardWatcher._isSafeFilePathAsync(resolvedBase, overviewFile))) {
+            this.channel.appendLine(`[warn] Unsafe file path detected: ${overviewFile}`);
+            return;
+        }
+        // UUID is the directory three levels above overview.txt:
         //   <brainRoot>/<uuid>/.system_generated/logs/overview.txt
         const conversationId = path.basename(path.dirname(path.dirname(path.dirname(overviewFile))));
         const result = parseAntigravityConversation({ conversationId, overviewFile });

@@ -38,18 +38,19 @@ interface OverviewStep {
 function extractUserRequestText(content: string): string {
     const match = /<USER_REQUEST>\s*([\s\S]*?)\s*<\/USER_REQUEST>/.exec(content);
     if (match) {
-        return match[1].trim();
+        return stripTruncationMarker(match[1].trim());
     }
-    return content.trim();
+    return stripTruncationMarker(content.trim());
 }
 
-// ─── Public API ───────────────────────────────────────────────────────────────
-
 /**
- * Parses a single Antigravity conversation from its `overview.txt` JSONL log.
- *
- * @param info  Descriptor returned by `discoverAntigravityConversationsAsync`.
+ * Removes the `<truncated N bytes>` suffix that Antigravity appends to content
+ * fields when the stored text was cut off in overview.txt.
  */
+function stripTruncationMarker(text: string): string {
+    return text.replace(/<truncated \d+ bytes>\s*$/, '').trimEnd();
+}
+
 export function parseAntigravityConversation(info: AntigravityConversationInfo): ParseResult {
     const errors: string[] = [];
     const { conversationId, overviewFile } = info;
@@ -108,6 +109,12 @@ export function parseAntigravityConversation(info: AntigravityConversationInfo):
             if (!text) { continue; }
 
             const codeBlocks = extractCodeBlocks(text, conversationId, msgIndex);
+            // Skip re-injected user messages (Antigravity re-feeds the original
+            // request after each internal tool-call planning phase; the extracted
+            // text is identical to the message already in the list).
+            const lastMsg = messages[messages.length - 1];
+            if (lastMsg && lastMsg.role === 'user' && lastMsg.content === text) { continue; }
+
             messages.push({
                 id: `${conversationId}-${msgIndex}`,
                 role: 'user',
@@ -121,7 +128,7 @@ export function parseAntigravityConversation(info: AntigravityConversationInfo):
             }
         } else if (source === 'MODEL' && type === 'PLANNER_RESPONSE' && content) {
             // Only include model steps that carry narrative text; tool-only steps are skipped.
-            const text = content.trim();
+            const text = stripTruncationMarker(content.trim());
             if (!text) { continue; }
 
             const codeBlocks = extractCodeBlocks(text, conversationId, msgIndex);
@@ -139,8 +146,35 @@ export function parseAntigravityConversation(info: AntigravityConversationInfo):
         return { session: emptySession, errors };
     }
 
-    const createdAt  = sessionCreatedAt  ? new Date(sessionCreatedAt).toISOString()  : new Date(0).toISOString();
-    const updatedAt  = sessionUpdatedAt  ? new Date(sessionUpdatedAt).toISOString()  : createdAt;
+    const createdAt = (() => {
+        if (sessionCreatedAt) {
+            try {
+                const date = new Date(sessionCreatedAt);
+                if (!isNaN(date.getTime())) {
+                    return date.toISOString();
+                }
+                throw new Error('Invalid date');
+            } catch {
+                errors.push('Invalid sessionCreatedAt, falling back to epoch');
+            }
+        }
+        return new Date(0).toISOString();
+    })();
+
+    const updatedAt = (() => {
+        if (sessionUpdatedAt) {
+            try {
+                const date = new Date(sessionUpdatedAt);
+                if (!isNaN(date.getTime())) {
+                    return date.toISOString();
+                }
+                throw new Error('Invalid date');
+            } catch {
+                errors.push('Invalid sessionUpdatedAt, falling back to createdAt');
+            }
+        }
+        return createdAt;
+    })();
 
     const fileSizeBytes = (() => {
         try { return fs.statSync(overviewFile).size; } catch { return undefined; }
@@ -158,24 +192,13 @@ export function parseAntigravityConversation(info: AntigravityConversationInfo):
         createdAt,
         updatedAt,
         parseErrors: errors.length > 0 ? errors : undefined,
+        sourceNotes: [
+            'Antigravity — prompts only. AI responses are not available from disk: ' +
+            'Antigravity stores conversation content in an encrypted format that requires ' +
+            'the running Language Server to decode. Only your prompts are shown here. ' +
+            'Prompt Library, search, analytics, and timeline work fully.',
+        ],
     };
 
     return { session, errors };
-}
-
-/**
- * Extracts fenced code blocks from an Antigravity message.
- * Delegates to the shared extractor used by other parsers.
- */
-export function extractAntigravityCodeBlocks(
-    content: string,
-    sessionId: string,
-    messageIndex: number
-) {
-    return extractCodeBlocks(content, sessionId, messageIndex);
-}
-
-/** Re-export the overview file path helper for use in file-watching. */
-export function overviewFilePath(brainDir: string, conversationId: string): string {
-    return path.join(brainDir, conversationId, '.system_generated', 'logs', 'overview.txt');
 }

@@ -2625,9 +2625,12 @@ var MAX_TITLE_CHARS5 = 120;
 function extractUserRequestText(content) {
   const match = /<USER_REQUEST>\s*([\s\S]*?)\s*<\/USER_REQUEST>/.exec(content);
   if (match) {
-    return match[1].trim();
+    return stripTruncationMarker(match[1].trim());
   }
-  return content.trim();
+  return stripTruncationMarker(content.trim());
+}
+function stripTruncationMarker(text) {
+  return text.replace(/<truncated \d+ bytes>\s*$/, "").trimEnd();
 }
 function parseAntigravityConversation(info) {
   const errors = [];
@@ -2682,6 +2685,10 @@ function parseAntigravityConversation(info) {
         continue;
       }
       const codeBlocks = extractCodeBlocks2(text, conversationId, msgIndex);
+      const lastMsg = messages[messages.length - 1];
+      if (lastMsg && lastMsg.role === "user" && lastMsg.content === text) {
+        continue;
+      }
       messages.push({
         id: `${conversationId}-${msgIndex}`,
         role: "user",
@@ -2693,7 +2700,7 @@ function parseAntigravityConversation(info) {
         title = text.slice(0, MAX_TITLE_CHARS5).replace(/\s+/g, " ").trim();
       }
     } else if (source === "MODEL" && type === "PLANNER_RESPONSE" && content) {
-      const text = content.trim();
+      const text = stripTruncationMarker(content.trim());
       if (!text) {
         continue;
       }
@@ -2710,8 +2717,34 @@ function parseAntigravityConversation(info) {
   if (messages.length === 0) {
     return { session: emptySession, errors };
   }
-  const createdAt = sessionCreatedAt ? new Date(sessionCreatedAt).toISOString() : (/* @__PURE__ */ new Date(0)).toISOString();
-  const updatedAt = sessionUpdatedAt ? new Date(sessionUpdatedAt).toISOString() : createdAt;
+  const createdAt = (() => {
+    if (sessionCreatedAt) {
+      try {
+        const date = new Date(sessionCreatedAt);
+        if (!isNaN(date.getTime())) {
+          return date.toISOString();
+        }
+        throw new Error("Invalid date");
+      } catch {
+        errors.push("Invalid sessionCreatedAt, falling back to epoch");
+      }
+    }
+    return (/* @__PURE__ */ new Date(0)).toISOString();
+  })();
+  const updatedAt = (() => {
+    if (sessionUpdatedAt) {
+      try {
+        const date = new Date(sessionUpdatedAt);
+        if (!isNaN(date.getTime())) {
+          return date.toISOString();
+        }
+        throw new Error("Invalid date");
+      } catch {
+        errors.push("Invalid sessionUpdatedAt, falling back to createdAt");
+      }
+    }
+    return createdAt;
+  })();
   const fileSizeBytes = (() => {
     try {
       return fs12.statSync(overviewFile).size;
@@ -2730,7 +2763,10 @@ function parseAntigravityConversation(info) {
     fileSizeBytes,
     createdAt,
     updatedAt,
-    parseErrors: errors.length > 0 ? errors : void 0
+    parseErrors: errors.length > 0 ? errors : void 0,
+    sourceNotes: [
+      "Antigravity \u2014 prompts only. AI responses are not available from disk: Antigravity stores conversation content in an encrypted format that requires the running Language Server to decode. Only your prompts are shown here. Prompt Library, search, analytics, and timeline work fully."
+    ]
   };
   return { session, errors };
 }
@@ -3582,8 +3618,14 @@ var ChatWizardWatcher = class _ChatWizardWatcher {
     const verb = this.index.size > before ? "added" : "updated";
     this.channel.appendLine(`[live] ${verb} aider session ${historyFile}`);
   }
-  onAntigravityFileChanged(uri) {
-    const overviewFile = uri.fsPath;
+  async onAntigravityFileChanged(uri) {
+    const brainRoot = resolveAntigravityBrainPath();
+    const resolvedBase = await fs13.promises.realpath(brainRoot).catch(() => brainRoot);
+    const overviewFile = await fs13.promises.realpath(uri.fsPath).catch(() => uri.fsPath);
+    if (!await _ChatWizardWatcher._isSafeFilePathAsync(resolvedBase, overviewFile)) {
+      this.channel.appendLine(`[warn] Unsafe file path detected: ${overviewFile}`);
+      return;
+    }
     const conversationId = path13.basename(path13.dirname(path13.dirname(path13.dirname(overviewFile))));
     const result = parseAntigravityConversation({ conversationId, overviewFile });
     if (result.errors.length > 0) {
@@ -5638,6 +5680,9 @@ var SessionWebviewPanel = class _SessionWebviewPanel {
           void vscode5.commands.executeCommand("chatwizard.exportExcerpt", session.id);
         } else if (msg.command === "exportSelection" && msg.text) {
           void _SessionWebviewPanel._saveSelection(msg.text, session.title);
+        } else if (msg.command === "copy" && msg.text) {
+          void vscode5.env.clipboard.writeText(msg.text);
+          void vscode5.window.showInformationMessage("Chat copied to clipboard.");
         }
       },
       void 0,
@@ -6128,6 +6173,26 @@ ${cwInteractiveJs()}
   filterResponsesEl.addEventListener('change', function() {
     if (filterResponsesEl.checked && filterPromptsEl.checked) { filterPromptsEl.checked = false; }
     applyRoleFilter();
+  });
+
+  // \u2500\u2500 Copy-all: when nothing is selected, Ctrl+C / context-menu Copy copies the whole chat
+  document.addEventListener('copy', function(e) {
+    var sel = window.getSelection();
+    if (sel && sel.toString().trim()) { return; } // normal selection copy \u2014 don't interfere
+    var parts = [];
+    document.querySelectorAll('.message').forEach(function(msgEl) {
+      if (msgEl.classList.contains('aborted')) { return; }
+      var roleEl = msgEl.querySelector('.role-label');
+      var bodyEl = msgEl.querySelector('.message-body[data-raw]');
+      if (roleEl && bodyEl) {
+        var role = roleEl.textContent || '';
+        var raw = bodyEl.getAttribute('data-raw') || bodyEl.textContent || '';
+        parts.push(role + '\\n' + raw);
+      }
+    });
+    if (!parts.length) { return; }
+    vscode.postMessage({ command: 'copy', text: parts.join('\\n\\n---\\n\\n') });
+    e.preventDefault();
   });
 
   // \u2500\u2500 Context menu \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
@@ -9348,9 +9413,7 @@ function computeAnalytics(sessions, countTokens2) {
   let totalResponses = 0;
   let totalUserTokens = 0;
   let totalAssistantTokens = 0;
-  let copilotSessions = 0;
-  let claudeSessions = 0;
-  let antigravitySessions = 0;
+  const sessionCountsBySource = {};
   for (const m of allMetrics) {
     totalPrompts += m.userMessageCount;
     totalResponses += m.assistantMessageCount;
@@ -9358,13 +9421,7 @@ function computeAnalytics(sessions, countTokens2) {
     totalAssistantTokens += m.assistantTokens;
   }
   for (const s of sessions) {
-    if (s.source === "copilot") {
-      copilotSessions++;
-    } else if (s.source === "claude") {
-      claudeSessions++;
-    } else if (s.source === "antigravity") {
-      antigravitySessions++;
-    }
+    sessionCountsBySource[s.source] = (sessionCountsBySource[s.source] || 0) + 1;
   }
   const totalTokens = totalUserTokens + totalAssistantTokens;
   const dailyMap = /* @__PURE__ */ new Map();
@@ -9435,9 +9492,7 @@ function computeAnalytics(sessions, countTokens2) {
     totalUserTokens,
     totalAssistantTokens,
     totalTokens,
-    copilotSessions,
-    claudeSessions,
-    antigravitySessions,
+    sessionCountsBySource,
     dailyActivity,
     projectActivity,
     topTerms,
@@ -13669,4 +13724,3 @@ function capitalise(s) {
   activate,
   deactivate
 });
-//# sourceMappingURL=extension.js.map

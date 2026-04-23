@@ -50,9 +50,7 @@ export interface AnalyticsData {
     totalUserTokens: number;
     totalAssistantTokens: number;
     totalTokens: number;
-    copilotSessions: number;
-    claudeSessions: number;
-    antigravitySessions: number;
+    sessionCountsBySource: Record<string, number>;
     dailyActivity: DailyActivity[];      // sorted by date asc
     projectActivity: ProjectActivity[];  // sorted by tokenCount desc
     topTerms: TopTerm[];                 // top 20, sorted by count desc
@@ -106,9 +104,7 @@ export function computeAnalytics(sessions: Session[], countTokens: CountTokensFn
     let totalResponses = 0;
     let totalUserTokens = 0;
     let totalAssistantTokens = 0;
-    let copilotSessions = 0;
-    let claudeSessions = 0;
-    let antigravitySessions = 0;
+    const sessionCountsBySource: Record<string, number> = {};
 
     for (const m of allMetrics) {
         totalPrompts += m.userMessageCount;
@@ -117,9 +113,7 @@ export function computeAnalytics(sessions: Session[], countTokens: CountTokensFn
         totalAssistantTokens += m.assistantTokens;
     }
     for (const s of sessions) {
-        if (s.source === 'copilot') { copilotSessions++; }
-        else if (s.source === 'claude') { claudeSessions++; }
-        else if (s.source === 'antigravity') { antigravitySessions++; }
+        sessionCountsBySource[s.source] = (sessionCountsBySource[s.source] || 0) + 1;
     }
 
     const totalTokens = totalUserTokens + totalAssistantTokens;
@@ -203,9 +197,7 @@ export function computeAnalytics(sessions: Session[], countTokens: CountTokensFn
         totalUserTokens,
         totalAssistantTokens,
         totalTokens,
-        copilotSessions,
-        claudeSessions,
-        antigravitySessions,
+        sessionCountsBySource,
         dailyActivity,
         projectActivity,
         topTerms,

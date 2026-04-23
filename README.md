@@ -216,7 +216,18 @@ Capabilities not available in the built-in GitHub Copilot Chat panel or the Clau
 | **Cursor** | SQLite `state.vscdb` at `%APPDATA%/Cursor/User/workspaceStorage/<hash>/` — chat history stored under the `composer.composerData` key. Requires `better-sqlite3` (pre-built native module bundled with the extension). |
 | **Windsurf** (Codeium) | SQLite `state.vscdb` at `%APPDATA%/Windsurf/User/workspaceStorage/<hash>/` — Cascade chat history stored under the `cascade.sessionData` key. Reuses the same `better-sqlite3` driver. |
 | **Aider** | Markdown `.aider.chat.history.md` files written by Aider into each project root. ChatWizard scans all open VS Code workspace folders plus any paths listed in `chatwizard.aiderSearchRoots` (up to `chatwizard.aiderSearchDepth` levels deep, default 3). Optional `.aider.conf.yml` in the same directory is read for the `model:` key. No central storage directory — files live inside your project repos. |
-| **Google Antigravity** | JSONL step logs at `~/.gemini/antigravity/brain/<uuid>/.system_generated/logs/overview.txt` — one log per conversation, each line is a step object. User messages are extracted from `<USER_REQUEST>` XML envelopes; AI responses come from `PLANNER_RESPONSE` steps that carry text content. Configurable via `chatwizard.indexAntigravity` and `chatwizard.antigravityBrainPath`. |
+
+> For tools with partial support, see [Limited Support](#limited-support) below.
+
+---
+
+## Limited Support
+
+Some tools are supported with constraints. Features that operate on prompts alone — **Prompt Library**, **Full-Text Search**, **Analytics**, and **Timeline** — work fully. The session reader displays an informational banner explaining what is unavailable.
+
+| Tool | What works | Limitation |
+|------|-----------|------------|
+| **Google Antigravity** | Prompt Library, full-text search, analytics, timeline, session reader (prompts only) | AI responses are not available from disk. Antigravity stores conversation content in an encrypted format that requires the running Language Server to decode. Only prompts are indexed. Configurable via `chatwizard.indexAntigravity` / `chatwizard.antigravityBrainPath`. |
 
 ---
 
@@ -231,7 +242,7 @@ Capabilities not available in the built-in GitHub Copilot Chat panel or the Clau
 ## Requirements
 
 - VS Code **1.85.0** or later.
-- At least one supported AI coding tool installed and actively used: **GitHub Copilot Chat**, **Claude Code**, **Cline**, **Roo Code**, **Cursor**, **Windsurf**, **Aider**, or **Google Antigravity**. Chat Wizard reads the session files these tools write — it does not create sessions itself and requires no additional configuration for standard installs.
+- At least one supported AI coding tool installed and actively used: **GitHub Copilot Chat**, **Claude Code**, **Cline**, **Roo Code**, **Cursor**, **Windsurf**, **Aider**, or **Google Antigravity** (limited support — prompts only; see [Limited Support](#limited-support)). Chat Wizard reads the session files these tools write — it does not create sessions itself and requires no additional configuration for standard installs.
 
 ---
 
@@ -312,8 +323,8 @@ Grouping commands (`chatwizard.enableSessionGrouping` / `chatwizard.disableSessi
 
 ### 1.3.0
 
-- **Google Antigravity support** — indexes agent conversations from Google Antigravity stored at `~/.gemini/antigravity/brain/<uuid>/.system_generated/logs/overview.txt` (JSONL step logs). Configurable via `chatwizard.indexAntigravity` / `chatwizard.antigravityBrainPath`.
-- Antigravity sessions participate fully in search, prompt library, code blocks, analytics, model usage, timeline, and source filtering across all panels.
+- **Google Antigravity support (limited)** — indexes user prompts from Google Antigravity stored at `~/.gemini/antigravity/brain/<uuid>/.system_generated/logs/overview.txt` (JSONL step logs). AI responses are not available from disk (stored in an encrypted format). Configurable via `chatwizard.indexAntigravity` / `chatwizard.antigravityBrainPath`.
+- Antigravity prompts participate in search, prompt library, analytics, model usage, timeline, and source filtering. The session reader shows prompts only with an informational banner.
 - Token counting for Antigravity sessions uses the Gemini character ÷ 4 approximation.
 - Antigravity brand icon, CSS theme variable, and badge class added.
 
