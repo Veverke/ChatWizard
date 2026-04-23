@@ -13634,7 +13634,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
       if (e.affectsConfiguration("chatwizard.claudeProjectsPath") || e.affectsConfiguration("chatwizard.copilotStoragePath") || e.affectsConfiguration("chatwizard.cursorStoragePath")) {
         channel.appendLine("[Chat Wizard] Data path setting changed \u2014 re-discovering workspaces and restarting index...");
         void (async () => {
-          const [copilotWs, claudeWs, cursorWs] = await Promise.all([
+          const [copilotWs, claudeWs, cursorWs, windsurfWs] = await Promise.all([
             discoverCopilotWorkspacesAsync().then(
               (list) => list.map((ws) => ({
                 id: ws.workspaceId,
@@ -13644,9 +13644,10 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
               }))
             ).catch(() => []),
             discoverClaudeWorkspacesAsync().catch(() => []),
-            discoverCursorWorkspacesAsync().catch(() => [])
+            discoverCursorWorkspacesAsync().catch(() => []),
+            discoverWindsurfWorkspacesAsync().catch(() => [])
           ]);
-          const allAvailable = [...copilotWs, ...claudeWs, ...cursorWs];
+          const allAvailable = [...copilotWs, ...claudeWs, ...cursorWs, ...windsurfWs];
           scopeManager.resetToDefault();
           await scopeManager.initDefault(allAvailable);
           const selectedIds = scopeManager.getSelectedIds();
@@ -13680,7 +13681,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
   registerManageWorkspacesCommand(context, scopeManager, () => watcher, channel, index);
   await new Promise((resolve) => setTimeout(resolve, 200));
   void (async () => {
-    const [copilotWs, claudeWs, cursorWs] = await Promise.all([
+    const [copilotWs, claudeWs, cursorWs, windsurfWs] = await Promise.all([
       discoverCopilotWorkspacesAsync().then(
         (list) => list.map((ws) => ({
           id: ws.workspaceId,
@@ -13690,9 +13691,10 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
         }))
       ).catch(() => []),
       discoverClaudeWorkspacesAsync().catch(() => []),
-      discoverCursorWorkspacesAsync().catch(() => [])
+      discoverCursorWorkspacesAsync().catch(() => []),
+      discoverWindsurfWorkspacesAsync().catch(() => [])
     ]);
-    const allAvailable = [...copilotWs, ...claudeWs, ...cursorWs];
+    const allAvailable = [...copilotWs, ...claudeWs, ...cursorWs, ...windsurfWs];
     channel.appendLine(
       `[Chat Wizard] Discovered ${allAvailable.length} workspace(s) for scope detection: ` + allAvailable.map((ws) => `${ws.source}:${ws.id} (${ws.workspacePath})`).join(", ")
     );
