@@ -2,53 +2,45 @@
 
 import * as assert from 'assert';
 import { SemanticIndexer, SemanticIndexerVsCodeApi } from '../../src/search/semanticIndexer';
-import { IEmbeddingEngine, ISemanticIndex, SEMANTIC_DIMS } from '../../src/search/semanticContracts';
-import { SemanticSearchResult } from '../../src/search/types';
+import { IEmbeddingEngine, ISemanticIndex, SEMANTIC_DIMS, SemanticScope } from '../../src/search/semanticContracts';
+import { SemanticSearchResult, SemanticMessageResult } from '../../src/search/types';
+import { Session, Message } from '../../src/types/index';
+
+// ── Session fixture ───────────────────────────────────────────────────────────
+
+function makeSession(id: string, text: string): Session {
+    const msg: Message = { id: 'msg-1', role: 'user', content: text, codeBlocks: [] };
+    return {
+        id, title: id, source: 'copilot', workspaceId: 'ws', messages: [msg],
+        filePath: `/fake/${id}.jsonl`, createdAt: '2025-01-01T00:00:00.000Z', updatedAt: '2025-01-01T00:00:00.000Z',
+    };
+}
 
 // ── Stub factories ────────────────────────────────────────────────────────────
-
-/** Minimal stub for vscode.StatusBarItem */
-function makeStatusBarStub(): import('vscode').StatusBarItem & { shown: boolean; disposed: boolean } {
-    const item = {
-        id: '',
-        name: '',
-        text: '',
-        tooltip: undefined,
-        color: undefined,
-        backgroundColor: undefined,
-        command: undefined,
-        accessibilityInformation: undefined,
-        alignment: 1 as import('vscode').StatusBarAlignment,
-        priority: undefined,
-        shown: false,
-        disposed: false,
-        show() { item.shown = true; },
-        hide() { item.shown = false; },
-        dispose() { item.disposed = true; item.shown = false; },
-    };
-    return item;
-}
 
 /** Creates a SemanticIndexerVsCodeApi stub. */
 function makeVsCodeApiStub(opts: {
     consentResult?: boolean;
     isFirstUse?: boolean;
-} = {}): SemanticIndexerVsCodeApi & { statusBarsCreated: ReturnType<typeof makeStatusBarStub>[] } {
-    const statusBars: ReturnType<typeof makeStatusBarStub>[] = [];
+} = {}): SemanticIndexerVsCodeApi & { loadProgressCallCount: number; indexingProgressCallCount: number } {
+    const counts = { loadProgressCallCount: 0, indexingProgressCallCount: 0 };
     return {
-        statusBarsCreated: statusBars,
+        get loadProgressCallCount() { return counts.loadProgressCallCount; },
+        get indexingProgressCallCount() { return counts.indexingProgressCallCount; },
         async showConsentDialog(): Promise<boolean> {
             return opts.consentResult ?? true;
         },
         isFirstUse(_storagePath: string): boolean {
             return opts.isFirstUse ?? false;
         },
-        createStatusBarItem() {
-            const bar = makeStatusBarStub();
-            statusBars.push(bar);
-            return bar;
+        async loadModelWithProgress(task: (report: (msg: string) => void) => Promise<void>): Promise<void> {
+            counts.loadProgressCallCount++;
+            await task(() => { /* no-op */ });
         },
-        showModelReady(_isFirstUse: boolean): void { /* no-op in tests */ },
+        async runIndexingProgress(task: (report: (completed: number, total: number) => void) => Promise<void>): Promise<void> {
+            counts.indexingProgressCallCount++;
+            await task(() => { /* no-op */ });
+        },
         showIndexingComplete(_count: number): void { /* no-op in tests */ },
     };
 }
@@ -102,11 +94,26 @@ function makeIndexStub(): ISemanticIndex & {
         get lastSavedPath() { return state.lastSavedPath; },
         get lastLoadedPath() { return state.lastLoadedPath; },
         get size() { return entries.size; },
-        add(id: string, v: Float32Array) { entries.set(id, v); },
-        remove(id: string) { entries.delete(id); },
-        has(id: string) { return entries.has(id); },
-        search(_q: Float32Array, topK: number): SemanticSearchResult[] {
-            return [...entries.keys()].slice(0, topK).map(id => ({ sessionId: id, score: 1 }));
+        add(sessionId: string, role: 'user' | 'assistant', messageIndex: number, paragraphIndex: number, v: Float32Array) {
+            entries.set(`${sessionId}::${role}::${messageIndex}::${paragraphIndex}`, v);
+        },
+        remove(id: string) {
+            for (const k of entries.keys()) {
+                if (k.startsWith(`${id}::`)) { entries.delete(k); }
+            }
+        },
+        has(id: string) { return [...entries.keys()].some(k => k.startsWith(`${id}::`)); },
+        search(_q: Float32Array, topK: number): SemanticMessageResult[] {
+            return [...entries.keys()].slice(0, topK).map(k => {
+                const parts = k.split('::');
+                return {
+                    sessionId: parts.slice(0, parts.length - 3).join('::'),
+                    role: parts[parts.length - 3] as 'user' | 'assistant',
+                    messageIndex: parseInt(parts[parts.length - 2], 10),
+                    paragraphIndex: parseInt(parts[parts.length - 1], 10),
+                    score: 1,
+                };
+            });
         },
         async save(filePath: string) {
             state.saveCalled++;
@@ -166,7 +173,7 @@ suite('SemanticIndexer.indexedCount', () => {
     test('reflects index.size', async () => {
         const { indexer, index } = await makeReadyIndexer();
         assert.strictEqual(indexer.indexedCount, 0);
-        index.add('s1', new Float32Array(SEMANTIC_DIMS));
+        index.add('s1', 'user', 0, 0, new Float32Array(SEMANTIC_DIMS));
         assert.strictEqual(indexer.indexedCount, 1);
         indexer.dispose();
     });
@@ -208,12 +215,11 @@ suite('SemanticIndexer.initialize', () => {
         let dialogShown = false;
         const engine = makeEngineStub();
         const index = makeIndexStub();
-        const api: SemanticIndexerVsCodeApi & { statusBarsCreated: unknown[] } = {
-            statusBarsCreated: [],
+        const api: SemanticIndexerVsCodeApi = {
             isFirstUse: () => true,
             async showConsentDialog() { dialogShown = true; return true; },
-            createStatusBarItem: makeVsCodeApiStub().createStatusBarItem,
-            showModelReady(_isFirstUse: boolean): void { /* no-op */ },
+            async loadModelWithProgress(task) { await task(() => {}); },
+            async runIndexingProgress(task) { await task(() => {}); },
             showIndexingComplete(_count: number): void { /* no-op */ },
         };
         const indexer = new SemanticIndexer('/storage', () => engine, () => index, api);
@@ -226,12 +232,11 @@ suite('SemanticIndexer.initialize', () => {
         let dialogShown = false;
         const engine = makeEngineStub();
         const index = makeIndexStub();
-        const api: SemanticIndexerVsCodeApi & { statusBarsCreated: unknown[] } = {
-            statusBarsCreated: [],
+        const api: SemanticIndexerVsCodeApi = {
             isFirstUse: () => false,
             async showConsentDialog() { dialogShown = true; return true; },
-            createStatusBarItem: makeVsCodeApiStub().createStatusBarItem,
-            showModelReady(_isFirstUse: boolean): void { /* no-op */ },
+            async loadModelWithProgress(task) { await task(() => {}); },
+            async runIndexingProgress(task) { await task(() => {}); },
             showIndexingComplete(_count: number): void { /* no-op */ },
         };
         const indexer = new SemanticIndexer('/storage', () => engine, () => index, api);
@@ -250,17 +255,13 @@ suite('SemanticIndexer.initialize', () => {
         indexer.dispose();
     });
 
-    test('creates and disposes a status bar item during model loading', async () => {
+    test('calls loadModelWithProgress during model loading', async () => {
         const engine = makeEngineStub();
         const index = makeIndexStub();
         const api = makeVsCodeApiStub({ isFirstUse: false });
         const indexer = new SemanticIndexer('/storage', () => engine, () => index, api);
         await indexer.initialize();
-        // At least one status bar was created for loading progress
-        assert.ok(api.statusBarsCreated.length >= 1);
-        // All status bars created during loading should be disposed
-        const allDisposed = api.statusBarsCreated.every(b => b.disposed);
-        assert.ok(allDisposed, 'loading status bar should be disposed after initialize()');
+        assert.strictEqual(api.loadProgressCallCount, 1, 'loadModelWithProgress should be called once during initialize()');
         indexer.dispose();
     });
 
@@ -281,7 +282,7 @@ suite('SemanticIndexer.initialize', () => {
 suite('SemanticIndexer.scheduleSession', () => {
     test('triggers engine.embed() for a new session', async () => {
         const { indexer, engine } = await makeReadyIndexer();
-        indexer.scheduleSession('s1', 'hello world');
+        indexer.scheduleSession(makeSession('s1', 'hello world'));
         // Wait for async queue to drain
         await new Promise(r => setTimeout(r, 20));
         assert.strictEqual(engine.embedCallCount, 1);
@@ -291,7 +292,7 @@ suite('SemanticIndexer.scheduleSession', () => {
 
     test('adds embedding to the index after embedding', async () => {
         const { indexer, index } = await makeReadyIndexer();
-        indexer.scheduleSession('s1', 'hello world');
+        indexer.scheduleSession(makeSession('s1', 'hello world'));
         await new Promise(r => setTimeout(r, 20));
         assert.ok(index.has('s1'), 'session should be in the index');
         indexer.dispose();
@@ -299,8 +300,8 @@ suite('SemanticIndexer.scheduleSession', () => {
 
     test('skips sessions already in the index', async () => {
         const { indexer, engine, index } = await makeReadyIndexer();
-        index.add('s1', new Float32Array(SEMANTIC_DIMS));
-        indexer.scheduleSession('s1', 'hello world');
+        index.add('s1', 'user', 0, 0, new Float32Array(SEMANTIC_DIMS));
+        indexer.scheduleSession(makeSession('s1', 'hello world'));
         await new Promise(r => setTimeout(r, 20));
         assert.strictEqual(engine.embedCallCount, 0, 'already-indexed session must be skipped');
         indexer.dispose();
@@ -312,16 +313,16 @@ suite('SemanticIndexer.scheduleSession', () => {
         const api = makeVsCodeApiStub({ isFirstUse: false });
         const indexer = new SemanticIndexer('/storage', () => engine, () => index, api);
         // Not initialized
-        indexer.scheduleSession('s1', 'hello world');
+        indexer.scheduleSession(makeSession('s1', 'hello world'));
         await new Promise(r => setTimeout(r, 20));
         assert.strictEqual(engine.embedCallCount, 0);
     });
 
     test('queues multiple sessions and processes them all', async () => {
         const { indexer, engine, index } = await makeReadyIndexer();
-        indexer.scheduleSession('s1', 'text one');
-        indexer.scheduleSession('s2', 'text two');
-        indexer.scheduleSession('s3', 'text three');
+        indexer.scheduleSession(makeSession('s1', 'text one'));
+        indexer.scheduleSession(makeSession('s2', 'text two'));
+        indexer.scheduleSession(makeSession('s3', 'text three'));
         await new Promise(r => setTimeout(r, 50));
         assert.strictEqual(engine.embedCallCount, 3);
         assert.ok(index.has('s1'));
@@ -345,8 +346,8 @@ suite('SemanticIndexer.scheduleSession', () => {
         const indexer = new SemanticIndexer('/storage', () => engine, () => index, api);
         await indexer.initialize();
 
-        indexer.scheduleSession('s1', 'will fail');
-        indexer.scheduleSession('s2', 'will succeed');
+        indexer.scheduleSession(makeSession('s1', 'will fail'));
+        indexer.scheduleSession(makeSession('s2', 'will succeed'));
         await new Promise(r => setTimeout(r, 50));
 
         assert.ok(!index.has('s1'), 's1 should not be in index after failed embed');
@@ -354,30 +355,21 @@ suite('SemanticIndexer.scheduleSession', () => {
         indexer.dispose();
     });
 
-    test('shows indexing status bar while queue is non-empty', async () => {
+    test('calls runIndexingProgress while queue is non-empty', async () => {
         const { indexer, api } = await makeReadyIndexer({ loadDelay: 0 });
-        indexer.scheduleSession('s1', 'session text');
-
-        // Status bar should be visible at some point while queue is processing
-        const hasIndexingBar = api.statusBarsCreated.some(b => b.shown || b.text.includes('semantic indexing'));
-        // Give the queue a moment to create the bar
-        await new Promise(r => setTimeout(r, 5));
-        const hasBar = api.statusBarsCreated.some(b => b.text.includes('semantic indexing'));
-        // The bar must have been created at least once
-        assert.ok(api.statusBarsCreated.length >= 1 || hasBar || hasIndexingBar);
-
+        indexer.scheduleSession(makeSession('s1', 'session text'));
         await new Promise(r => setTimeout(r, 30));
+        assert.ok(api.indexingProgressCallCount >= 1, 'runIndexingProgress should have been called');
         indexer.dispose();
     });
 
-    test('status bar is disposed after queue drains', async () => {
+    test('runIndexingProgress resolves after queue drains', async () => {
         const { indexer, api } = await makeReadyIndexer();
-        indexer.scheduleSession('s1', 'text');
+        indexer.scheduleSession(makeSession('s1', 'text'));
         await new Promise(r => setTimeout(r, 50));
-
-        // All status bars that were created should be disposed after queue drains
-        const allDisposed = api.statusBarsCreated.every(b => b.disposed);
-        assert.ok(allDisposed, 'all status bars should be disposed after queue drains');
+        // Queue has drained — runIndexingProgress task must have resolved
+        assert.strictEqual(indexer.isIndexing, false);
+        assert.ok(api.indexingProgressCallCount >= 1);
         indexer.dispose();
     });
 });
@@ -387,7 +379,7 @@ suite('SemanticIndexer.scheduleSession', () => {
 suite('SemanticIndexer.removeSession', () => {
     test('removes session from the index', async () => {
         const { indexer, index } = await makeReadyIndexer();
-        index.add('s1', new Float32Array(SEMANTIC_DIMS));
+        index.add('s1', 'user', 0, 0, new Float32Array(SEMANTIC_DIMS));
         indexer.removeSession('s1');
         assert.ok(!index.has('s1'));
         indexer.dispose();
@@ -417,7 +409,7 @@ suite('SemanticIndexer.search', () => {
 
     test('embeds query and delegates to index.search()', async () => {
         const { indexer, engine, index } = await makeReadyIndexer();
-        index.add('s1', new Float32Array(SEMANTIC_DIMS).fill(0.5));
+        index.add('s1', 'user', 0, 0, new Float32Array(SEMANTIC_DIMS).fill(0.5));
 
         const results = await indexer.search('find authentication', 10);
         assert.strictEqual(engine.embedCallCount, 1);
@@ -438,7 +430,7 @@ suite('SemanticIndexer.search', () => {
         // makeIndexStub.search slices to topK
         const { indexer, index } = await makeReadyIndexer();
         for (let i = 0; i < 5; i++) {
-            index.add(`s${i}`, new Float32Array(SEMANTIC_DIMS));
+            index.add(`s${i}`, 'user', 0, i, new Float32Array(SEMANTIC_DIMS));
         }
         const results = await indexer.search('query', 3);
         assert.ok(results.length <= 3);
@@ -456,7 +448,7 @@ suite('SemanticIndexer.dispose', () => {
 
     test('triggers a final save', async () => {
         const { indexer, index } = await makeReadyIndexer();
-        index.add('s1', new Float32Array(SEMANTIC_DIMS));
+        index.add('s1', 'user', 0, 0, new Float32Array(SEMANTIC_DIMS));
         indexer.dispose();
         // Fire-and-forget save is async; give it a tick to run
         await new Promise(r => setTimeout(r, 10));
@@ -472,7 +464,7 @@ suite('SemanticIndexer.dispose', () => {
 
         // Schedule many sessions, then immediately dispose
         for (let i = 0; i < 20; i++) {
-            indexer.scheduleSession(`s${i}`, `text ${i}`);
+            indexer.scheduleSession(makeSession(`s${i}`, `text ${i}`));
         }
         indexer.dispose();
         await new Promise(r => setTimeout(r, 50));
@@ -485,8 +477,10 @@ suite('SemanticIndexer.dispose', () => {
     test('scheduleSession after dispose is a no-op', async () => {
         const { indexer, engine } = await makeReadyIndexer();
         indexer.dispose();
-        indexer.scheduleSession('s1', 'text');
+        indexer.scheduleSession(makeSession('s1', 'text'));
         await new Promise(r => setTimeout(r, 20));
         assert.strictEqual(engine.embedCallCount, 0);
     });
 });
+
+

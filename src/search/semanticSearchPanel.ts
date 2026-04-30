@@ -3,7 +3,7 @@
 import * as vscode from 'vscode';
 import { SessionIndex } from '../index/sessionIndex';
 import { SessionSummary, SessionSource } from '../types/index';
-import { ISemanticIndexer, SEMANTIC_MIN_SCORE } from './semanticContracts';
+import { ISemanticIndexer, SEMANTIC_MIN_SCORE, SemanticScope } from './semanticContracts';
 import { SemanticSearchResult } from './types';
 import { sourceCodiconId } from '../ui/sourceUi';
 
@@ -64,9 +64,8 @@ export function buildItems(
         const srcIcon = `$(${sourceCodiconId(summary.source)})`;
         const label = `${srcIcon}  ${summary.title}`;
 
-        const workspace = summary.workspacePath ?? summary.workspaceId;
         const score = Math.round(result.score * 100);
-        const description = `${workspace} · ${summary.updatedAt.slice(0, 10)} · Score: ${score}%`;
+        const description = `Score: ${score}% · ${summary.updatedAt.slice(0, 10)}`;
 
         items.push({ label, description, summary, score, alwaysShow: true });
     }
@@ -94,6 +93,7 @@ export class SemanticSearchPanel {
 
         // Filter state
         let sourceFilter: SourceFilterState = 'all';
+        let scope: SemanticScope = 'both';
 
         type MutableButton = { iconPath: vscode.ThemeIcon; tooltip: string };
 
@@ -102,14 +102,96 @@ export class SemanticSearchPanel {
             tooltip: sourceButtonTooltip(sourceFilter),
         } as MutableButton;
 
+        function scopeButtonIcon(s: SemanticScope): vscode.ThemeIcon {
+            if (s === 'user')      { return new vscode.ThemeIcon('comment'); }
+            if (s === 'assistant') { return new vscode.ThemeIcon('hubot'); }
+            return new vscode.ThemeIcon('list-unordered');
+        }
+
+        function scopeButtonTooltip(s: SemanticScope): string {
+            if (s === 'both')      { return 'Scope: Both \u2014 click for My questions only'; }
+            if (s === 'user')      { return 'Scope: My questions \u2014 click for AI responses only'; }
+            return 'Scope: AI responses \u2014 click for Both';
+        }
+
+        function nextScope(s: SemanticScope): SemanticScope {
+            if (s === 'both')      { return 'user'; }
+            if (s === 'user')      { return 'assistant'; }
+            return 'both';
+        }
+
+        const scopeButton = {
+            iconPath: scopeButtonIcon(scope),
+            tooltip: scopeButtonTooltip(scope),
+        } as MutableButton;
+
         const quickPick = vscode.window.createQuickPick<SemanticResultItem>();
-        quickPick.placeholder = 'Semantic search — describe a topic or question…';
+        quickPick.placeholder = 'Find past sessions by topic — e.g. "authentication", "unit testing", "release process"';
         quickPick.matchOnDescription = false;
         quickPick.matchOnDetail = false;
-        quickPick.buttons = [sourceButton as vscode.QuickInputButton];
+        quickPick.buttons = [sourceButton as vscode.QuickInputButton, scopeButton as vscode.QuickInputButton];
 
         let debounceTimer: ReturnType<typeof setTimeout> | undefined;
         let lastRawResults: SemanticSearchResult[] = [];
+
+        // Runs a full semantic search and updates items
+        async function runSearch(value: string): Promise<void> {
+            if (!value) {
+                lastRawResults = [];
+                quickPick.items = [];
+                return;
+            }
+
+            if (!indexer.isReady) {
+                quickPick.items = [{
+                    label: `$(loading~spin) Semantic index still loading model\u2026 please wait`,
+                    summary: undefined as unknown as SessionSummary,
+                    score: 0,
+                    alwaysShow: true,
+                }];
+                return;
+            }
+
+            const minScore = vscode.workspace.getConfiguration('chatwizard')
+                .get<number>('semanticMinScore') ?? SEMANTIC_MIN_SCORE;
+
+            quickPick.busy = true;
+            try {
+                lastRawResults = await indexer.search(value, 10, minScore, scope);
+            } catch (err) {
+                quickPick.busy = false;
+                quickPick.items = [{
+                    label: `$(error) Search failed: ${err instanceof Error ? err.message : String(err)}`,
+                    summary: undefined as unknown as SessionSummary,
+                    score: 0,
+                    alwaysShow: true,
+                }];
+                return;
+            }
+            quickPick.busy = false;
+
+            if (indexer.isIndexing && lastRawResults.length === 0) {
+                quickPick.items = [{
+                    label: `$(loading~spin) Still indexing sessions (${indexer.indexedCount}/${totalSessions}) \u2014 try again shortly`,
+                    summary: undefined as unknown as SessionSummary,
+                    score: 0,
+                    alwaysShow: true,
+                }];
+                return;
+            }
+
+            applyFilter();
+
+            if (quickPick.items.length === 0) {
+                quickPick.items = [{
+                    label: `$(info) No semantic matches found`,
+                    description: indexer.indexedCount === 0 ? 'Index is empty \u2014 indexing may not have started yet' : undefined,
+                    summary: undefined as unknown as SessionSummary,
+                    score: 0,
+                    alwaysShow: true,
+                }];
+            }
+        }
 
         // Apply the current source filter to the last raw result set client-side
         function applyFilter(): void {
@@ -126,62 +208,7 @@ export class SemanticSearchPanel {
 
             debounceTimer = setTimeout(async () => {
                 debounceTimer = undefined;
-
-                if (!value) {
-                    lastRawResults = [];
-                    quickPick.items = [];
-                    return;
-                }
-
-                if (!indexer.isReady) {
-                    quickPick.items = [{
-                        label: `$(loading~spin) Semantic index still loading model… please wait`,
-                        summary: undefined as unknown as SessionSummary,
-                        score: 0,
-                        alwaysShow: true,
-                    }];
-                    return;
-                }
-
-                const minScore = vscode.workspace.getConfiguration('chatwizard')
-                    .get<number>('semanticMinScore') ?? SEMANTIC_MIN_SCORE;
-
-                quickPick.busy = true;
-                try {
-                    lastRawResults = await indexer.search(value, 10, minScore);
-                } catch (err) {
-                    quickPick.busy = false;
-                    quickPick.items = [{
-                        label: `$(error) Search failed: ${err instanceof Error ? err.message : String(err)}`,
-                        summary: undefined as unknown as SessionSummary,
-                        score: 0,
-                        alwaysShow: true,
-                    }];
-                    return;
-                }
-                quickPick.busy = false;
-
-                if (indexer.isIndexing && lastRawResults.length === 0) {
-                    quickPick.items = [{
-                        label: `$(loading~spin) Still indexing sessions (${indexer.indexedCount}/${totalSessions}) — try again shortly`,
-                        summary: undefined as unknown as SessionSummary,
-                        score: 0,
-                        alwaysShow: true,
-                    }];
-                    return;
-                }
-
-                applyFilter();
-
-                if (quickPick.items.length === 0) {
-                    quickPick.items = [{
-                        label: `$(info) No semantic matches found`,
-                        description: indexer.indexedCount === 0 ? 'Index is empty — indexing may not have started yet' : undefined,
-                        summary: undefined as unknown as SessionSummary,
-                        score: 0,
-                        alwaysShow: true,
-                    }];
-                }
+                await runSearch(value);
             }, 400);
         });
 
@@ -190,8 +217,18 @@ export class SemanticSearchPanel {
                 sourceFilter = nextSourceState(sourceFilter);
                 sourceButton.iconPath = sourceButtonIcon(sourceFilter);
                 sourceButton.tooltip = sourceButtonTooltip(sourceFilter);
-                quickPick.buttons = [sourceButton as vscode.QuickInputButton];
+                quickPick.buttons = [sourceButton as vscode.QuickInputButton, scopeButton as vscode.QuickInputButton];
                 applyFilter();
+            } else if (button === scopeButton) {
+                scope = nextScope(scope);
+                scopeButton.iconPath = scopeButtonIcon(scope);
+                scopeButton.tooltip = scopeButtonTooltip(scope);
+                quickPick.buttons = [sourceButton as vscode.QuickInputButton, scopeButton as vscode.QuickInputButton];
+                // Re-run the query with the new scope
+                const currentValue = quickPick.value;
+                if (currentValue) {
+                    void runSearch(currentValue);
+                }
             }
         });
 

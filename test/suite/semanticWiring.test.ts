@@ -1,18 +1,14 @@
 // test/suite/semanticWiring.test.ts
 //
-// Unit tests for the semantic search wiring helpers exported from extension.ts.
-//
-// The wiring inside activate() depends heavily on VS Code APIs (commands, config,
-// status bar, etc.) and is verified through the Extension Development Host manual
-// testing steps documented in docs/work-plan-semantic-search.md Phase 5.
-//
-// What CAN be unit-tested here is the pure `buildSemanticText` helper, which is
-// the only exported, dependency-free function produced by the wiring phase.
+// Tests for the message-splitting behaviour in SemanticIndexer.scheduleSession().
+// The wiring inside activate() depends heavily on VS Code APIs and is verified
+// through manual Extension Development Host testing (see docs/).
 
 import * as assert from 'assert';
-import { buildSemanticText } from '../../src/extension';
+import { SemanticIndexer, SemanticIndexerVsCodeApi } from '../../src/search/semanticIndexer';
+import { IEmbeddingEngine, ISemanticIndex, SEMANTIC_DIMS } from '../../src/search/semanticContracts';
+import { SemanticMessageResult } from '../../src/search/types';
 import { Session, Message } from '../../src/types/index';
-import { SEMANTIC_MAX_CHARS } from '../../src/search/semanticContracts';
 
 // ── Fixture builders ───────────────────────────────────────────────────────
 
@@ -35,118 +31,158 @@ function makeSession(overrides: Partial<Session> & { messages?: Message[] } = {}
     };
 }
 
-// ── buildSemanticText ──────────────────────────────────────────────────────
+// ── Stubs ──────────────────────────────────────────────────────────────────
 
-suite('buildSemanticText', () => {
-    test('includes the session title', () => {
-        const session = makeSession({ title: 'Authentication patterns' });
-        const text = buildSemanticText(session);
-        assert.ok(text.includes('Authentication patterns'), `text: ${text.slice(0, 200)}`);
+function makeVsCodeApiStub(): SemanticIndexerVsCodeApi {
+    return {
+        async showConsentDialog() { return true; },
+        isFirstUse() { return false; },
+        async loadModelWithProgress(task) { await task(() => {}); },
+        async runIndexingProgress(task) { await task(() => {}); },
+        showIndexingComplete() {},
+    };
+}
+
+type EmbedCall = { text: string };
+
+function makeEngineStub(): IEmbeddingEngine & { calls: EmbedCall[] } {
+    const calls: EmbedCall[] = [];
+    let ready = false;
+    return {
+        get isReady() { return ready; },
+        async load() { ready = true; },
+        async embed(text: string) {
+            calls.push({ text });
+            return new Float32Array(SEMANTIC_DIMS).fill(0.1);
+        },
+        calls,
+    };
+}
+
+type IndexAddCall = { sessionId: string; role: 'user' | 'assistant'; messageIndex: number; paragraphIndex: number };
+
+function makeIndexStub(): ISemanticIndex & { addCalls: IndexAddCall[] } {
+    const addCalls: IndexAddCall[] = [];
+    const entries = new Map<string, Float32Array>();
+    return {
+        addCalls,
+        get size() { return entries.size; },
+        add(sessionId: string, role: 'user' | 'assistant', messageIndex: number, paragraphIndex: number, embedding: Float32Array) {
+            addCalls.push({ sessionId, role, messageIndex, paragraphIndex });
+            entries.set(`${sessionId}::${role}::${messageIndex}::${paragraphIndex}`, embedding);
+        },
+        remove(id: string) {
+            for (const k of entries.keys()) {
+                if (k.startsWith(`${id}::`)) { entries.delete(k); }
+            }
+        },
+        has(id: string) { return [...entries.keys()].some(k => k.startsWith(`${id}::`)); },
+        search(_q: Float32Array, topK: number): SemanticMessageResult[] {
+            return [...entries.entries()].slice(0, topK).map(([k]) => {
+                const parts = k.split('::');
+                return {
+                    sessionId: parts.slice(0, parts.length - 3).join('::'),
+                    role: parts[parts.length - 3] as 'user' | 'assistant',
+                    messageIndex: parseInt(parts[parts.length - 2], 10),
+                    paragraphIndex: parseInt(parts[parts.length - 1], 10),
+                    score: 1,
+                };
+            });
+        },
+        async save() {},
+        async load() {},
+    };
+}
+
+async function makeReadyIndexer() {
+    const engine = makeEngineStub();
+    const index = makeIndexStub();
+    const api = makeVsCodeApiStub();
+    const indexer = new SemanticIndexer('/storage', () => engine, () => index, api);
+    await indexer.initialize();
+    return { indexer, engine, index };
+}
+
+// ── scheduleSession() message splitting ────────────────────────────────────
+
+suite('scheduleSession — message splitting', () => {
+    test('user message produces exactly one embed call', async () => {
+        const { indexer, engine } = await makeReadyIndexer();
+        const session = makeSession({ messages: [makeMessage('user', 'How do I implement JWT auth?')] });
+        indexer.scheduleSession(session);
+        await new Promise(r => setTimeout(r, 30));
+        assert.strictEqual(engine.calls.length, 1);
+        assert.strictEqual(engine.calls[0].text, 'How do I implement JWT auth?');
+        indexer.dispose();
     });
 
-    test('includes user message content', () => {
+    test('assistant response with 3 paragraphs produces 3 embed calls', async () => {
+        const { indexer, engine, index } = await makeReadyIndexer();
         const session = makeSession({
-            messages: [makeMessage('user', 'How do I implement JWT auth?')],
+            messages: [makeMessage('assistant', 'Para one.\n\nPara two.\n\nPara three.')],
         });
-        const text = buildSemanticText(session);
-        assert.ok(text.includes('How do I implement JWT auth?'));
+        indexer.scheduleSession(session);
+        await new Promise(r => setTimeout(r, 30));
+        assert.strictEqual(engine.calls.length, 3);
+        assert.strictEqual(index.addCalls.filter(c => c.role === 'assistant').length, 3);
+        assert.ok(index.addCalls.some(c => c.paragraphIndex === 0));
+        assert.ok(index.addCalls.some(c => c.paragraphIndex === 1));
+        assert.ok(index.addCalls.some(c => c.paragraphIndex === 2));
+        indexer.dispose();
     });
 
-    test('includes assistant message content', () => {
+    test('mixed session: user+assistant produces correct entry counts', async () => {
+        const { indexer, engine, index } = await makeReadyIndexer();
         const session = makeSession({
             messages: [
-                makeMessage('user', 'What is React?'),
-                makeMessage('assistant', 'React is a UI library built by Meta.'),
+                makeMessage('user', 'Question'),
+                makeMessage('assistant', 'Answer part 1.\n\nAnswer part 2.'),
             ],
         });
-        const text = buildSemanticText(session);
-        assert.ok(text.includes('React is a UI library built by Meta.'));
+        indexer.scheduleSession(session);
+        await new Promise(r => setTimeout(r, 30));
+        // 1 user + 2 assistant paragraphs = 3 total
+        assert.strictEqual(engine.calls.length, 3);
+        assert.strictEqual(index.addCalls.filter(c => c.role === 'user').length, 1);
+        assert.strictEqual(index.addCalls.filter(c => c.role === 'assistant').length, 2);
+        indexer.dispose();
     });
 
-    test('title and messages are separated by newlines', () => {
-        const session = makeSession({
-            title: 'My title',
-            messages: [makeMessage('user', 'First message')],
-        });
-        const text = buildSemanticText(session);
-        assert.ok(text.includes('My title\nFirst message'), `text: ${JSON.stringify(text)}`);
+    test('sessions already in index are skipped', async () => {
+        const { indexer, engine, index } = await makeReadyIndexer();
+        // Pre-populate index
+        index.add('sess-1', 'user', 0, 0, new Float32Array(SEMANTIC_DIMS));
+        const session = makeSession({ id: 'sess-1', messages: [makeMessage('user', 'hello')] });
+        indexer.scheduleSession(session);
+        await new Promise(r => setTimeout(r, 20));
+        assert.strictEqual(engine.calls.length, 0, 'should skip already-indexed session');
+        indexer.dispose();
     });
 
-    test('multiple messages are joined with newlines', () => {
+    test('empty message content is skipped', async () => {
+        const { indexer, engine } = await makeReadyIndexer();
+        const session = makeSession({ messages: [makeMessage('user', '   ')] });
+        indexer.scheduleSession(session);
+        await new Promise(r => setTimeout(r, 20));
+        assert.strictEqual(engine.calls.length, 0, 'whitespace-only message should be skipped');
+        indexer.dispose();
+    });
+
+    test('messageIndex matches position in messages array', async () => {
+        const { indexer, index } = await makeReadyIndexer();
         const session = makeSession({
-            title: 'T',
             messages: [
-                makeMessage('user', 'Line A'),
-                makeMessage('assistant', 'Line B'),
-                makeMessage('user', 'Line C'),
+                makeMessage('user', 'First'),
+                makeMessage('assistant', 'Second'),
+                makeMessage('user', 'Third'),
             ],
         });
-        const text = buildSemanticText(session);
-        assert.ok(text.includes('Line A\nLine B\nLine C'));
-    });
-
-    test('result for empty messages is just the title', () => {
-        const session = makeSession({ title: 'Just the title', messages: [] });
-        const text = buildSemanticText(session);
-        assert.strictEqual(text, 'Just the title');
-    });
-
-    test('truncates to SEMANTIC_MAX_CHARS when content is long', () => {
-        const longContent = 'x'.repeat(SEMANTIC_MAX_CHARS * 2);
-        const session = makeSession({ messages: [makeMessage('user', longContent)] });
-        const text = buildSemanticText(session);
-        assert.strictEqual(text.length, SEMANTIC_MAX_CHARS);
-    });
-
-    test('does not truncate when content is exactly SEMANTIC_MAX_CHARS', () => {
-        // title is "Test Session" (12 chars) + "\n" + remaining fill
-        const fillLen = SEMANTIC_MAX_CHARS - 'Test Session'.length - 1;
-        const session = makeSession({ messages: [makeMessage('user', 'x'.repeat(fillLen))] });
-        const text = buildSemanticText(session);
-        assert.strictEqual(text.length, SEMANTIC_MAX_CHARS);
-    });
-
-    test('does not truncate short content', () => {
-        const session = makeSession({
-            title: 'Short',
-            messages: [makeMessage('user', 'Brief')],
-        });
-        const text = buildSemanticText(session);
-        assert.strictEqual(text, 'Short\nBrief');
-    });
-
-    test('returned string is a string type', () => {
-        const text = buildSemanticText(makeSession());
-        assert.strictEqual(typeof text, 'string');
-    });
-
-    test('handles session with no title gracefully', () => {
-        const session = makeSession({ title: '', messages: [makeMessage('user', 'content')] });
-        const text = buildSemanticText(session);
-        // '\n' + 'content' when title is empty
-        assert.ok(text.includes('content'));
-    });
-
-    test('truncated output is always a prefix of the full text', () => {
-        const longContent = 'a'.repeat(SEMANTIC_MAX_CHARS * 3);
-        const session = makeSession({
-            title: 'Title',
-            messages: [makeMessage('user', longContent)],
-        });
-        const full = ['Title', longContent].join('\n');
-        const text = buildSemanticText(session);
-        assert.strictEqual(text, full.slice(0, SEMANTIC_MAX_CHARS));
-    });
-
-    test('session with many short messages all appear before truncation', () => {
-        const messages = Array.from({ length: 5 }, (_, i) =>
-            makeMessage(i % 2 === 0 ? 'user' : 'assistant', `Message ${i}`)
-        );
-        const session = makeSession({ title: 'Multi', messages });
-        const text = buildSemanticText(session);
-        // All 5 messages together with title fit well under 2048 chars
-        for (let i = 0; i < 5; i++) {
-            assert.ok(text.includes(`Message ${i}`), `Missing "Message ${i}" in text`);
-        }
+        indexer.scheduleSession(session);
+        await new Promise(r => setTimeout(r, 30));
+        const userCalls = index.addCalls.filter(c => c.role === 'user');
+        assert.strictEqual(userCalls[0].messageIndex, 0);
+        assert.strictEqual(userCalls[1].messageIndex, 2);
+        indexer.dispose();
     });
 });
+

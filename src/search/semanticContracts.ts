@@ -1,18 +1,23 @@
 // src/search/semanticContracts.ts
 
-import { SemanticSearchResult } from './types';
+import { SemanticSearchResult, SemanticMessageResult } from './types';
+import { Session } from '../types/index';
 
 /** Embedding dimension for Xenova/all-MiniLM-L6-v2 */
 export const SEMANTIC_DIMS = 384;
 
-/** Maximum characters of session text passed to the embedding model */
-export const SEMANTIC_MAX_CHARS = 2048;
-
 /**
  * Minimum cosine similarity score (0–1) for a result to be included.
- * For all-MiniLM-L6-v2: <0.25 is effectively noise/unrelated.
+ * For all-MiniLM-L6-v2 with fine-grained (message/paragraph) embeddings,
+ * <0.35 is effectively noise/unrelated.
  */
-export const SEMANTIC_MIN_SCORE = 0.25;
+export const SEMANTIC_MIN_SCORE = 0.35;
+
+/**
+ * Which turn types to include when searching the vector index.
+ * Scope is a search-time filter only — indexing always covers both turn types.
+ */
+export type SemanticScope = 'both' | 'user' | 'assistant';
 
 /** Wraps @xenova/transformers — loads the ONNX model and produces normalized embeddings */
 export interface IEmbeddingEngine {
@@ -24,10 +29,10 @@ export interface IEmbeddingEngine {
 /** In-memory vector store with binary file persistence */
 export interface ISemanticIndex {
     readonly size: number;
-    add(sessionId: string, embedding: Float32Array): void;
+    add(sessionId: string, role: 'user' | 'assistant', messageIndex: number, paragraphIndex: number, embedding: Float32Array): void;
     remove(sessionId: string): void;
     has(sessionId: string): boolean;
-    search(queryEmbedding: Float32Array, topK: number, minScore?: number): SemanticSearchResult[];
+    search(queryEmbedding: Float32Array, topK: number, minScore?: number, scope?: SemanticScope): SemanticMessageResult[];
     save(filePath: string): Promise<void>;
     load(filePath: string): Promise<void>;
 }
@@ -38,8 +43,8 @@ export interface ISemanticIndexer {
     readonly isIndexing: boolean;
     readonly indexedCount: number;
     initialize(): Promise<void>;
-    scheduleSession(sessionId: string, text: string): void;
+    scheduleSession(session: Session): void;
     removeSession(sessionId: string): void;
-    search(query: string, topK: number, minScore?: number): Promise<SemanticSearchResult[]>;
+    search(query: string, topK: number, minScore?: number, scope?: SemanticScope): Promise<SemanticSearchResult[]>;
     dispose(): void;
 }

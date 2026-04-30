@@ -52,6 +52,21 @@ export interface SemanticSearchResult {
     score: number; // cosine similarity, 0–1
 }
 
+/**
+ * A fine-grained hit from the vector index — identifies the exact message and
+ * paragraph that matched the query. Aggregated to SemanticSearchResult (session-level)
+ * by SemanticIndexer.search() before being returned to callers.
+ */
+export interface SemanticMessageResult {
+    sessionId: string;
+    role: 'user' | 'assistant';
+    /** 0-based index of the message within session.messages */
+    messageIndex: number;
+    /** 0 for user messages; paragraph offset within an assistant response */
+    paragraphIndex: number;
+    score: number; // cosine similarity, 0–1
+}
+
 /** Return value of FullTextSearchEngine.search() */
 export interface SearchResponse {
     /** Sorted result set, capped at MAX_RESULTS (500) */

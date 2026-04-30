@@ -1,6 +1,6 @@
 // src/search/embeddingEngine.ts
 
-import { IEmbeddingEngine, SEMANTIC_DIMS, SEMANTIC_MAX_CHARS } from './semanticContracts';
+import { IEmbeddingEngine, SEMANTIC_DIMS } from './semanticContracts';
 
 /** Minimal callable shape returned by @xenova/transformers pipeline() */
 type PipelineCallable = (text: string, options: Record<string, unknown>) => Promise<{ data: ArrayLike<number> }>;
@@ -99,8 +99,7 @@ export class EmbeddingEngine implements IEmbeddingEngine {
         if (!this._isReady || !this.pipelineFn) {
             throw new Error('EmbeddingEngine is not ready. Call load() first.');
         }
-        const clipped = text.slice(0, SEMANTIC_MAX_CHARS);
-        const output = await this.pipelineFn(clipped, { pooling: 'mean', normalize: true });
+        const output = await this.pipelineFn(text, { pooling: 'mean', normalize: true });
         const data = output.data;
         const result = data instanceof Float32Array
             ? data

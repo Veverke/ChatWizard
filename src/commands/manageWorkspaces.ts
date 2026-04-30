@@ -198,9 +198,18 @@ export function registerManageWorkspacesCommand(
                     (vscode.workspace.workspaceFolders ?? [])
                         .map(f => path.normalize(f.uri.fsPath).toLowerCase())
                 );
-                const currentWsItems = workspaceItems.filter(item =>
-                    openPaths.has(path.normalize(item.workspacePath).toLowerCase())
-                );
+                // Match items that ARE the open workspace folder (exact) OR that live
+                // inside it (child path).  The ancestor-removal step above can remove
+                // the exact path from workspaceItems when a deeper Cursor/Copilot
+                // workspace is also discovered; the child-path fallback keeps
+                // currentWsItems non-empty in that case so deselect-all correctly
+                // restores to items within the current workspace instead of all items.
+                const currentWsItems = workspaceItems.filter(item => {
+                    const itemPath = path.normalize(item.workspacePath).toLowerCase();
+                    return [...openPaths].some(
+                        op => itemPath === op || itemPath.startsWith(op + path.sep)
+                    );
+                });
 
                 qp.onDidChangeSelection(selected => {
                     if (selected.length === 0) {

@@ -36,17 +36,11 @@ import { ModelUsageViewProvider } from './analytics/modelUsageViewProvider';
 import { TimelineViewProvider } from './timeline/timelineViewProvider';
 import { TelemetryRecorder } from './telemetry/telemetryRecorder';
 import { registerManageWorkspacesCommand } from './commands/manageWorkspaces';
+import { registerPaletteCommands } from './commands/paletteCommands';
 import { SemanticIndexer } from './search/semanticIndexer';
 import { EmbeddingEngine } from './search/embeddingEngine';
 import { SemanticIndex } from './search/semanticIndex';
 import { SemanticSearchPanel } from './search/semanticSearchPanel';
-import { SEMANTIC_MAX_CHARS } from './search/semanticContracts';
-
-/** Build the text blob used for embedding a session: title + all message content, truncated. */
-export function buildSemanticText(session: Session): string {
-    const parts = [session.title, ...session.messages.map(m => m.content)];
-    return parts.join('\n').slice(0, SEMANTIC_MAX_CHARS);
-}
 
 let watcher: ChatWizardWatcher | undefined;
 
@@ -132,7 +126,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             for (const summary of index.getAllSummaries()) {
                 const session = index.get(summary.id);
                 if (session) {
-                    indexer.scheduleSession(session.id, buildSemanticText(session));
+                    indexer.scheduleSession(session);
                 }
             }
         });
@@ -150,10 +144,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         if (!semanticIndexer) { return; }
         if (event.type === 'batch') {
             for (const session of event.sessions) {
-                semanticIndexer.scheduleSession(session.id, buildSemanticText(session));
+                semanticIndexer.scheduleSession(session);
             }
         } else if (event.type === 'upsert') {
-            semanticIndexer.scheduleSession(event.session.id, buildSemanticText(event.session));
+            semanticIndexer.scheduleSession(event.session);
         } else if (event.type === 'remove') {
             semanticIndexer.removeSession(event.sessionId);
         } else if (event.type === 'clear') {
@@ -880,7 +874,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         vscode.commands.registerCommand('chatwizard.semanticSearch', () => {
             if (!semanticIndexer) {
                 void vscode.window.showInformationMessage(
-                    'Chat Wizard: Semantic search is disabled. Enable it in settings to use natural-language search.',
+                    'Chat Wizard: Topic similarity search is disabled. Enable it in settings to find past sessions by topic.',
                     'Open Settings',
                 ).then(action => {
                     if (action === 'Open Settings') {
@@ -1024,6 +1018,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     // Register the manage-workspaces command (scope changes take effect via watcher.restart()).
     registerManageWorkspacesCommand(context, scopeManager, () => watcher, channel, index);
+    registerPaletteCommands(context);
 
     // Yield for webview IPC round-trips, then start the file watcher in the background.
     // activate() returns immediately so VS Code is never blocked — the tree view is already

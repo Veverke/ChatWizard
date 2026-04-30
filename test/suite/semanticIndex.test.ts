@@ -39,29 +39,29 @@ suite('SemanticIndex — CRUD', () => {
 
     test('add() increments size', () => {
         const idx = new SemanticIndex();
-        idx.add('s1', randomUnitVector());
+        idx.add('s1', 'user', 0, 0, randomUnitVector());
         assert.strictEqual(idx.size, 1);
-        idx.add('s2', randomUnitVector());
+        idx.add('s2', 'user', 0, 0, randomUnitVector());
         assert.strictEqual(idx.size, 2);
     });
 
     test('add() with the same id overwrites without increasing size', () => {
         const idx = new SemanticIndex();
-        idx.add('s1', randomUnitVector());
-        idx.add('s1', randomUnitVector());
+        idx.add('s1', 'user', 0, 0, randomUnitVector());
+        idx.add('s1', 'user', 0, 0, randomUnitVector());
         assert.strictEqual(idx.size, 1);
     });
 
     test('has() returns true after add, false before add', () => {
         const idx = new SemanticIndex();
         assert.strictEqual(idx.has('s1'), false);
-        idx.add('s1', randomUnitVector());
+        idx.add('s1', 'user', 0, 0, randomUnitVector());
         assert.strictEqual(idx.has('s1'), true);
     });
 
     test('remove() decrements size and has() returns false afterwards', () => {
         const idx = new SemanticIndex();
-        idx.add('s1', randomUnitVector());
+        idx.add('s1', 'user', 0, 0, randomUnitVector());
         idx.remove('s1');
         assert.strictEqual(idx.size, 0);
         assert.strictEqual(idx.has('s1'), false);
@@ -86,7 +86,7 @@ suite('SemanticIndex — search()', () => {
     test('returns at most topK results', () => {
         const idx = new SemanticIndex();
         for (let i = 0; i < 10; i++) {
-            idx.add(`s${i}`, randomUnitVector());
+            idx.add(`s${i}`, 'user', 0, i, randomUnitVector());
         }
         const results = idx.search(randomUnitVector(), 3);
         assert.strictEqual(results.length, 3);
@@ -94,8 +94,8 @@ suite('SemanticIndex — search()', () => {
 
     test('returns all results when size < topK', () => {
         const idx = new SemanticIndex();
-        idx.add('s1', randomUnitVector());
-        idx.add('s2', randomUnitVector());
+        idx.add('s1', 'user', 0, 0, randomUnitVector());
+        idx.add('s2', 'user', 0, 0, randomUnitVector());
         const results = idx.search(randomUnitVector(), 20);
         assert.strictEqual(results.length, 2);
     });
@@ -103,7 +103,7 @@ suite('SemanticIndex — search()', () => {
     test('results are sorted descending by score', () => {
         const idx = new SemanticIndex();
         for (let i = 0; i < 5; i++) {
-            idx.add(`s${i}`, randomUnitVector());
+            idx.add(`s${i}`, 'user', 0, i, randomUnitVector());
         }
         const results = idx.search(randomUnitVector(), 5);
         for (let i = 1; i < results.length; i++) {
@@ -115,9 +115,9 @@ suite('SemanticIndex — search()', () => {
     test('identical query vector scores ~1.0 as rank-1', () => {
         const idx = new SemanticIndex();
         const target = randomUnitVector();
-        idx.add('target', target);
-        idx.add('other1', randomUnitVector());
-        idx.add('other2', randomUnitVector());
+        idx.add('target', 'user', 0, 0, target);
+        idx.add('other1', 'user', 0, 0, randomUnitVector());
+        idx.add('other2', 'user', 0, 0, randomUnitVector());
 
         const results = idx.search(target, 3);
         assert.strictEqual(results[0].sessionId, 'target');
@@ -125,12 +125,54 @@ suite('SemanticIndex — search()', () => {
         assert.ok(results[0].score > 0.9999, `Expected score ~1 but got ${results[0].score}`);
     });
 
-    test('result items have sessionId and score fields', () => {
+    test('result items have sessionId, role, messageIndex, paragraphIndex and score fields', () => {
         const idx = new SemanticIndex();
-        idx.add('abc', randomUnitVector());
+        idx.add('abc', 'user', 2, 0, randomUnitVector());
         const results = idx.search(randomUnitVector(), 1);
         assert.ok('sessionId' in results[0]);
         assert.ok('score' in results[0]);
+        assert.ok('role' in results[0]);
+        assert.ok('messageIndex' in results[0]);
+        assert.ok('paragraphIndex' in results[0]);
+        assert.strictEqual(results[0].sessionId, 'abc');
+        assert.strictEqual(results[0].role, 'user');
+        assert.strictEqual(results[0].messageIndex, 2);
+        assert.strictEqual(results[0].paragraphIndex, 0);
+    });
+});
+
+// ── search() scope filter ──────────────────────────────────────────────────
+
+suite('SemanticIndex — search() scope filter', () => {
+    test('scope=user excludes assistant entries', () => {
+        const idx = new SemanticIndex();
+        const v = randomUnitVector();
+        idx.add('s1', 'user', 0, 0, v);
+        idx.add('s1', 'assistant', 1, 0, randomUnitVector());
+        const results = idx.search(v, 10, 0, 'user');
+        assert.ok(results.every(r => r.role === 'user'), 'All results should be user role');
+    });
+
+    test('scope=assistant excludes user entries', () => {
+        const idx = new SemanticIndex();
+        const v = randomUnitVector();
+        idx.add('s1', 'user', 0, 0, randomUnitVector());
+        idx.add('s1', 'assistant', 1, 0, v);
+        const results = idx.search(v, 10, 0, 'assistant');
+        assert.ok(results.every(r => r.role === 'assistant'), 'All results should be assistant role');
+    });
+
+    test('scope=both returns entries from both roles', () => {
+        const idx = new SemanticIndex();
+        idx.add('s1', 'user', 0, 0, randomUnitVector());
+        idx.add('s1', 'assistant', 1, 0, randomUnitVector());
+        const results = idx.search(randomUnitVector(), 10, 0, 'both');
+        assert.strictEqual(results.length, 2);
+    });
+
+    test('scope filter on empty index returns []', () => {
+        const idx = new SemanticIndex();
+        assert.deepStrictEqual(idx.search(randomUnitVector(), 10, 0, 'user'), []);
     });
 });
 
@@ -143,8 +185,8 @@ suite('SemanticIndex — save() / load() round-trip', () => {
             const a = new SemanticIndex();
             const v1 = randomUnitVector();
             const v2 = randomUnitVector();
-            a.add('session-1', v1);
-            a.add('session-2', v2);
+            a.add('session-1', 'user', 0, 0, v1);
+            a.add('session-2', 'user', 1, 0, v2);
             await a.save(file);
 
             const b = new SemanticIndex();
@@ -163,14 +205,14 @@ suite('SemanticIndex — save() / load() round-trip', () => {
         try {
             const a = new SemanticIndex();
             const v = randomUnitVector();
-            a.add('s1', v);
+            a.add('s1', 'user', 0, 0, v);
             await a.save(file);
 
             const b = new SemanticIndex();
             await b.load(file);
 
             // Search with the same vector — round-tripped entry should be rank 1
-            b.add('s2', randomUnitVector());
+            b.add('s2', 'user', 1, 0, randomUnitVector());
             const results = b.search(v, 2);
             assert.strictEqual(results[0].sessionId, 's1');
         } finally {
@@ -190,8 +232,8 @@ suite('SemanticIndex — save() / load() round-trip', () => {
             assert.strictEqual(buf[1], 0x57);
             assert.strictEqual(buf[2], 0x53);
             assert.strictEqual(buf[3], 0x45);
-            // Version 1
-            assert.strictEqual(buf.readUInt32LE(4), 1);
+            // Version 2
+            assert.strictEqual(buf.readUInt32LE(4), 2);
             // Dims 384
             assert.strictEqual(buf.readUInt32LE(8), 384);
             // Count 0
@@ -273,7 +315,7 @@ suite('SemanticIndex — load() resilience', () => {
         try {
             const buf = Buffer.alloc(16, 0);
             Buffer.from([0x43, 0x57, 0x53, 0x45]).copy(buf, 0);
-            buf.writeUInt32LE(1, 4);
+            buf.writeUInt32LE(2, 4); // version 2
             buf.writeUInt32LE(128, 8); // wrong dims
             buf.writeUInt32LE(0, 12);
             fs.writeFileSync(file, buf);
@@ -289,10 +331,10 @@ suite('SemanticIndex — load() resilience', () => {
     test('truncated entry data → starts empty, no throw', async () => {
         const file = tmpFile();
         try {
-            // Valid header declaring 1 entry, but no actual entry data
+            // Valid v2 header declaring 1 entry, but no actual entry data
             const buf = Buffer.alloc(16, 0);
             Buffer.from([0x43, 0x57, 0x53, 0x45]).copy(buf, 0);
-            buf.writeUInt32LE(1, 4);
+            buf.writeUInt32LE(2, 4); // version 2
             buf.writeUInt32LE(SEMANTIC_DIMS, 8);
             buf.writeUInt32LE(1, 12); // claims 1 entry
             fs.writeFileSync(file, buf);
@@ -310,12 +352,12 @@ suite('SemanticIndex — load() resilience', () => {
         try {
             // Save index with one session
             const a = new SemanticIndex();
-            a.add('s1', randomUnitVector());
+            a.add('s1', 'user', 0, 0, randomUnitVector());
             await a.save(file);
 
             // Load into already-populated index
             const b = new SemanticIndex();
-            b.add('pre-existing', randomUnitVector());
+            b.add('pre-existing', 'user', 0, 0, randomUnitVector());
             await b.load(file);
 
             assert.strictEqual(b.size, 1);
@@ -325,4 +367,7 @@ suite('SemanticIndex — load() resilience', () => {
             fs.rmSync(file, { force: true });
         }
     });
+
 });
+
+

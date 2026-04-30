@@ -2,7 +2,7 @@
 
 import * as assert from 'assert';
 import { EmbeddingEngine, PipelineFactory } from '../../src/search/embeddingEngine';
-import { SEMANTIC_DIMS, SEMANTIC_MAX_CHARS } from '../../src/search/semanticContracts';
+import { SEMANTIC_DIMS } from '../../src/search/semanticContracts';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -121,17 +121,16 @@ suite('EmbeddingEngine.embed', () => {
         assert.strictEqual(result.length, SEMANTIC_DIMS);
     });
 
-    test('clips text longer than SEMANTIC_MAX_CHARS before embedding', async () => {
+    test('passes full text to the pipeline (no clipping)', async () => {
         const mock = makeMockFactory();
         const eng = new EmbeddingEngine('/cache', mock.factory);
         await eng.load();
-        const longText = 'x'.repeat(SEMANTIC_MAX_CHARS + 500);
+        const longText = 'x'.repeat(5000);
         await eng.embed(longText);
-        assert.ok(mock.lastText !== undefined);
-        assert.ok((mock.lastText as string).length <= SEMANTIC_MAX_CHARS);
+        assert.strictEqual(mock.lastText, longText, 'full text should be passed without clipping');
     });
 
-    test('does not clip text shorter than SEMANTIC_MAX_CHARS', async () => {
+    test('does not alter short text', async () => {
         const mock = makeMockFactory();
         const eng = new EmbeddingEngine('/cache', mock.factory);
         await eng.load();

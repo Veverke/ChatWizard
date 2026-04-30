@@ -97,7 +97,7 @@ export class SearchPanel {
 
         const semanticButton: vscode.QuickInputButton = {
             iconPath: new vscode.ThemeIcon('sparkle'),
-            tooltip: 'Switch to Semantic Search',
+            tooltip: 'Switch to topic similarity search',
         };
 
         const quickPick = vscode.window.createQuickPick<SearchResultItem>();
@@ -144,7 +144,12 @@ export class SearchPanel {
                 });
             }
 
+            const seenSessions = new Set<string>();
             for (const result of response.results) {
+                // results are sorted score-descending; first hit per session is the best
+                if (seenSessions.has(result.sessionId)) { continue; }
+                seenSessions.add(result.sessionId);
+
                 const summary = summaryMap.get(result.sessionId);
                 if (!summary) { continue; }
 

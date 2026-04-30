@@ -426,9 +426,39 @@
       },
       {
         "command": "chatwizard.semanticSearch",
-        "title": "Semantic Search",
+        "title": "Find Sessions by Topic (Semantic)",
         "category": "Chat Wizard",
         "icon": "$(sparkle)"
+      },
+      {
+        "command": "chatwizard.views",
+        "title": "View…",
+        "category": "Chat Wizard",
+        "icon": "$(window)"
+      },
+      {
+        "command": "chatwizard.searchMenu",
+        "title": "Search…",
+        "category": "Chat Wizard",
+        "icon": "$(search)"
+      },
+      {
+        "command": "chatwizard.organise",
+        "title": "Filter & Sort…",
+        "category": "Chat Wizard",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "chatwizard.export",
+        "title": "Export…",
+        "category": "Chat Wizard",
+        "icon": "$(export)"
+      },
+      {
+        "command": "chatwizard.workspace",
+        "title": "Settings…",
+        "category": "Chat Wizard",
+        "icon": "$(folder-library)"
       }
     ],
     "menus": {
@@ -665,6 +695,64 @@
           "when": "viewItem == session || viewItem == session.pinned",
           "group": "inline@2"
         }
+      ],
+      "commandPalette": [
+        { "command": "chatwizard.openSession",              "when": "false" },
+        { "command": "chatwizard.openSessionFromCodeBlock", "when": "false" },
+        { "command": "chatwizard.search",                   "when": "false" },
+        { "command": "chatwizard.filterSessions",           "when": "false" },
+        { "command": "chatwizard.filterCodeBlocks",         "when": "false" },
+        { "command": "chatwizard.configureSortOrder",       "when": "false" },
+        { "command": "chatwizard.sortByDate",               "when": "false" },
+        { "command": "chatwizard.sortByDate.asc",           "when": "false" },
+        { "command": "chatwizard.sortByDate.desc",          "when": "false" },
+        { "command": "chatwizard.sortByWorkspace",          "when": "false" },
+        { "command": "chatwizard.sortByWorkspace.asc",      "when": "false" },
+        { "command": "chatwizard.sortByWorkspace.desc",     "when": "false" },
+        { "command": "chatwizard.sortByLength",             "when": "false" },
+        { "command": "chatwizard.sortByLength.asc",         "when": "false" },
+        { "command": "chatwizard.sortByLength.desc",        "when": "false" },
+        { "command": "chatwizard.sortByTitle",              "when": "false" },
+        { "command": "chatwizard.sortByTitle.asc",          "when": "false" },
+        { "command": "chatwizard.sortByTitle.desc",         "when": "false" },
+        { "command": "chatwizard.sortByModel",              "when": "false" },
+        { "command": "chatwizard.sortByModel.asc",          "when": "false" },
+        { "command": "chatwizard.sortByModel.desc",         "when": "false" },
+        { "command": "chatwizard.pinSession",               "when": "false" },
+        { "command": "chatwizard.unpinSession",             "when": "false" },
+        { "command": "chatwizard.loadMoreSessions",         "when": "false" },
+        { "command": "chatwizard.loadMoreCodeBlocks",       "when": "false" },
+        { "command": "chatwizard.enableSessionGrouping",    "when": "false" },
+        { "command": "chatwizard.disableSessionGrouping",   "when": "false" },
+        { "command": "chatwizard.enableCbGrouping",         "when": "false" },
+        { "command": "chatwizard.disableCbGrouping",        "when": "false" },
+        { "command": "chatwizard.exportSession",            "when": "false" },
+        { "command": "chatwizard.exportAll",                "when": "false" },
+        { "command": "chatwizard.exportSelected",           "when": "false" },
+        { "command": "chatwizard.exportExcerpt",            "when": "false" },
+        { "command": "chatwizard.exportFromTreeSelection",  "when": "false" },
+        { "command": "chatwizard.showCodeBlocks",           "when": "false" },
+        { "command": "chatwizard.showPromptLibrary",        "when": "false" },
+        { "command": "chatwizard.showAnalytics",            "when": "false" },
+        { "command": "chatwizard.showTimeline",             "when": "false" },
+        { "command": "chatwizard.rescan",                   "when": "false" },
+        { "command": "chatwizard.manageWatchedWorkspaces",  "when": "false" },
+        { "command": "chatwizard.cbSortByDate",             "when": "false" },
+        { "command": "chatwizard.cbSortByDate.asc",         "when": "false" },
+        { "command": "chatwizard.cbSortByDate.desc",        "when": "false" },
+        { "command": "chatwizard.cbSortByWorkspace",        "when": "false" },
+        { "command": "chatwizard.cbSortByWorkspace.asc",    "when": "false" },
+        { "command": "chatwizard.cbSortByWorkspace.desc",   "when": "false" },
+        { "command": "chatwizard.cbSortByLength",           "when": "false" },
+        { "command": "chatwizard.cbSortByLength.asc",       "when": "false" },
+        { "command": "chatwizard.cbSortByLength.desc",      "when": "false" },
+        { "command": "chatwizard.cbSortByTitle",            "when": "false" },
+        { "command": "chatwizard.cbSortByTitle.asc",        "when": "false" },
+        { "command": "chatwizard.cbSortByTitle.desc",       "when": "false" },
+        { "command": "chatwizard.cbSortByLanguage",         "when": "false" },
+        { "command": "chatwizard.cbSortByLanguage.asc",     "when": "false" },
+        { "command": "chatwizard.cbSortByLanguage.desc",    "when": "false" },
+        { "command": "chatwizard.semanticSearch",           "when": "false" }
       ]
     },
     "configuration": {
@@ -815,14 +903,14 @@
         "chatwizard.enableSemanticSearch": {
           "type": "boolean",
           "default": false,
-          "description": "Enable local semantic (natural language) search. Downloads a ~22 MB model on first use."
+          "description": "Enable topic-similarity search powered by a local AI model. Finds past sessions by topic — not keywords. Downloads a ~22 MB model on first use."
         },
         "chatwizard.semanticMinScore": {
           "type": "number",
           "default": 0.25,
           "minimum": 0,
           "maximum": 1,
-          "description": "Minimum similarity score (0–1) for a session to appear in semantic search results. Lower values show more (but less relevant) results. Recommended range: 0.20–0.40."
+          "description": "Minimum similarity score (0–1) for a session to appear in topic similarity search results. Lower values show more (but less relevant) results. Recommended range: 0.30–0.45."
         }
       }
     }

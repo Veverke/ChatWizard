@@ -31,11 +31,10 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 var extension_exports = {};
 __export(extension_exports, {
   activate: () => activate,
-  buildSemanticText: () => buildSemanticText,
   deactivate: () => deactivate
 });
 module.exports = __toCommonJS(extension_exports);
-var vscode17 = __toESM(require("vscode"));
+var vscode18 = __toESM(require("vscode"));
 
 // src/index/sessionIndex.ts
 function toSummary(session) {
@@ -1153,8 +1152,8 @@ function resolveClaudeProjectsPath(override) {
     return override;
   }
   try {
-    const vscode18 = require("vscode");
-    const cfg = vscode18.workspace.getConfiguration("chatwizard");
+    const vscode19 = require("vscode");
+    const cfg = vscode19.workspace.getConfiguration("chatwizard");
     const configured = cfg.get("claudeProjectsPath");
     if (configured && configured !== "") {
       return configured;
@@ -1168,8 +1167,8 @@ function resolveClineStoragePath(override) {
     return override;
   }
   try {
-    const vscode18 = require("vscode");
-    const cfg = vscode18.workspace.getConfiguration("chatwizard");
+    const vscode19 = require("vscode");
+    const cfg = vscode19.workspace.getConfiguration("chatwizard");
     const configured = cfg.get("clineStoragePath");
     if (configured && configured !== "") {
       return configured;
@@ -1183,8 +1182,8 @@ function resolveRooCodeStoragePath(override) {
     return override;
   }
   try {
-    const vscode18 = require("vscode");
-    const cfg = vscode18.workspace.getConfiguration("chatwizard");
+    const vscode19 = require("vscode");
+    const cfg = vscode19.workspace.getConfiguration("chatwizard");
     const configured = cfg.get("rooCodeStoragePath");
     if (configured && configured !== "") {
       return configured;
@@ -1198,8 +1197,8 @@ function resolveCursorStoragePath(override) {
     return override;
   }
   try {
-    const vscode18 = require("vscode");
-    const cfg = vscode18.workspace.getConfiguration("chatwizard");
+    const vscode19 = require("vscode");
+    const cfg = vscode19.workspace.getConfiguration("chatwizard");
     const configured = cfg.get("cursorStoragePath");
     if (configured && configured !== "") {
       return configured;
@@ -1213,8 +1212,8 @@ function resolveWindsurfStoragePath(override) {
     return override;
   }
   try {
-    const vscode18 = require("vscode");
-    const cfg = vscode18.workspace.getConfiguration("chatwizard");
+    const vscode19 = require("vscode");
+    const cfg = vscode19.workspace.getConfiguration("chatwizard");
     const configured = cfg.get("windsurfStoragePath");
     if (configured && configured !== "") {
       return configured;
@@ -1228,8 +1227,8 @@ function resolveAntigravityBrainPath(override) {
     return override;
   }
   try {
-    const vscode18 = require("vscode");
-    const cfg = vscode18.workspace.getConfiguration("chatwizard");
+    const vscode19 = require("vscode");
+    const cfg = vscode19.workspace.getConfiguration("chatwizard");
     const configured = cfg.get("antigravityBrainPath");
     if (configured && configured !== "") {
       return configured;
@@ -1252,8 +1251,8 @@ var WorkspaceScopeManager = class {
   /** Returns the normalised, lowercase paths of currently open VS Code workspace folders. */
   _getOpenFolderPaths() {
     try {
-      const vscode18 = require("vscode");
-      return (vscode18.workspace.workspaceFolders ?? []).map(
+      const vscode19 = require("vscode");
+      return (vscode19.workspace.workspaceFolders ?? []).map(
         (f) => path9.normalize(f.uri.fsPath).toLowerCase()
       );
     } catch {
@@ -7050,7 +7049,7 @@ var SearchPanel = class {
     };
     const semanticButton = {
       iconPath: new vscode6.ThemeIcon("sparkle"),
-      tooltip: "Switch to Semantic Search"
+      tooltip: "Switch to topic similarity search"
     };
     const quickPick = vscode6.window.createQuickPick();
     quickPick.placeholder = "Search chat history\u2026 (prefix with / for regex)";
@@ -7087,7 +7086,12 @@ var SearchPanel = class {
           alwaysShow: true
         });
       }
+      const seenSessions = /* @__PURE__ */ new Set();
       for (const result of response.results) {
+        if (seenSessions.has(result.sessionId)) {
+          continue;
+        }
+        seenSessions.add(result.sessionId);
         const summary = summaryMap.get(result.sessionId);
         if (!summary) {
           continue;
@@ -12881,9 +12885,12 @@ function registerManageWorkspacesCommand(context, scopeManager, getWatcher, chan
         const openPaths = new Set(
           (vscode14.workspace.workspaceFolders ?? []).map((f) => path18.normalize(f.uri.fsPath).toLowerCase())
         );
-        const currentWsItems = workspaceItems.filter(
-          (item) => openPaths.has(path18.normalize(item.workspacePath).toLowerCase())
-        );
+        const currentWsItems = workspaceItems.filter((item) => {
+          const itemPath = path18.normalize(item.workspacePath).toLowerCase();
+          return [...openPaths].some(
+            (op) => itemPath === op || itemPath.startsWith(op + path18.sep)
+          );
+        });
         qp.onDidChangeSelection((selected) => {
           if (selected.length === 0) {
             const restore = currentWsItems.length > 0 ? currentWsItems : workspaceItems;
@@ -12944,17 +12951,101 @@ function registerManageWorkspacesCommand(context, scopeManager, getWatcher, chan
   );
 }
 
-// src/search/semanticIndexer.ts
+// src/commands/paletteCommands.ts
 var vscode15 = __toESM(require("vscode"));
+
+// src/commands/paletteCommandsData.ts
+var PALETTE_CATEGORIES = [
+  {
+    commandId: "chatwizard.views",
+    title: "View\u2026",
+    icon: "$(window)",
+    items: [
+      { commandId: "chatwizard.showCodeBlocks", label: "Code Blocks", icon: "$(code)" },
+      { commandId: "chatwizard.showPromptLibrary", label: "Prompt Library", icon: "$(book)" },
+      { commandId: "chatwizard.showAnalytics", label: "Analytics Dashboard", icon: "$(graph)" },
+      { commandId: "chatwizard.showTimeline", label: "Timeline", icon: "$(history)" }
+    ]
+  },
+  {
+    commandId: "chatwizard.searchMenu",
+    title: "Search\u2026",
+    icon: "$(search)",
+    items: [
+      { commandId: "chatwizard.search", label: "Full-Text Search", icon: "$(search)" },
+      { commandId: "chatwizard.semanticSearch", label: "Find Sessions by Topic (Semantic)", icon: "$(sparkle)" }
+    ]
+  },
+  {
+    commandId: "chatwizard.organise",
+    title: "Filter & Sort\u2026",
+    icon: "$(settings-gear)",
+    items: [
+      { commandId: "chatwizard.filterSessions", label: "Filter Sessions\u2026", icon: "$(filter)" },
+      { commandId: "chatwizard.configureSortOrder", label: "Configure Sort Order\u2026", icon: "$(settings-gear)" },
+      { commandId: "chatwizard.filterCodeBlocks", label: "Filter Code Blocks\u2026", icon: "$(filter)" }
+    ]
+  },
+  {
+    commandId: "chatwizard.export",
+    title: "Export\u2026",
+    icon: "$(export)",
+    items: [
+      { commandId: "chatwizard.exportAll", label: "Export All Sessions\u2026", icon: "$(files)" },
+      { commandId: "chatwizard.exportSelected", label: "Export Selected Sessions\u2026", icon: "$(checklist)" },
+      { commandId: "chatwizard.exportExcerpt", label: "Export Session Excerpt\u2026", icon: "$(export)" }
+    ]
+  },
+  {
+    commandId: "chatwizard.workspace",
+    title: "Settings\u2026",
+    icon: "$(folder-library)",
+    items: [
+      { commandId: "chatwizard.manageWatchedWorkspaces", label: "Manage Watched Workspaces", icon: "$(folder-library)" },
+      { commandId: "chatwizard.rescan", label: "Rescan Sessions", icon: "$(refresh)" }
+    ]
+  }
+];
+
+// src/commands/paletteCommands.ts
+function registerPaletteCommands(context) {
+  for (const cat of PALETTE_CATEGORIES) {
+    context.subscriptions.push(
+      vscode15.commands.registerCommand(cat.commandId, async () => {
+        const items = cat.items.map((i) => ({
+          label: `${i.icon}  ${i.label}`,
+          description: i.description,
+          commandId: i.commandId
+        }));
+        const pick = await vscode15.window.showQuickPick(items, {
+          title: `Chat Wizard \u2014 ${cat.title}`,
+          placeHolder: "Select an action\u2026"
+        });
+        if (pick) {
+          await vscode15.commands.executeCommand(pick.commandId);
+        }
+      })
+    );
+  }
+}
+
+// src/search/semanticIndexer.ts
+var vscode16 = __toESM(require("vscode"));
 var path19 = __toESM(require("path"));
 var fs16 = __toESM(require("fs"));
+
+// src/search/semanticContracts.ts
+var SEMANTIC_DIMS = 384;
+var SEMANTIC_MIN_SCORE = 0.35;
+
+// src/search/semanticIndexer.ts
 var EMBEDDINGS_FILENAME = "semantic-embeddings.bin";
 var SAVE_DEBOUNCE_MS = 5e3;
 var MODEL_CACHE_SUBDIR = "models";
 function defaultVsCodeApi() {
   return {
     async showConsentDialog() {
-      const choice = await vscode15.window.showInformationMessage(
+      const choice = await vscode16.window.showInformationMessage(
         "Chat Wizard: Semantic search requires downloading a ~22 MB AI model (Xenova/all-MiniLM-L6-v2). Download now?",
         "Download",
         "Cancel"
@@ -12964,16 +13055,26 @@ function defaultVsCodeApi() {
     isFirstUse(storagePath) {
       return !fs16.existsSync(path19.join(storagePath, MODEL_CACHE_SUBDIR));
     },
-    createStatusBarItem() {
-      return vscode15.window.createStatusBarItem(vscode15.StatusBarAlignment.Left);
+    async loadModelWithProgress(task) {
+      await vscode16.window.withProgress(
+        { location: vscode16.ProgressLocation.Window, title: "Chat Wizard: loading AI model\u2026", cancellable: false },
+        async (progress) => {
+          await task((msg) => progress.report({ message: msg }));
+        }
+      );
     },
-    showModelReady(_isFirstUse) {
-      void vscode15.window.showInformationMessage(
-        "Chat Wizard: Semantic search model loaded. Indexing your sessions in the background\u2026"
+    async runIndexingProgress(task) {
+      await vscode16.window.withProgress(
+        { location: vscode16.ProgressLocation.Window, title: "Chat Wizard: indexing\u2026", cancellable: false },
+        async (progress) => {
+          await task((completed, total) => {
+            progress.report({ message: `${completed} / ${total} sessions` });
+          });
+        }
       );
     },
     showIndexingComplete(count) {
-      void vscode15.window.showInformationMessage(
+      void vscode16.window.showInformationMessage(
         `Chat Wizard: Semantic index ready \u2014 ${count} session${count === 1 ? "" : "s"} indexed.`
       );
     }
@@ -12990,10 +13091,12 @@ var SemanticIndexer = class {
   // Embedding queue
   _queue = [];
   _queueRunning = false;
-  _totalQueued = 0;
-  _totalProcessed = 0;
+  _totalSessionsQueued = 0;
+  _totalSessionsCompleted = 0;
+  /** Remaining queue entries per session; deleted when the session reaches 0. */
+  _pendingBySession = /* @__PURE__ */ new Map();
   // Status bar for indexing progress
-  _indexingStatusBar;
+  // (progress is surfaced via vsCodeApi.runIndexingProgress — no local status bar item)
   // Debounced save timer
   _saveTimer;
   constructor(storagePath, engineFactory, indexFactory, vsCodeApi) {
@@ -13029,36 +13132,55 @@ var SemanticIndexer = class {
         return;
       }
     }
-    const isFirstUse = this.vsCodeApi.isFirstUse(this.storagePath);
-    const loadBar = this.vsCodeApi.createStatusBarItem();
-    loadBar.text = "$(loading~spin) Chat Wizard: loading model\u2026";
-    loadBar.show();
-    try {
-      await this.engine.load((msg) => {
-        loadBar.text = `$(loading~spin) Chat Wizard: ${msg}`;
-      });
-    } finally {
-      loadBar.dispose();
-    }
-    this.vsCodeApi.showModelReady(isFirstUse);
+    await this.vsCodeApi.loadModelWithProgress(async (report) => {
+      await this.engine.load(report);
+    });
     await this.index.load(path19.join(this.storagePath, EMBEDDINGS_FILENAME));
     this._isReady = true;
   }
   // ── scheduleSession() ───────────────────────────────────────────────────
   /**
-   * Queues a session for embedding. Skips silently if the session is already
-   * in the index or the indexer is not ready.
+   * Queues all messages of a session for embedding.
+   * - Each user message → one queue entry.
+   * - Each assistant response → one entry per non-empty paragraph (split on `\n\n`).
+   * Skips silently if the session is already in the index or the indexer is not ready.
    */
-  scheduleSession(sessionId, text) {
+  scheduleSession(session) {
     if (!this._isReady || this._disposed) {
       return;
     }
-    if (this.index.has(sessionId)) {
+    if (this.index.has(session.id)) {
       return;
     }
-    this._queue.push({ sessionId, text });
-    this._totalQueued++;
-    this._refreshStatusBar();
+    let added = 0;
+    for (let msgIdx = 0; msgIdx < session.messages.length; msgIdx++) {
+      const msg = session.messages[msgIdx];
+      const text = msg.content?.trim();
+      if (!text) {
+        continue;
+      }
+      if (msg.role === "user") {
+        this._queue.push({ sessionId: session.id, role: "user", messageIndex: msgIdx, paragraphIndex: 0, text });
+        added++;
+      } else if (msg.role === "assistant") {
+        const paragraphs = text.split(/\n\n+/).map((p) => p.trim()).filter(Boolean);
+        for (let paraIdx = 0; paraIdx < paragraphs.length; paraIdx++) {
+          this._queue.push({
+            sessionId: session.id,
+            role: "assistant",
+            messageIndex: msgIdx,
+            paragraphIndex: paraIdx,
+            text: paragraphs[paraIdx]
+          });
+          added++;
+        }
+      }
+    }
+    if (added === 0) {
+      return;
+    }
+    this._totalSessionsQueued++;
+    this._pendingBySession.set(session.id, added);
     if (!this._queueRunning) {
       this._runQueue();
     }
@@ -13069,12 +13191,20 @@ var SemanticIndexer = class {
     this._scheduleSave();
   }
   // ── search() ────────────────────────────────────────────────────────────
-  async search(query, topK, minScore = 0) {
+  async search(query, topK, minScore = SEMANTIC_MIN_SCORE, scope = "both") {
     if (!this._isReady) {
       throw new Error("SemanticIndexer is not ready. Call initialize() first.");
     }
     const queryVector = await this.engine.embed(query);
-    return this.index.search(queryVector, topK, minScore);
+    const hits = this.index.search(queryVector, topK * 10, minScore, scope);
+    const bestBySession = /* @__PURE__ */ new Map();
+    for (const hit of hits) {
+      const existing = bestBySession.get(hit.sessionId);
+      if (!existing || hit.score > existing.score) {
+        bestBySession.set(hit.sessionId, { sessionId: hit.sessionId, score: hit.score });
+      }
+    }
+    return [...bestBySession.values()].sort((a, b) => b.score - a.score).slice(0, topK);
   }
   // ── dispose() ───────────────────────────────────────────────────────────
   dispose() {
@@ -13087,8 +13217,6 @@ var SemanticIndexer = class {
       clearTimeout(this._saveTimer);
       this._saveTimer = void 0;
     }
-    this._indexingStatusBar?.dispose();
-    this._indexingStatusBar = void 0;
     if (this._isReady) {
       this.index.save(path19.join(this.storagePath, EMBEDDINGS_FILENAME)).catch(() => {
       });
@@ -13097,35 +13225,30 @@ var SemanticIndexer = class {
   // ── Private helpers ──────────────────────────────────────────────────────
   async _runQueue() {
     this._queueRunning = true;
-    while (this._queue.length > 0 && !this._disposed) {
-      const entry = this._queue.shift();
-      try {
-        const embedding = await this.engine.embed(entry.text);
-        this.index.add(entry.sessionId, embedding);
-        this._totalProcessed++;
-        this._refreshStatusBar();
-        this._scheduleSave();
-      } catch {
-        this._totalProcessed++;
-        this._refreshStatusBar();
+    await this.vsCodeApi.runIndexingProgress(async (report) => {
+      while (this._queue.length > 0 && !this._disposed) {
+        const entry = this._queue.shift();
+        try {
+          const embedding = await this.engine.embed(entry.text);
+          this.index.add(entry.sessionId, entry.role, entry.messageIndex, entry.paragraphIndex, embedding);
+          this._scheduleSave();
+        } catch {
+        } finally {
+          const remaining = (this._pendingBySession.get(entry.sessionId) ?? 1) - 1;
+          if (remaining === 0) {
+            this._pendingBySession.delete(entry.sessionId);
+            this._totalSessionsCompleted++;
+          } else {
+            this._pendingBySession.set(entry.sessionId, remaining);
+          }
+          report(this._totalSessionsCompleted, this._totalSessionsQueued);
+        }
       }
-    }
+    });
     this._queueRunning = false;
-    this._indexingStatusBar?.dispose();
-    this._indexingStatusBar = void 0;
-    if (!this._disposed && this._totalProcessed > 0) {
-      this.vsCodeApi.showIndexingComplete(this._totalProcessed);
+    if (!this._disposed && this._totalSessionsCompleted > 0) {
+      this.vsCodeApi.showIndexingComplete(this._totalSessionsCompleted);
     }
-  }
-  _refreshStatusBar() {
-    if (this._queue.length === 0) {
-      return;
-    }
-    if (!this._indexingStatusBar) {
-      this._indexingStatusBar = this.vsCodeApi.createStatusBarItem();
-    }
-    this._indexingStatusBar.text = `$(loading~spin) Chat Wizard: semantic indexing\u2026 ${this._totalProcessed}/${this._totalQueued}`;
-    this._indexingStatusBar.show();
   }
   _scheduleSave() {
     if (this._saveTimer !== void 0) {
@@ -13138,11 +13261,6 @@ var SemanticIndexer = class {
     }, SAVE_DEBOUNCE_MS);
   }
 };
-
-// src/search/semanticContracts.ts
-var SEMANTIC_DIMS = 384;
-var SEMANTIC_MAX_CHARS = 2048;
-var SEMANTIC_MIN_SCORE = 0.25;
 
 // src/search/embeddingEngine.ts
 async function defaultPipelineFactory(cacheDir, onProgress) {
@@ -13204,8 +13322,7 @@ var EmbeddingEngine = class {
     if (!this._isReady || !this.pipelineFn) {
       throw new Error("EmbeddingEngine is not ready. Call load() first.");
     }
-    const clipped = text.slice(0, SEMANTIC_MAX_CHARS);
-    const output = await this.pipelineFn(clipped, { pooling: "mean", normalize: true });
+    const output = await this.pipelineFn(text, { pooling: "mean", normalize: true });
     const data = output.data;
     const result = data instanceof Float32Array ? data : Float32Array.from(data);
     if (result.length !== SEMANTIC_DIMS) {
@@ -13218,7 +13335,27 @@ var EmbeddingEngine = class {
 // src/search/semanticIndex.ts
 var fs17 = __toESM(require("fs"));
 var MAGIC = Buffer.from([67, 87, 83, 69]);
-var FILE_VERSION = 1;
+var FILE_VERSION = 2;
+function makeKey(sessionId, role, messageIndex, paragraphIndex) {
+  return `${sessionId}::${role}::${messageIndex}::${paragraphIndex}`;
+}
+function parseKey(key) {
+  const parts = key.split("::");
+  if (parts.length < 4) {
+    return null;
+  }
+  const paragraphIndex = parseInt(parts[parts.length - 1], 10);
+  const messageIndex = parseInt(parts[parts.length - 2], 10);
+  const role = parts[parts.length - 3];
+  const sessionId = parts.slice(0, parts.length - 3).join("::");
+  if (isNaN(messageIndex) || isNaN(paragraphIndex)) {
+    return null;
+  }
+  if (role !== "user" && role !== "assistant") {
+    return null;
+  }
+  return { sessionId, role, messageIndex, paragraphIndex };
+}
 var SemanticIndex = class {
   _store = /* @__PURE__ */ new Map();
   // ── size ───────────────────────────────────────────────────────────────
@@ -13226,22 +13363,48 @@ var SemanticIndex = class {
     return this._store.size;
   }
   // ── CRUD ───────────────────────────────────────────────────────────────
-  add(sessionId, embedding) {
-    this._store.set(sessionId, embedding);
+  add(sessionId, role, messageIndex, paragraphIndex, embedding) {
+    this._store.set(makeKey(sessionId, role, messageIndex, paragraphIndex), embedding);
   }
   remove(sessionId) {
-    this._store.delete(sessionId);
+    const prefix = `${sessionId}::`;
+    for (const key of this._store.keys()) {
+      if (key.startsWith(prefix)) {
+        this._store.delete(key);
+      }
+    }
   }
   has(sessionId) {
-    return this._store.has(sessionId);
+    const prefix = `${sessionId}::`;
+    for (const key of this._store.keys()) {
+      if (key.startsWith(prefix)) {
+        return true;
+      }
+    }
+    return false;
   }
   // ── Search ─────────────────────────────────────────────────────────────
-  search(queryEmbedding, topK, minScore = 0) {
+  search(queryEmbedding, topK, minScore = 0, scope = "both") {
     const results = [];
-    for (const [sessionId, embedding] of this._store) {
+    for (const [key, embedding] of this._store) {
+      if (scope !== "both") {
+        const roleMarker = scope === "user" ? "::user::" : "::assistant::";
+        const otherMarker = scope === "user" ? "::assistant::" : "::user::";
+        if (key.includes(otherMarker) && !key.includes(roleMarker)) {
+          continue;
+        }
+        const parsed = parseKey(key);
+        if (!parsed || parsed.role !== scope) {
+          continue;
+        }
+      }
       const score = dot(queryEmbedding, embedding);
       if (score >= minScore) {
-        results.push({ sessionId, score });
+        const parsed = parseKey(key);
+        if (!parsed) {
+          continue;
+        }
+        results.push({ ...parsed, score });
       }
     }
     results.sort((a, b) => b.score - a.score);
@@ -13252,11 +13415,11 @@ var SemanticIndex = class {
     const entries = [...this._store.entries()];
     const N = entries.length;
     let totalSize = 16;
-    const idBufs = [];
-    for (const [id] of entries) {
-      const idBuf = Buffer.from(id, "utf8");
-      idBufs.push(idBuf);
-      totalSize += 4 + idBuf.byteLength + SEMANTIC_DIMS * 4;
+    const keyBufs = [];
+    for (const [key] of entries) {
+      const keyBuf = Buffer.from(key, "utf8");
+      keyBufs.push(keyBuf);
+      totalSize += 4 + keyBuf.byteLength + SEMANTIC_DIMS * 4;
     }
     const buf = Buffer.allocUnsafe(totalSize);
     let offset = 0;
@@ -13269,12 +13432,12 @@ var SemanticIndex = class {
     buf.writeUInt32LE(N, offset);
     offset += 4;
     for (let i = 0; i < N; i++) {
-      const idBuf = idBufs[i];
+      const keyBuf = keyBufs[i];
       const embedding = entries[i][1];
-      buf.writeUInt32LE(idBuf.byteLength, offset);
+      buf.writeUInt32LE(keyBuf.byteLength, offset);
       offset += 4;
-      idBuf.copy(buf, offset);
-      offset += idBuf.byteLength;
+      keyBuf.copy(buf, offset);
+      offset += keyBuf.byteLength;
       for (let d = 0; d < SEMANTIC_DIMS; d++) {
         buf.writeFloatLE(embedding[d], offset);
         offset += 4;
@@ -13300,7 +13463,10 @@ var SemanticIndex = class {
       const version = raw.readUInt32LE(offset);
       offset += 4;
       if (version !== FILE_VERSION) {
-        throw new Error(`Unsupported file version: ${version}`);
+        console.warn(
+          `[ChatWizard] SemanticIndex: unrecognised file version ${version} in "${filePath}". Starting with empty index.`
+        );
+        return;
       }
       const dims = raw.readUInt32LE(offset);
       offset += 4;
@@ -13315,15 +13481,15 @@ var SemanticIndex = class {
       this._store.clear();
       for (let i = 0; i < N; i++) {
         if (offset + 4 > raw.byteLength) {
-          throw new Error(`Unexpected end of file reading entry ${i} id length`);
+          throw new Error(`Unexpected end of file reading entry ${i} key length`);
         }
-        const idLen = raw.readUInt32LE(offset);
+        const keyLen = raw.readUInt32LE(offset);
         offset += 4;
-        if (offset + idLen > raw.byteLength) {
-          throw new Error(`Unexpected end of file reading entry ${i} id bytes`);
+        if (offset + keyLen > raw.byteLength) {
+          throw new Error(`Unexpected end of file reading entry ${i} key bytes`);
         }
-        const sessionId = raw.toString("utf8", offset, offset + idLen);
-        offset += idLen;
+        const key = raw.toString("utf8", offset, offset + keyLen);
+        offset += keyLen;
         const embeddingBytes = SEMANTIC_DIMS * 4;
         if (offset + embeddingBytes > raw.byteLength) {
           throw new Error(`Unexpected end of file reading entry ${i} embedding`);
@@ -13333,7 +13499,7 @@ var SemanticIndex = class {
           embedding[d] = raw.readFloatLE(offset);
           offset += 4;
         }
-        this._store.set(sessionId, embedding);
+        this._store.set(key, embedding);
       }
     } catch (err) {
       console.warn(
@@ -13352,7 +13518,7 @@ function dot(a, b) {
 }
 
 // src/search/semanticSearchPanel.ts
-var vscode16 = __toESM(require("vscode"));
+var vscode17 = __toESM(require("vscode"));
 function nextSourceState2(current) {
   if (current === "all") {
     return "copilot";
@@ -13379,15 +13545,15 @@ function sourceButtonTooltip2(state) {
 }
 function sourceButtonIcon2(state) {
   if (state === "copilot") {
-    return new vscode16.ThemeIcon("github");
+    return new vscode17.ThemeIcon("github");
   }
   if (state === "claude") {
-    return new vscode16.ThemeIcon("hubot");
+    return new vscode17.ThemeIcon("hubot");
   }
   if (state === "antigravity") {
-    return new vscode16.ThemeIcon("rocket");
+    return new vscode17.ThemeIcon("rocket");
   }
-  return new vscode16.ThemeIcon("list-filter");
+  return new vscode17.ThemeIcon("list-filter");
 }
 function buildItems(results, summaryMap) {
   const items = [];
@@ -13398,9 +13564,8 @@ function buildItems(results, summaryMap) {
     }
     const srcIcon = `$(${sourceCodiconId(summary.source)})`;
     const label = `${srcIcon}  ${summary.title}`;
-    const workspace8 = summary.workspacePath ?? summary.workspaceId;
     const score = Math.round(result.score * 100);
-    const description = `${workspace8} \xB7 ${summary.updatedAt.slice(0, 10)} \xB7 Score: ${score}%`;
+    const description = `Score: ${score}% \xB7 ${summary.updatedAt.slice(0, 10)}`;
     items.push({ label, description, summary, score, alwaysShow: true });
   }
   return items;
@@ -13413,17 +13578,99 @@ var SemanticSearchPanel = class {
     }
     const totalSessions = summaryMap.size;
     let sourceFilter = "all";
+    let scope = "both";
     const sourceButton = {
       iconPath: sourceButtonIcon2(sourceFilter),
       tooltip: sourceButtonTooltip2(sourceFilter)
     };
-    const quickPick = vscode16.window.createQuickPick();
-    quickPick.placeholder = "Semantic search \u2014 describe a topic or question\u2026";
+    function scopeButtonIcon(s) {
+      if (s === "user") {
+        return new vscode17.ThemeIcon("comment");
+      }
+      if (s === "assistant") {
+        return new vscode17.ThemeIcon("hubot");
+      }
+      return new vscode17.ThemeIcon("list-unordered");
+    }
+    function scopeButtonTooltip(s) {
+      if (s === "both") {
+        return "Scope: Both \u2014 click for My questions only";
+      }
+      if (s === "user") {
+        return "Scope: My questions \u2014 click for AI responses only";
+      }
+      return "Scope: AI responses \u2014 click for Both";
+    }
+    function nextScope(s) {
+      if (s === "both") {
+        return "user";
+      }
+      if (s === "user") {
+        return "assistant";
+      }
+      return "both";
+    }
+    const scopeButton = {
+      iconPath: scopeButtonIcon(scope),
+      tooltip: scopeButtonTooltip(scope)
+    };
+    const quickPick = vscode17.window.createQuickPick();
+    quickPick.placeholder = 'Find past sessions by topic \u2014 e.g. "authentication", "unit testing", "release process"';
     quickPick.matchOnDescription = false;
     quickPick.matchOnDetail = false;
-    quickPick.buttons = [sourceButton];
+    quickPick.buttons = [sourceButton, scopeButton];
     let debounceTimer;
     let lastRawResults = [];
+    async function runSearch(value) {
+      if (!value) {
+        lastRawResults = [];
+        quickPick.items = [];
+        return;
+      }
+      if (!indexer.isReady) {
+        quickPick.items = [{
+          label: `$(loading~spin) Semantic index still loading model\u2026 please wait`,
+          summary: void 0,
+          score: 0,
+          alwaysShow: true
+        }];
+        return;
+      }
+      const minScore = vscode17.workspace.getConfiguration("chatwizard").get("semanticMinScore") ?? SEMANTIC_MIN_SCORE;
+      quickPick.busy = true;
+      try {
+        lastRawResults = await indexer.search(value, 10, minScore, scope);
+      } catch (err) {
+        quickPick.busy = false;
+        quickPick.items = [{
+          label: `$(error) Search failed: ${err instanceof Error ? err.message : String(err)}`,
+          summary: void 0,
+          score: 0,
+          alwaysShow: true
+        }];
+        return;
+      }
+      quickPick.busy = false;
+      if (indexer.isIndexing && lastRawResults.length === 0) {
+        quickPick.items = [{
+          label: `$(loading~spin) Still indexing sessions (${indexer.indexedCount}/${totalSessions}) \u2014 try again shortly`,
+          summary: void 0,
+          score: 0,
+          alwaysShow: true
+        }];
+        return;
+      }
+      applyFilter();
+      if (quickPick.items.length === 0) {
+        quickPick.items = [{
+          label: `$(info) No semantic matches found`,
+          description: indexer.indexedCount === 0 ? "Index is empty \u2014 indexing may not have started yet" : void 0,
+          summary: void 0,
+          score: 0,
+          alwaysShow: true
+        }];
+      }
+    }
     function applyFilter() {
       const allItems = buildItems(lastRawResults, summaryMap);
       const filtered = sourceFilter === "all" ? allItems : allItems.filter((item) => item.summary.source === sourceFilter);
@@ -13436,54 +13683,7 @@ var SemanticSearchPanel = class {
       }
       debounceTimer = setTimeout(async () => {
         debounceTimer = void 0;
-        if (!value) {
-          lastRawResults = [];
-          quickPick.items = [];
-          return;
-        }
-        if (!indexer.isReady) {
-          quickPick.items = [{
-            label: `$(loading~spin) Semantic index still loading model\u2026 please wait`,
-            summary: void 0,
-            score: 0,
-            alwaysShow: true
-          }];
-          return;
-        }
-        const minScore = vscode16.workspace.getConfiguration("chatwizard").get("semanticMinScore") ?? SEMANTIC_MIN_SCORE;
-        quickPick.busy = true;
-        try {
-          lastRawResults = await indexer.search(value, 10, minScore);
-        } catch (err) {
-          quickPick.busy = false;
-          quickPick.items = [{
-            label: `$(error) Search failed: ${err instanceof Error ? err.message : String(err)}`,
-            summary: void 0,
-            score: 0,
-            alwaysShow: true
-          }];
-          return;
-        }
-        quickPick.busy = false;
-        if (indexer.isIndexing && lastRawResults.length === 0) {
-          quickPick.items = [{
-            label: `$(loading~spin) Still indexing sessions (${indexer.indexedCount}/${totalSessions}) \u2014 try again shortly`,
-            summary: void 0,
-            score: 0,
-            alwaysShow: true
-          }];
-          return;
-        }
-        applyFilter();
-        if (quickPick.items.length === 0) {
-          quickPick.items = [{
-            label: `$(info) No semantic matches found`,
-            description: indexer.indexedCount === 0 ? "Index is empty \u2014 indexing may not have started yet" : void 0,
-            summary: void 0,
-            score: 0,
-            alwaysShow: true
-          }];
-        }
+        await runSearch(value);
       }, 400);
     });
     quickPick.onDidTriggerButton((button) => {
@@ -13491,14 +13691,23 @@ var SemanticSearchPanel = class {
         sourceFilter = nextSourceState2(sourceFilter);
         sourceButton.iconPath = sourceButtonIcon2(sourceFilter);
         sourceButton.tooltip = sourceButtonTooltip2(sourceFilter);
-        quickPick.buttons = [sourceButton];
+        quickPick.buttons = [sourceButton, scopeButton];
         applyFilter();
+      } else if (button === scopeButton) {
+        scope = nextScope(scope);
+        scopeButton.iconPath = scopeButtonIcon(scope);
+        scopeButton.tooltip = scopeButtonTooltip(scope);
+        quickPick.buttons = [sourceButton, scopeButton];
+        const currentValue = quickPick.value;
+        if (currentValue) {
+          void runSearch(currentValue);
+        }
       }
     });
     quickPick.onDidAccept(() => {
       const active = quickPick.activeItems[0];
       if (active && active.summary) {
-        vscode16.commands.executeCommand("chatwizard.openSession", active.summary);
+        vscode17.commands.executeCommand("chatwizard.openSession", active.summary);
       }
     });
     quickPick.onDidHide(() => {
@@ -13512,36 +13721,32 @@ var SemanticSearchPanel = class {
 };
 
 // src/extension.ts
-function buildSemanticText(session) {
-  const parts = [session.title, ...session.messages.map((m) => m.content)];
-  return parts.join("\n").slice(0, SEMANTIC_MAX_CHARS);
-}
 var watcher;
 async function activate(context) {
-  const channel = vscode17.window.createOutputChannel("Chat Wizard");
+  const channel = vscode18.window.createOutputChannel("Chat Wizard");
   context.subscriptions.push(channel);
   const telemetry = new TelemetryRecorder(context.globalStorageUri.fsPath);
-  const telemetryCfg = vscode17.workspace.getConfiguration("chatwizard");
+  const telemetryCfg = vscode18.workspace.getConfiguration("chatwizard");
   telemetry.setEnabled(telemetryCfg.get("enableTelemetry") ?? false);
   const index = new SessionIndex();
   const promptLibraryViewProvider = new PromptLibraryViewProvider(index);
   context.subscriptions.push(
-    vscode17.window.registerWebviewViewProvider(PromptLibraryViewProvider.viewType, promptLibraryViewProvider)
+    vscode18.window.registerWebviewViewProvider(PromptLibraryViewProvider.viewType, promptLibraryViewProvider)
   );
   const analyticsViewProvider = new AnalyticsViewProvider(index);
   context.subscriptions.push(
-    vscode17.window.registerWebviewViewProvider(AnalyticsViewProvider.viewType, analyticsViewProvider)
+    vscode18.window.registerWebviewViewProvider(AnalyticsViewProvider.viewType, analyticsViewProvider)
   );
   const modelUsageViewProvider = new ModelUsageViewProvider(context, index);
   context.subscriptions.push(
-    vscode17.window.registerWebviewViewProvider(ModelUsageViewProvider.viewType, modelUsageViewProvider)
+    vscode18.window.registerWebviewViewProvider(ModelUsageViewProvider.viewType, modelUsageViewProvider)
   );
   const timelineViewProvider = new TimelineViewProvider(index, context);
   context.subscriptions.push(
-    vscode17.window.registerWebviewViewProvider(TimelineViewProvider.viewType, timelineViewProvider)
+    vscode18.window.registerWebviewViewProvider(TimelineViewProvider.viewType, timelineViewProvider)
   );
   context.subscriptions.push(
-    vscode17.window.registerFileDecorationProvider(new SessionParseWarningDecorationProvider())
+    vscode18.window.registerFileDecorationProvider(new SessionParseWarningDecorationProvider())
   );
   const engine = new FullTextSearchEngine();
   const searchIndexListener = index.addTypedChangeListener((event) => {
@@ -13562,7 +13767,7 @@ async function activate(context) {
     }
   });
   context.subscriptions.push(searchIndexListener);
-  const semanticEmbeddingsUri = vscode17.Uri.joinPath(context.globalStorageUri, "semantic-embeddings.bin");
+  const semanticEmbeddingsUri = vscode18.Uri.joinPath(context.globalStorageUri, "semantic-embeddings.bin");
   let semanticIndexer = null;
   function createAndInitSemanticIndexer() {
     const indexer = new SemanticIndexer(
@@ -13575,12 +13780,12 @@ async function activate(context) {
       for (const summary of index.getAllSummaries()) {
         const session = index.get(summary.id);
         if (session) {
-          indexer.scheduleSession(session.id, buildSemanticText(session));
+          indexer.scheduleSession(session);
         }
       }
     });
   }
-  if (vscode17.workspace.getConfiguration("chatwizard").get("enableSemanticSearch") ?? false) {
+  if (vscode18.workspace.getConfiguration("chatwizard").get("enableSemanticSearch") ?? false) {
     createAndInitSemanticIndexer();
   }
   context.subscriptions.push({ dispose: () => {
@@ -13592,18 +13797,18 @@ async function activate(context) {
     }
     if (event.type === "batch") {
       for (const session of event.sessions) {
-        semanticIndexer.scheduleSession(session.id, buildSemanticText(session));
+        semanticIndexer.scheduleSession(session);
       }
     } else if (event.type === "upsert") {
-      semanticIndexer.scheduleSession(event.session.id, buildSemanticText(event.session));
+      semanticIndexer.scheduleSession(event.session);
     } else if (event.type === "remove") {
       semanticIndexer.removeSession(event.sessionId);
     } else if (event.type === "clear") {
       semanticIndexer.dispose();
       semanticIndexer = null;
-      void vscode17.workspace.fs.delete(semanticEmbeddingsUri).then(void 0, () => {
+      void vscode18.workspace.fs.delete(semanticEmbeddingsUri).then(void 0, () => {
       });
-      if (vscode17.workspace.getConfiguration("chatwizard").get("enableSemanticSearch") ?? false) {
+      if (vscode18.workspace.getConfiguration("chatwizard").get("enableSemanticSearch") ?? false) {
         createAndInitSemanticIndexer();
       }
     }
@@ -13611,7 +13816,7 @@ async function activate(context) {
   context.subscriptions.push(semanticListener);
   const codeBlockEngine = new CodeBlockSearchEngine();
   context.subscriptions.push(
-    vscode17.window.registerWebviewPanelSerializer("chatwizardAnalytics", {
+    vscode18.window.registerWebviewPanelSerializer("chatwizardAnalytics", {
       async deserializeWebviewPanel(webviewPanel) {
         webviewPanel.webview.options = { enableScripts: true };
         webviewPanel.webview.html = AnalyticsPanel.getShellHtml();
@@ -13627,7 +13832,7 @@ async function activate(context) {
     })
   );
   context.subscriptions.push(
-    vscode17.window.registerWebviewPanelSerializer("chatwizardCodeBlocks", {
+    vscode18.window.registerWebviewPanelSerializer("chatwizardCodeBlocks", {
       async deserializeWebviewPanel(webviewPanel) {
         webviewPanel.webview.options = { enableScripts: true };
         webviewPanel.webview.html = CodeBlocksPanel.getShellHtml();
@@ -13636,7 +13841,7 @@ async function activate(context) {
         const blocks = index.getAllCodeBlocks();
         webviewPanel.webview.onDidReceiveMessage((msg) => {
           if (msg.command === "copy") {
-            void vscode17.env.clipboard.writeText(msg.text ?? "");
+            void vscode18.env.clipboard.writeText(msg.text ?? "");
           } else if (msg.type === "ready") {
             void webviewPanel.webview.postMessage({ type: "update", data: CodeBlocksPanel.buildPayload(blocks, codeBlockEngine) });
           }
@@ -13646,14 +13851,14 @@ async function activate(context) {
     })
   );
   context.subscriptions.push(
-    vscode17.window.registerWebviewPanelSerializer("chatwizardPromptLibrary", {
+    vscode18.window.registerWebviewPanelSerializer("chatwizardPromptLibrary", {
       async deserializeWebviewPanel(webviewPanel) {
         webviewPanel.dispose();
       }
     })
   );
   context.subscriptions.push(
-    vscode17.window.registerWebviewPanelSerializer("chatwizardSession3", {
+    vscode18.window.registerWebviewPanelSerializer("chatwizardSession3", {
       async deserializeWebviewPanel(webviewPanel) {
         webviewPanel.dispose();
       }
@@ -13719,14 +13924,14 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
   }
   function syncContext() {
     const primary = provider.getPrimary();
-    void vscode17.commands.executeCommand("setContext", "chatwizard.sortKey", primary.key);
-    void vscode17.commands.executeCommand("setContext", "chatwizard.sortDir", primary.direction);
-    void vscode17.commands.executeCommand("setContext", "chatwizard.hasFilter", provider.hasActiveFilter());
-    void vscode17.commands.executeCommand("setContext", "chatwizard.sessionGrouped", provider.isGrouped());
+    void vscode18.commands.executeCommand("setContext", "chatwizard.sortKey", primary.key);
+    void vscode18.commands.executeCommand("setContext", "chatwizard.sortDir", primary.direction);
+    void vscode18.commands.executeCommand("setContext", "chatwizard.hasFilter", provider.hasActiveFilter());
+    void vscode18.commands.executeCommand("setContext", "chatwizard.sessionGrouped", provider.isGrouped());
   }
   syncContext();
   function syncCbGroupContext() {
-    void vscode17.commands.executeCommand("setContext", "chatwizard.cbGrouped", codeBlockProvider.isGrouped());
+    void vscode18.commands.executeCommand("setContext", "chatwizard.cbGrouped", codeBlockProvider.isGrouped());
   }
   syncCbGroupContext();
   function savePins() {
@@ -13739,7 +13944,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
     handleDrag(items, dataTransfer) {
       dataTransfer.set(
         "application/vnd.chatwizard.session",
-        new vscode17.DataTransferItem(items.map((i) => i.summary.id))
+        new vscode18.DataTransferItem(items.map((i) => i.summary.id))
       );
     },
     async handleDrop(target, dataTransfer) {
@@ -13754,7 +13959,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
       savePins();
     }
   };
-  const treeView = vscode17.window.createTreeView("chatwizardSessions", {
+  const treeView = vscode18.window.createTreeView("chatwizardSessions", {
     treeDataProvider: provider,
     dragAndDropController: dragDropController,
     canSelectMany: true
@@ -13766,7 +13971,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
     treeView.message = index.size === 0 ? makeEmptyStateMsg("sessions") : void 0;
   });
   context.subscriptions.push(sessionDescListener);
-  const codeBlockTreeView = vscode17.window.createTreeView("chatwizardCodeBlocks", {
+  const codeBlockTreeView = vscode18.window.createTreeView("chatwizardCodeBlocks", {
     treeDataProvider: codeBlockProvider,
     canSelectMany: false
   });
@@ -13788,8 +13993,8 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
     void context.globalState.update("sortStack", JSON.stringify(provider.getSortStack()));
   }
   function syncCbContext() {
-    void vscode17.commands.executeCommand("setContext", "chatwizard.cbSortKey", codeBlockProvider.getSortMode());
-    void vscode17.commands.executeCommand("setContext", "chatwizard.cbSortDir", codeBlockProvider.getSortDir());
+    void vscode18.commands.executeCommand("setContext", "chatwizard.cbSortKey", codeBlockProvider.getSortMode());
+    void vscode18.commands.executeCommand("setContext", "chatwizard.cbSortDir", codeBlockProvider.getSortDir());
   }
   syncCbContext();
   function applyCbSort(mode) {
@@ -13801,29 +14006,29 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
   const sortModes = ["date", "workspace", "length", "title", "model"];
   for (const mode of sortModes) {
     context.subscriptions.push(
-      vscode17.commands.registerCommand(`chatwizard.sortBy${capitalise(mode)}`, () => applySort(mode))
+      vscode18.commands.registerCommand(`chatwizard.sortBy${capitalise(mode)}`, () => applySort(mode))
     );
     context.subscriptions.push(
-      vscode17.commands.registerCommand(`chatwizard.sortBy${capitalise(mode)}.asc`, () => applySort(mode))
+      vscode18.commands.registerCommand(`chatwizard.sortBy${capitalise(mode)}.asc`, () => applySort(mode))
     );
     context.subscriptions.push(
-      vscode17.commands.registerCommand(`chatwizard.sortBy${capitalise(mode)}.desc`, () => applySort(mode))
+      vscode18.commands.registerCommand(`chatwizard.sortBy${capitalise(mode)}.desc`, () => applySort(mode))
     );
   }
   const cbSortModes = ["date", "workspace", "length", "title", "language"];
   for (const mode of cbSortModes) {
     context.subscriptions.push(
-      vscode17.commands.registerCommand(`chatwizard.cbSortBy${capitalise(mode)}`, () => applyCbSort(mode))
+      vscode18.commands.registerCommand(`chatwizard.cbSortBy${capitalise(mode)}`, () => applyCbSort(mode))
     );
     context.subscriptions.push(
-      vscode17.commands.registerCommand(`chatwizard.cbSortBy${capitalise(mode)}.asc`, () => applyCbSort(mode))
+      vscode18.commands.registerCommand(`chatwizard.cbSortBy${capitalise(mode)}.asc`, () => applyCbSort(mode))
     );
     context.subscriptions.push(
-      vscode17.commands.registerCommand(`chatwizard.cbSortBy${capitalise(mode)}.desc`, () => applyCbSort(mode))
+      vscode18.commands.registerCommand(`chatwizard.cbSortBy${capitalise(mode)}.desc`, () => applyCbSort(mode))
     );
   }
   context.subscriptions.push(
-    vscode17.commands.registerCommand("chatwizard.configureSortOrder", async () => {
+    vscode18.commands.registerCommand("chatwizard.configureSortOrder", async () => {
       const allKeys = ["date", "workspace", "length", "title", "model", "source"];
       const newStack = [];
       for (let round = 0; round < 3; round++) {
@@ -13836,7 +14041,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
         if (round > 0) {
           items.push({ label: "$(check)  Done \u2014 apply current sort", key: "_done", alwaysShow: true });
         }
-        const keyPick = await vscode17.window.showQuickPick(items, {
+        const keyPick = await vscode18.window.showQuickPick(items, {
           title: `Sort order \u2014 ${ordinal} criterion`,
           placeHolder: round === 0 ? "Pick the primary sort key" : "Pick an additional key, or Done to finish"
         });
@@ -13847,7 +14052,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
           { label: "$(arrow-down)  Descending", description: "Newest \xB7 Largest \xB7 Z\u2192A", dir: "desc" },
           { label: "$(arrow-up)  Ascending", description: "Oldest \xB7 Smallest \xB7 A\u2192Z", dir: "asc" }
         ];
-        const dirPick = await vscode17.window.showQuickPick(dirItems, {
+        const dirPick = await vscode18.window.showQuickPick(dirItems, {
           title: `Direction for "${SORT_KEY_LABELS[keyPick.key]}"`
         });
         if (!dirPick) {
@@ -13861,7 +14066,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
     })
   );
   context.subscriptions.push(
-    vscode17.commands.registerCommand("chatwizard.filterSessions", async () => {
+    vscode18.commands.registerCommand("chatwizard.filterSessions", async () => {
       const current = provider.getFilter();
       const items = [
         {
@@ -13915,7 +14120,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
           alwaysShow: true
         }
       ];
-      const pick = await vscode17.window.showQuickPick(items, {
+      const pick = await vscode18.window.showQuickPick(items, {
         title: "Filter Sessions",
         placeHolder: "Choose a filter criterion to set (or clear all)"
       });
@@ -13926,12 +14131,12 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
         provider.clearFilter();
         treeView.description = provider.getDescription();
         provider.refresh();
-        void vscode17.commands.executeCommand("setContext", "chatwizard.hasFilter", false);
+        void vscode18.commands.executeCommand("setContext", "chatwizard.hasFilter", false);
         return;
       }
       const newFilter = { ...current };
       if (pick.id === "title") {
-        const val = await vscode17.window.showInputBox({
+        const val = await vscode18.window.showInputBox({
           title: "Filter by title (case-insensitive substring)",
           value: current.title ?? "",
           placeHolder: "Leave blank to remove this filter"
@@ -13941,7 +14146,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
         }
         newFilter.title = val.trim() || void 0;
       } else if (pick.id === "dateFrom") {
-        const val = await vscode17.window.showInputBox({
+        const val = await vscode18.window.showInputBox({
           title: "Updated from (YYYY-MM-DD, inclusive)",
           value: current.dateFrom ?? "",
           placeHolder: "e.g. 2024-01-01  \u2014  blank to remove",
@@ -13952,7 +14157,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
         }
         newFilter.dateFrom = val.trim() || void 0;
       } else if (pick.id === "dateTo") {
-        const val = await vscode17.window.showInputBox({
+        const val = await vscode18.window.showInputBox({
           title: "Updated until (YYYY-MM-DD, inclusive)",
           value: current.dateTo ?? "",
           placeHolder: "e.g. 2024-12-31  \u2014  blank to remove",
@@ -13963,7 +14168,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
         }
         newFilter.dateTo = val.trim() || void 0;
       } else if (pick.id === "model") {
-        const val = await vscode17.window.showInputBox({
+        const val = await vscode18.window.showInputBox({
           title: "Filter by model (case-insensitive substring)",
           value: current.model ?? "",
           placeHolder: "e.g. gpt-4  \u2014  blank to remove"
@@ -13982,7 +14187,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
             description: current.source === s ? "current" : void 0
           }))
         ];
-        const chosen = await vscode17.window.showQuickPick(sourceItems, {
+        const chosen = await vscode18.window.showQuickPick(sourceItems, {
           title: "Filter by source (AI assistant)"
         });
         if (chosen === void 0) {
@@ -13990,7 +14195,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
         }
         newFilter.source = chosen.value;
       } else if (pick.id === "minMessages") {
-        const val = await vscode17.window.showInputBox({
+        const val = await vscode18.window.showInputBox({
           title: "Minimum message count (inclusive)",
           value: current.minMessages !== void 0 ? String(current.minMessages) : "",
           placeHolder: "e.g. 10  \u2014  blank to remove",
@@ -14001,7 +14206,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
         }
         newFilter.minMessages = val.trim() ? parseInt(val.trim(), 10) : void 0;
       } else if (pick.id === "maxMessages") {
-        const val = await vscode17.window.showInputBox({
+        const val = await vscode18.window.showInputBox({
           title: "Maximum message count (inclusive)",
           value: current.maxMessages !== void 0 ? String(current.maxMessages) : "",
           placeHolder: "e.g. 100  \u2014  blank to remove",
@@ -14019,11 +14224,11 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
       provider.setFilter(newFilter);
       treeView.description = provider.getDescription();
       provider.refresh();
-      void vscode17.commands.executeCommand("setContext", "chatwizard.hasFilter", provider.hasActiveFilter());
+      void vscode18.commands.executeCommand("setContext", "chatwizard.hasFilter", provider.hasActiveFilter());
     })
   );
   context.subscriptions.push(
-    vscode17.commands.registerCommand("chatwizard.filterCodeBlocks", async () => {
+    vscode18.commands.registerCommand("chatwizard.filterCodeBlocks", async () => {
       const current = codeBlockProvider.getFilter();
       const items = [
         {
@@ -14052,7 +14257,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
           alwaysShow: true
         }
       ];
-      const pick = await vscode17.window.showQuickPick(items, {
+      const pick = await vscode18.window.showQuickPick(items, {
         title: "Filter Code Blocks",
         placeHolder: "Choose a filter criterion to set (or clear all)"
       });
@@ -14067,7 +14272,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
       }
       const newFilter = { ...current };
       if (pick.id === "language") {
-        const val = await vscode17.window.showInputBox({
+        const val = await vscode18.window.showInputBox({
           title: "Filter by language (case-insensitive substring)",
           value: current.language ?? "",
           placeHolder: "e.g. typescript, python, javascript"
@@ -14077,7 +14282,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
         }
         newFilter.language = val.trim() || void 0;
       } else if (pick.id === "content") {
-        const val = await vscode17.window.showInputBox({
+        const val = await vscode18.window.showInputBox({
           title: "Filter by content (case-insensitive substring)",
           value: current.content ?? "",
           placeHolder: "Search within code block content"
@@ -14095,7 +14300,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
           })),
           { label: "$(close)  Clear filter", source: void 0 }
         ];
-        const sourcePick = await vscode17.window.showQuickPick(sourceItems, {
+        const sourcePick = await vscode18.window.showQuickPick(sourceItems, {
           title: "Filter by source"
         });
         if (!sourcePick) {
@@ -14108,7 +14313,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
           { label: "$(hubot)  AI Assistant", role: "assistant" },
           { label: "$(close)  Clear filter", role: void 0 }
         ];
-        const rolePick = await vscode17.window.showQuickPick(roleItems, {
+        const rolePick = await vscode18.window.showQuickPick(roleItems, {
           title: "Filter by message role"
         });
         if (!rolePick) {
@@ -14122,27 +14327,27 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
     })
   );
   context.subscriptions.push(
-    vscode17.commands.registerCommand("chatwizard.pinSession", (item) => {
+    vscode18.commands.registerCommand("chatwizard.pinSession", (item) => {
       provider.pin(item.summary.id);
       provider.refresh();
       savePins();
     })
   );
   context.subscriptions.push(
-    vscode17.commands.registerCommand("chatwizard.unpinSession", (item) => {
+    vscode18.commands.registerCommand("chatwizard.unpinSession", (item) => {
       provider.unpin(item.summary.id);
       provider.refresh();
       savePins();
     })
   );
   context.subscriptions.push(
-    vscode17.commands.registerCommand("chatwizard.loadMoreSessions", () => provider.loadMore())
+    vscode18.commands.registerCommand("chatwizard.loadMoreSessions", () => provider.loadMore())
   );
   context.subscriptions.push(
-    vscode17.commands.registerCommand("chatwizard.loadMoreCodeBlocks", () => codeBlockProvider.loadMore())
+    vscode18.commands.registerCommand("chatwizard.loadMoreCodeBlocks", () => codeBlockProvider.loadMore())
   );
   context.subscriptions.push(
-    vscode17.commands.registerCommand("chatwizard.toggleSessionGrouping", () => {
+    vscode18.commands.registerCommand("chatwizard.toggleSessionGrouping", () => {
       const next = provider.getGroupMode() === "date" ? "none" : "date";
       provider.setGroupMode(next);
       treeView.description = provider.getDescription();
@@ -14151,7 +14356,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
     })
   );
   context.subscriptions.push(
-    vscode17.commands.registerCommand("chatwizard.enableSessionGrouping", () => {
+    vscode18.commands.registerCommand("chatwizard.enableSessionGrouping", () => {
       provider.setGroupMode("date");
       treeView.description = provider.getDescription();
       void context.globalState.update("sessionGroupMode", "date");
@@ -14159,7 +14364,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
     })
   );
   context.subscriptions.push(
-    vscode17.commands.registerCommand("chatwizard.disableSessionGrouping", () => {
+    vscode18.commands.registerCommand("chatwizard.disableSessionGrouping", () => {
       provider.setGroupMode("none");
       treeView.description = provider.getDescription();
       void context.globalState.update("sessionGroupMode", "none");
@@ -14167,7 +14372,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
     })
   );
   context.subscriptions.push(
-    vscode17.commands.registerCommand("chatwizard.toggleCbGrouping", () => {
+    vscode18.commands.registerCommand("chatwizard.toggleCbGrouping", () => {
       const next = codeBlockProvider.getGroupMode() === "language" ? "none" : "language";
       codeBlockProvider.setGroupMode(next);
       codeBlockTreeView.description = codeBlockProvider.getDescription();
@@ -14176,7 +14381,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
     })
   );
   context.subscriptions.push(
-    vscode17.commands.registerCommand("chatwizard.enableCbGrouping", () => {
+    vscode18.commands.registerCommand("chatwizard.enableCbGrouping", () => {
       codeBlockProvider.setGroupMode("language");
       codeBlockTreeView.description = codeBlockProvider.getDescription();
       void context.globalState.update("cbGroupMode", "language");
@@ -14184,7 +14389,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
     })
   );
   context.subscriptions.push(
-    vscode17.commands.registerCommand("chatwizard.disableCbGrouping", () => {
+    vscode18.commands.registerCommand("chatwizard.disableCbGrouping", () => {
       codeBlockProvider.setGroupMode("none");
       codeBlockTreeView.description = codeBlockProvider.getDescription();
       void context.globalState.update("cbGroupMode", "none");
@@ -14192,10 +14397,10 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
     })
   );
   context.subscriptions.push(
-    vscode17.commands.registerCommand("chatwizard.openSession", (summary, searchTerm, highlightContainer) => {
+    vscode18.commands.registerCommand("chatwizard.openSession", (summary, searchTerm, highlightContainer) => {
       const session = index.get(summary.id);
       if (!session) {
-        vscode17.window.showErrorMessage(`Session not found: ${summary.id}`);
+        vscode18.window.showErrorMessage(`Session not found: ${summary.id}`);
         return;
       }
       telemetry.record("session.opened", { source: session.source });
@@ -14203,10 +14408,10 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
     })
   );
   context.subscriptions.push(
-    vscode17.commands.registerCommand("chatwizard.openSessionFromCodeBlock", (ref) => {
+    vscode18.commands.registerCommand("chatwizard.openSessionFromCodeBlock", (ref) => {
       const session = index.get(ref.sessionId);
       if (!session) {
-        vscode17.window.showErrorMessage(`Session not found: ${ref.sessionId}`);
+        vscode18.window.showErrorMessage(`Session not found: ${ref.sessionId}`);
         return;
       }
       const isLeaf = ref.blocks.length === 1;
@@ -14216,20 +14421,20 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
     })
   );
   context.subscriptions.push(
-    vscode17.commands.registerCommand("chatwizard.search", () => {
+    vscode18.commands.registerCommand("chatwizard.search", () => {
       telemetry.record("search.opened");
       SearchPanel.show(context, index, engine);
     })
   );
   context.subscriptions.push(
-    vscode17.commands.registerCommand("chatwizard.semanticSearch", () => {
+    vscode18.commands.registerCommand("chatwizard.semanticSearch", () => {
       if (!semanticIndexer) {
-        void vscode17.window.showInformationMessage(
-          "Chat Wizard: Semantic search is disabled. Enable it in settings to use natural-language search.",
+        void vscode18.window.showInformationMessage(
+          "Chat Wizard: Topic similarity search is disabled. Enable it in settings to find past sessions by topic.",
           "Open Settings"
         ).then((action) => {
           if (action === "Open Settings") {
-            void vscode17.commands.executeCommand(
+            void vscode18.commands.executeCommand(
               "workbench.action.openSettings",
               "chatwizard.enableSemanticSearch"
             );
@@ -14241,45 +14446,45 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
     })
   );
   context.subscriptions.push(
-    vscode17.commands.registerCommand("chatwizard.showCodeBlocks", () => {
+    vscode18.commands.registerCommand("chatwizard.showCodeBlocks", () => {
       CodeBlocksPanel.show(context, index, codeBlockEngine);
     })
   );
   context.subscriptions.push(
-    vscode17.commands.registerCommand("chatwizard.showPromptLibrary", () => {
+    vscode18.commands.registerCommand("chatwizard.showPromptLibrary", () => {
       PromptLibraryPanel.show(context, index);
     })
   );
   context.subscriptions.push(
-    vscode17.commands.registerCommand("chatwizard.showAnalytics", () => {
+    vscode18.commands.registerCommand("chatwizard.showAnalytics", () => {
       AnalyticsPanel.show(context, index);
     })
   );
   context.subscriptions.push(
-    vscode17.commands.registerCommand("chatwizard.showTimeline", () => {
-      void vscode17.commands.executeCommand("chatwizardTimeline.focus");
+    vscode18.commands.registerCommand("chatwizard.showTimeline", () => {
+      void vscode18.commands.executeCommand("chatwizardTimeline.focus");
     })
   );
   context.subscriptions.push(
-    vscode17.commands.registerCommand("chatwizard.rescan", () => {
-      void vscode17.window.showInformationMessage(
+    vscode18.commands.registerCommand("chatwizard.rescan", () => {
+      void vscode18.window.showInformationMessage(
         "Chat Wizard indexes sessions automatically via file system events. If sessions are missing, reload the window to trigger a fresh scan.",
         "Reload Window"
       ).then((action) => {
         if (action === "Reload Window") {
-          void vscode17.commands.executeCommand("workbench.action.reloadWindow");
+          void vscode18.commands.executeCommand("workbench.action.reloadWindow");
         }
       });
     })
   );
   context.subscriptions.push(
-    vscode17.workspace.onDidChangeConfiguration((e) => {
+    vscode18.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("chatwizard.enableTelemetry")) {
-        const cfg = vscode17.workspace.getConfiguration("chatwizard");
+        const cfg = vscode18.workspace.getConfiguration("chatwizard");
         telemetry.setEnabled(cfg.get("enableTelemetry") ?? false);
       }
       if (e.affectsConfiguration("chatwizard.enableSemanticSearch")) {
-        const cfg = vscode17.workspace.getConfiguration("chatwizard");
+        const cfg = vscode18.workspace.getConfiguration("chatwizard");
         const enabled = cfg.get("enableSemanticSearch") ?? false;
         if (enabled && !semanticIndexer) {
           createAndInitSemanticIndexer();
@@ -14325,7 +14530,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
   );
   registerExportCommands(context, index, () => provider.getSortedSummaries());
   context.subscriptions.push(
-    vscode17.commands.registerCommand(
+    vscode18.commands.registerCommand(
       "chatwizard.exportFromTreeSelection",
       async (item, allSelected) => {
         const items = allSelected && allSelected.length > 0 ? allSelected : item ? [item] : [];
@@ -14336,6 +14541,7 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
   );
   const scopeManager = new WorkspaceScopeManager(context);
   registerManageWorkspacesCommand(context, scopeManager, () => watcher, channel, index);
+  registerPaletteCommands(context);
   await new Promise((resolve) => setTimeout(resolve, 200));
   void (async () => {
     const [copilotWs, claudeWs, cursorWs, windsurfWs] = await Promise.all([
@@ -14381,6 +14587,6 @@ function capitalise(s) {
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   activate,
-  buildSemanticText,
   deactivate
 });
+//# sourceMappingURL=extension.js.map

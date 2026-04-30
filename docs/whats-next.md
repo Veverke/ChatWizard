@@ -65,7 +65,33 @@ Gaps in the domain of managing conversations themselves:
 
 ---
 
-## 4. Competitive Gaps vs. Top Tools
+## 4. Session Retention and Archiving
+
+Two related but distinct features for managing history growth over time. As a rough ceiling: 20–30 sessions/day × ~220 working days/year ≈ **~8 K sessions/year per user**. Sessions older than 6–12 months are rarely searched or revisited, but accumulate storage and add noise to search results and UI listings.
+
+### Retention
+
+Two independent retention controls, scoped differently:
+
+- **Semantic index retention** (`chatwizard.semanticIndexMaxAgeDays`) — excludes sessions older than N days from the semantic/vector index only. Raw session files are untouched; sessions still appear in keyword search and the tree view. This is the lower-risk, purely mechanical fix for keeping the semantic index bounded. Recommended default: **180 days**.
+
+- **Global session retention** (`chatwizard.sessionRetentionDays`) — suppresses sessions older than N days from _all_ surfaces: tree view, keyword search, semantic index, analytics. Source files on disk are never deleted (the extension is read-only by design); suppression is a flag in the extension's own index. Effectively hides old sessions from normal operation without destroying data.
+
+Both settings are independent — a user can enable semantic-only retention without hiding old sessions from the tree view.
+
+### Archiving
+
+Archiving addresses a different problem: removing sessions from active use while keeping them recoverable and portable.
+
+**Phase 1 — Index-level suppression:** Mark sessions as archived in the `SessionIndex` metadata. Archived sessions disappear from the tree view, both search engines, and analytics. Source files remain untouched. Restore = flip the archived flag. No file I/O risk. UI shows an optional "Archived" collapsible section in the tree view for recovery without a settings round-trip.
+
+**Phase 2 — Export/import (portability):** Export a set of archived (or selected) sessions to a portable `.cwarchive` file (structured JSON or zip of session data). Import on another machine re-ingests the archive into the local index. This is the mechanism for moving chat history across machines — important because ChatWizard is 100% local and source files (Copilot, Claude, Cursor, etc.) are not synced by default.
+
+**Key design constraint for Phase 2:** The file watcher re-discovers source files on startup. Imported archive sessions must be tracked in a suppression list checked at parse time, or stored in a separate namespace, to prevent the watcher from overwriting them with a "not found" state.
+
+---
+
+## 5. Competitive Gaps vs. Top Tools
 
 **Pieces for Developers** is the most direct competitor. It:
 - Uses **on-device ML models** for natural language search — _"find where I used debounce"_ works without typing the exact word

@@ -120,7 +120,7 @@ No executable logic is introduced in this phase; build pipeline and type-check s
 
 ---
 
-## Phase 1 — EmbeddingEngine ⬜
+## Phase 1 — EmbeddingEngine ✅
 
 **Goal:** Implement `IEmbeddingEngine` — a thin wrapper around `@xenova/transformers` that loads the ONNX model and produces normalized embeddings.
 
@@ -160,7 +160,7 @@ Write unit tests in `test/suite/embeddingEngine.test.ts` covering all public met
 
 ---
 
-## Phase 2 — SemanticIndex ⬜
+## Phase 2 — SemanticIndex ✅
 
 **Goal:** Implement `ISemanticIndex` — an in-memory vector store with binary file persistence so embeddings survive VS Code restarts.
 
@@ -211,7 +211,7 @@ Write unit tests in `test/suite/semanticIndex.test.ts` covering all public metho
 
 ---
 
-## Phase 3 — SemanticIndexer ⬜
+## Phase 3 — SemanticIndexer ✅
 
 **Goal:** Implement `ISemanticIndexer` — the orchestrator that owns `IEmbeddingEngine` and `ISemanticIndex`, manages the async embedding queue, shows status bar progress, and persists the index.
 
@@ -254,7 +254,7 @@ Write unit tests in `test/suite/semanticIndexer.test.ts` covering all public met
 
 ---
 
-## Phase 4 — SemanticSearchPanel ⬜
+## Phase 4 — SemanticSearchPanel ✅
 
 **Goal:** Implement the user-facing quick-pick panel and add the mode-toggle button to the existing `SearchPanel`.
 
@@ -299,7 +299,7 @@ Write unit tests in `test/suite/semanticSearchPanel.test.ts` covering `SemanticS
 
 ---
 
-## Phase 5 — Extension Wiring ⬜
+## Phase 5 — Extension Wiring ✅
 
 **Goal:** Integrate the four parallel tracks into `extension.ts` — register the command, wire `SessionIndex` events to the indexer, and handle runtime config changes.
 
