@@ -907,7 +907,7 @@
         },
         "chatwizard.semanticMinScore": {
           "type": "number",
-          "default": 0.25,
+          "default": 0.35,
           "minimum": 0,
           "maximum": 1,
           "description": "Minimum similarity score (0–1) for a session to appear in topic similarity search results. Lower values show more (but less relevant) results. Recommended range: 0.30–0.45."
