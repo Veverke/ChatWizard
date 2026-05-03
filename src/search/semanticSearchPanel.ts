@@ -65,7 +65,8 @@ export function buildItems(
         const label = `${srcIcon}  ${summary.title}`;
 
         const score = Math.round(result.score * 100);
-        const description = `Score: ${score}% · ${summary.updatedAt.slice(0, 10)}`;
+        const workspace = summary.workspacePath ?? summary.workspaceId;
+        const description = `Score: ${score}% · ${workspace} · ${summary.updatedAt.slice(0, 10)}`;
 
         items.push({ label, description, summary, score, alwaysShow: true });
     }

@@ -25,7 +25,7 @@ function makeMockFactory(
             return { data: embedding };
         };
     };
-    return { factory, ...state };
+    return Object.assign(state, { factory });
 }
 
 // ── isReady ───────────────────────────────────────────────────────────────────

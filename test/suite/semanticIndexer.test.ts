@@ -1,6 +1,7 @@
 // test/suite/semanticIndexer.test.ts
 
 import * as assert from 'assert';
+import * as path from 'path';
 import { SemanticIndexer, SemanticIndexerVsCodeApi } from '../../src/search/semanticIndexer';
 import { IEmbeddingEngine, ISemanticIndex, SEMANTIC_DIMS, SemanticScope } from '../../src/search/semanticContracts';
 import { SemanticSearchResult, SemanticMessageResult } from '../../src/search/types';
@@ -207,7 +208,8 @@ suite('SemanticIndexer.initialize', () => {
         const api = makeVsCodeApiStub({ isFirstUse: false });
         const indexer = new SemanticIndexer('/my/storage', () => engine, () => index, api);
         await indexer.initialize();
-        assert.ok(index.lastLoadedPath?.startsWith('/my/storage'), `expected /my/storage prefix, got ${index.lastLoadedPath}`);
+        const expectedPath = path.join('/my/storage', 'semantic-embeddings.bin');
+        assert.strictEqual(index.lastLoadedPath, expectedPath, `expected ${expectedPath}, got ${index.lastLoadedPath}`);
         indexer.dispose();
     });
 

@@ -104,7 +104,10 @@ export function computeAnalytics(sessions: Session[], countTokens: CountTokensFn
     let totalResponses = 0;
     let totalUserTokens = 0;
     let totalAssistantTokens = 0;
-    const sessionCountsBySource: Record<string, number> = {};
+    const sessionCountsBySource: Record<string, number> = {
+        copilot: 0, claude: 0, cline: 0, roocode: 0,
+        cursor: 0, windsurf: 0, aider: 0, antigravity: 0,
+    };
 
     for (const m of allMetrics) {
         totalPrompts += m.userMessageCount;

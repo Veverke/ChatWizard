@@ -96,7 +96,7 @@ suite('SemanticIndex — search()', () => {
         const idx = new SemanticIndex();
         idx.add('s1', 'user', 0, 0, randomUnitVector());
         idx.add('s2', 'user', 0, 0, randomUnitVector());
-        const results = idx.search(randomUnitVector(), 20);
+        const results = idx.search(randomUnitVector(), 20, -1);
         assert.strictEqual(results.length, 2);
     });
 
@@ -128,7 +128,7 @@ suite('SemanticIndex — search()', () => {
     test('result items have sessionId, role, messageIndex, paragraphIndex and score fields', () => {
         const idx = new SemanticIndex();
         idx.add('abc', 'user', 2, 0, randomUnitVector());
-        const results = idx.search(randomUnitVector(), 1);
+        const results = idx.search(randomUnitVector(), 1, -1);
         assert.ok('sessionId' in results[0]);
         assert.ok('score' in results[0]);
         assert.ok('role' in results[0]);
@@ -166,7 +166,7 @@ suite('SemanticIndex — search() scope filter', () => {
         const idx = new SemanticIndex();
         idx.add('s1', 'user', 0, 0, randomUnitVector());
         idx.add('s1', 'assistant', 1, 0, randomUnitVector());
-        const results = idx.search(randomUnitVector(), 10, 0, 'both');
+        const results = idx.search(randomUnitVector(), 10, -1, 'both');
         assert.strictEqual(results.length, 2);
     });
 
