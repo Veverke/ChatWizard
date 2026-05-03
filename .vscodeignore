@@ -27,6 +27,9 @@ node_modules/**
 !node_modules/better-sqlite3/build/Release/better_sqlite3.node
 !node_modules/better-sqlite3/package.json
 
+# @xenova/transformers: loaded externally at runtime (not bundled); include full package
+!node_modules/@xenova/transformers/**
+
 # bindings + file-uri-to-path: runtime deps used by better-sqlite3 to locate the .node file
 !node_modules/bindings/bindings.js
 !node_modules/bindings/package.json
