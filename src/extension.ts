@@ -41,6 +41,7 @@ import { SemanticIndexer } from './search/semanticIndexer';
 import { EmbeddingEngine } from './search/embeddingEngine';
 import { SemanticIndex } from './search/semanticIndex';
 import { SemanticSearchPanel } from './search/semanticSearchPanel';
+import { McpServer } from './mcp/mcpServer';
 
 let watcher: ChatWizardWatcher | undefined;
 
@@ -992,6 +993,70 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 void watcher?.restart()
                     .then(() => channel.appendLine('[Chat Wizard] Watcher restarted after filter change.'))
                     .catch(err => channel.appendLine(`[error] Filter-change restart failed: ${err}`));
+            }
+        })
+    );
+
+    // ------------------------------------------------------------------
+    // MCP server commands
+    // ------------------------------------------------------------------
+    const mcpServer = new McpServer();
+    context.subscriptions.push({ dispose: () => void mcpServer.stop() });
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.startMcpServer', async () => {
+            if (mcpServer.isRunning) {
+                void vscode.window.showInformationMessage(
+                    `Chat Wizard MCP server is already running on port ${mcpServer.port}.`
+                );
+                return;
+            }
+            try {
+                await mcpServer.start();
+                void vscode.window.showInformationMessage(
+                    `Chat Wizard MCP server started on port ${mcpServer.port}. ` +
+                    `Use 'Chat Wizard: Copy MCP Config to Clipboard' to set up your AI tool.`
+                );
+            } catch (err) {
+                void vscode.window.showErrorMessage(
+                    `Chat Wizard: Failed to start MCP server — ${String(err)}`
+                );
+            }
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.stopMcpServer', async () => {
+            if (!mcpServer.isRunning) {
+                void vscode.window.showInformationMessage('Chat Wizard MCP server is not running.');
+                return;
+            }
+            await mcpServer.stop();
+            void vscode.window.showInformationMessage('Chat Wizard MCP server stopped.');
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.copyMcpConfig', async () => {
+            const cfg = vscode.workspace.getConfiguration('chatwizard');
+            const port = mcpServer.isRunning
+                ? mcpServer.port
+                : (cfg.get<number>('mcpServer.port') ?? 6789);
+            const config = {
+                mcpServers: {
+                    chatwizard: { url: `http://localhost:${port}/sse` },
+                },
+            };
+            await vscode.env.clipboard.writeText(JSON.stringify(config, null, 2));
+            if (!mcpServer.isRunning) {
+                void vscode.window.showWarningMessage(
+                    'MCP config copied to clipboard. Note: the MCP server is not currently running. ' +
+                    `Start it with 'Chat Wizard: Start MCP Server'.`
+                );
+            } else {
+                void vscode.window.showInformationMessage(
+                    'MCP config copied to clipboard. Paste it into your AI tool\'s MCP configuration.'
+                );
             }
         })
     );

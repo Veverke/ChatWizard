@@ -82,6 +82,9 @@ export const PALETTE_CATEGORIES: readonly PaletteCategory[] = [
         items: [
             { commandId: 'chatwizard.manageWatchedWorkspaces', label: 'Manage Watched Workspaces', icon: '$(folder-library)' },
             { commandId: 'chatwizard.rescan',                  label: 'Rescan Sessions',            icon: '$(refresh)'        },
+            { commandId: 'chatwizard.startMcpServer',          label: 'Start MCP Server',           icon: '$(broadcast)'     },
+            { commandId: 'chatwizard.stopMcpServer',           label: 'Stop MCP Server',            icon: '$(debug-stop)'    },
+            { commandId: 'chatwizard.copyMcpConfig',           label: 'Copy MCP Config to Clipboard', icon: '$(clippy)'      },
         ],
     },
 ];
