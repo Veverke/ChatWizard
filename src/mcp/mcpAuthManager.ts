@@ -39,6 +39,22 @@ export class McpAuthManager {
     }
 
     /**
+     * Read and return an existing valid token from `tokenPath`, or `null` if the file
+     * does not exist. Does NOT create a new token — use this from code paths where the
+     * token file must already exist (e.g. copyMcpConfig), so consent gating is preserved.
+     */
+    async readToken(tokenPath: string): Promise<string | null> {
+        this._assertAbsolute(tokenPath);
+        try {
+            const raw = fs.readFileSync(tokenPath, 'utf8').trim();
+            return this._isValidToken(raw) ? raw : null;
+        } catch (err: unknown) {
+            if (this._isNoEntError(err)) { return null; }
+            throw err;
+        }
+    }
+
+    /**
      * Generate a fresh token, overwrite the existing file, and return the new token.
      * Called when the user explicitly requests token rotation.
      */

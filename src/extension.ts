@@ -52,7 +52,7 @@ import { ListRecentTool } from './mcp/tools/listRecentTool';
 import { GetContextTool } from './mcp/tools/getContextTool';
 import { ListSourcesTool } from './mcp/tools/listSourcesTool';
 import { ServerInfoTool } from './mcp/tools/serverInfoTool';
-import { NullSemanticIndexer } from './search/semanticContracts';
+import { NullSemanticIndexer, ISemanticIndexer } from './search/semanticContracts';
 
 let watcher: ChatWizardWatcher | undefined;
 
@@ -172,6 +172,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         }
     });
     context.subscriptions.push(semanticListener);
+
+    // Proxy that delegates to the current semanticIndexer reference.
+    // Passed into buildMcpTools() once so tools always see the live indexer
+    // even when enableSemanticSearch is toggled at runtime without a reload.
+    const _nullIndexerForProxy = new NullSemanticIndexer();
+    const semanticProxy: ISemanticIndexer = {
+        get isReady()      { return (semanticIndexer ?? _nullIndexerForProxy).isReady; },
+        get isIndexing()   { return (semanticIndexer ?? _nullIndexerForProxy).isIndexing; },
+        get indexedCount() { return (semanticIndexer ?? _nullIndexerForProxy).indexedCount; },
+        initialize()       { return (semanticIndexer ?? _nullIndexerForProxy).initialize(); },
+        scheduleSession(s) { return (semanticIndexer ?? _nullIndexerForProxy).scheduleSession(s); },
+        removeSession(id)  { return (semanticIndexer ?? _nullIndexerForProxy).removeSession(id); },
+        search(q, k, s)    { return (semanticIndexer ?? _nullIndexerForProxy).search(q, k, s); },
+        dispose()          { /* proxy is not the owner; do nothing */ },
+    };
 
     // Build code block engine — populated by the codeBlockListener when batchUpsert fires.
     const codeBlockEngine = new CodeBlockSearchEngine();
@@ -1018,7 +1033,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const mcpConfigHelper = new McpConfigHelper();
 
     // Resolve the extension version once (used by ServerInfoTool).
-    const extensionVersion = context.extension?.packageJSON?.version as string ?? '0.0.0';
+    const extensionVersion = context.extension.packageJSON.version as string ?? '0.0.0';
 
     // Date the server instance was created (uptime reference).
     const mcpServerStartTime = new Date();
@@ -1026,9 +1041,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // Build tool instances — they hold references to live engine instances.
     // GetContextTool composes FindSimilarTool + SearchTool, so create those first.
     function buildMcpTools() {
-        const effectiveSemanticIndexer = semanticIndexer ?? new NullSemanticIndexer();
         const searchTool = new SearchTool(engine, index);
-        const findSimilarTool = new FindSimilarTool(effectiveSemanticIndexer, index);
+        const findSimilarTool = new FindSimilarTool(semanticProxy, index);
         return [
             searchTool,
             findSimilarTool,
@@ -1037,7 +1051,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             new ListRecentTool(index),
             new GetContextTool(findSimilarTool, searchTool, index),
             new ListSourcesTool(index),
-            new ServerInfoTool(index, effectiveSemanticIndexer, extensionVersion, mcpServerStartTime),
+            new ServerInfoTool(index, semanticProxy, extensionVersion, mcpServerStartTime),
         ];
     }
 
@@ -1186,7 +1200,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
             let token: string;
             try {
-                token = await mcpAuthManager.getOrCreateToken(mcpTokenPath);
+                const existing = await mcpAuthManager.readToken(mcpTokenPath);
+                if (!existing) {
+                    void vscode.window.showErrorMessage(
+                        'Chat Wizard: No MCP token found. Run "Chat Wizard: Start MCP Server" first to initialise the server and generate a token.'
+                    );
+                    return;
+                }
+                token = existing;
             } catch {
                 void vscode.window.showErrorMessage(
                     'Chat Wizard: Could not read MCP token. Start the MCP server first.'

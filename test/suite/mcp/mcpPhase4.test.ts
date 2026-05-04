@@ -273,3 +273,57 @@ suite('All 8 MCP tools construct and execute safely', () => {
         }
     });
 });
+
+// ── GetContextTool: semantic branch regression ────────────────────────────────
+// Verifies that when a ready ISemanticIndexer returns a known session, GetContextTool
+// merges those semantic results into its output (catches the {topic} vs {query} bug).
+
+import { ISemanticIndexer, SemanticScope } from '../../../src/search/semanticContracts';
+import { SemanticSearchResult } from '../../../src/search/types';
+import { Session } from '../../../src/types/index';
+
+class ReadyStubSemanticIndexer implements ISemanticIndexer {
+    constructor(private readonly _result: SemanticSearchResult) {}
+    readonly isReady = true;
+    readonly isIndexing = false;
+    readonly indexedCount = 1;
+    initialize(): Promise<void> { return Promise.resolve(); }
+    scheduleSession(_s: Session): void { /* no-op */ }
+    removeSession(_id: string): void { /* no-op */ }
+    search(_query: string, _topK: number, _minScore?: number, _scope?: SemanticScope): Promise<SemanticSearchResult[]> {
+        return Promise.resolve([this._result]);
+    }
+    dispose(): void { /* no-op */ }
+}
+
+suite('GetContextTool: semantic branch', () => {
+    const KNOWN_SESSION_ID = 'stub-session-abc123';
+
+    test('includes session from semantic search results when indexer is ready', async () => {
+        const localIndex = new SessionIndex();
+        localIndex.upsert({
+            id: KNOWN_SESSION_ID,
+            title: 'Stub Session',
+            source: 'copilot',
+            messages: [{ role: 'user', content: 'Hello from stub session', timestamp: '' }],
+            updatedAt: '2025-01-01',
+            createdAt: '2025-01-01',
+            workspaceId: 'ws-stub',
+            filePath: '/tmp/stub.json',
+        } as unknown as Session);
+
+        const stub = new ReadyStubSemanticIndexer({ sessionId: KNOWN_SESSION_ID, score: 0.9 });
+        const stubFindSimilar = new FindSimilarTool(stub, localIndex);
+        const stubSearch = new SearchTool(new FullTextSearchEngine(), localIndex);
+        const tool = new GetContextTool(stubFindSimilar, stubSearch, localIndex);
+
+        const result = await tool.execute({ topic: 'test topic' });
+
+        assert.notStrictEqual(result.isError, true, 'should not return an error');
+        const text = result.content[0]?.text ?? '';
+        assert.ok(
+            text.includes(`ID: ${KNOWN_SESSION_ID}`),
+            `expected output to include "ID: ${KNOWN_SESSION_ID}" but got:\n${text}`,
+        );
+    });
+});

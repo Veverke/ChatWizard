@@ -83,7 +83,7 @@ export class GetContextTool implements IMcpTool {
         const orderedIds: string[] = [];
 
         // 1. Semantic search (primary, if available).
-        const semanticResult = await this.findSimilarTool.execute({ topic, limit: limit * 2 });
+        const semanticResult = await this.findSimilarTool.execute({ query: topic, limit: limit * 2 });
         if (!semanticResult.isError) {
             for (const id of extractIds(semanticResult.content[0]?.text ?? '')) {
                 if (!seenIds.has(id)) {
