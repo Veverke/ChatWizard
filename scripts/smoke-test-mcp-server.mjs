@@ -8,7 +8,7 @@ import * as http from 'http';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -20,11 +20,9 @@ if (!fs.existsSync(outDir)) {
     process.exit(1);
 }
 
-const toFileUrl = p => new URL('file:///' + p.replace(/\\/g, '/')).href;
-
-const { McpServer } = await import(toFileUrl(path.join(outDir, 'mcp', 'mcpServer.js')));
-const { ServerInfoTool } = await import(toFileUrl(path.join(outDir, 'mcp', 'tools', 'serverInfoTool.js')));
-const { SessionIndex } = await import(toFileUrl(path.join(outDir, 'index', 'sessionIndex.js')));
+const { McpServer } = await import(pathToFileURL(path.join(outDir, 'mcp', 'mcpServer.js')).href);
+const { ServerInfoTool } = await import(pathToFileURL(path.join(outDir, 'mcp', 'tools', 'serverInfoTool.js')).href);
+const { SessionIndex } = await import(pathToFileURL(path.join(outDir, 'index', 'sessionIndex.js')).href);
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 

@@ -1002,11 +1002,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // ------------------------------------------------------------------
     // Phase 4 will replace this placeholder with full wiring (token path, tool instances).
     const _mcpCfg = vscode.workspace.getConfiguration('chatwizard');
+    await vscode.workspace.fs.createDirectory(context.globalStorageUri);
     const mcpServer = new McpServer(
         {
             enabled: _mcpCfg.get<boolean>('mcpServer.enabled') ?? false,
             port: _mcpCfg.get<number>('mcpServer.port') ?? 6789,
-            tokenPath: '', // Phase 4: wired to context.globalStorageUri/mcp-token.txt
+            tokenPath: vscode.Uri.joinPath(context.globalStorageUri, 'mcp-token.txt').fsPath,
         },
         [], // Phase 4: populated with all 8 tool instances
     );

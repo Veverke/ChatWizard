@@ -1,6 +1,7 @@
 // src/mcp/mcpServer.ts
 import * as fs from 'fs';
 import * as http from 'http';
+import * as path from 'path';
 import { Server as SdkServer } from '@modelcontextprotocol/sdk/server/index.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
@@ -44,6 +45,13 @@ export class McpServer implements IMcpServer {
 
     async start(): Promise<void> {
         if (this._running) { return; }
+
+        if (!this.config.tokenPath) {
+            throw new Error('MCP server cannot start: tokenPath is not configured. Set a valid absolute path in McpServerConfig.');
+        }
+        if (!path.isAbsolute(this.config.tokenPath)) {
+            throw new Error(`MCP server cannot start: tokenPath must be an absolute path (got "${this.config.tokenPath}"). Check the extension configuration.`);
+        }
 
         const port = this.config.port;
 
@@ -94,7 +102,7 @@ export class McpServer implements IMcpServer {
             if (!token) {
                 res.writeHead(503, { 'Content-Type': 'application/json' })
                     .end(JSON.stringify({
-                        error: 'MCP server token not yet initialized. Use the ChatWizard extension to start the server.',
+                        error: 'MCP server token not initialized — the token file was missing or unreadable when the server started. Re-run the \'ChatWizard: Start MCP Server\' command to regenerate the token and restart the server.',
                     }));
                 return false;
             }

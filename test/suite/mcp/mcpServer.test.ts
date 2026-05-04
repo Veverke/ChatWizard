@@ -3,6 +3,7 @@
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as http from 'http';
+import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 import { McpServer } from '../../../src/mcp/mcpServer';
@@ -11,14 +12,26 @@ import type { McpServerConfig } from '../../../src/types/index';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Allocate a unique port in the ephemeral range for each test to avoid conflicts. */
-let _nextPort = 19200;
-function allocPort(): number { return _nextPort++; }
+/** Obtain a free OS-assigned port by binding a temporary server to port 0. */
+async function getFreePort(): Promise<number> {
+    return new Promise<number>((resolve, reject) => {
+        const srv = net.createServer();
+        srv.listen(0, '127.0.0.1', () => {
+            const { port } = srv.address() as net.AddressInfo;
+            srv.close(() => resolve(port));
+        });
+        srv.on('error', reject);
+    });
+}
+
+/** Track temp token files created during the run so they can be deleted in teardown. */
+const _tempFiles: string[] = [];
 
 /** Write a bearer token to a temp file; returns the file path. */
 function writeTempToken(token: string): string {
     const p = path.join(os.tmpdir(), `cw-test-token-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
     fs.writeFileSync(p, token, 'utf8');
+    _tempFiles.push(p);
     return p;
 }
 
@@ -70,7 +83,9 @@ class FakeTool implements IMcpTool {
 
 suite('McpServer — lifecycle', () => {
     let server: McpServer;
-    const port = allocPort();
+    let port: number;
+
+    suiteSetup(async () => { port = await getFreePort(); });
 
     setup(() => {
         const tokenPath = writeTempToken('test-token-lifecycle');
@@ -127,7 +142,7 @@ suite('McpServer — lifecycle', () => {
         const tokenPath = writeTempToken('test-token-logger');
         const logServer = new McpServer(makeConfig(port + 100), [], (msg) => messages.push(msg));
         // Won't be able to bind since we haven't released the port yet, use dedicated port
-        const logPort = allocPort();
+        const logPort = await getFreePort();
         const logServer2 = new McpServer(makeConfig(logPort, tokenPath), [], (msg) => messages.push(msg));
         await logServer2.start();
         await logServer2.stop();
@@ -156,8 +171,10 @@ suite('McpServer — lifecycle', () => {
 
 suite('McpServer — /health endpoint', () => {
     let server: McpServer;
-    const port = allocPort();
+    let port: number;
     let sessionCount = 0;
+
+    suiteSetup(async () => { port = await getFreePort(); });
 
     setup(async () => {
         const tokenPath = writeTempToken('test-token-health');
@@ -194,8 +211,10 @@ suite('McpServer — /health endpoint', () => {
 
 suite('McpServer — /mcp-config endpoint', () => {
     let server: McpServer;
-    const port = allocPort();
+    let port: number;
     const TOKEN = 'config-endpoint-test-token';
+
+    suiteSetup(async () => { port = await getFreePort(); });
 
     setup(async () => {
         const tokenPath = writeTempToken(TOKEN);
@@ -254,8 +273,10 @@ suite('McpServer — /mcp-config endpoint', () => {
 
 suite('McpServer — auth middleware', () => {
     const TOKEN = 'auth-test-secret-token';
-    const port = allocPort();
+    let port: number;
     let server: McpServer;
+
+    suiteSetup(async () => { port = await getFreePort(); });
 
     setup(async () => {
         const tokenPath = writeTempToken(TOKEN);
@@ -296,8 +317,10 @@ suite('McpServer — auth middleware', () => {
 // ── Auth middleware — no token file ──────────────────────────────────────────
 
 suite('McpServer — auth middleware (no token file)', () => {
-    const port = allocPort();
+    let port: number;
     let server: McpServer;
+
+    suiteSetup(async () => { port = await getFreePort(); });
 
     setup(async () => {
         // Point to a path that doesn't exist
@@ -327,8 +350,10 @@ suite('McpServer — auth middleware (no token file)', () => {
 // ── Tool registry ─────────────────────────────────────────────────────────────
 
 suite('McpServer — tool registry', () => {
-    const port = allocPort();
+    let port: number;
     let server: McpServer;
+
+    suiteSetup(async () => { port = await getFreePort(); });
 
     teardown(async () => {
         await server.stop();
@@ -378,8 +403,10 @@ suite('McpServer — tool registry', () => {
 // ── Unknown path ──────────────────────────────────────────────────────────────
 
 suite('McpServer — unknown paths', () => {
-    const port = allocPort();
+    let port: number;
     let server: McpServer;
+
+    suiteSetup(async () => { port = await getFreePort(); });
 
     setup(async () => {
         const tokenPath = writeTempToken('unknown-path-token');
@@ -403,4 +430,10 @@ suite('McpServer — unknown paths', () => {
         });
         assert.strictEqual(status, 404);
     });
+});
+
+suiteTeardown(() => {
+    for (const p of _tempFiles) {
+        fs.rmSync(p, { force: true });
+    }
 });

@@ -3223,8 +3223,8 @@ var require_utils = __commonJS({
       }
       return ind;
     }
-    function removeDotSegments(path20) {
-      let input = path20;
+    function removeDotSegments(path21) {
+      let input = path21;
       const output = [];
       let nextSlash = -1;
       let len = 0;
@@ -3423,8 +3423,8 @@ var require_schemes = __commonJS({
         wsComponent.secure = void 0;
       }
       if (wsComponent.resourceName) {
-        const [path20, query] = wsComponent.resourceName.split("?");
-        wsComponent.path = path20 && path20 !== "/" ? path20 : void 0;
+        const [path21, query] = wsComponent.resourceName.split("?");
+        wsComponent.path = path21 && path21 !== "/" ? path21 : void 0;
         wsComponent.query = query;
         wsComponent.resourceName = void 0;
       }
@@ -31096,6 +31096,7 @@ var SemanticSearchPanel = class {
 // src/mcp/mcpServer.ts
 var fs18 = __toESM(require("fs"));
 var http = __toESM(require("http"));
+var path20 = __toESM(require("path"));
 
 // node_modules/zod/v4/core/core.js
 var _a;
@@ -31337,10 +31338,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path20) {
-  if (!path20)
+function getElementAtPath(obj, path21) {
+  if (!path21)
     return obj;
-  return path20.reduce((acc, key) => acc?.[key], obj);
+  return path21.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -31749,11 +31750,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path20, issues) {
+function prefixIssues(path21, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path20);
+    iss.path.unshift(path21);
     return iss;
   });
 }
@@ -31900,16 +31901,16 @@ function flattenError(error2, mapper = (issue2) => issue2.message) {
 }
 function formatError(error2, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error3, path20 = []) => {
+  const processError = (error3, path21 = []) => {
     for (const issue2 of error3.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path20, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path21, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path20, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path21, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path20, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path21, ...issue2.path]);
       } else {
-        const fullpath = [...path20, ...issue2.path];
+        const fullpath = [...path21, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -39748,6 +39749,12 @@ var McpServer = class {
     if (this._running) {
       return;
     }
+    if (!this.config.tokenPath) {
+      throw new Error("MCP server cannot start: tokenPath is not configured. Set a valid absolute path in McpServerConfig.");
+    }
+    if (!path20.isAbsolute(this.config.tokenPath)) {
+      throw new Error(`MCP server cannot start: tokenPath must be an absolute path (got "${this.config.tokenPath}"). Check the extension configuration.`);
+    }
     const port = this.config.port;
     let token;
     try {
@@ -39789,7 +39796,7 @@ var McpServer = class {
     const checkAuth = (req, res) => {
       if (!token) {
         res.writeHead(503, { "Content-Type": "application/json" }).end(JSON.stringify({
-          error: "MCP server token not yet initialized. Use the ChatWizard extension to start the server."
+          error: "MCP server token not initialized \u2014 the token file was missing or unreadable when the server started. Re-run the 'ChatWizard: Start MCP Server' command to regenerate the token and restart the server."
         }));
         return false;
       }
@@ -40715,12 +40722,12 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
     })
   );
   const _mcpCfg = vscode18.workspace.getConfiguration("chatwizard");
+  await vscode18.workspace.fs.createDirectory(context.globalStorageUri);
   const mcpServer = new McpServer(
     {
       enabled: _mcpCfg.get("mcpServer.enabled") ?? false,
       port: _mcpCfg.get("mcpServer.port") ?? 6789,
-      tokenPath: ""
-      // Phase 4: wired to context.globalStorageUri/mcp-token.txt
+      tokenPath: vscode18.Uri.joinPath(context.globalStorageUri, "mcp-token.txt").fsPath
     },
     []
     // Phase 4: populated with all 8 tool instances
