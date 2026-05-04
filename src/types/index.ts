@@ -198,6 +198,16 @@ export interface AiderHistoryInfo {
     configFile?: string;
 }
 
+/** Configuration for the local MCP server */
+export interface McpServerConfig {
+    /** Whether the MCP server is enabled */
+    enabled: boolean;
+    /** Port to listen on (default: 6789) */
+    port: number;
+    /** Absolute path to the bearer token file */
+    tokenPath: string;
+}
+
 /** Result of parsing a raw JSONL file */
 export interface ParseResult {
     session: Session;

@@ -9427,7 +9427,16 @@ function computeAnalytics(sessions, countTokens2) {
   let totalResponses = 0;
   let totalUserTokens = 0;
   let totalAssistantTokens = 0;
-  const sessionCountsBySource = {};
+  const sessionCountsBySource = {
+    copilot: 0,
+    claude: 0,
+    cline: 0,
+    roocode: 0,
+    cursor: 0,
+    windsurf: 0,
+    aider: 0,
+    antigravity: 0
+  };
   for (const m of allMetrics) {
     totalPrompts += m.userMessageCount;
     totalResponses += m.assistantMessageCount;
@@ -13565,7 +13574,8 @@ function buildItems(results, summaryMap) {
     const srcIcon = `$(${sourceCodiconId(summary.source)})`;
     const label = `${srcIcon}  ${summary.title}`;
     const score = Math.round(result.score * 100);
-    const description = `Score: ${score}% \xB7 ${summary.updatedAt.slice(0, 10)}`;
+    const workspace8 = summary.workspacePath ?? summary.workspaceId;
+    const description = `Score: ${score}% \xB7 ${workspace8} \xB7 ${summary.updatedAt.slice(0, 10)}`;
     items.push({ label, description, summary, score, alwaysShow: true });
   }
   return items;
@@ -14589,4 +14599,3 @@ function capitalise(s) {
   activate,
   deactivate
 });
-//# sourceMappingURL=extension.js.map
