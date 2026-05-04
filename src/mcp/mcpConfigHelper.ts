@@ -11,7 +11,7 @@ export type McpConfigTarget = 'copilot' | 'claude' | 'cursor' | 'continue' | 'ge
  */
 export class McpConfigHelper {
     /**
-     * Return a formatted JSON (or YAML for Continue) config snippet that the user
+     * Return a formatted JSON config snippet that the user
      * can paste directly into the target tool's configuration file.
      *
      * @param tool    Which AI tool to generate the snippet for.
@@ -32,6 +32,8 @@ export class McpConfigHelper {
                 return this._continueSnippet(sseUrl, token);
             case 'generic':
                 return this._genericSnippet(sseUrl, token);
+            default:
+                throw new Error(`Unsupported MCP config target: "${tool as string}"`);
         }
     }
 

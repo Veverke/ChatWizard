@@ -28,7 +28,7 @@ suite('McpAuthManager', () => {
 
     suiteTeardown(() => {
         for (const p of _tempPaths) {
-            try { fs.unlinkSync(p); } catch { /* already gone */ }
+            try { fs.rmSync(p, { recursive: true, force: true }); } catch { /* already gone */ }
         }
     });
 
@@ -69,6 +69,17 @@ suite('McpAuthManager', () => {
 
             const token = await manager.getOrCreateToken(p);
             assert.strictEqual(token, existing);
+        });
+
+        test('regenerates token when file contains invalid content', async () => {
+            const p = tempPath();
+            fs.writeFileSync(p, 'not-a-valid-hex-token', 'utf8');
+
+            const token = await manager.getOrCreateToken(p);
+
+            assert.match(token, /^[0-9a-f]{64}$/, 'regenerated token is valid hex');
+            const onDisk = fs.readFileSync(p, 'utf8').trim();
+            assert.strictEqual(onDisk, token, 'corrupt file is overwritten with new token');
         });
 
         test('creates parent directories if they do not exist', async () => {

@@ -7,10 +7,13 @@ import * as path from 'path';
  * Manages the bearer token used to authenticate MCP server requests.
  *
  * The token is a 32-byte random hex string stored as plain text at `tokenPath`.
- * No raw token value is ever emitted to the Output channel — only its byte length
- * and creation timestamp are logged.
+ * An optional logger callback may be supplied to the constructor; when present,
+ * token write events are recorded with byte length and creation timestamp only
+ * — the raw token value is never passed to the logger.
  */
 export class McpAuthManager {
+    constructor(private readonly _log?: (message: string) => void) {}
+
     /**
      * Return the existing token if the file exists; otherwise generate a fresh token,
      * write it to `tokenPath` (creating parent directories as needed), and return it.
@@ -19,8 +22,12 @@ export class McpAuthManager {
         this._assertAbsolute(tokenPath);
         try {
             const raw = fs.readFileSync(tokenPath, 'utf8').trim();
-            if (raw.length > 0) {
+            if (this._isValidToken(raw)) {
                 return raw;
+            }
+            if (raw.length > 0) {
+                // Non-empty but invalid/corrupt — regenerate
+                return this._writeNewToken(tokenPath);
             }
         } catch (err: unknown) {
             // File does not exist yet — fall through to generate.
@@ -47,7 +54,13 @@ export class McpAuthManager {
         const dir = path.dirname(tokenPath);
         fs.mkdirSync(dir, { recursive: true });
         fs.writeFileSync(tokenPath, token, { encoding: 'utf8', mode: 0o600 });
+        try { fs.chmodSync(tokenPath, 0o600); } catch { /* non-POSIX filesystem */ }
+        this._log?.(`[McpAuthManager] Token written — 32 bytes at ${new Date().toISOString()}`);
         return token;
+    }
+
+    private _isValidToken(raw: string): boolean {
+        return /^[0-9a-f]{64}$/.test(raw);
     }
 
     private _assertAbsolute(tokenPath: string): void {
