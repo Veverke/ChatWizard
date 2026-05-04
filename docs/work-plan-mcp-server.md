@@ -178,7 +178,7 @@ Phase 0 — Foundation: contracts + package setup   ← must complete first
 
 ---
 
-## Phase 1 — Tool Implementations ⬜
+## Phase 1 — Tool Implementations ✅
 
 **Goal:** Implement each MCP tool as an independent class implementing `IMcpTool`. Tools are pure data transformers — they accept a typed input, query the existing index/search engines, and return formatted text. No HTTP code here.
 
@@ -191,69 +191,71 @@ Each tool file is independently assignable. All tools follow the same pattern: i
 
 ### Task — `SearchTool` (`src/mcp/tools/searchTool.ts`)
 
-- [ ] Accepts `{ query: string, limit?: number, source?: string, workspaceId?: string }`
-- [ ] Delegates to `FullTextSearchEngine.search()`
-- [ ] Formats each result as:
+- [x] Accepts `{ query: string, limit?: number, source?: string, workspaceId?: string }`
+- [x] Delegates to `FullTextSearchEngine.search()`
+- [x] Formats each result as:
   ```
   [Session: <title>] | Source: <source> | Date: <updatedAt>
   Snippet: <first 300 chars of matching content>
   ID: <sessionId>
   ```
-- [ ] Input validation: `query` must be non-empty string; `limit` clamped to 1–50
+- [x] Input validation: `query` must be non-empty string; `limit` clamped to 1–50
 
 ### Task — `FindSimilarTool` (`src/mcp/tools/findSimilarTool.ts`)
 
-- [ ] Accepts `{ query: string, limit?: number, minScore?: number }`
-- [ ] Delegates to `SemanticIndexer.search()`
-- [ ] Returns error text (not a thrown exception) if semantic search is not enabled or indexer not ready
-- [ ] Formats results the same as `SearchTool` with an additional `Similarity: <score>` field
+- [x] Accepts `{ query: string, limit?: number, minScore?: number }`
+- [x] Delegates to `SemanticIndexer.search()`
+- [x] Returns error text (not a thrown exception) if semantic search is not enabled or indexer not ready
+- [x] Formats results the same as `SearchTool` with an additional `Similarity: <score>` field
 
 ### Task — `GetSessionTool` (`src/mcp/tools/getSessionTool.ts`)
 
-- [ ] Accepts `{ sessionId: string, maxChars?: number }` (default `maxChars`: 4000)
-- [ ] Looks up session in `SessionIndex`
-- [ ] Formats as a structured conversation transcript: role labels, message content, truncated at `maxChars` with a `[truncated — use chatwizard_get_session_full for complete content]` note
-- [ ] Returns `isError: true` with a descriptive message if `sessionId` not found
+- [x] Accepts `{ sessionId: string, maxChars?: number }` (default `maxChars`: 4000)
+- [x] Looks up session in `SessionIndex`
+- [x] Formats as a structured conversation transcript: role labels, message content, truncated at `maxChars` with a `[truncated — use chatwizard_get_session_full for complete content]` note
+- [x] Returns `isError: true` with a descriptive message if `sessionId` not found
 
 ### Task — `GetSessionFullTool` (`src/mcp/tools/getSessionFullTool.ts`)
 
-- [ ] Same as `GetSessionTool` but no truncation
-- [ ] Separate tool so calling models can choose cost/completeness tradeoff explicitly
+- [x] Same as `GetSessionTool` but no truncation
+- [x] Separate tool so calling models can choose cost/completeness tradeoff explicitly
 
 ### Task — `ListRecentTool` (`src/mcp/tools/listRecentTool.ts`)
 
-- [ ] Accepts `{ limit?: number, source?: string, since?: string }` (`since` is an ISO date string)
-- [ ] Queries `SessionIndex.getAll()`, filters, sorts by `updatedAt` descending
-- [ ] Returns lightweight summaries: title, source, date, message count, sessionId
+- [x] Accepts `{ limit?: number, source?: string, since?: string }` (`since` is an ISO date string)
+- [x] Queries `SessionIndex.getAll()`, filters, sorts by `updatedAt` descending
+- [x] Returns lightweight summaries: title, source, date, message count, sessionId
 
 ### Task — `GetContextTool` (`src/mcp/tools/getContextTool.ts`)
 
-- [ ] Accepts `{ topic: string, limit?: number }`
-- [ ] Runs `FindSimilarTool` first (if semantic search enabled), then `SearchTool` as fallback/supplement
-- [ ] Deduplicates by sessionId, merges results, returns top passages with source attribution
-- [ ] This is the "smart" tool intended for agents that want maximum relevance with a single call
+- [x] Accepts `{ topic: string, limit?: number }`
+- [x] Runs `FindSimilarTool` first (if semantic search enabled), then `SearchTool` as fallback/supplement
+- [x] Deduplicates by sessionId, merges results, returns top passages with source attribution
+- [x] This is the "smart" tool intended for agents that want maximum relevance with a single call
 
 ### Task — `ListSourcesTool` (`src/mcp/tools/listSourcesTool.ts`)
 
-- [ ] No inputs
-- [ ] Queries `SessionIndex` to count sessions by source
-- [ ] Returns a table of source names + session counts + most recent session date
+- [x] No inputs
+- [x] Queries `SessionIndex` to count sessions by source
+- [x] Returns a table of source names + session counts + most recent session date
 
 ### Task — `ServerInfoTool` (`src/mcp/tools/serverInfoTool.ts`)
 
-- [ ] No inputs
-- [ ] Returns: extension version, total session count, indexed sources, semantic search enabled/ready, server uptime
+- [x] No inputs
+- [x] Returns: extension version, total session count, indexed sources, semantic search enabled/ready, server uptime
 
 ### Task — Unit tests
 
-- [ ] `test/suite/mcp/tools/searchTool.test.ts` — mock `FullTextSearchEngine`; test input validation, result formatting, empty results
-- [ ] `test/suite/mcp/tools/getSessionTool.test.ts` — mock `SessionIndex`; test found/not-found, truncation
-- [ ] `test/suite/mcp/tools/listRecentTool.test.ts` — mock `SessionIndex`; test filtering and sorting
+- [x] `test/suite/mcp/tools/searchTool.test.ts` — real `FullTextSearchEngine`; tests input validation, result formatting, empty results, source filter
+- [x] `test/suite/mcp/tools/getSessionTool.test.ts` — real `SessionIndex`; tests found/not-found, truncation, full variant
+- [x] `test/suite/mcp/tools/listRecentTool.test.ts` — real `SessionIndex`; tests filtering, sorting, limit clamping
+- [x] `test/suite/mcp/tools/findSimilarTool.test.ts` — stub `ISemanticIndexer`; tests ready/not-ready paths, formatting, error handling
+- [x] `test/suite/mcp/tools/listSourcesTool.test.ts` — covers `ListSourcesTool` and `ServerInfoTool`
 
 ### Deliverables
 
-- `src/mcp/tools/` — 8 tool files
-- `test/suite/mcp/tools/` — 3 test files (critical paths covered)
+- `src/mcp/tools/` — 8 tool files ✅
+- `test/suite/mcp/tools/` — 5 test files, 50 tests, all passing ✅
 
 ---
 
