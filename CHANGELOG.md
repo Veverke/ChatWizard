@@ -1,5 +1,17 @@
 # Change Log
 
+## [1.4.0] - 2026-05-05
+
+- **MCP Server Mode** — expose your full chat history as a [Model Context Protocol](https://modelcontextprotocol.io/) server so that AI tools can query past conversations as live context when answering new questions. The server binds to `localhost` only, is disabled by default, and requires a bearer token for every request.
+  - Enable via `chatwizard.mcpServer.enabled: true` (default `false`). Port configurable via `chatwizard.mcpServer.port` (default `6789`).
+  - **8 MCP tools:** `chatwizard_search` (full-text), `chatwizard_find_similar` (semantic), `chatwizard_get_session` (truncated content), `chatwizard_get_session_full` (no truncation), `chatwizard_list_recent`, `chatwizard_get_context` (smart context), `chatwizard_list_sources`, `chatwizard_server_info`.
+  - **3 new commands:** `Chat Wizard: Start MCP Server`, `Chat Wizard: Stop MCP Server`, `Chat Wizard: Copy MCP Config to Clipboard`.
+  - **Config clipboard flow** — `Copy MCP Config` shows a quick-pick (GitHub Copilot, Claude Desktop, Cursor, Continue, Generic) and copies a ready-to-paste JSON snippet to the clipboard, then opens per-tool setup instructions in a read-only document.
+  - **Status bar indicator** — a `$(broadcast) MCP` item reflects server state and provides one-click start/stop.
+  - **First-run consent modal** — on first start, a modal explains what the server does before generating the bearer token.
+  - **`NullSemanticIndexer`** — semantic tool paths degrade gracefully when semantic search is disabled.
+  - See [docs/mcp-setup-guide.md](docs/mcp-setup-guide.md) for per-tool setup instructions.
+
 ## [1.3.0] - 2026-04-30
 
 - **Topic similarity search** — new `Find Sessions by Topic` command (`chatwizard.semanticSearch`) finds past sessions by topic rather than keywords, powered by a local `Xenova/all-MiniLM-L6-v2` ONNX model (~22 MB, downloaded on first use after a consent prompt; `@xenova/transformers` bundled externally). Disabled by default; enable via `chatwizard.enableSemanticSearch`. The index stores one vector per user message and one per paragraph of each AI response (split on `\n\n`), keeping each embedding within the model's 256-token window. Vectors are persisted to `semantic-embeddings.bin` using a composite key `"sessionId::role::messageIndex::paragraphIndex"` per entry. Minimum similarity score is configurable via `chatwizard.semanticMinScore` (default `0.35`; recommended range `0.30–0.45`). A scope toggle cycles `Both → My questions → AI responses → Both` to restrict the search to user-message or assistant-paragraph vectors. Model loading and background indexing surface progress via `vscode.window.withProgress`. The full-text search quick-pick (`chatwizard.search`) shows a `$(sparkle)` button to switch directly to topic similarity search.

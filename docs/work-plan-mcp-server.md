@@ -434,7 +434,7 @@ This is a distinct MCP primitive from Tools. The SDK's `server.prompt()` method 
 
 ---
 
-## Phase 5 — Documentation & Setup Guides ⬜
+## Phase 5 — Documentation & Setup Guides ✅
 
 **Goal:** Write user-facing documentation so users can self-serve MCP setup for each supported AI tool.
 
@@ -442,20 +442,20 @@ This is a distinct MCP primitive from Tools. The SDK's `server.prompt()` method 
 
 ### Tasks
 
-- [ ] Add `## MCP Server` section to `README.md` — one-paragraph explanation, quick-start steps (enable setting → copy config → paste → restart tool)
-- [ ] Create `docs/mcp-setup-guide.md` — per-tool setup instructions with screenshots for:
+- [x] Add `## MCP Server` section to `README.md` — one-paragraph explanation, quick-start steps (enable setting → copy config → paste → restart tool)
+- [x] Create `docs/mcp-setup-guide.md` — per-tool setup instructions with screenshots for:
   - GitHub Copilot (VS Code `settings.json`)
   - Claude Desktop (`claude_desktop_config.json`)
   - Cursor (`.cursor/mcp.json`)
   - Continue (`.continue/config.json`)
-- [ ] Add CHANGELOG entry for the release that ships MCP Server Mode
-- [ ] Update `whats-next.md` to mark MCP Server Mode as complete
+- [x] Add CHANGELOG entry for the release that ships MCP Server Mode
+- [x] Update `whats-next.md` to mark MCP Server Mode as complete
 
 ### Deliverables
 
-- `README.md` updated
-- `docs/mcp-setup-guide.md` created
-- `CHANGELOG.md` updated
+- `README.md` updated ✅
+- `docs/mcp-setup-guide.md` created ✅
+- `CHANGELOG.md` updated ✅
 
 ---
 

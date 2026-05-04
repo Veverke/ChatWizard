@@ -153,6 +153,35 @@ A chronological month-grouped feed of all sessions across all workspaces. Each c
 - **Stats bar** — at-a-glance counters: active days this week, total sessions, current daily streak, longest streak, and "on this day last month" sessions.
 - Clicking any card opens the session reader.
 
+### MCP Server (Local AI Context Bridge)
+Expose your entire chat history as a **Model Context Protocol (MCP) server** so that AI tools — GitHub Copilot, Claude Desktop, Cursor, and Continue — can query your past conversations as live context when answering new questions.
+
+Every other ChatWizard feature makes it a better *viewer*. MCP Server Mode makes it *useful inside the tools you are already in*. A Copilot session that starts with `chatwizard_find_similar("WAL mode SQLite lock")` can surface the exact Aider session from three months ago where you solved that problem — without you switching tabs or running a manual query.
+
+**Quick start:**
+1. Open **VS Code Settings** and set `chatwizard.mcpServer.enabled` to `true`.
+2. Run **Chat Wizard: Copy MCP Config** from the Command Palette.
+3. Select your AI tool (Copilot, Claude Desktop, Cursor, or Continue).
+4. Paste the copied config into the tool's MCP config file (full instructions shown automatically).
+5. Restart or reload the tool. It will connect to the ChatWizard MCP server immediately.
+
+The server is **100% local** (`localhost` only), **read-only** (no tool can modify session data), and **auth-gated** (a 64-character bearer token is generated on first start and stored in VS Code's extension storage — only tools you explicitly configure can query your history). The server starts automatically when enabled and stops when VS Code closes.
+
+**Available MCP tools:**
+
+| Tool | What it does |
+|------|--------------|
+| `chatwizard_search` | Full-text keyword search across all sessions |
+| `chatwizard_find_similar` | Topic / semantic similarity search |
+| `chatwizard_get_session` | Retrieve session content (truncated to 4 000 chars by default) |
+| `chatwizard_get_session_full` | Retrieve complete session content with no truncation |
+| `chatwizard_list_recent` | List recently updated sessions, optionally filtered by source or date |
+| `chatwizard_get_context` | Smart context: best snippets for a topic in a single call |
+| `chatwizard_list_sources` | Show which AI tools are indexed and their session counts |
+| `chatwizard_server_info` | Server metadata, session count, index status, uptime |
+
+See [docs/mcp-setup-guide.md](docs/mcp-setup-guide.md) for per-tool setup instructions.
+
 ### Live File Watching
 A `FileSystemWatcher` monitors all configured source directories — Copilot Chat workspace storage, Claude Code projects, Cline/Roo Code task directories, Cursor and Windsurf `state.vscdb` files, Aider `.aider.chat.history.md` files in open workspace folders, and Google Antigravity brain logs (`~/.gemini/antigravity/brain/**/.system_generated/logs/overview.txt`). When a session file is created or updated, only that entry is re-parsed and re-indexed — no full rebuild. All views (Sessions, Code Blocks, Prompt Library, Analytics, Timeline) refresh automatically without user action.
 
@@ -202,6 +231,7 @@ Capabilities not available in the built-in GitHub Copilot Chat panel or the Clau
 | Selective workspace indexing & scope management | ✅ | ❌ | ❌ |
 | Live auto-refresh when sessions change | ✅ | ✅ current session | ✅ current session |
 | 100% local — no external network calls | ✅ | ✅ | ✅ |
+| Expose history to AI tools via MCP (Model Context Protocol) | ✅ | ❌ | ❌ |
 
 ---
 
@@ -267,6 +297,8 @@ Some tools are supported with constraints. Features that operate on prompts alon
 | `chatwizard.indexAntigravity` | `true` | Index Google Antigravity agent conversation sessions |
 | `chatwizard.antigravityBrainPath` | `` | Custom path to the Antigravity brain directory (empty = default `~/.gemini/antigravity/brain`) |
 | `chatwizard.enableTelemetry` | `false` | Enable local-only usage telemetry written to the extension's global storage directory (no external data transmission) |
+| `chatwizard.mcpServer.enabled` | `false` | Start a local MCP server so AI tools can query your chat history as context. Restart VS Code (or use the Start command) after enabling. |
+| `chatwizard.mcpServer.port` | `6789` | Port for the local MCP server (localhost only). Restart VS Code after changing. |
 
 ---
 
@@ -294,6 +326,9 @@ Some tools are supported with constraints. Features that operate on prompts alon
 | `chatwizard.loadMoreSessions` | Load More Sessions | "Load more" item at bottom of Sessions panel |
 | `chatwizard.loadMoreCodeBlocks` | Load More Code Blocks | "Load more" item at bottom of Code Blocks panel |
 | `chatwizard.manageWatchedWorkspaces` | Manage Watched Workspaces | Command Palette / Sessions view toolbar |
+| `chatwizard.startMcpServer` | Chat Wizard: Start MCP Server | Command Palette |
+| `chatwizard.stopMcpServer` | Chat Wizard: Stop MCP Server | Command Palette |
+| `chatwizard.copyMcpConfig` | Chat Wizard: Copy MCP Config to Clipboard | Command Palette |
 
 Sort commands (`chatwizard.sortByDate`, `chatwizard.sortByDate.asc`, `chatwizard.sortByDate.desc`, and equivalents for workspace, length, title, and model) are available in the Sessions view toolbar. Matching commands prefixed `chatwizard.cb` (date, workspace, length, title, language) are available in the Code Blocks view toolbar.
 
@@ -307,6 +342,7 @@ Grouping commands (`chatwizard.enableSessionGrouping` / `chatwizard.disableSessi
 - **Read-only access.** ChatWizard reads AI chat session files but never writes to them or modifies them in any way.
 - **Live index updates.** A `FileSystemWatcher` monitors the session directories and rebuilds the affected index entries whenever new sessions are created or existing ones are updated. All views refresh automatically.
 - **No external indexing dependencies.** Full-text search uses a custom in-memory inverted index. Similarity clustering uses trigram scoring. Analytics use local token-count approximations. No ML models, no network calls.
+- **MCP server — local and auth-gated.** When enabled, the MCP server binds exclusively to `127.0.0.1` (never `0.0.0.0`). All requests require a bearer token generated with `crypto.randomBytes(32)` and stored in VS Code's extension storage. The token is never logged. A `/health` endpoint is intentionally unauthenticated so clients can verify connectivity; it returns only `{ status: "ok", sessions: N }`.
 - **Local telemetry (opt-in).** If `chatwizard.enableTelemetry` is enabled, usage events are appended to a JSONL file inside the extension's VS Code global storage directory on your local machine. This file is never read by any external service.
 
 ---
