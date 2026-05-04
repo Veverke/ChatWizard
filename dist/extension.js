@@ -3223,8 +3223,8 @@ var require_utils = __commonJS({
       }
       return ind;
     }
-    function removeDotSegments(path21) {
-      let input = path21;
+    function removeDotSegments(path22) {
+      let input = path22;
       const output = [];
       let nextSlash = -1;
       let len = 0;
@@ -3423,8 +3423,8 @@ var require_schemes = __commonJS({
         wsComponent.secure = void 0;
       }
       if (wsComponent.resourceName) {
-        const [path21, query] = wsComponent.resourceName.split("?");
-        wsComponent.path = path21 && path21 !== "/" ? path21 : void 0;
+        const [path22, query] = wsComponent.resourceName.split("?");
+        wsComponent.path = path22 && path22 !== "/" ? path22 : void 0;
         wsComponent.query = query;
         wsComponent.resourceName = void 0;
       }
@@ -12481,12 +12481,12 @@ var require_dist = __commonJS({
         throw new Error(`Unknown format "${name}"`);
       return f;
     };
-    function addFormats(ajv, list, fs19, exportName) {
+    function addFormats(ajv, list, fs20, exportName) {
       var _a3;
       var _b;
       (_a3 = (_b = ajv.opts.code).formats) !== null && _a3 !== void 0 ? _a3 : _b.formats = (0, codegen_1._)`require("ajv-formats/dist/formats").${exportName}`;
       for (const f of list)
-        ajv.addFormat(f, fs19[f]);
+        ajv.addFormat(f, fs20[f]);
     }
     module2.exports = exports2 = formatsPlugin;
     Object.defineProperty(exports2, "__esModule", { value: true });
@@ -30409,6 +30409,22 @@ var fs16 = __toESM(require("fs"));
 // src/search/semanticContracts.ts
 var SEMANTIC_DIMS = 384;
 var SEMANTIC_MIN_SCORE = 0.35;
+var NullSemanticIndexer = class {
+  isReady = false;
+  isIndexing = false;
+  indexedCount = 0;
+  async initialize() {
+  }
+  scheduleSession(_session) {
+  }
+  removeSession(_sessionId) {
+  }
+  async search(_query, _topK, _minScore, _scope) {
+    return [];
+  }
+  dispose() {
+  }
+};
 
 // src/search/semanticIndexer.ts
 var EMBEDDINGS_FILENAME = "semantic-embeddings.bin";
@@ -31338,10 +31354,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path21) {
-  if (!path21)
+function getElementAtPath(obj, path22) {
+  if (!path22)
     return obj;
-  return path21.reduce((acc, key) => acc?.[key], obj);
+  return path22.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -31750,11 +31766,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path21, issues) {
+function prefixIssues(path22, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path21);
+    iss.path.unshift(path22);
     return iss;
   });
 }
@@ -31901,16 +31917,16 @@ function flattenError(error2, mapper = (issue2) => issue2.message) {
 }
 function formatError(error2, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error3, path21 = []) => {
+  const processError = (error3, path22 = []) => {
     for (const issue2 of error3.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path21, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path22, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path21, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path22, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path21, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path22, ...issue2.path]);
       } else {
-        const fullpath = [...path21, ...issue2.path];
+        const fullpath = [...path22, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -39913,6 +39929,871 @@ var McpServer = class {
   }
 };
 
+// src/mcp/mcpAuthManager.ts
+var crypto2 = __toESM(require("crypto"));
+var fs19 = __toESM(require("fs"));
+var path21 = __toESM(require("path"));
+var McpAuthManager = class {
+  constructor(_log) {
+    this._log = _log;
+  }
+  /**
+   * Return the existing token if the file exists; otherwise generate a fresh token,
+   * write it to `tokenPath` (creating parent directories as needed), and return it.
+   */
+  async getOrCreateToken(tokenPath) {
+    this._assertAbsolute(tokenPath);
+    try {
+      const raw = fs19.readFileSync(tokenPath, "utf8").trim();
+      if (this._isValidToken(raw)) {
+        return raw;
+      }
+      if (raw.length > 0) {
+        return this._writeNewToken(tokenPath);
+      }
+    } catch (err) {
+      if (!this._isNoEntError(err)) {
+        throw err;
+      }
+    }
+    return this._writeNewToken(tokenPath);
+  }
+  /**
+   * Generate a fresh token, overwrite the existing file, and return the new token.
+   * Called when the user explicitly requests token rotation.
+   */
+  async rotateToken(tokenPath) {
+    this._assertAbsolute(tokenPath);
+    return this._writeNewToken(tokenPath);
+  }
+  // ── Private helpers ───────────────────────────────────────────────────────
+  _writeNewToken(tokenPath) {
+    const token = crypto2.randomBytes(32).toString("hex");
+    const dir = path21.dirname(tokenPath);
+    fs19.mkdirSync(dir, { recursive: true });
+    fs19.writeFileSync(tokenPath, token, { encoding: "utf8", mode: 384 });
+    try {
+      fs19.chmodSync(tokenPath, 384);
+    } catch {
+    }
+    this._log?.(`[McpAuthManager] Token written \u2014 32 bytes at ${(/* @__PURE__ */ new Date()).toISOString()}`);
+    return token;
+  }
+  _isValidToken(raw) {
+    return /^[0-9a-f]{64}$/.test(raw);
+  }
+  _assertAbsolute(tokenPath) {
+    if (!path21.isAbsolute(tokenPath)) {
+      throw new Error(
+        `McpAuthManager: tokenPath must be an absolute path (got "${tokenPath}").`
+      );
+    }
+  }
+  _isNoEntError(err) {
+    return typeof err === "object" && err !== null && "code" in err && err.code === "ENOENT";
+  }
+};
+
+// src/mcp/mcpConfigHelper.ts
+var McpConfigHelper = class {
+  /**
+   * Return a formatted JSON config snippet that the user
+   * can paste directly into the target tool's configuration file.
+   *
+   * @param tool    Which AI tool to generate the snippet for.
+   * @param port    Port the MCP server is listening on.
+   * @param token   Bearer token the tool must supply in the Authorization header.
+   */
+  getConfigSnippet(tool, port, token) {
+    const sseUrl = `http://localhost:${port}/sse`;
+    switch (tool) {
+      case "copilot":
+        return this._copilotSnippet(sseUrl, token);
+      case "claude":
+        return this._claudeSnippet(sseUrl, token);
+      case "cursor":
+        return this._cursorSnippet(sseUrl, token);
+      case "continue":
+        return this._continueSnippet(sseUrl, token);
+      case "generic":
+        return this._genericSnippet(sseUrl, token);
+      default:
+        throw new Error(`Unsupported MCP config target: "${tool}"`);
+    }
+  }
+  // ── Per-tool formatters ────────────────────────────────────────────────────
+  /**
+   * VS Code `settings.json` entry for GitHub Copilot.
+   * Add the `"github.copilot.chat.mcpServers"` block (or merge into an existing one).
+   */
+  _copilotSnippet(sseUrl, token) {
+    const config2 = {
+      "github.copilot.chat.mcpServers": {
+        chatwizard: {
+          type: "sse",
+          url: sseUrl,
+          headers: {
+            Authorization: `Bearer ${token}`
+          }
+        }
+      }
+    };
+    return JSON.stringify(config2, null, 2);
+  }
+  /**
+   * Claude Desktop `claude_desktop_config.json` entry.
+   * Merge the `"mcpServers"` block into your existing config file.
+   */
+  _claudeSnippet(sseUrl, token) {
+    const config2 = {
+      mcpServers: {
+        chatwizard: {
+          url: sseUrl,
+          headers: {
+            Authorization: `Bearer ${token}`
+          }
+        }
+      }
+    };
+    return JSON.stringify(config2, null, 2);
+  }
+  /**
+   * Cursor `.cursor/mcp.json` entry.
+   * If the file already exists, merge the inner `"chatwizard"` key under `"mcpServers"`.
+   */
+  _cursorSnippet(sseUrl, token) {
+    const config2 = {
+      mcpServers: {
+        chatwizard: {
+          url: sseUrl,
+          headers: {
+            Authorization: `Bearer ${token}`
+          }
+        }
+      }
+    };
+    return JSON.stringify(config2, null, 2);
+  }
+  /**
+   * Continue `.continue/config.json` `mcpServers` array entry.
+   * Add the object inside the existing `"mcpServers": [...]` array.
+   */
+  _continueSnippet(sseUrl, token) {
+    const entry = {
+      name: "chatwizard",
+      transport: {
+        type: "sse",
+        url: sseUrl,
+        requestOptions: {
+          headers: {
+            Authorization: `Bearer ${token}`
+          }
+        }
+      }
+    };
+    const config2 = {
+      mcpServers: [entry]
+    };
+    return JSON.stringify(config2, null, 2);
+  }
+  /**
+   * Generic snippet — a minimal `{ url, authorization }` block usable by any
+   * MCP-aware client that accepts a raw HTTP endpoint + auth header.
+   */
+  _genericSnippet(sseUrl, token) {
+    const config2 = {
+      url: sseUrl,
+      authorization: `Bearer ${token}`
+    };
+    return JSON.stringify(config2, null, 2);
+  }
+  // ── Setup instructions ─────────────────────────────────────────────────────
+  /**
+   * Return step-by-step plain-text setup instructions for the given tool.
+   * Shown in the "Show instructions" virtual document after copying config.
+   */
+  getSetupInstructions(tool, port) {
+    switch (tool) {
+      case "copilot":
+        return this._copilotInstructions(port);
+      case "claude":
+        return this._claudeInstructions(port);
+      case "cursor":
+        return this._cursorInstructions(port);
+      case "continue":
+        return this._continueInstructions(port);
+      case "generic":
+        return this._genericInstructions(port);
+      default:
+        throw new Error(`Unsupported MCP config target: "${tool}"`);
+    }
+  }
+  _copilotInstructions(port) {
+    return [
+      "# ChatWizard MCP Setup \u2014 GitHub Copilot",
+      "",
+      "## Steps",
+      "",
+      "1. Open **VS Code Settings** (`Ctrl+,` / `Cmd+,`).",
+      "2. Click the **Open Settings (JSON)** icon in the top-right corner.",
+      "3. Paste the copied JSON block at the top level of your `settings.json`.",
+      '   - If you already have a `"github.copilot.chat.mcpServers"` key, merge',
+      '     the `"chatwizard"` entry into the existing object.',
+      "4. Save the file. VS Code will pick up the new MCP server automatically.",
+      "5. Open a Copilot Chat session and verify with:",
+      "   `@chatwizard chatwizard_server_info`",
+      "",
+      "## Notes",
+      "",
+      `- The MCP server runs on **port ${port}** (localhost only).`,
+      "- Keep the ChatWizard extension loaded and the MCP server running while using Copilot.",
+      "- To stop the server: run **Chat Wizard: Stop MCP Server** from the Command Palette."
+    ].join("\n");
+  }
+  _claudeInstructions(port) {
+    return [
+      "# ChatWizard MCP Setup \u2014 Claude Desktop",
+      "",
+      "## Steps",
+      "",
+      "1. Locate your Claude Desktop config file:",
+      "   - **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`",
+      "   - **Windows**: `%APPDATA%\\Claude\\claude_desktop_config.json`",
+      "2. Open the file in a text editor (create it if it does not exist).",
+      '3. Paste the copied JSON block, merging the `"mcpServers"` entry.',
+      '   - If `"mcpServers"` already exists, add `"chatwizard"` to that object.',
+      "4. Save the file.",
+      "5. **Restart Claude Desktop** to pick up the new MCP server.",
+      "6. In Claude, try: `/chatwizard_server_info` or ask Claude to call it.",
+      "",
+      "## Notes",
+      "",
+      `- The MCP server runs on **port ${port}** (localhost only).`,
+      "- The bearer token is required \u2014 it is already embedded in the copied config.",
+      "- If you rotate the token, copy the config again and update Claude Desktop."
+    ].join("\n");
+  }
+  _cursorInstructions(port) {
+    return [
+      "# ChatWizard MCP Setup \u2014 Cursor",
+      "",
+      "## Steps",
+      "",
+      "1. Locate (or create) `.cursor/mcp.json` in your home directory:",
+      "   - **macOS/Linux**: `~/.cursor/mcp.json`",
+      "   - **Windows**: `%USERPROFILE%\\.cursor\\mcp.json`",
+      "2. Paste the copied JSON block into that file.",
+      '   - If the file already exists, merge the `"chatwizard"` entry under `"mcpServers"`.',
+      "3. Save the file.",
+      "4. **Restart Cursor** (or reload the window) to activate the MCP server.",
+      "5. In Cursor Chat, verify with: `@chatwizard chatwizard_server_info`",
+      "",
+      "## Notes",
+      "",
+      `- The MCP server runs on **port ${port}** (localhost only).`,
+      "- The bearer token in the config snippet is required for authentication."
+    ].join("\n");
+  }
+  _continueInstructions(port) {
+    return [
+      "# ChatWizard MCP Setup \u2014 Continue",
+      "",
+      "## Steps",
+      "",
+      "1. Open your Continue config file:",
+      "   - **All platforms**: `~/.continue/config.json`",
+      "   - Or open Continue in VS Code and click **Settings \u2192 Edit config.json**.",
+      '2. Find the `"mcpServers"` array (or add it if absent).',
+      "3. Paste the copied object into that array.",
+      "4. Save the file. Continue reloads its config automatically.",
+      "5. In a Continue session, call: `@chatwizard chatwizard_server_info`",
+      "",
+      "## Notes",
+      "",
+      `- The MCP server runs on **port ${port}** (localhost only).`,
+      "- The `requestOptions.headers.Authorization` field contains your bearer token.",
+      "- Continue supports SSE transport, so no proxy or subprocess is needed."
+    ].join("\n");
+  }
+  _genericInstructions(port) {
+    return [
+      "# ChatWizard MCP Setup \u2014 Generic Client",
+      "",
+      "## Connection details",
+      "",
+      `- **SSE endpoint**: \`http://localhost:${port}/sse\``,
+      `- **Messages endpoint**: \`http://localhost:${port}/messages\``,
+      `- **Health endpoint**: \`http://localhost:${port}/health\` (no auth required)`,
+      "",
+      "## Authentication",
+      "",
+      "- Add the header `Authorization: Bearer <token>` to every request.",
+      "- The token is embedded in the copied config snippet.",
+      "",
+      "## Steps",
+      "",
+      "1. Copy the token from the pasted config snippet.",
+      "2. Configure your MCP client to connect to the SSE endpoint above.",
+      "3. Set the Authorization header with your token.",
+      "4. Test connectivity by calling `chatwizard_server_info` with no arguments.",
+      "",
+      "## Notes",
+      "",
+      "- The server is bound to localhost only \u2014 no external access.",
+      "- Keep the ChatWizard extension running in VS Code while using the MCP client."
+    ].join("\n");
+  }
+};
+
+// src/mcp/tools/searchTool.ts
+var DEFAULT_LIMIT = 10;
+var MIN_LIMIT = 1;
+var MAX_LIMIT = 50;
+var SNIPPET_MAX_CHARS = 300;
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+var SearchTool = class {
+  constructor(ftse, sessionIndex) {
+    this.ftse = ftse;
+    this.sessionIndex = sessionIndex;
+  }
+  name = "chatwizard_search";
+  description = 'Full-text keyword search across all indexed chat sessions. Returns sessions whose messages contain all supplied keywords, with a snippet of the matching content. Optionally filter by source (e.g. "copilot", "claude", "cursor") or workspaceId.';
+  inputSchema = {
+    type: "object",
+    properties: {
+      query: {
+        type: "string",
+        description: "Keywords to search for. All tokens must be present in the matching message."
+      },
+      limit: {
+        type: "number",
+        description: `Maximum number of sessions to return (1\u2013${MAX_LIMIT}, default ${DEFAULT_LIMIT}).`
+      },
+      source: {
+        type: "string",
+        description: 'Restrict results to a single AI tool source (e.g. "copilot", "claude", "cursor", "cline", "windsurf", "aider").'
+      },
+      workspaceId: {
+        type: "string",
+        description: "Restrict results to a specific workspace (opaque ID)."
+      }
+    },
+    required: ["query"]
+  };
+  async execute(input) {
+    const query = input["query"];
+    if (typeof query !== "string" || query.trim() === "") {
+      return {
+        content: [{ type: "text", text: 'Error: "query" must be a non-empty string.' }],
+        isError: true
+      };
+    }
+    const rawLimit = input["limit"];
+    const limit = clamp(
+      typeof rawLimit === "number" ? Math.round(rawLimit) : DEFAULT_LIMIT,
+      MIN_LIMIT,
+      MAX_LIMIT
+    );
+    const source = typeof input["source"] === "string" ? input["source"] : void 0;
+    const workspaceId = typeof input["workspaceId"] === "string" ? input["workspaceId"] : void 0;
+    const { results } = this.ftse.search({
+      text: query,
+      filter: {
+        source,
+        workspaceId
+      }
+    });
+    if (results.length === 0) {
+      return {
+        content: [{ type: "text", text: `No sessions found matching "${query}".` }]
+      };
+    }
+    const bestBySession = /* @__PURE__ */ new Map();
+    for (const result of results) {
+      const existing = bestBySession.get(result.sessionId);
+      if (!existing || result.score > existing.score) {
+        bestBySession.set(result.sessionId, result);
+      }
+    }
+    const ranked = Array.from(bestBySession.values()).sort((a, b) => b.score - a.score).slice(0, limit);
+    const lines = [];
+    for (const result of ranked) {
+      const session = this.sessionIndex.get(result.sessionId);
+      const title = session?.title ?? result.sessionId;
+      const sessionSource = session?.source ?? "unknown";
+      const updatedAt = session?.updatedAt ?? "";
+      const snippet = result.snippet.slice(0, SNIPPET_MAX_CHARS);
+      lines.push(
+        `[Session: ${title}] | Source: ${sessionSource} | Date: ${updatedAt}`,
+        `Snippet: ${snippet}`,
+        `ID: ${result.sessionId}`,
+        ""
+      );
+    }
+    return {
+      content: [{ type: "text", text: lines.join("\n").trimEnd() }]
+    };
+  }
+};
+
+// src/mcp/tools/findSimilarTool.ts
+var DEFAULT_LIMIT2 = 10;
+var MIN_LIMIT2 = 1;
+var MAX_LIMIT2 = 50;
+var SNIPPET_MAX_CHARS2 = 300;
+function clamp2(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+var FindSimilarTool = class {
+  constructor(semanticIndexer, sessionIndex) {
+    this.semanticIndexer = semanticIndexer;
+    this.sessionIndex = sessionIndex;
+  }
+  name = "chatwizard_find_similar";
+  description = "Semantic similarity search across all indexed chat sessions. Returns sessions whose content is semantically related to the supplied topic or question. More powerful than keyword search for conceptual queries. Requires semantic search to be enabled and the model to be initialized.";
+  inputSchema = {
+    type: "object",
+    properties: {
+      query: {
+        type: "string",
+        description: "Topic, question, or description to find semantically similar sessions for."
+      },
+      limit: {
+        type: "number",
+        description: `Maximum number of results to return (1\u2013${MAX_LIMIT2}, default ${DEFAULT_LIMIT2}).`
+      },
+      minScore: {
+        type: "number",
+        description: "Minimum similarity score threshold (0\u20131). Defaults to 0.35."
+      }
+    },
+    required: ["query"]
+  };
+  async execute(input) {
+    const query = input["query"];
+    if (typeof query !== "string" || query.trim() === "") {
+      return {
+        content: [{ type: "text", text: 'Error: "query" must be a non-empty string.' }],
+        isError: true
+      };
+    }
+    if (!this.semanticIndexer.isReady) {
+      return {
+        content: [{
+          type: "text",
+          text: "Semantic search is not available. Enable it in ChatWizard settings and allow the AI model to download."
+        }],
+        isError: true
+      };
+    }
+    const rawLimit = input["limit"];
+    const limit = clamp2(
+      typeof rawLimit === "number" ? Math.round(rawLimit) : DEFAULT_LIMIT2,
+      MIN_LIMIT2,
+      MAX_LIMIT2
+    );
+    const rawMinScore = input["minScore"];
+    const minScore = typeof rawMinScore === "number" ? rawMinScore : void 0;
+    let semanticResults;
+    try {
+      semanticResults = await this.semanticIndexer.search(query, limit, minScore);
+    } catch (err) {
+      return {
+        content: [{ type: "text", text: `Semantic search error: ${String(err)}` }],
+        isError: true
+      };
+    }
+    if (semanticResults.length === 0) {
+      return {
+        content: [{ type: "text", text: `No semantically similar sessions found for "${query}".` }]
+      };
+    }
+    const lines = [];
+    for (const result of semanticResults) {
+      const session = this.sessionIndex.get(result.sessionId);
+      const title = session?.title ?? result.sessionId;
+      const sessionSource = session?.source ?? "unknown";
+      const updatedAt = session?.updatedAt ?? "";
+      const scoreStr = result.score.toFixed(3);
+      const firstUserMsg = session?.messages.find((m) => m.role === "user");
+      const snippet = (firstUserMsg?.content ?? "").slice(0, SNIPPET_MAX_CHARS2);
+      lines.push(
+        `[Session: ${title}] | Source: ${sessionSource} | Date: ${updatedAt}`,
+        `Snippet: ${snippet}`,
+        `Similarity: ${scoreStr}`,
+        `ID: ${result.sessionId}`,
+        ""
+      );
+    }
+    return {
+      content: [{ type: "text", text: lines.join("\n").trimEnd() }]
+    };
+  }
+};
+
+// src/mcp/tools/getSessionTool.ts
+var DEFAULT_MAX_CHARS = 4e3;
+var TRUNCATION_NOTE = "\n[truncated \u2014 use chatwizard_get_session_full for complete content]";
+function formatSessionTranscript(session, maxChars) {
+  const header = [
+    `Session: ${session.title}`,
+    `Source: ${session.source}`,
+    `Date: ${session.updatedAt}`,
+    `Messages: ${session.messages.length}`,
+    "---"
+  ].join("\n");
+  const messageParts = [];
+  for (const msg of session.messages) {
+    const roleLabel = msg.role === "user" ? "User" : "Assistant";
+    const ts = msg.timestamp ? ` [${msg.timestamp}]` : "";
+    messageParts.push(`${roleLabel}${ts}:
+${msg.content}`);
+  }
+  const body = messageParts.join("\n\n");
+  const full = `${header}
+
+${body}`;
+  if (maxChars === void 0) {
+    return full;
+  }
+  if (full.length <= maxChars) {
+    return full;
+  }
+  return full.slice(0, maxChars) + TRUNCATION_NOTE;
+}
+var GetSessionTool = class {
+  constructor(sessionIndex) {
+    this.sessionIndex = sessionIndex;
+  }
+  name = "chatwizard_get_session";
+  description = `Retrieve the content of a specific chat session by ID, truncated to avoid context overflow. Defaults to ${DEFAULT_MAX_CHARS} characters. Use chatwizard_get_session_full for the complete untruncated content.`;
+  inputSchema = {
+    type: "object",
+    properties: {
+      sessionId: {
+        type: "string",
+        description: 'The unique session ID (returned by other chatwizard tools as "ID: ...").'
+      },
+      maxChars: {
+        type: "number",
+        description: `Maximum characters to return (default ${DEFAULT_MAX_CHARS}).`
+      }
+    },
+    required: ["sessionId"]
+  };
+  async execute(input) {
+    const sessionId = input["sessionId"];
+    if (typeof sessionId !== "string" || sessionId.trim() === "") {
+      return {
+        content: [{ type: "text", text: 'Error: "sessionId" must be a non-empty string.' }],
+        isError: true
+      };
+    }
+    const session = this.sessionIndex.get(sessionId.trim());
+    if (!session) {
+      return {
+        content: [{ type: "text", text: `Session not found: "${sessionId}". Use chatwizard_list_recent or chatwizard_search to discover session IDs.` }],
+        isError: true
+      };
+    }
+    const rawMax = input["maxChars"];
+    const maxChars = typeof rawMax === "number" && rawMax > 0 ? Math.round(rawMax) : DEFAULT_MAX_CHARS;
+    return {
+      content: [{ type: "text", text: formatSessionTranscript(session, maxChars) }]
+    };
+  }
+};
+
+// src/mcp/tools/getSessionFullTool.ts
+var GetSessionFullTool = class {
+  constructor(sessionIndex) {
+    this.sessionIndex = sessionIndex;
+  }
+  name = "chatwizard_get_session_full";
+  description = "Retrieve the complete, untruncated content of a specific chat session by ID. Prefer chatwizard_get_session for large sessions to avoid context window overflow.";
+  inputSchema = {
+    type: "object",
+    properties: {
+      sessionId: {
+        type: "string",
+        description: 'The unique session ID (returned by other chatwizard tools as "ID: ...").'
+      }
+    },
+    required: ["sessionId"]
+  };
+  async execute(input) {
+    const sessionId = input["sessionId"];
+    if (typeof sessionId !== "string" || sessionId.trim() === "") {
+      return {
+        content: [{ type: "text", text: 'Error: "sessionId" must be a non-empty string.' }],
+        isError: true
+      };
+    }
+    const session = this.sessionIndex.get(sessionId.trim());
+    if (!session) {
+      return {
+        content: [{ type: "text", text: `Session not found: "${sessionId}". Use chatwizard_list_recent or chatwizard_search to discover session IDs.` }],
+        isError: true
+      };
+    }
+    return {
+      content: [{ type: "text", text: formatSessionTranscript(session) }]
+    };
+  }
+};
+
+// src/mcp/tools/listRecentTool.ts
+var DEFAULT_LIMIT3 = 10;
+var MIN_LIMIT3 = 1;
+var MAX_LIMIT3 = 50;
+function clamp3(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+var ListRecentTool = class {
+  constructor(sessionIndex) {
+    this.sessionIndex = sessionIndex;
+  }
+  name = "chatwizard_list_recent";
+  description = "List recently updated chat sessions, sorted newest first. Optionally filter by source (AI tool) or a minimum date. Returns lightweight summaries suitable for orientation and triage.";
+  inputSchema = {
+    type: "object",
+    properties: {
+      limit: {
+        type: "number",
+        description: `Maximum sessions to return (1\u2013${MAX_LIMIT3}, default ${DEFAULT_LIMIT3}).`
+      },
+      source: {
+        type: "string",
+        description: 'Restrict to a single AI tool source (e.g. "copilot", "claude", "cursor", "cline", "windsurf", "aider").'
+      },
+      since: {
+        type: "string",
+        description: 'Only include sessions updated at or after this ISO 8601 date string (e.g. "2025-01-01").'
+      }
+    },
+    required: []
+  };
+  async execute(input) {
+    const rawLimit = input["limit"];
+    const limit = clamp3(
+      typeof rawLimit === "number" ? Math.round(rawLimit) : DEFAULT_LIMIT3,
+      MIN_LIMIT3,
+      MAX_LIMIT3
+    );
+    const source = typeof input["source"] === "string" ? input["source"] : void 0;
+    const since = typeof input["since"] === "string" ? input["since"] : void 0;
+    let summaries = this.sessionIndex.getAllSummaries();
+    if (source) {
+      summaries = summaries.filter((s) => s.source === source);
+    }
+    if (since) {
+      summaries = summaries.filter((s) => s.updatedAt >= since);
+    }
+    summaries = summaries.slice(0, limit);
+    if (summaries.length === 0) {
+      return {
+        content: [{ type: "text", text: "No sessions found matching the supplied filters." }]
+      };
+    }
+    const lines = [];
+    for (const s of summaries) {
+      lines.push(
+        `[Session: ${s.title}] | Source: ${s.source} | Date: ${s.updatedAt} | Messages: ${s.messageCount}`,
+        `ID: ${s.id}`,
+        ""
+      );
+    }
+    return {
+      content: [{ type: "text", text: lines.join("\n").trimEnd() }]
+    };
+  }
+};
+
+// src/mcp/tools/getContextTool.ts
+var DEFAULT_LIMIT4 = 5;
+var MIN_LIMIT4 = 1;
+var MAX_LIMIT4 = 20;
+var PASSAGE_MAX_CHARS = 500;
+function clamp4(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+function extractIds(text) {
+  const ids = [];
+  for (const line of text.split("\n")) {
+    const match = line.match(/^ID:\s*(.+)$/);
+    if (match) {
+      ids.push(match[1].trim());
+    }
+  }
+  return ids;
+}
+var GetContextTool = class {
+  constructor(findSimilarTool, searchTool, sessionIndex) {
+    this.findSimilarTool = findSimilarTool;
+    this.searchTool = searchTool;
+    this.sessionIndex = sessionIndex;
+  }
+  name = "chatwizard_get_context";
+  description = "Smart context retrieval: finds the most relevant past sessions for a topic by combining semantic similarity search (when available) with keyword search. Deduplicates results and returns top passages with full session attribution. Preferred over individual search tools when you want the best relevant context in one call.";
+  inputSchema = {
+    type: "object",
+    properties: {
+      topic: {
+        type: "string",
+        description: "The topic, question, or concept to find context for."
+      },
+      limit: {
+        type: "number",
+        description: `Maximum sessions to include (1\u2013${MAX_LIMIT4}, default ${DEFAULT_LIMIT4}).`
+      }
+    },
+    required: ["topic"]
+  };
+  async execute(input) {
+    const topic = input["topic"];
+    if (typeof topic !== "string" || topic.trim() === "") {
+      return {
+        content: [{ type: "text", text: 'Error: "topic" must be a non-empty string.' }],
+        isError: true
+      };
+    }
+    const rawLimit = input["limit"];
+    const limit = clamp4(
+      typeof rawLimit === "number" ? Math.round(rawLimit) : DEFAULT_LIMIT4,
+      MIN_LIMIT4,
+      MAX_LIMIT4
+    );
+    const seenIds = /* @__PURE__ */ new Set();
+    const orderedIds = [];
+    const semanticResult = await this.findSimilarTool.execute({ topic, limit: limit * 2 });
+    if (!semanticResult.isError) {
+      for (const id of extractIds(semanticResult.content[0]?.text ?? "")) {
+        if (!seenIds.has(id)) {
+          seenIds.add(id);
+          orderedIds.push(id);
+        }
+      }
+    }
+    const keywordResult = await this.searchTool.execute({ query: topic, limit: limit * 2 });
+    if (!keywordResult.isError) {
+      for (const id of extractIds(keywordResult.content[0]?.text ?? "")) {
+        if (!seenIds.has(id)) {
+          seenIds.add(id);
+          orderedIds.push(id);
+        }
+      }
+    }
+    const topIds = orderedIds.slice(0, limit);
+    if (topIds.length === 0) {
+      return {
+        content: [{ type: "text", text: `No relevant context found for topic: "${topic}".` }]
+      };
+    }
+    const lines = [`Context for: "${topic}"`, ""];
+    for (const sessionId of topIds) {
+      const session = this.sessionIndex.get(sessionId);
+      if (!session) {
+        continue;
+      }
+      const firstUserMsg = session.messages.find((m) => m.role === "user");
+      const passage = (firstUserMsg?.content ?? "").slice(0, PASSAGE_MAX_CHARS);
+      lines.push(
+        `[Session: ${session.title}] | Source: ${session.source} | Date: ${session.updatedAt}`,
+        `Passage: ${passage}`,
+        `ID: ${session.id}`,
+        ""
+      );
+    }
+    return {
+      content: [{ type: "text", text: lines.join("\n").trimEnd() }]
+    };
+  }
+};
+
+// src/mcp/tools/listSourcesTool.ts
+var ListSourcesTool = class {
+  constructor(sessionIndex) {
+    this.sessionIndex = sessionIndex;
+  }
+  name = "chatwizard_list_sources";
+  description = "List which AI coding tools are indexed by ChatWizard, along with session counts and the most recent session date per source. Use this to understand what data is available before issuing other queries.";
+  inputSchema = {
+    type: "object",
+    properties: {},
+    required: []
+  };
+  async execute(_input) {
+    const summaries = this.sessionIndex.getAllSummaries();
+    if (summaries.length === 0) {
+      return {
+        content: [{ type: "text", text: "No sessions are currently indexed." }]
+      };
+    }
+    const bySource = /* @__PURE__ */ new Map();
+    for (const s of summaries) {
+      const existing = bySource.get(s.source);
+      if (!existing) {
+        bySource.set(s.source, { count: 1, latestDate: s.updatedAt });
+      } else {
+        existing.count++;
+        if (s.updatedAt > existing.latestDate) {
+          existing.latestDate = s.updatedAt;
+        }
+      }
+    }
+    const sorted = Array.from(bySource.entries()).sort(([, a], [, b]) => b.count - a.count);
+    const lines = [
+      `Indexed sources (${summaries.length} total sessions):`,
+      ""
+    ];
+    for (const [source, { count, latestDate }] of sorted) {
+      lines.push(`${source}: ${count} session${count === 1 ? "" : "s"} | Most recent: ${latestDate}`);
+    }
+    return {
+      content: [{ type: "text", text: lines.join("\n") }]
+    };
+  }
+};
+
+// src/mcp/tools/serverInfoTool.ts
+var ServerInfoTool = class {
+  constructor(sessionIndex, semanticIndexer, extensionVersion, serverStartTime) {
+    this.sessionIndex = sessionIndex;
+    this.semanticIndexer = semanticIndexer;
+    this.extensionVersion = extensionVersion;
+    this.serverStartTime = serverStartTime;
+  }
+  name = "chatwizard_server_info";
+  description = "Return ChatWizard MCP server metadata and health information. Includes extension version, total session count, indexed AI tool sources, semantic search availability, and server uptime. Use this to verify connectivity and understand current index state.";
+  inputSchema = {
+    type: "object",
+    properties: {},
+    required: []
+  };
+  async execute(_input) {
+    const summaries = this.sessionIndex.getAllSummaries();
+    const totalSessions = summaries.length;
+    const sources = Array.from(new Set(summaries.map((s) => s.source))).sort();
+    const uptimeMs = Date.now() - this.serverStartTime.getTime();
+    const uptimeSecs = Math.floor(uptimeMs / 1e3);
+    const uptimeStr = uptimeSecs < 60 ? `${uptimeSecs}s` : uptimeSecs < 3600 ? `${Math.floor(uptimeSecs / 60)}m ${uptimeSecs % 60}s` : `${Math.floor(uptimeSecs / 3600)}h ${Math.floor(uptimeSecs % 3600 / 60)}m`;
+    const semanticStatus = this.semanticIndexer.isReady ? `enabled (${this.semanticIndexer.indexedCount} sessions indexed${this.semanticIndexer.isIndexing ? ", indexing in progress" : ""})` : "not ready (model not loaded or user declined download)";
+    const lines = [
+      `ChatWizard MCP Server`,
+      `Version: ${this.extensionVersion}`,
+      `Uptime: ${uptimeStr}`,
+      `Total sessions: ${totalSessions}`,
+      `Indexed sources: ${sources.length > 0 ? sources.join(", ") : "none"}`,
+      `Semantic search: ${semanticStatus}`
+    ];
+    return {
+      content: [{ type: "text", text: lines.join("\n") }]
+    };
+  }
+};
+
 // src/extension.ts
 var watcher;
 async function activate(context) {
@@ -40721,18 +41602,80 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
       }
     })
   );
-  const _mcpCfg = vscode18.workspace.getConfiguration("chatwizard");
+  const mcpCfg = vscode18.workspace.getConfiguration("chatwizard");
   await vscode18.workspace.fs.createDirectory(context.globalStorageUri);
+  const mcpTokenPath = vscode18.Uri.joinPath(context.globalStorageUri, "mcp-token.txt").fsPath;
+  const mcpAuthManager = new McpAuthManager((msg) => channel.appendLine(msg));
+  const mcpConfigHelper = new McpConfigHelper();
+  const extensionVersion = context.extension?.packageJSON?.version ?? "0.0.0";
+  const mcpServerStartTime = /* @__PURE__ */ new Date();
+  function buildMcpTools() {
+    const effectiveSemanticIndexer = semanticIndexer ?? new NullSemanticIndexer();
+    const searchTool = new SearchTool(engine, index);
+    const findSimilarTool = new FindSimilarTool(effectiveSemanticIndexer, index);
+    return [
+      searchTool,
+      findSimilarTool,
+      new GetSessionTool(index),
+      new GetSessionFullTool(index),
+      new ListRecentTool(index),
+      new GetContextTool(findSimilarTool, searchTool, index),
+      new ListSourcesTool(index),
+      new ServerInfoTool(index, effectiveSemanticIndexer, extensionVersion, mcpServerStartTime)
+    ];
+  }
   const mcpServer = new McpServer(
     {
-      enabled: _mcpCfg.get("mcpServer.enabled") ?? false,
-      port: _mcpCfg.get("mcpServer.port") ?? 6789,
-      tokenPath: vscode18.Uri.joinPath(context.globalStorageUri, "mcp-token.txt").fsPath
+      enabled: mcpCfg.get("mcpServer.enabled") ?? false,
+      port: mcpCfg.get("mcpServer.port") ?? 6789,
+      tokenPath: mcpTokenPath
     },
-    []
-    // Phase 4: populated with all 8 tool instances
+    buildMcpTools(),
+    (msg) => channel.appendLine(msg),
+    () => index.size
   );
   context.subscriptions.push({ dispose: () => void mcpServer.stop() });
+  const mcpStatusBar = vscode18.window.createStatusBarItem(vscode18.StatusBarAlignment.Right, 50);
+  context.subscriptions.push(mcpStatusBar);
+  function updateMcpStatusBar() {
+    const cfg = vscode18.workspace.getConfiguration("chatwizard");
+    const enabled = cfg.get("mcpServer.enabled") ?? false;
+    if (!enabled && !mcpServer.isRunning) {
+      mcpStatusBar.hide();
+      return;
+    }
+    const port = mcpServer.isRunning ? mcpServer.port : cfg.get("mcpServer.port") ?? 6789;
+    if (mcpServer.isRunning) {
+      mcpStatusBar.text = "$(broadcast) MCP";
+      mcpStatusBar.tooltip = `ChatWizard MCP server running on port ${port} \u2014 click to stop`;
+      mcpStatusBar.command = "chatwizard.stopMcpServer";
+      mcpStatusBar.backgroundColor = void 0;
+    } else {
+      mcpStatusBar.text = "$(broadcast) MCP";
+      mcpStatusBar.tooltip = `ChatWizard MCP server is stopped \u2014 click to start`;
+      mcpStatusBar.command = "chatwizard.startMcpServer";
+      mcpStatusBar.backgroundColor = new vscode18.ThemeColor("statusBarItem.warningBackground");
+    }
+    mcpStatusBar.show();
+  }
+  if (mcpCfg.get("mcpServer.enabled") ?? false) {
+    void (async () => {
+      const fsSync = await import("fs");
+      if (!fsSync.existsSync(mcpTokenPath)) {
+        channel.appendLine(
+          '[Chat Wizard] MCP auto-start skipped \u2014 no token file found. Run "Chat Wizard: Start MCP Server" to initialise.'
+        );
+        updateMcpStatusBar();
+        return;
+      }
+      try {
+        await mcpServer.start();
+        updateMcpStatusBar();
+      } catch (err) {
+        channel.appendLine(`[Chat Wizard] MCP server auto-start failed: ${String(err)}`);
+      }
+    })();
+  }
   context.subscriptions.push(
     vscode18.commands.registerCommand("chatwizard.startMcpServer", async () => {
       if (mcpServer.isRunning) {
@@ -40741,10 +41684,30 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
         );
         return;
       }
+      const fs20 = await import("fs");
+      const tokenExists = fs20.existsSync(mcpTokenPath);
+      if (!tokenExists) {
+        const choice = await vscode18.window.showWarningMessage(
+          "The MCP server will listen on localhost only. A bearer token will be generated and stored in your VS Code extension storage. Only tools you configure with this token can query your chat history. Continue?",
+          { modal: true },
+          "Enable"
+        );
+        if (choice !== "Enable") {
+          return;
+        }
+      }
       try {
+        await mcpAuthManager.getOrCreateToken(mcpTokenPath);
         await mcpServer.start();
+        updateMcpStatusBar();
+        await vscode18.workspace.getConfiguration("chatwizard").update(
+          "mcpServer.enabled",
+          true,
+          vscode18.ConfigurationTarget.Global
+        );
+        const port = mcpServer.port;
         void vscode18.window.showInformationMessage(
-          `Chat Wizard MCP server started on port ${mcpServer.port}. Use 'Chat Wizard: Copy MCP Config to Clipboard' to set up your AI tool.`
+          `Chat Wizard MCP server started on port ${port}. Use 'Chat Wizard: Copy MCP Config to Clipboard' to set up your AI tool.`
         );
       } catch (err) {
         void vscode18.window.showErrorMessage(
@@ -40760,27 +41723,50 @@ Chat Wizard reads your Claude Code and GitHub Copilot chat history. Make sure th
         return;
       }
       await mcpServer.stop();
+      updateMcpStatusBar();
       void vscode18.window.showInformationMessage("Chat Wizard MCP server stopped.");
     })
   );
   context.subscriptions.push(
     vscode18.commands.registerCommand("chatwizard.copyMcpConfig", async () => {
-      const cfg = vscode18.workspace.getConfiguration("chatwizard");
-      const port = mcpServer.isRunning ? mcpServer.port : cfg.get("mcpServer.port") ?? 6789;
-      const config2 = {
-        mcpServers: {
-          chatwizard: { url: `http://localhost:${port}/sse` }
-        }
-      };
-      await vscode18.env.clipboard.writeText(JSON.stringify(config2, null, 2));
-      if (!mcpServer.isRunning) {
-        void vscode18.window.showWarningMessage(
-          `MCP config copied to clipboard. Note: the MCP server is not currently running. Start it with 'Chat Wizard: Start MCP Server'.`
+      const toolItems = [
+        { label: "$(copilot) GitHub Copilot", description: "VS Code settings.json", target: "copilot" },
+        { label: "$(comment-discussion) Claude Desktop", description: "claude_desktop_config.json", target: "claude" },
+        { label: "$(terminal) Cursor", description: ".cursor/mcp.json", target: "cursor" },
+        { label: "$(sync) Continue", description: ".continue/config.json", target: "continue" },
+        { label: "$(link) Generic (URL + token)", description: "Any MCP-aware client", target: "generic" }
+      ];
+      const picked = await vscode18.window.showQuickPick(toolItems, {
+        title: "Copy MCP Config \u2014 choose your AI tool",
+        placeHolder: "Select the AI tool you want to configure"
+      });
+      if (!picked) {
+        return;
+      }
+      const cfg2 = vscode18.workspace.getConfiguration("chatwizard");
+      const port = mcpServer.isRunning ? mcpServer.port : cfg2.get("mcpServer.port") ?? 6789;
+      let token;
+      try {
+        token = await mcpAuthManager.getOrCreateToken(mcpTokenPath);
+      } catch {
+        void vscode18.window.showErrorMessage(
+          "Chat Wizard: Could not read MCP token. Start the MCP server first."
         );
-      } else {
-        void vscode18.window.showInformationMessage(
-          "MCP config copied to clipboard. Paste it into your AI tool's MCP configuration."
-        );
+        return;
+      }
+      const snippet = mcpConfigHelper.getConfigSnippet(picked.target, port, token);
+      await vscode18.env.clipboard.writeText(snippet);
+      const action = await vscode18.window.showInformationMessage(
+        `Config copied! Paste it into your tool's MCP configuration.`,
+        "Show instructions"
+      );
+      if (action === "Show instructions") {
+        const instructions = mcpConfigHelper.getSetupInstructions(picked.target, port);
+        const doc = await vscode18.workspace.openTextDocument({
+          language: "markdown",
+          content: instructions
+        });
+        await vscode18.window.showTextDocument(doc, { preview: true, preserveFocus: false });
       }
     })
   );
