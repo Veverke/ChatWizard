@@ -353,7 +353,7 @@ This is a distinct MCP primitive from Tools. The SDK's `server.prompt()` method 
 
 ---
 
-## Phase 3 — Auth & Config ⬜
+## Phase 3 — Auth & Config ✅
 
 **Goal:** Implement bearer token generation/persistence and the `McpConfigHelper` that produces ready-to-paste config snippets for each supported AI tool.
 
@@ -365,23 +365,26 @@ This is a distinct MCP primitive from Tools. The SDK's `server.prompt()` method 
 
 ### Tasks — `McpAuthManager` (`src/mcp/mcpAuthManager.ts`)
 
-- [ ] `getOrCreateToken(tokenPath: string): Promise<string>` — reads token from file if it exists; generates a `crypto.randomBytes(32).toString('hex')` token and writes it if not; returns the token string
-- [ ] `rotateToken(tokenPath: string): Promise<string>` — generates and writes a fresh token; returns it; called when the user explicitly requests a token rotation
-- [ ] Never logs or surfaces the raw token to the Output channel (only its length and creation date)
+- [x] `getOrCreateToken(tokenPath: string): Promise<string>` — reads token from file if it exists; generates a `crypto.randomBytes(32).toString('hex')` token and writes it if not; returns the token string
+- [x] `rotateToken(tokenPath: string): Promise<string>` — generates and writes a fresh token; returns it; called when the user explicitly requests a token rotation
+- [x] Never logs or surfaces the raw token to the Output channel (only its length and creation date)
 
 ### Tasks — `McpConfigHelper` (`src/mcp/mcpConfigHelper.ts`)
 
-- [ ] `getConfigSnippet(tool: 'copilot' | 'claude' | 'cursor' | 'continue' | 'generic', port: number, token: string): string` — returns a ready-to-paste JSON or YAML block for the specified tool
-- [ ] Copilot format: VS Code `settings.json` `"github.copilot.chat.mcpServers"` entry
-- [ ] Claude Desktop format: `claude_desktop_config.json` `"mcpServers"` entry
-- [ ] Continue format: `.continue/config.json` `"mcpServers"` entry  
-- [ ] Cursor format: `.cursor/mcp.json` entry
-- [ ] Generic format: a plain `{ url, authorization }` block
+- [x] `getConfigSnippet(tool: 'copilot' | 'claude' | 'cursor' | 'continue' | 'generic', port: number, token: string): string` — returns a ready-to-paste JSON or YAML block for the specified tool
+- [x] Copilot format: VS Code `settings.json` `"github.copilot.chat.mcpServers"` entry
+- [x] Claude Desktop format: `claude_desktop_config.json` `"mcpServers"` entry
+- [x] Continue format: `.continue/config.json` `"mcpServers"` entry  
+- [x] Cursor format: `.cursor/mcp.json` entry
+- [x] Generic format: a plain `{ url, authorization }` block
 
 ### Deliverables
 
-- `src/mcp/mcpAuthManager.ts`
-- `src/mcp/mcpConfigHelper.ts`
+- `src/mcp/mcpAuthManager.ts` ✅
+- `src/mcp/mcpConfigHelper.ts` ✅
+- `test/suite/mcp/mcpAuthManager.test.ts` — 12 tests, all passing ✅
+- `test/suite/mcp/mcpConfigHelper.test.ts` — 36 tests, all passing ✅
+- `scripts/smoke-test-phase3.mjs` — 34 assertions, all passing ✅
 
 ---
 
