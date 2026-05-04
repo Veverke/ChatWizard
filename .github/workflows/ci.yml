@@ -23,5 +23,15 @@ jobs:
       - name: Compile & lint
         run: npm run compile && npm run lint
 
+      # Download VS Code first so rebuild-native.js can read the exact Electron
+      # version from .vscode-test/ before recompiling better-sqlite3.
+      # Without this step the native binary is compiled against system Node.js ABI
+      # and fails to load inside VS Code's Electron runtime.
+      - name: Download VS Code
+        run: node -e "require('@vscode/test-electron').downloadAndUnzipVSCode()"
+
+      - name: Rebuild native modules for VS Code's Electron
+        run: npm run rebuild:native
+
       - name: Run tests
         run: xvfb-run -a npm test

@@ -25,11 +25,13 @@ The natural next wave of sources to add:
 
 ## 2. Broader Expansion Possibilities
 
-### Semantic / Vector Search
-The current engine is an inverted index + trigrams. Adding local embedding-based similarity search (e.g., via `@xenova/transformers` running fully client-side, zero network) would allow natural language queries like _"find sessions where I discussed authentication patterns"_ without exact keyword matches. This is the single highest-leverage upgrade.
+### ~~Topic Similarity~~
+~~The current engine is an inverted index + trigrams. Adding local embedding-based similarity search (e.g., via `@xenova/transformers` running fully client-side, zero network) would allow natural language queries like _"find sessions where I discussed authentication patterns"_ without exact keyword matches. This is the single highest-leverage upgrade.~~
 
 ### MCP Server Mode
 Expose the chat history index as a **Model Context Protocol (MCP) server** so that AI tools (Copilot, Claude, Cursor, Continue) can query past conversations as context when answering new questions — "before answering, here's how I solved this before."
+
+→ _Full use cases, tool catalogue, and implementation phases: [work-plan-mcp-server.md](work-plan-mcp-server.md)_
 
 ### Git / Branch Linkage
 At session-open time, record the active git branch and HEAD commit. Show sessions tagged by branch in the TreeView, and in the session reader show what the repo looked like at that point. Answers _"what was I doing on feature/auth?"_
@@ -104,7 +106,7 @@ Broader gaps relative to competitors:
 
 | Gap | Detail |
 |---|---|
-| No semantic search | Exact-keyword + regex only; no "find sessions about this concept" |
+| ~~No semantic search~~ | ~~Exact-keyword + regex only; no "find sessions about this concept"~~ |
 | No AI-assisted summarization | No per-session summary, no topic auto-labeling, no cluster naming |
 | Editor-only access | No web UI, no mobile, no CLI — history is locked inside VS Code |
 | No collaboration | Can't share a session, export to Notion/Obsidian natively, or link to a GitHub issue |

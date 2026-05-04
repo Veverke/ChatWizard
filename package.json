@@ -459,6 +459,21 @@
         "title": "Settings…",
         "category": "Chat Wizard",
         "icon": "$(folder-library)"
+      },
+      {
+        "command": "chatwizard.startMcpServer",
+        "title": "Chat Wizard: Start MCP Server",
+        "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.stopMcpServer",
+        "title": "Chat Wizard: Stop MCP Server",
+        "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.copyMcpConfig",
+        "title": "Chat Wizard: Copy MCP Config to Clipboard",
+        "category": "Chat Wizard"
       }
     ],
     "menus": {
@@ -697,62 +712,230 @@
         }
       ],
       "commandPalette": [
-        { "command": "chatwizard.openSession",              "when": "false" },
-        { "command": "chatwizard.openSessionFromCodeBlock", "when": "false" },
-        { "command": "chatwizard.search",                   "when": "false" },
-        { "command": "chatwizard.filterSessions",           "when": "false" },
-        { "command": "chatwizard.filterCodeBlocks",         "when": "false" },
-        { "command": "chatwizard.configureSortOrder",       "when": "false" },
-        { "command": "chatwizard.sortByDate",               "when": "false" },
-        { "command": "chatwizard.sortByDate.asc",           "when": "false" },
-        { "command": "chatwizard.sortByDate.desc",          "when": "false" },
-        { "command": "chatwizard.sortByWorkspace",          "when": "false" },
-        { "command": "chatwizard.sortByWorkspace.asc",      "when": "false" },
-        { "command": "chatwizard.sortByWorkspace.desc",     "when": "false" },
-        { "command": "chatwizard.sortByLength",             "when": "false" },
-        { "command": "chatwizard.sortByLength.asc",         "when": "false" },
-        { "command": "chatwizard.sortByLength.desc",        "when": "false" },
-        { "command": "chatwizard.sortByTitle",              "when": "false" },
-        { "command": "chatwizard.sortByTitle.asc",          "when": "false" },
-        { "command": "chatwizard.sortByTitle.desc",         "when": "false" },
-        { "command": "chatwizard.sortByModel",              "when": "false" },
-        { "command": "chatwizard.sortByModel.asc",          "when": "false" },
-        { "command": "chatwizard.sortByModel.desc",         "when": "false" },
-        { "command": "chatwizard.pinSession",               "when": "false" },
-        { "command": "chatwizard.unpinSession",             "when": "false" },
-        { "command": "chatwizard.loadMoreSessions",         "when": "false" },
-        { "command": "chatwizard.loadMoreCodeBlocks",       "when": "false" },
-        { "command": "chatwizard.enableSessionGrouping",    "when": "false" },
-        { "command": "chatwizard.disableSessionGrouping",   "when": "false" },
-        { "command": "chatwizard.enableCbGrouping",         "when": "false" },
-        { "command": "chatwizard.disableCbGrouping",        "when": "false" },
-        { "command": "chatwizard.exportSession",            "when": "false" },
-        { "command": "chatwizard.exportAll",                "when": "false" },
-        { "command": "chatwizard.exportSelected",           "when": "false" },
-        { "command": "chatwizard.exportExcerpt",            "when": "false" },
-        { "command": "chatwizard.exportFromTreeSelection",  "when": "false" },
-        { "command": "chatwizard.showCodeBlocks",           "when": "false" },
-        { "command": "chatwizard.showPromptLibrary",        "when": "false" },
-        { "command": "chatwizard.showAnalytics",            "when": "false" },
-        { "command": "chatwizard.showTimeline",             "when": "false" },
-        { "command": "chatwizard.rescan",                   "when": "false" },
-        { "command": "chatwizard.manageWatchedWorkspaces",  "when": "false" },
-        { "command": "chatwizard.cbSortByDate",             "when": "false" },
-        { "command": "chatwizard.cbSortByDate.asc",         "when": "false" },
-        { "command": "chatwizard.cbSortByDate.desc",        "when": "false" },
-        { "command": "chatwizard.cbSortByWorkspace",        "when": "false" },
-        { "command": "chatwizard.cbSortByWorkspace.asc",    "when": "false" },
-        { "command": "chatwizard.cbSortByWorkspace.desc",   "when": "false" },
-        { "command": "chatwizard.cbSortByLength",           "when": "false" },
-        { "command": "chatwizard.cbSortByLength.asc",       "when": "false" },
-        { "command": "chatwizard.cbSortByLength.desc",      "when": "false" },
-        { "command": "chatwizard.cbSortByTitle",            "when": "false" },
-        { "command": "chatwizard.cbSortByTitle.asc",        "when": "false" },
-        { "command": "chatwizard.cbSortByTitle.desc",       "when": "false" },
-        { "command": "chatwizard.cbSortByLanguage",         "when": "false" },
-        { "command": "chatwizard.cbSortByLanguage.asc",     "when": "false" },
-        { "command": "chatwizard.cbSortByLanguage.desc",    "when": "false" },
-        { "command": "chatwizard.semanticSearch",           "when": "false" }
+        {
+          "command": "chatwizard.openSession",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.openSessionFromCodeBlock",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.search",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.filterSessions",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.filterCodeBlocks",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.configureSortOrder",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.sortByDate",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.sortByDate.asc",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.sortByDate.desc",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.sortByWorkspace",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.sortByWorkspace.asc",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.sortByWorkspace.desc",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.sortByLength",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.sortByLength.asc",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.sortByLength.desc",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.sortByTitle",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.sortByTitle.asc",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.sortByTitle.desc",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.sortByModel",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.sortByModel.asc",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.sortByModel.desc",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.pinSession",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.unpinSession",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.loadMoreSessions",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.loadMoreCodeBlocks",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.enableSessionGrouping",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.disableSessionGrouping",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.enableCbGrouping",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.disableCbGrouping",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.exportSession",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.exportAll",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.exportSelected",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.exportExcerpt",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.exportFromTreeSelection",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.showCodeBlocks",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.showPromptLibrary",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.showAnalytics",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.showTimeline",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.rescan",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.manageWatchedWorkspaces",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.cbSortByDate",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.cbSortByDate.asc",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.cbSortByDate.desc",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.cbSortByWorkspace",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.cbSortByWorkspace.asc",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.cbSortByWorkspace.desc",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.cbSortByLength",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.cbSortByLength.asc",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.cbSortByLength.desc",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.cbSortByTitle",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.cbSortByTitle.asc",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.cbSortByTitle.desc",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.cbSortByLanguage",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.cbSortByLanguage.asc",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.cbSortByLanguage.desc",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.semanticSearch",
+          "when": "false"
+        }
       ]
     },
     "configuration": {
@@ -911,6 +1094,18 @@
           "minimum": 0,
           "maximum": 1,
           "description": "Minimum similarity score (0–1) for a session to appear in topic similarity search results. Lower values show more (but less relevant) results. Recommended range: 0.30–0.45."
+        },
+        "chatwizard.mcpServer.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Start a local MCP server so AI tools can query your chat history as context."
+        },
+        "chatwizard.mcpServer.port": {
+          "type": "number",
+          "default": 6789,
+          "minimum": 1024,
+          "maximum": 65535,
+          "description": "Port for the local MCP server. Restart VS Code after changing."
         }
       }
     }
@@ -930,6 +1125,7 @@
     "package:vsix:darwin-arm64": "npm run rebuild:native && npm run bundle && npx @vscode/vsce package --target darwin-arm64 --out chatwizard-darwin-arm64.vsix"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@xenova/transformers": "^2.17.2",
     "better-sqlite3": "^12.8.0"
   },
