@@ -42,6 +42,17 @@ import { EmbeddingEngine } from './search/embeddingEngine';
 import { SemanticIndex } from './search/semanticIndex';
 import { SemanticSearchPanel } from './search/semanticSearchPanel';
 import { McpServer } from './mcp/mcpServer';
+import { McpAuthManager } from './mcp/mcpAuthManager';
+import { McpConfigHelper, McpConfigTarget } from './mcp/mcpConfigHelper';
+import { SearchTool } from './mcp/tools/searchTool';
+import { FindSimilarTool } from './mcp/tools/findSimilarTool';
+import { GetSessionTool } from './mcp/tools/getSessionTool';
+import { GetSessionFullTool } from './mcp/tools/getSessionFullTool';
+import { ListRecentTool } from './mcp/tools/listRecentTool';
+import { GetContextTool } from './mcp/tools/getContextTool';
+import { ListSourcesTool } from './mcp/tools/listSourcesTool';
+import { ServerInfoTool } from './mcp/tools/serverInfoTool';
+import { NullSemanticIndexer, ISemanticIndexer } from './search/semanticContracts';
 
 let watcher: ChatWizardWatcher | undefined;
 
@@ -161,6 +172,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         }
     });
     context.subscriptions.push(semanticListener);
+
+    // Proxy that delegates to the current semanticIndexer reference.
+    // Passed into buildMcpTools() once so tools always see the live indexer
+    // even when enableSemanticSearch is toggled at runtime without a reload.
+    const _nullIndexerForProxy = new NullSemanticIndexer();
+    const semanticProxy: ISemanticIndexer = {
+        get isReady()      { return (semanticIndexer ?? _nullIndexerForProxy).isReady; },
+        get isIndexing()   { return (semanticIndexer ?? _nullIndexerForProxy).isIndexing; },
+        get indexedCount() { return (semanticIndexer ?? _nullIndexerForProxy).indexedCount; },
+        initialize()       { return (semanticIndexer ?? _nullIndexerForProxy).initialize(); },
+        scheduleSession(s) { return (semanticIndexer ?? _nullIndexerForProxy).scheduleSession(s); },
+        removeSession(id)  { return (semanticIndexer ?? _nullIndexerForProxy).removeSession(id); },
+        search(q, k, s)    { return (semanticIndexer ?? _nullIndexerForProxy).search(q, k, s); },
+        dispose()          { /* proxy is not the owner; do nothing */ },
+    };
 
     // Build code block engine — populated by the codeBlockListener when batchUpsert fires.
     const codeBlockEngine = new CodeBlockSearchEngine();
@@ -998,21 +1024,100 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
 
     // ------------------------------------------------------------------
-    // MCP server commands
+    // MCP server — Phase 4 wiring
     // ------------------------------------------------------------------
-    // Phase 4 will replace this placeholder with full wiring (token path, tool instances).
-    const _mcpCfg = vscode.workspace.getConfiguration('chatwizard');
+    const mcpCfg = vscode.workspace.getConfiguration('chatwizard');
     await vscode.workspace.fs.createDirectory(context.globalStorageUri);
+    const mcpTokenPath = vscode.Uri.joinPath(context.globalStorageUri, 'mcp-token.txt').fsPath;
+    const mcpAuthManager = new McpAuthManager((msg) => channel.appendLine(msg));
+    const mcpConfigHelper = new McpConfigHelper();
+
+    // Resolve the extension version once (used by ServerInfoTool).
+    const extensionVersion = context.extension.packageJSON.version as string ?? '0.0.0';
+
+    // Date the server instance was created (uptime reference).
+    const mcpServerStartTime = new Date();
+
+    // Build tool instances — they hold references to live engine instances.
+    // GetContextTool composes FindSimilarTool + SearchTool, so create those first.
+    function buildMcpTools() {
+        const searchTool = new SearchTool(engine, index);
+        const findSimilarTool = new FindSimilarTool(semanticProxy, index);
+        return [
+            searchTool,
+            findSimilarTool,
+            new GetSessionTool(index),
+            new GetSessionFullTool(index),
+            new ListRecentTool(index),
+            new GetContextTool(findSimilarTool, searchTool, index),
+            new ListSourcesTool(index),
+            new ServerInfoTool(index, semanticProxy, extensionVersion, mcpServerStartTime),
+        ];
+    }
+
     const mcpServer = new McpServer(
         {
-            enabled: _mcpCfg.get<boolean>('mcpServer.enabled') ?? false,
-            port: _mcpCfg.get<number>('mcpServer.port') ?? 6789,
-            tokenPath: vscode.Uri.joinPath(context.globalStorageUri, 'mcp-token.txt').fsPath,
+            enabled: mcpCfg.get<boolean>('mcpServer.enabled') ?? false,
+            port: mcpCfg.get<number>('mcpServer.port') ?? 6789,
+            tokenPath: mcpTokenPath,
         },
-        [], // Phase 4: populated with all 8 tool instances
+        buildMcpTools(),
+        (msg) => channel.appendLine(msg),
+        () => index.size,
     );
     context.subscriptions.push({ dispose: () => void mcpServer.stop() });
 
+    // ── Status bar item ────────────────────────────────────────────────────────
+    const mcpStatusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 50);
+    context.subscriptions.push(mcpStatusBar);
+
+    function updateMcpStatusBar(): void {
+        const cfg = vscode.workspace.getConfiguration('chatwizard');
+        const enabled = cfg.get<boolean>('mcpServer.enabled') ?? false;
+        if (!enabled && !mcpServer.isRunning) {
+            mcpStatusBar.hide();
+            return;
+        }
+        const port = mcpServer.isRunning ? mcpServer.port : (cfg.get<number>('mcpServer.port') ?? 6789);
+        if (mcpServer.isRunning) {
+            mcpStatusBar.text = '$(broadcast) MCP';
+            mcpStatusBar.tooltip = `ChatWizard MCP server running on port ${port} — click to stop`;
+            mcpStatusBar.command = 'chatwizard.stopMcpServer';
+            mcpStatusBar.backgroundColor = undefined;
+        } else {
+            mcpStatusBar.text = '$(broadcast) MCP';
+            mcpStatusBar.tooltip = `ChatWizard MCP server is stopped — click to start`;
+            mcpStatusBar.command = 'chatwizard.startMcpServer';
+            mcpStatusBar.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
+        }
+        mcpStatusBar.show();
+    }
+
+    // ── Auto-start when enabled at activation ──────────────────────────────────
+    // Only auto-start if the token file already exists (i.e. consent was given in a
+    // previous session). If the token file is absent the user must run the explicit
+    // "Start MCP Server" command so the first-run consent modal can be shown.
+    if (mcpCfg.get<boolean>('mcpServer.enabled') ?? false) {
+        void (async () => {
+            const fsSync = await import('fs');
+            if (!fsSync.existsSync(mcpTokenPath)) {
+                channel.appendLine(
+                    '[Chat Wizard] MCP auto-start skipped — no token file found. ' +
+                    'Run "Chat Wizard: Start MCP Server" to initialise.'
+                );
+                updateMcpStatusBar(); // show the amber "stopped" indicator
+                return;
+            }
+            try {
+                await mcpServer.start();
+                updateMcpStatusBar();
+            } catch (err) {
+                channel.appendLine(`[Chat Wizard] MCP server auto-start failed: ${String(err)}`);
+            }
+        })();
+    }
+
+    // ── startMcpServer command ─────────────────────────────────────────────────
     context.subscriptions.push(
         vscode.commands.registerCommand('chatwizard.startMcpServer', async () => {
             if (mcpServer.isRunning) {
@@ -1021,10 +1126,32 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 );
                 return;
             }
+
+            // First-run consent: show modal if no token file exists yet.
+            const fs = await import('fs');
+            const tokenExists = fs.existsSync(mcpTokenPath);
+            if (!tokenExists) {
+                const choice = await vscode.window.showWarningMessage(
+                    'The MCP server will listen on localhost only. ' +
+                    'A bearer token will be generated and stored in your VS Code extension storage. ' +
+                    'Only tools you configure with this token can query your chat history. Continue?',
+                    { modal: true },
+                    'Enable',
+                );
+                if (choice !== 'Enable') { return; }
+            }
+
             try {
+                await mcpAuthManager.getOrCreateToken(mcpTokenPath);
                 await mcpServer.start();
+                updateMcpStatusBar();
+                // Persist the enabled setting so the server auto-starts next session.
+                await vscode.workspace.getConfiguration('chatwizard').update(
+                    'mcpServer.enabled', true, vscode.ConfigurationTarget.Global
+                );
+                const port = mcpServer.port;
                 void vscode.window.showInformationMessage(
-                    `Chat Wizard MCP server started on port ${mcpServer.port}. ` +
+                    `Chat Wizard MCP server started on port ${port}. ` +
                     `Use 'Chat Wizard: Copy MCP Config to Clipboard' to set up your AI tool.`
                 );
             } catch (err) {
@@ -1035,6 +1162,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         })
     );
 
+    // ── stopMcpServer command ──────────────────────────────────────────────────
     context.subscriptions.push(
         vscode.commands.registerCommand('chatwizard.stopMcpServer', async () => {
             if (!mcpServer.isRunning) {
@@ -1042,31 +1170,66 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 return;
             }
             await mcpServer.stop();
+            updateMcpStatusBar();
             void vscode.window.showInformationMessage('Chat Wizard MCP server stopped.');
         })
     );
 
+    // ── copyMcpConfig command — quick-pick flow ────────────────────────────────
     context.subscriptions.push(
         vscode.commands.registerCommand('chatwizard.copyMcpConfig', async () => {
-            const cfg = vscode.workspace.getConfiguration('chatwizard');
+            type ToolItem = vscode.QuickPickItem & { target: McpConfigTarget };
+            const toolItems: ToolItem[] = [
+                { label: '$(copilot) GitHub Copilot', description: 'VS Code settings.json', target: 'copilot' },
+                { label: '$(comment-discussion) Claude Desktop', description: 'claude_desktop_config.json', target: 'claude' },
+                { label: '$(terminal) Cursor', description: '.cursor/mcp.json', target: 'cursor' },
+                { label: '$(sync) Continue', description: '.continue/config.json', target: 'continue' },
+                { label: '$(link) Generic (URL + token)', description: 'Any MCP-aware client', target: 'generic' },
+            ];
+
+            const picked = await vscode.window.showQuickPick(toolItems, {
+                title: 'Copy MCP Config — choose your AI tool',
+                placeHolder: 'Select the AI tool you want to configure',
+            });
+            if (!picked) { return; }
+
+            const cfg2 = vscode.workspace.getConfiguration('chatwizard');
             const port = mcpServer.isRunning
                 ? mcpServer.port
-                : (cfg.get<number>('mcpServer.port') ?? 6789);
-            const config = {
-                mcpServers: {
-                    chatwizard: { url: `http://localhost:${port}/sse` },
-                },
-            };
-            await vscode.env.clipboard.writeText(JSON.stringify(config, null, 2));
-            if (!mcpServer.isRunning) {
-                void vscode.window.showWarningMessage(
-                    'MCP config copied to clipboard. Note: the MCP server is not currently running. ' +
-                    `Start it with 'Chat Wizard: Start MCP Server'.`
+                : (cfg2.get<number>('mcpServer.port') ?? 6789);
+
+            let token: string;
+            try {
+                const existing = await mcpAuthManager.readToken(mcpTokenPath);
+                if (!existing) {
+                    void vscode.window.showErrorMessage(
+                        'Chat Wizard: No MCP token found. Run "Chat Wizard: Start MCP Server" first to initialise the server and generate a token.'
+                    );
+                    return;
+                }
+                token = existing;
+            } catch {
+                void vscode.window.showErrorMessage(
+                    'Chat Wizard: Could not read MCP token. Start the MCP server first.'
                 );
-            } else {
-                void vscode.window.showInformationMessage(
-                    'MCP config copied to clipboard. Paste it into your AI tool\'s MCP configuration.'
-                );
+                return;
+            }
+
+            const snippet = mcpConfigHelper.getConfigSnippet(picked.target, port, token);
+            await vscode.env.clipboard.writeText(snippet);
+
+            const action = await vscode.window.showInformationMessage(
+                `Config copied! Paste it into your tool's MCP configuration.`,
+                'Show instructions',
+            );
+
+            if (action === 'Show instructions') {
+                const instructions = mcpConfigHelper.getSetupInstructions(picked.target, port);
+                const doc = await vscode.workspace.openTextDocument({
+                    language: 'markdown',
+                    content: instructions,
+                });
+                await vscode.window.showTextDocument(doc, { preview: true, preserveFocus: false });
             }
         })
     );
