@@ -37,6 +37,10 @@ const EXPECTED_LEAF_COMMANDS: ReadonlySet<string> = new Set([
     // Workspace
     'chatwizard.manageWatchedWorkspaces',
     'chatwizard.rescan',
+    // MCP server
+    'chatwizard.startMcpServer',
+    'chatwizard.stopMcpServer',
+    'chatwizard.copyMcpConfig',
 ]);
 
 // Authoritative set of top-level category command IDs contributed to the palette.
