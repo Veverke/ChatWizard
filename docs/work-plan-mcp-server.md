@@ -374,7 +374,7 @@ This is a distinct MCP primitive from Tools. The SDK's `server.prompt()` method 
 - [x] `getConfigSnippet(tool: 'copilot' | 'claude' | 'cursor' | 'continue' | 'generic', port: number, token: string): string` — returns a ready-to-paste JSON or YAML block for the specified tool
 - [x] Copilot format: VS Code `settings.json` `"github.copilot.chat.mcpServers"` entry
 - [x] Claude Desktop format: `claude_desktop_config.json` `"mcpServers"` entry
-- [x] Continue format: `.continue/config.json` `"mcpServers"` entry  
+- [x] Continue format: `.continue/mcpServers/chatwizard.json` entry  
 - [x] Cursor format: `.cursor/mcp.json` entry
 - [x] Generic format: a plain `{ url, authorization }` block
 
@@ -447,7 +447,7 @@ This is a distinct MCP primitive from Tools. The SDK's `server.prompt()` method 
   - GitHub Copilot (VS Code `settings.json`)
   - Claude Desktop (`claude_desktop_config.json`)
   - Cursor (`.cursor/mcp.json`)
-  - Continue (`.continue/config.json`)
+  - Continue (`.continue/mcpServers/chatwizard.json`)
 - [x] Add CHANGELOG entry for the release that ships MCP Server Mode
 - [x] Update `whats-next.md` to mark MCP Server Mode as complete
 

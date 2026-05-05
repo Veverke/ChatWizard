@@ -222,7 +222,7 @@ Save the following as `chatwizard.json` inside the `mcpServers/` directory:
 
 - MCP tools are **only available in agent mode** in Continue. They are not visible in standard chat mode.
 - Continue supports SSE transport via the `url` field — no subprocess is needed.
-- The `headers.Authorization` field contains your bearer token.
+- The `transport.requestOptions.headers.Authorization` field contains your bearer token.
 - If you rotate the token, update the JSON file. Continue reloads MCP config files automatically.
 
 ---
@@ -273,5 +273,12 @@ Use these connection details for any MCP client not listed above:
 
 ### Token rotation
 
-- To invalidate the current token and generate a new one, delete `mcp-token.txt` from VS Code's extension global storage and restart the MCP server.
-- After rotation, run **Chat Wizard: Copy MCP Config** again and update all configured AI tools.
+1. In VS Code Settings, enable **Chat Wizard: Allow Token Rotation** (`chatwizard.mcpServer.allowTokenRotation`).
+2. Open the Command Palette and run **Chat Wizard: Rotate MCP Token** (`chatwizard.rotateMcpToken`).
+3. Confirm the rotation in the dialog. If the MCP server is currently running, it will restart automatically with the new token.
+4. Run **Chat Wizard: Copy MCP Config** again and update every AI tool that was using the old token.
+
+**Manual fallback (if the command is unavailable):**
+
+- Delete `mcp-token.txt` from VS Code's extension global storage and restart the MCP server.
+- Then run **Chat Wizard: Copy MCP Config** and update all configured tools.

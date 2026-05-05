@@ -1261,7 +1261,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 'This will immediately invalidate the current token. ' +
                 'Every AI tool you have configured with the current token (Copilot, Claude, Cursor, Continue, etc.) ' +
                 'will stop working until you copy the new config and update each tool manually. ' +
-                'The MCP server will restart automatically with the new token.',
+                'If the MCP server is currently running, it will restart automatically with the new token.',
                 { modal: true },
                 'Rotate Token',
             );

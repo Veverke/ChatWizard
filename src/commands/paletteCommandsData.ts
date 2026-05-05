@@ -85,6 +85,7 @@ export const PALETTE_CATEGORIES: readonly PaletteCategory[] = [
             { commandId: 'chatwizard.startMcpServer',          label: 'Start MCP Server',           icon: '$(broadcast)'     },
             { commandId: 'chatwizard.stopMcpServer',           label: 'Stop MCP Server',            icon: '$(debug-stop)'    },
             { commandId: 'chatwizard.copyMcpConfig',           label: 'Copy MCP Config to Clipboard', icon: '$(clippy)'      },
+            { commandId: 'chatwizard.rotateMcpToken',           label: 'Rotate MCP Token',             icon: '$(sync)'        },
         ],
     },
 ];
