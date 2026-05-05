@@ -1183,7 +1183,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 { label: '$(copilot) GitHub Copilot', description: 'VS Code settings.json', target: 'copilot' },
                 { label: '$(comment-discussion) Claude Desktop', description: 'claude_desktop_config.json', target: 'claude' },
                 { label: '$(terminal) Cursor', description: '.cursor/mcp.json', target: 'cursor' },
-                { label: '$(sync) Continue', description: '.continue/config.json', target: 'continue' },
+                { label: '$(sync) Continue', description: '.continue/mcpServers/chatwizard.json', target: 'continue' },
                 { label: '$(link) Generic (URL + token)', description: 'Any MCP-aware client', target: 'generic' },
             ];
 
@@ -1230,6 +1230,64 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                     content: instructions,
                 });
                 await vscode.window.showTextDocument(doc, { preview: true, preserveFocus: false });
+            }
+        })
+    );
+
+    // ── rotateMcpToken command ─────────────────────────────────────────────────
+    context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.rotateMcpToken', async () => {
+            const cfg3 = vscode.workspace.getConfiguration('chatwizard');
+            const rotationAllowed = cfg3.get<boolean>('mcpServer.allowTokenRotation') ?? false;
+
+            if (!rotationAllowed) {
+                void vscode.window.showWarningMessage(
+                    'Token rotation is disabled. Enable the "Chat Wizard: Allow Token Rotation" setting ' +
+                    '(chatwizard.mcpServer.allowTokenRotation) first, then run this command again.',
+                    'Open Settings',
+                ).then(action => {
+                    if (action === 'Open Settings') {
+                        void vscode.commands.executeCommand(
+                            'workbench.action.openSettings',
+                            'chatwizard.mcpServer.allowTokenRotation'
+                        );
+                    }
+                });
+                return;
+            }
+
+            const confirmed = await vscode.window.showWarningMessage(
+                'Rotate the MCP bearer token?\n\n' +
+                'This will immediately invalidate the current token. ' +
+                'Every AI tool you have configured with the current token (Copilot, Claude, Cursor, Continue, etc.) ' +
+                'will stop working until you copy the new config and update each tool manually. ' +
+                'If the MCP server is currently running, it will restart automatically with the new token.',
+                { modal: true },
+                'Rotate Token',
+            );
+            if (confirmed !== 'Rotate Token') { return; }
+
+            try {
+                await mcpAuthManager.rotateToken(mcpTokenPath);
+
+                // Restart the server so it loads the new token immediately.
+                if (mcpServer.isRunning) {
+                    await mcpServer.stop();
+                    await mcpServer.start();
+                    updateMcpStatusBar();
+                }
+
+                const copyAction = await vscode.window.showInformationMessage(
+                    'MCP token rotated. Copy the new config and update every tool that was using the old token.',
+                    'Copy New Config',
+                );
+                if (copyAction === 'Copy New Config') {
+                    await vscode.commands.executeCommand('chatwizard.copyMcpConfig');
+                }
+            } catch (err) {
+                void vscode.window.showErrorMessage(
+                    `Chat Wizard: Failed to rotate MCP token — ${String(err)}`
+                );
             }
         })
     );

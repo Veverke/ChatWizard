@@ -95,25 +95,27 @@ export class McpConfigHelper {
     }
 
     /**
-     * Continue `.continue/config.json` `mcpServers` array entry.
-     * Add the object inside the existing `"mcpServers": [...]` array.
+     * Continue `.continue/mcpServers/chatwizard.json` entry.
+     * Continue uses the array-based mcpServers format with a named transport object.
+     * Save this file at `.continue/mcpServers/chatwizard.json` in your workspace
+     * (project-scoped) or `~/.continue/mcpServers/chatwizard.json` (global).
      */
     private _continueSnippet(sseUrl: string, token: string): string {
-        const entry = {
-            name: 'chatwizard',
-            transport: {
-                type: 'sse',
-                url: sseUrl,
-                requestOptions: {
-                    headers: {
-                        Authorization: `Bearer ${token}`,
+        const config = {
+            mcpServers: [
+                {
+                    name: 'chatwizard',
+                    transport: {
+                        type: 'sse',
+                        url: sseUrl,
+                        requestOptions: {
+                            headers: {
+                                Authorization: `Bearer ${token}`,
+                            },
+                        },
                     },
                 },
-            },
-        };
-        // Wrap in a container so the user can see where it belongs
-        const config = {
-            mcpServers: [entry],
+            ],
         };
         return JSON.stringify(config, null, 2);
     }
@@ -228,19 +230,23 @@ export class McpConfigHelper {
             '',
             '## Steps',
             '',
-            '1. Open your Continue config file:',
-            '   - **All platforms**: `~/.continue/config.json`',
-            '   - Or open Continue in VS Code and click **Settings → Edit config.json**.',
-            '2. Find the `"mcpServers"` array (or add it if absent).',
-            '3. Paste the copied object into that array.',
-            '4. Save the file. Continue reloads its config automatically.',
-            '5. In a Continue session, call: `@chatwizard chatwizard_server_info`',
+            '1. Create the MCP servers directory if it does not exist:',
+            '   - **Project-scoped** (recommended): `.continue/mcpServers/` in your workspace root',
+            '   - **Global**: `~/.continue/mcpServers/` in your home directory',
+            '2. Save the copied JSON as `chatwizard.json` inside that directory.',
+            '   - Example path: `.continue/mcpServers/chatwizard.json`',
+            '   - Alternatively, add an `mcpServers` entry to `.continue/config.json` if you prefer',
+            '     a single config file.',
+            '3. Continue picks up new files in that directory automatically — no restart needed.',
+            '4. Switch Continue to **Agent mode** (MCP tools are only available in agent mode).',
+            '5. Verify with: `@chatwizard chatwizard_server_info`',
             '',
             '## Notes',
             '',
             `- The MCP server runs on **port ${port}** (localhost only).`,
-            '- The `requestOptions.headers.Authorization` field contains your bearer token.',
-            '- Continue supports SSE transport, so no proxy or subprocess is needed.',
+            '- The `transport.requestOptions.headers.Authorization` field contains your bearer token.',
+            '- Continue supports SSE transport via the `transport.url` field; no subprocess is needed.',
+            '- MCP is only usable in **agent mode** in Continue — it is not available in chat mode.',
         ].join('\n');
     }
 
