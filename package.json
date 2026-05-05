@@ -474,6 +474,11 @@
         "command": "chatwizard.copyMcpConfig",
         "title": "Chat Wizard: Copy MCP Config to Clipboard",
         "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.rotateMcpToken",
+        "title": "Chat Wizard: Rotate MCP Token",
+        "category": "Chat Wizard"
       }
     ],
     "menus": {
@@ -935,6 +940,10 @@
         {
           "command": "chatwizard.semanticSearch",
           "when": "false"
+        },
+        {
+          "command": "chatwizard.rotateMcpToken",
+          "when": "true"
         }
       ]
     },
@@ -1106,6 +1115,11 @@
           "minimum": 1024,
           "maximum": 65535,
           "description": "Port for the local MCP server. Restart VS Code after changing."
+        },
+        "chatwizard.mcpServer.allowTokenRotation": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "When `true`, the **Chat Wizard: Rotate MCP Token** command (`chatwizard.rotateMcpToken`) is permitted to generate a new MCP bearer token, immediately invalidating the previous one. All AI tools configured with the old token must be reconfigured after rotation."
         }
       }
     }
