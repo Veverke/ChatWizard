@@ -41,6 +41,7 @@ const EXPECTED_LEAF_COMMANDS: ReadonlySet<string> = new Set([
     'chatwizard.startMcpServer',
     'chatwizard.stopMcpServer',
     'chatwizard.copyMcpConfig',
+    'chatwizard.rotateMcpToken',
 ]);
 
 // Authoritative set of top-level category command IDs contributed to the palette.
