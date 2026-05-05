@@ -96,26 +96,20 @@ export class McpConfigHelper {
 
     /**
      * Continue `.continue/mcpServers/chatwizard.json` entry.
-     * Continue uses the array-based mcpServers format with a named transport object.
-     * Save this file at `.continue/mcpServers/chatwizard.json` in your workspace
+     * Continue accepts the same JSON MCP format used by Claude Desktop and Cursor —
+     * save this file at `.continue/mcpServers/chatwizard.json` in your workspace
      * (project-scoped) or `~/.continue/mcpServers/chatwizard.json` (global).
      */
     private _continueSnippet(sseUrl: string, token: string): string {
         const config = {
-            mcpServers: [
-                {
-                    name: 'chatwizard',
-                    transport: {
-                        type: 'sse',
-                        url: sseUrl,
-                        requestOptions: {
-                            headers: {
-                                Authorization: `Bearer ${token}`,
-                            },
-                        },
+            mcpServers: {
+                chatwizard: {
+                    url: sseUrl,
+                    headers: {
+                        Authorization: `Bearer ${token}`,
                     },
                 },
-            ],
+            },
         };
         return JSON.stringify(config, null, 2);
     }
@@ -244,8 +238,8 @@ export class McpConfigHelper {
             '## Notes',
             '',
             `- The MCP server runs on **port ${port}** (localhost only).`,
-            '- The `transport.requestOptions.headers.Authorization` field contains your bearer token.',
-            '- Continue supports SSE transport via the `transport.url` field; no subprocess is needed.',
+            '- The `headers.Authorization` field contains your bearer token.',
+            '- Continue supports SSE transport via the `url` field; no subprocess is needed.',
             '- MCP is only usable in **agent mode** in Continue — it is not available in chat mode.',
         ].join('\n');
     }
