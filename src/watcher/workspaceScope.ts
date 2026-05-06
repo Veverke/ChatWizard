@@ -20,13 +20,17 @@ export interface ExtensionContextLike {
 /**
  * Owns the persisted workspace scope selection.
  *
- * **Scope logic** (simple):
- * - Every time the extension activates, `initDefault()` sets the scope to the
- *   currently open VS Code workspace folder(s) — overwriting whatever was stored.
- *   This means opening a workspace always makes it the active scope.
- * - If no workspace folder is open, the scope is set to empty (`[]`).
- * - The user can expand the scope via "Manage Watched Workspaces"; that selection
- *   is then stored and used until the next time a workspace is opened.
+ * **Scope logic:**
+ * - On activation with an open workspace folder, `initDefault()` sets the scope to
+ *   the workspaces matching that folder — overwriting any previous selection.
+ *   Opening workspace B after workspace A automatically switches to B.
+ * - On activation with **no** open workspace folder (e.g. a debug Extension Host
+ *   launched without a folder), the persisted selection is kept as-is so the user
+ *   does not lose a manually configured scope.
+ * - The user can expand/change the scope via "Manage Watched Workspaces"; that
+ *   selection is stored and used until a different workspace folder is opened.
+ * - Path changes (claudeProjectsPath etc.) call `resetToDefault()` first so that
+ *   `initDefault()` re-detects from the new path on the following call.
  */
 export class WorkspaceScopeManager {
     private readonly _context: ExtensionContextLike;
@@ -50,26 +54,27 @@ export class WorkspaceScopeManager {
     }
 
     /**
-     * Called on every activation. Always overwrites the persisted scope with the
+     * Called on every activation. Sets the scope to the workspaces matching the
      * currently open VS Code workspace folder(s).
      *
-     * - Open workspace found in `available` → scope = those IDs only.
-     * - Open workspace not yet in `available` (no chat history) → scope = `[]`.
-     * - No workspace open → scope = `[]`.
+     * - Open folder found → scope = matching IDs (overwrites any previous selection).
+     * - Open folder not in `available` (no chat history yet) → scope = `[]`.
+     * - **No folder open** (e.g. debug Extension Host without a workspace) → keep
+     *   the existing persisted selection unchanged.
      *
      * On Windows path comparison is case-insensitive; both sides are `path.normalize()`d.
      */
     async initDefault(available: ScopedWorkspace[]): Promise<void> {
         const openFolderPaths = this._getOpenFolderPaths();
 
-        let ids: string[];
+        // No folder open — preserve whatever the user previously configured.
         if (openFolderPaths.length === 0) {
-            ids = [];
-        } else {
-            ids = available
-                .filter(ws => openFolderPaths.includes(path.normalize(ws.workspacePath).toLowerCase()))
-                .map(ws => ws.id);
+            return;
         }
+
+        const ids = available
+            .filter(ws => openFolderPaths.includes(path.normalize(ws.workspacePath).toLowerCase()))
+            .map(ws => ws.id);
 
         await this._context.globalState.update(STORAGE_KEY, ids);
     }

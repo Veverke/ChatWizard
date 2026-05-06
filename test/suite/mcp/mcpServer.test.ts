@@ -140,10 +140,10 @@ suite('McpServer — lifecycle', () => {
     test('logger callback receives start message', async () => {
         const messages: string[] = [];
         const tokenPath = writeTempToken('test-token-logger');
-        const logServer = new McpServer(makeConfig(port + 100), [], (msg) => messages.push(msg));
+        const logServer = new McpServer(makeConfig(port + 100), [], [], (msg) => messages.push(msg));
         // Won't be able to bind since we haven't released the port yet, use dedicated port
         const logPort = await getFreePort();
-        const logServer2 = new McpServer(makeConfig(logPort, tokenPath), [], (msg) => messages.push(msg));
+        const logServer2 = new McpServer(makeConfig(logPort, tokenPath), [], [], (msg) => messages.push(msg));
         await logServer2.start();
         await logServer2.stop();
         assert.ok(messages.some(m => m.includes('started')), 'expected start log message');
@@ -178,7 +178,7 @@ suite('McpServer — /health endpoint', () => {
 
     setup(async () => {
         const tokenPath = writeTempToken('test-token-health');
-        server = new McpServer(makeConfig(port, tokenPath), [], () => { /* logger */ }, () => sessionCount);
+        server = new McpServer(makeConfig(port, tokenPath), [], [], () => { /* logger */ }, () => sessionCount);
         await server.start();
     });
 

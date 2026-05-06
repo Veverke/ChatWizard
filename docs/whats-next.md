@@ -33,6 +33,9 @@ The natural next wave of sources to add:
 
 → _Complete as of v1.4.0. See [docs/mcp-setup-guide.md](mcp-setup-guide.md) for setup instructions._
 
+### Session Archive (Source of Truth)
+ChatWizard reads session files owned by AI tools — but those tools silently prune old sessions. When they do, ChatWizard loses the data too. The archive feature mirrors every indexed session into ChatWizard's own storage (`globalStorageUri/archive/`). Sessions are never evicted unless the user explicitly configures `chatwizard.archive.maxAgeDays` / `chatwizard.archive.maxSizeMB`. Archived sessions load alongside live ones at startup, get a subtle `· archived` badge in the tree, and are fully available to MCP tools. See [work-plan-session-archive.md](work-plan-session-archive.md).
+
 ### Git / Branch Linkage
 At session-open time, record the active git branch and HEAD commit. Show sessions tagged by branch in the TreeView, and in the session reader show what the repo looked like at that point. Answers _"what was I doing on feature/auth?"_
 

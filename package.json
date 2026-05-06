@@ -479,6 +479,16 @@
         "command": "chatwizard.rotateMcpToken",
         "title": "Chat Wizard: Rotate MCP Token",
         "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.connectCopilot",
+        "title": "Chat Wizard: Connect GitHub Copilot",
+        "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.setupGlobalInstructions",
+        "title": "Chat Wizard: Set Up Global Copilot Instructions",
+        "category": "Chat Wizard"
       }
     ],
     "menus": {

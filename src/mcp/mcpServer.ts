@@ -4,9 +4,9 @@ import * as http from 'http';
 import * as path from 'path';
 import { Server as SdkServer } from '@modelcontextprotocol/sdk/server/index.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
-import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import { ListToolsRequestSchema, CallToolRequestSchema, ListPromptsRequestSchema, GetPromptRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import type { IMcpServer, IMcpTool } from './mcpContracts';
+import type { IMcpServer, IMcpTool, IMcpPrompt } from './mcpContracts';
 import type { McpServerConfig } from '../types/index';
 
 /**
@@ -21,17 +21,22 @@ export class McpServer implements IMcpServer {
     private _sdkServer: SdkServer | undefined;
     private readonly _transports = new Map<string, SSEServerTransport>();
     private readonly _tools = new Map<string, IMcpTool>();
+    private readonly _prompts = new Map<string, IMcpPrompt>();
     private _running = false;
     private _port = 0;
 
     constructor(
         private readonly config: McpServerConfig,
         tools: IMcpTool[],
+        prompts: IMcpPrompt[] = [],
         private readonly logger: (msg: string) => void = () => { /* no-op */ },
         private readonly getSessionCount: () => number = () => 0,
     ) {
         for (const tool of tools) {
             this._tools.set(tool.name, tool);
+        }
+        for (const prompt of prompts) {
+            this._prompts.set(prompt.name, prompt);
         }
     }
 
@@ -41,6 +46,11 @@ export class McpServer implements IMcpServer {
     /** Register an additional tool. Must be called before start(). */
     register(tool: IMcpTool): void {
         this._tools.set(tool.name, tool);
+    }
+
+    /** Register an additional prompt. Must be called before start(). */
+    registerPrompt(prompt: IMcpPrompt): void {
+        this._prompts.set(prompt.name, prompt);
     }
 
     async start(): Promise<void> {
@@ -65,7 +75,7 @@ export class McpServer implements IMcpServer {
         // Low-level SDK server: accepts raw JSON-schema tool definitions.
         const sdkServer = new SdkServer(
             { name: 'chatwizard', version: '1.0.0' },
-            { capabilities: { tools: {} } },
+            { capabilities: { tools: {}, prompts: {} } },
         );
 
         // List available tools.
@@ -80,6 +90,7 @@ export class McpServer implements IMcpServer {
         // Dispatch tool calls; wrap thrown errors so they never become HTTP 500s.
         sdkServer.setRequestHandler(CallToolRequestSchema, async (request) => {
             const toolName = request.params.name;
+            this.logger(`[Chat Wizard] MCP tools/call: ${toolName}`);
             const tool = this._tools.get(toolName);
             if (!tool) {
                 return {
@@ -95,6 +106,50 @@ export class McpServer implements IMcpServer {
                     isError: true,
                 } as CallToolResult;
             }
+        });
+
+        // List available prompts (slash commands).
+        sdkServer.setRequestHandler(ListPromptsRequestSchema, async () => {
+            this.logger(`[Chat Wizard] MCP prompts/list: ${this._prompts.size} prompt(s)`);
+            return {
+                prompts: Array.from(this._prompts.values()).map(p => ({
+                    name: p.name,
+                    description: p.description,
+                    arguments: p.arguments,
+                })),
+            };
+        });
+
+        // Render prompt template to a prompt message.
+        sdkServer.setRequestHandler(GetPromptRequestSchema, async (request) => {
+            const promptName = request.params.name;
+            this.logger(
+                `[Chat Wizard] MCP prompts/get: ${promptName} args=${JSON.stringify(request.params.arguments ?? {})}`
+            );
+            const prompt = this._prompts.get(promptName);
+            if (!prompt) {
+                throw new Error(`Unknown prompt: ${promptName}`);
+            }
+
+            const rendered = await prompt.render(request.params.arguments ?? {});
+            const text = rendered.content
+                .filter(c => c.type === 'text')
+                .map(c => c.text)
+                .join('\n\n')
+                .trim();
+
+            return {
+                description: prompt.description,
+                messages: [
+                    {
+                        role: 'user',
+                        content: {
+                            type: 'text',
+                            text: text || 'No prompt content generated.',
+                        },
+                    },
+                ],
+            };
         });
 
         // Auth middleware — returns false and sends an error response if auth fails.

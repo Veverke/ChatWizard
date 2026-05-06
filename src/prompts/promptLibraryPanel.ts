@@ -496,6 +496,42 @@ export class PromptLibraryPanel {
     });
 
     // -----------------------------------------------------------------
+    // Date label helper
+    // -----------------------------------------------------------------
+    function clusterDateLabel(cluster) {
+      var allDates = [];
+      if (cluster.canonical && cluster.canonical.firstSeen) {
+        allDates.push(cluster.canonical.firstSeen);
+      }
+      (cluster.variants || []).forEach(function(v) {
+        if (v.firstSeen) { allDates.push(v.firstSeen); }
+      });
+      if (allDates.length === 0) { return ''; }
+      allDates.sort();
+      var min = allDates[0].substring(0, 10);
+      var max = allDates[allDates.length - 1].substring(0, 10);
+      return min === max ? min : min + '\u2013' + max;
+    }
+
+    // -----------------------------------------------------------------
+    // Date label helper
+    // -----------------------------------------------------------------
+    function clusterDateLabel(cluster) {
+      var allDates = [];
+      if (cluster.canonical && cluster.canonical.firstSeen) {
+        allDates.push(cluster.canonical.firstSeen);
+      }
+      (cluster.variants || []).forEach(function(v) {
+        if (v.firstSeen) { allDates.push(v.firstSeen); }
+      });
+      if (allDates.length === 0) { return ''; }
+      allDates.sort();
+      var min = allDates[0].substring(0, 10);
+      var max = allDates[allDates.length - 1].substring(0, 10);
+      return min === max ? min : min + '\u2013' + max;
+    }
+
+    // -----------------------------------------------------------------
     // Month grouping helper
     // -----------------------------------------------------------------
     var MONTH_NAMES = ['January','February','March','April','May','June',
@@ -583,10 +619,13 @@ export class PromptLibraryPanel {
       const canonicalTitleAttr = sessionMeta.length === 1
         ? (' title="Click to open \u201c' + escHtml(sessionMeta[0].title) + '\u201d"')
         : (sessionMeta.length > 1 ? ' title="Hover or click to pick a session"' : '');
+      const dateLabel = clusterDateLabel(cluster);
+      const dateLabelHtml = dateLabel ? '<span class="date-label">' + escHtml(dateLabel) + '</span>' : '';
       return '<div class="prompt-card cw-fade-item"' + fadeAttr + ' data-text="' + escapedTextLower + '">'
         + '\\n  <div class="card-header">'
         + '\\n    <span class="freq-badge">' + totalFrequency + '\\u00d7</span>'
         + '\\n    <span class="stats-label">' + escHtml(statsLabel) + '</span>'
+        + dateLabelHtml
         + '\\n    <button class="copy-btn" data-text="' + escapedText + '" title="Copy prompt">Copy</button>'
         + '\\n  </div>'
         + '\\n  <div class="prompt-text" data-sessions="' + canonicalSessionsAttr + '" data-prompt="' + escapedText + '"' + canonicalDirectAttr + canonicalTitleAttr + '>' + displayText + '</div>'
@@ -897,11 +936,19 @@ export class PromptLibraryPanel {
             }
 
             const fadeAttr = i < 15 ? ` style="--cw-i:${i}"` : '';
+            const allDates = [canonical.firstSeen, ...variants.map(v => v.firstSeen)]
+                .filter((d): d is string => !!d)
+                .sort();
+            const dateLabel = allDates.length === 0 ? ''
+                : allDates[0].substring(0, 10) === allDates[allDates.length - 1].substring(0, 10)
+                    ? allDates[0].substring(0, 10)
+                    : allDates[0].substring(0, 10) + '\u2013' + allDates[allDates.length - 1].substring(0, 10);
+            const dateLabelHtml = dateLabel ? `<span class="date-label">${PromptLibraryPanel._escapeHtml(dateLabel)}</span>` : '';
             return `<div class="prompt-card cw-fade-item"${fadeAttr} data-text="${escapedTextLower}">
   <div class="card-header">
     <span class="freq-badge">${totalFrequency}&#215;</span>
     <span class="stats-label">${PromptLibraryPanel._escapeHtml(statsLabel)}</span>
-    <button class="copy-btn" data-text="${escapedText}" title="Copy prompt">Copy</button>
+    ${dateLabelHtml}<button class="copy-btn" data-text="${escapedText}" title="Copy prompt">Copy</button>
   </div>
   <div class="prompt-text">${escapedText}</div>${variantsHtml}
 </div>`;
