@@ -74,6 +74,9 @@ jobs:
             npm test
           fi
 
+      - name: Build extension bundle
+        run: npm run bundle
+
       - name: Run integration tests
         shell: bash
         run: |
