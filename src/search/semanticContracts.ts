@@ -48,3 +48,19 @@ export interface ISemanticIndexer {
     search(query: string, topK: number, minScore?: number, scope?: SemanticScope): Promise<SemanticSearchResult[]>;
     dispose(): void;
 }
+
+/**
+ * Stand-in for ISemanticIndexer used when semantic search is disabled.
+ * All methods are no-ops; isReady is always false so tool callers
+ * return the expected "not enabled" error message.
+ */
+export class NullSemanticIndexer implements ISemanticIndexer {
+    readonly isReady = false;
+    readonly isIndexing = false;
+    readonly indexedCount = 0;
+    async initialize(): Promise<void> { /* no-op */ }
+    scheduleSession(_session: Session): void { /* no-op */ }
+    removeSession(_sessionId: string): void { /* no-op */ }
+    async search(_query: string, _topK: number, _minScore?: number, _scope?: SemanticScope): Promise<SemanticSearchResult[]> { return []; }
+    dispose(): void { /* no-op */ }
+}
