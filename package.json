@@ -1141,6 +1141,8 @@
     "pretest": "npm run compile && npm run lint",
     "lint": "eslint \"src/**/*.ts\"",
     "test": "vscode-test",
+    "pretest:integration": "npm run compile",
+    "test:integration": "vscode-test --files \"out/test/suite/integration/**/*.test.js\"",
     "rebuild:native": "node scripts/rebuild-native.js",
     "bundle": "esbuild src/extension.ts --bundle --platform=node --external:vscode --external:better-sqlite3 --external:@xenova/transformers --outfile=dist/extension.js",
     "bundle:watch": "esbuild src/extension.ts --bundle --platform=node --external:vscode --external:better-sqlite3 --external:@xenova/transformers --outfile=dist/extension.js --sourcemap --watch",

@@ -338,6 +338,11 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
     private _groupMode: GroupMode = 'date';
 
     constructor(private readonly index: SessionIndex, private readonly extensionUri?: vscode.Uri) {
+        // If the index already has data (e.g. in tests where sessions are upserted
+        // before the provider is constructed), skip the loading state immediately.
+        if (index.getAllSummaries().length > 0) {
+            this._loading = false;
+        }
         index.addChangeListener(() => {
             this._loading = false;
             this._sortedCache = null;

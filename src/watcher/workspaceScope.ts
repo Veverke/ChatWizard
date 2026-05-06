@@ -67,8 +67,10 @@ export class WorkspaceScopeManager {
     async initDefault(available: ScopedWorkspace[]): Promise<void> {
         const openFolderPaths = this._getOpenFolderPaths();
 
-        // No folder open — preserve whatever the user previously configured.
+        // No folder open — clear scope so initDefault() always re-detects from
+        // the open workspace. An empty result is correct for this scenario.
         if (openFolderPaths.length === 0) {
+            await this._context.globalState.update(STORAGE_KEY, []);
             return;
         }
 

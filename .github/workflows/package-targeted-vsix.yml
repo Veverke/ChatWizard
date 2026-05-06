@@ -74,6 +74,15 @@ jobs:
             npm test
           fi
 
+      - name: Run integration tests
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" == "Linux" ]; then
+            xvfb-run -a npm run test:integration
+          else
+            npm run test:integration
+          fi
+
       - name: Build VSIX (${{ matrix.target }})
         run: npm run package:vsix:${{ matrix.target }}
 
