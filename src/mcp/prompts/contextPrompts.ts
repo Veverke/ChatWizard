@@ -140,3 +140,35 @@ export class ContinueFromHistoryPrompt implements IMcpPrompt {
         return { content: [{ type: 'text', text: prompt }] };
     }
 }
+
+// ---------------------------------------------------------------------------
+// Single source of truth for slash-command metadata.
+//
+// The VS Code chat participant (src/mcp/chatParticipant.ts) reads this at
+// runtime to map `/command` → IMcpPrompt.render().  The static package.json
+// `contributes.chatParticipants.commands` array MUST be kept in sync: if you
+// add, remove, or rename an entry here, update package.json accordingly.
+// ---------------------------------------------------------------------------
+export const PROMPT_DEFS: ReadonlyArray<{
+    /** Short name without the 'chatwizard.' prefix — matches package.json slashCommand name */
+    readonly command: string;
+    readonly description: string;
+    /** Name of the first (and only) argument populated from the user's free-form text */
+    readonly argName: string;
+}> = [
+    {
+        command: 'answerFromHistory',
+        description: 'Answer a question using retrieved ChatWizard history context first.',
+        argName: 'question',
+    },
+    {
+        command: 'troubleshootFromHistory',
+        description: 'Troubleshoot an error by retrieving prior similar fixes from chat history first.',
+        argName: 'error',
+    },
+    {
+        command: 'continueFromHistory',
+        description: 'Continue work by summarizing recent sessions and proposing next actions.',
+        argName: 'topic',
+    },
+];

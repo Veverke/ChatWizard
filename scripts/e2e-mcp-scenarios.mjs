@@ -189,6 +189,7 @@ const server = new McpServer(
     { enabled: true, port: 7777, tokenPath },
     [searchTool, findSimilarTool, getSessionTool, getFullTool,
      listRecentTool, getContextTool, listSourcesTool, serverInfoTool],
+    [],
     () => {},
     () => index.size,
 );

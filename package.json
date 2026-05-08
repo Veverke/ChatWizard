@@ -957,6 +957,29 @@
         }
       ]
     },
+    "chatParticipants": [
+      {
+        "id": "Veverke.chatwizard",
+        "name": "chatwizard",
+        "fullName": "Chat Wizard",
+        "description": "Query your AI chat history — answer questions, troubleshoot errors, and continue prior work.",
+        "isSticky": false,
+        "commands": [
+          {
+            "name": "answerFromHistory",
+            "description": "Answer a question using retrieved ChatWizard history context first."
+          },
+          {
+            "name": "troubleshootFromHistory",
+            "description": "Troubleshoot an error by retrieving prior similar fixes from chat history first."
+          },
+          {
+            "name": "continueFromHistory",
+            "description": "Continue work by summarizing recent sessions and proposing next actions."
+          }
+        ]
+      }
+    ],
     "configuration": {
       "title": "Chat Wizard",
       "properties": {

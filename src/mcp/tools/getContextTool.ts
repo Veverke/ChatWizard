@@ -104,6 +104,23 @@ export class GetContextTool implements IMcpTool {
             }
         }
 
+        // 3. Relaxed OR fallback: when both searches above return nothing, retry
+        //    with OR semantics (any token matches, including hapax tokens that
+        //    appear in only one session). This prevents long natural-language
+        //    queries from silently failing because a distinctive keyword has not
+        //    yet been promoted from the hapax store to the main inverted index.
+        if (orderedIds.length === 0) {
+            const relaxedResult = this.searchTool.executeRelaxed(topic, limit * 2);
+            if (!relaxedResult.isError) {
+                for (const id of extractIds(relaxedResult.content[0]?.text ?? '')) {
+                    if (!seenIds.has(id)) {
+                        seenIds.add(id);
+                        orderedIds.push(id);
+                    }
+                }
+            }
+        }
+
         const topIds = orderedIds.slice(0, limit);
 
         if (topIds.length === 0) {

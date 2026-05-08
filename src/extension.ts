@@ -53,6 +53,7 @@ import { GetContextTool } from './mcp/tools/getContextTool';
 import { ListSourcesTool } from './mcp/tools/listSourcesTool';
 import { ServerInfoTool } from './mcp/tools/serverInfoTool';
 import { ContextAnswerPrompt, ContinueFromHistoryPrompt, DebugWithHistoryPrompt } from './mcp/prompts/contextPrompts';
+import { registerChatParticipant } from './mcp/chatParticipant';
 import { NullSemanticIndexer, ISemanticIndexer } from './search/semanticContracts';
 
 let watcher: ChatWizardWatcher | undefined;
@@ -1070,6 +1071,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
 
     const mcpCapabilities = buildMcpCapabilities();
+
+    // Register VS Code chat participant (@chatwizard) — same prompts as MCP, no server needed.
+    registerChatParticipant(context, mcpCapabilities.prompts);
 
     const mcpServer = new McpServer(
         {

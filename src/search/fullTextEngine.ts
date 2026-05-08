@@ -404,4 +404,75 @@ export class FullTextSearchEngine {
         if (role === 'assistant' && !searchResponses) { return false; }
         return true;
     }
+
+    /**
+     * Relaxed OR search across both the main inverted index and the hapax store.
+     *
+     * Unlike `search()` (which requires ALL tokens to appear in the same message),
+     * this method finds sessions where ANY query token appears — including hapax
+     * tokens that are excluded from the strict AND index. Sessions are ranked by
+     * the number of distinct query tokens they contain.
+     *
+     * Intended as a fallback for GetContextTool when the strict keyword search
+     * yields no results (e.g. because a topic-specific token only appears in one
+     * session and is therefore in the hapax store).
+     */
+    searchRelaxedBySession(
+        queryText: string,
+        limit: number,
+        filter?: SearchQuery['filter'],
+    ): Array<{ sessionId: string; score: number; snippet: string }> {
+        // Use tokens ≥ 3 chars to skip noise words ("is", "it", "to", …).
+        const tokens = tokenize(queryText).filter(t => t.length >= 3);
+        if (tokens.length === 0) { return []; }
+
+        const f = filter ?? {};
+        const sessionScores = new Map<string, number>();
+
+        for (const token of tokens) {
+            // Main index (docFreq ≥ MIN_DOC_FREQ).
+            const postings = this.invertedIndex.get(token);
+            if (postings) {
+                for (const entry of postings) {
+                    const colonIdx = entry.indexOf(':');
+                    const sessionId = entry.slice(0, colonIdx);
+                    const session = this.sessions.get(sessionId);
+                    if (session && this._sessionPassesFilter(session, f)) {
+                        sessionScores.set(sessionId, (sessionScores.get(sessionId) ?? 0) + 1);
+                    }
+                }
+            }
+
+            // Hapax store (tokens that appear in exactly one session).
+            const hapax = this.hapaxStore.get(token);
+            if (hapax) {
+                const session = this.sessions.get(hapax.sessionId);
+                if (session && this._sessionPassesFilter(session, f)) {
+                    sessionScores.set(hapax.sessionId, (sessionScores.get(hapax.sessionId) ?? 0) + 1);
+                }
+            }
+        }
+
+        if (sessionScores.size === 0) { return []; }
+
+        const ranked = [...sessionScores.entries()]
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, limit);
+
+        return ranked.map(([sessionId, score]) => {
+            const session = this.sessions.get(sessionId)!;
+            // Find the first message that contains any query token for a snippet.
+            let snippet = '';
+            outer: for (const msg of session.messages) {
+                for (const token of tokens) {
+                    const match = findFirstMatch(msg.content, token);
+                    if (match !== undefined) {
+                        snippet = extractSnippet(msg.content, match.offset, match.length).snippet;
+                        break outer;
+                    }
+                }
+            }
+            return { sessionId, score, snippet };
+        });
+    }
 }

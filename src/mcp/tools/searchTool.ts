@@ -124,4 +124,39 @@ export class SearchTool implements IMcpTool {
             content: [{ type: 'text', text: lines.join('\n').trimEnd() }],
         };
     }
+
+    /**
+     * Relaxed OR search — used as a fallback by GetContextTool when the strict
+     * AND keyword search yields no results. Searches both the main inverted index
+     * and the hapax store, returning sessions that contain ANY query token, ranked
+     * by how many tokens they match. Returns the same `ID: <id>` line format as
+     * `execute()` so callers can use the shared `extractIds()` helper.
+     */
+    executeRelaxed(topic: string, limit: number): McpToolResult {
+        const results = this.ftse.searchRelaxedBySession(topic, limit);
+        if (results.length === 0) {
+            return {
+                content: [{ type: 'text', text: `No sessions found matching "${topic}".` }],
+            };
+        }
+
+        const lines: string[] = [];
+        for (const { sessionId, snippet } of results) {
+            const session = this.sessionIndex.get(sessionId);
+            const title = session?.title ?? sessionId;
+            const source = session?.source ?? 'unknown';
+            const updatedAt = session?.updatedAt ?? '';
+
+            lines.push(
+                `[Session: ${title}] | Source: ${source} | Date: ${updatedAt}`,
+                `Snippet: ${snippet.slice(0, SNIPPET_MAX_CHARS)}`,
+                `ID: ${sessionId}`,
+                '',
+            );
+        }
+
+        return {
+            content: [{ type: 'text', text: lines.join('\n').trimEnd() }],
+        };
+    }
 }
