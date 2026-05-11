@@ -39,7 +39,7 @@ export function registerChatParticipant(
 
     const participant = vscode.chat.createChatParticipant(
         PARTICIPANT_ID,
-        async (request, _chatContext, stream, _token) => {
+        async (request, _chatContext, stream, token) => {
             const command = request.command; // e.g. 'answerFromHistory'
             const userText = request.prompt.trim();
 
@@ -70,7 +70,14 @@ export function registerChatParticipant(
                     .filter((c): c is { type: 'text'; text: string } => c.type === 'text')
                     .map(c => c.text)
                     .join('\n\n');
-                stream.markdown(text);
+
+                // The rendered text is a prompt — send it to the LLM and stream the response.
+                // (MCP clients handle this step themselves; the chat participant must do it here.)
+                const messages = [vscode.LanguageModelChatMessage.User(text)];
+                const modelResponse = await request.model.sendRequest(messages, {}, token);
+                for await (const chunk of modelResponse.text) {
+                    stream.markdown(chunk);
+                }
             } catch (err) {
                 stream.markdown(
                     `Chat Wizard: error running \`/${command}\` — ${String(err)}`
