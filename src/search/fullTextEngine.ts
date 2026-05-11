@@ -31,11 +31,50 @@ function isReDoS(pattern: string): boolean {
     return pattern.length > MAX_REGEX_LEN || RE_REDOS_PATTERNS.test(pattern);
 }
 
+/**
+ * Common English stop words that carry little topical meaning.
+ * Filtered out of relaxed OR queries so specific terms (e.g. "docker") are
+ * not drowned out by noise words ("not", "and", "does") that match everywhere.
+ */
+export const STOP_WORDS = new Set([
+    // articles / conjunctions / prepositions
+    'the', 'and', 'or', 'but', 'nor', 'for', 'yet', 'so',
+    'of', 'in', 'on', 'at', 'to', 'by', 'as', 'an', 'a',
+    'from', 'into', 'with', 'about', 'above', 'after', 'before',
+    'between', 'during', 'over', 'under', 'through', 'than', 'then',
+    // pronouns
+    'i', 'me', 'my', 'we', 'our', 'you', 'your', 'he', 'she', 'his', 'her',
+    'it', 'its', 'they', 'their', 'them', 'this', 'that', 'these', 'those',
+    'who', 'what', 'which', 'there', 'here',
+    // common verbs / auxiliaries
+    'is', 'are', 'was', 'were', 'be', 'been', 'being', 'am',
+    'has', 'have', 'had', 'do', 'does', 'did', 'will', 'would',
+    'could', 'should', 'may', 'might', 'shall', 'can', 'get', 'got',
+    'use', 'used', 'make', 'made', 'let', 'set', 'put', 'take',
+    'start', 'stop', 'run', 'try', 'keep', 'work', 'need', 'want',
+    // negations / qualifiers (frequent in ALL sessions — not distinctive)
+    'not', 'no', 'now', 'just', 'only', 'also', 'even', 'still',
+    'back', 'more', 'most', 'some', 'any', 'all', 'both', 'each',
+    'how', 'when', 'where', 'why', 'if', 'up', 'out', 'off',
+    // generic nouns ubiquitous in computing contexts — not topically distinctive
+    'machine', 'system', 'server', 'process', 'service', 'instance',
+    'file', 'code', 'data', 'value', 'type', 'item', 'list',
+]);
+
 function tokenize(text: string): string[] {
     return text
         .toLowerCase()
         .split(/\W+/)
         .filter(t => t.length >= 2 && t.length <= MAX_TOKEN_LENGTH);
+}
+
+/**
+ * Tokenize a user-supplied query and remove stop words.
+ * Used when we want the most topically-meaningful tokens for search
+ * (e.g. keyword AND search and relaxed OR scoring).
+ */
+export function tokenizeQuery(query: string): string[] {
+    return tokenize(query).filter(t => !STOP_WORDS.has(t));
 }
 
 /** Statistics about the current state of the inverted index. */
@@ -422,15 +461,16 @@ export class FullTextSearchEngine {
         limit: number,
         filter?: SearchQuery['filter'],
     ): Array<{ sessionId: string; score: number; snippet: string }> {
-        // Use tokens ≥ 3 chars to skip noise words ("is", "it", "to", …).
-        const tokens = tokenize(queryText).filter(t => t.length >= 3);
+        // Strip stop words first so high-frequency noise words ("not", "and",
+        // "does") don't inflate scores and bury rare, specific tokens like "docker".
+        const tokens = tokenizeQuery(queryText).filter(t => t.length >= 3);
         if (tokens.length === 0) { return []; }
 
         const f = filter ?? {};
         const sessionScores = new Map<string, number>();
 
         for (const token of tokens) {
-            // Main index (docFreq ≥ MIN_DOC_FREQ).
+            // Main index (docFreq ≥ MIN_DOC_FREQ) — score += 1 per matched token.
             const postings = this.invertedIndex.get(token);
             if (postings) {
                 for (const entry of postings) {
@@ -444,11 +484,13 @@ export class FullTextSearchEngine {
             }
 
             // Hapax store (tokens that appear in exactly one session).
+            // Score += 2 because a hapax token is highly distinctive — it cannot
+            // appear in many sessions by definition, making it a stronger signal.
             const hapax = this.hapaxStore.get(token);
             if (hapax) {
                 const session = this.sessions.get(hapax.sessionId);
                 if (session && this._sessionPassesFilter(session, f)) {
-                    sessionScores.set(hapax.sessionId, (sessionScores.get(hapax.sessionId) ?? 0) + 1);
+                    sessionScores.set(hapax.sessionId, (sessionScores.get(hapax.sessionId) ?? 0) + 2);
                 }
             }
         }

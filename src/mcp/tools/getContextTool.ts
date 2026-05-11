@@ -4,6 +4,7 @@ import { IMcpTool, McpToolInput, McpToolResult } from '../mcpContracts';
 import { FindSimilarTool } from './findSimilarTool';
 import { SearchTool } from './searchTool';
 import { SessionIndex } from '../../index/sessionIndex';
+import { tokenizeQuery } from '../../search/fullTextEngine';
 
 const DEFAULT_LIMIT = 5;
 const MIN_LIMIT = 1;
@@ -94,7 +95,14 @@ export class GetContextTool implements IMcpTool {
         }
 
         // 2. Keyword search (supplement / fallback).
-        const keywordResult = await this.searchTool.execute({ query: topic, limit: limit * 2 });
+        // Strip stop words from the topic before AND search: natural-language
+        // queries contain words like "not", "and", "does" that are unlikely to
+        // appear together in every session message, causing AND intersection to
+        // fail immediately. Using only content-bearing tokens gives the AND
+        // search a realistic chance of matching.
+        const keywordTokens = tokenizeQuery(topic);
+        const keywordQuery = keywordTokens.join(' ');
+        const keywordResult = await this.searchTool.execute({ query: keywordQuery || topic, limit: limit * 2 });
         if (!keywordResult.isError) {
             for (const id of extractIds(keywordResult.content[0]?.text ?? '')) {
                 if (!seenIds.has(id)) {
