@@ -967,15 +967,15 @@
         "commands": [
           {
             "name": "answerFromHistory",
-            "description": "Answer a question using retrieved ChatWizard history context first."
+            "description": "Answer from chat history"
           },
           {
             "name": "troubleshootFromHistory",
-            "description": "Troubleshoot an error by retrieving prior similar fixes from chat history first."
+            "description": "Troubleshoot using prior chat history"
           },
           {
             "name": "continueFromHistory",
-            "description": "Continue work by summarizing recent sessions and proposing next actions."
+            "description": "Continue from recent sessions"
           }
         ]
       }

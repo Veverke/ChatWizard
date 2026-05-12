@@ -85,6 +85,16 @@ export class SearchTool implements IMcpTool {
         });
 
         if (results.length === 0) {
+            // Relaxed OR fallback: when the strict AND search finds nothing and no
+            // scope filters are active, retry with OR semantics so that hapax tokens
+            // (appearing in only one session, not yet promoted to the main index) are
+            // also considered. This prevents unique error messages and niche topics
+            // from silently returning zero results across ALL callers of this tool.
+            // Scoped searches (source / workspaceId) are intentionally excluded from
+            // the fallback to avoid silently expanding user-specified filters.
+            if (!source && !workspaceId) {
+                return this.executeRelaxed(query, limit);
+            }
             return {
                 content: [{ type: 'text', text: `No sessions found matching "${query}".` }],
             };

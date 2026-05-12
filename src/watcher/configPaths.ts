@@ -35,10 +35,18 @@ export function resolveClaudeProjectsPath(override?: string): string {
 /**
  * Resolve the Copilot Chat workspace storage directory.
  *
+/**
+ * Resolve the Copilot Chat workspace storage directory.
+ *
  * Priority:
  *   1. `override` argument
- *   2. VS Code setting `chatwizard.copilotStoragePath` (if non-empty)
- *   3. Default: `%APPDATA%/Code/User/workspaceStorage` (Windows) or `~/.config/Code/User/workspaceStorage`
+ *   2. VS Code setting `chatwizard.copilotStoragePath` (if non-empty) — also
+ *      honoured by `getWorkspaceStorageRoots()` in copilotWorkspace.ts, which
+ *      is what the discovery and watcher layers use directly.
+ *   3. Default: all present VS Code variant roots (`Code` + `Code - Insiders`).
+ *
+ * This function is retained for callers that need a single resolved string
+ * (e.g. the settings UI or legacy code paths).
  */
 export function resolveCopilotStoragePath(override?: string): string {
     if (override !== undefined && override !== '') {

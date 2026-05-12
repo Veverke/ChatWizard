@@ -99,7 +99,9 @@ export class GetContextTool implements IMcpTool {
         // queries contain words like "not", "and", "does" that are unlikely to
         // appear together in every session message, causing AND intersection to
         // fail immediately. Using only content-bearing tokens gives the AND
-        // search a realistic chance of matching.
+        // search a realistic chance of matching. SearchTool.execute() will
+        // automatically apply a relaxed OR fallback (including hapax tokens) when
+        // the strict AND search yields no results.
         const keywordTokens = tokenizeQuery(topic);
         const keywordQuery = keywordTokens.join(' ');
         const keywordResult = await this.searchTool.execute({ query: keywordQuery || topic, limit: limit * 2 });
@@ -108,23 +110,6 @@ export class GetContextTool implements IMcpTool {
                 if (!seenIds.has(id)) {
                     seenIds.add(id);
                     orderedIds.push(id);
-                }
-            }
-        }
-
-        // 3. Relaxed OR fallback: when both searches above return nothing, retry
-        //    with OR semantics (any token matches, including hapax tokens that
-        //    appear in only one session). This prevents long natural-language
-        //    queries from silently failing because a distinctive keyword has not
-        //    yet been promoted from the hapax store to the main inverted index.
-        if (orderedIds.length === 0) {
-            const relaxedResult = this.searchTool.executeRelaxed(topic, limit * 2);
-            if (!relaxedResult.isError) {
-                for (const id of extractIds(relaxedResult.content[0]?.text ?? '')) {
-                    if (!seenIds.has(id)) {
-                        seenIds.add(id);
-                        orderedIds.push(id);
-                    }
                 }
             }
         }

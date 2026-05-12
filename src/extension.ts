@@ -67,6 +67,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const telemetryCfg = vscode.workspace.getConfiguration('chatwizard');
     telemetry.setEnabled(telemetryCfg.get<boolean>('enableTelemetry') ?? false);
 
+    // Non-blocking update check — rate-limited to once per day via globalState
+    void checkForExtensionUpdate(context, channel);
+
     const index = new SessionIndex();
 
     // Register sidebar WebviewView providers BEFORE the slow file-indexing await so
@@ -1073,7 +1076,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const mcpCapabilities = buildMcpCapabilities();
 
     // Register VS Code chat participant (@chatwizard) — same prompts as MCP, no server needed.
-    registerChatParticipant(context, mcpCapabilities.prompts);
+    registerChatParticipant(context, mcpCapabilities.prompts, index);
 
     const mcpServer = new McpServer(
         {
@@ -1639,4 +1642,114 @@ async function setupGlobalCopilotInstructions(
         channel.appendLine(`[Chat Wizard] Failed to write global instructions file: ${String(err)}`);
         void vscode.window.showErrorMessage(`Chat Wizard: Could not write global instructions file - ${String(err)}`);
     }
+}
+
+// ── Extension update notifier ─────────────────────────────────────────────────
+
+const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000; // 1 day
+const EXTENSION_MARKETPLACE_ID = 'Veverke.chatwizard';
+
+/**
+ * Checks the VS Code Marketplace for a newer version of this extension.
+ * Rate-limited to once per day using globalState. Errors are suppressed silently.
+ */
+async function checkForExtensionUpdate(
+    context: vscode.ExtensionContext,
+    channel: vscode.OutputChannel,
+): Promise<void> {
+    const now = Date.now();
+    const lastCheck = context.globalState.get<number>('lastUpdateCheckMs', 0);
+    if (now - lastCheck < UPDATE_CHECK_INTERVAL_MS) { return; }
+
+    // Record the check time upfront so a network failure doesn't cause a retry
+    // on every subsequent activation within the same day.
+    await context.globalState.update('lastUpdateCheckMs', now);
+
+    try {
+        const latestVersion = await fetchLatestMarketplaceVersion(EXTENSION_MARKETPLACE_ID);
+        if (!latestVersion) { return; }
+
+        const installed = (context.extension.packageJSON.version as string) || '0.0.0';
+        if (!isNewerVersion(latestVersion, installed)) { return; }
+
+        channel.appendLine(`[Chat Wizard] Update available: v${latestVersion} (installed: v${installed})`);
+
+        const action = await vscode.window.showInformationMessage(
+            `Chat Wizard v${latestVersion} is available (you have v${installed}).`,
+            'Open Marketplace',
+            'Dismiss',
+        );
+        if (action === 'Open Marketplace') {
+            void vscode.env.openExternal(
+                vscode.Uri.parse(`https://marketplace.visualstudio.com/items?itemName=${EXTENSION_MARKETPLACE_ID}`)
+            );
+        }
+    } catch (err) {
+        // Never surface network or parse errors to the user
+        channel.appendLine(`[Chat Wizard] Update check failed: ${String(err)}`);
+    }
+}
+
+/** Queries the VS Code Marketplace REST API and returns the latest published version string. */
+async function fetchLatestMarketplaceVersion(extensionId: string): Promise<string | undefined> {
+    const https = await import('https');
+    const body = JSON.stringify({
+        filters: [{ criteria: [{ filterType: 7, value: extensionId }] }],
+        flags: 512,
+    });
+
+    return new Promise<string | undefined>((resolve) => {
+        const req = https.request(
+            {
+                hostname: 'marketplace.visualstudio.com',
+                path: '/_apis/public/gallery/extensionquery',
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json;api-version=3.0-preview.1',
+                    'User-Agent': 'vscode-chatwizard-update-check',
+                    'Content-Length': Buffer.byteLength(body),
+                },
+            },
+            (res) => {
+                let data = '';
+                res.on('data', (chunk: string) => { data += chunk; });
+                res.on('end', () => {
+                    try {
+                        const json = JSON.parse(data) as {
+                            results?: Array<{
+                                extensions?: Array<{
+                                    versions?: Array<{ version: string }>;
+                                }>;
+                            }>;
+                        };
+                        const version = json.results?.[0]?.extensions?.[0]?.versions?.[0]?.version;
+                        resolve(typeof version === 'string' ? version : undefined);
+                    } catch {
+                        resolve(undefined);
+                    }
+                });
+            }
+        );
+        req.on('error', () => resolve(undefined));
+        req.setTimeout(8000, () => { req.destroy(); resolve(undefined); });
+        req.write(body);
+        req.end();
+    });
+}
+
+/**
+ * Returns true when `candidate` is a strictly higher semver than `current`.
+ * Handles `major.minor.patch` strings (extra pre-release segments are ignored).
+ */
+function isNewerVersion(candidate: string, current: string): boolean {
+    const parse = (v: string): [number, number, number] => {
+        const parts = v.split('.').map(p => parseInt(p, 10));
+        return [parts[0] ?? 0, parts[1] ?? 0, parts[2] ?? 0];
+    };
+    const [caMaj, caMin, caPatch] = parse(candidate);
+    const [cuMaj, cuMin, cuPatch] = parse(current);
+    if (caMaj !== cuMaj) { return caMaj > cuMaj; }
+    if (caMin !== cuMin) { return caMin > cuMin; }
+    return caPatch > cuPatch;
 }

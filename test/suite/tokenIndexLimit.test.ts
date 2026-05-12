@@ -16,7 +16,7 @@ function msg(role: 'user' | 'assistant', content: string): Message {
 function session(id: string, content: string): Session {
     return {
         id,
-        title: id,
+        title: '',   // empty so title tokens don't interfere with token-count assertions
         source: 'copilot',
         workspaceId: 'ws',
         messages: [msg('user', content)],

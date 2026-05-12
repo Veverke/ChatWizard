@@ -74,7 +74,17 @@ function tokenize(text: string): string[] {
  * (e.g. keyword AND search and relaxed OR scoring).
  */
 export function tokenizeQuery(query: string): string[] {
-    return tokenize(query).filter(t => !STOP_WORDS.has(t));
+    const base = tokenize(query).filter(t => !STOP_WORDS.has(t));
+    // Also add de-pluralized form (strip trailing 's') so "BDDs" matches "BDD",
+    // "errors" matches "error", etc. Only applied when de-s'd result is >= 3 chars.
+    const expanded = new Set(base);
+    for (const t of base) {
+        if (t.length >= 4 && t.endsWith('s')) {
+            const stem = t.slice(0, -1);
+            if (stem.length >= 3) { expanded.add(stem); }
+        }
+    }
+    return [...expanded];
 }
 
 /** Statistics about the current state of the inverted index. */
@@ -134,13 +144,26 @@ export class FullTextSearchEngine {
         const tokenSet = new Set<string>();
         this.sessionTokens.set(session.id, tokenSet);
 
+        // Index session title with sentinel msgIdx -1 so title terms are searchable.
+        const titleEntry = `${session.id}:-1`;
+        for (const token of tokenize(session.title)) {
+            this._indexToken(token, session.id, titleEntry, tokenSet);
+        }
+
         for (let msgIdx = 0; msgIdx < session.messages.length; msgIdx++) {
             const message = session.messages[msgIdx];
             const tokens = tokenize(message.content);
             const entry = `${session.id}:${msgIdx}`;
 
             for (const token of tokens) {
-                tokenSet.add(token);
+                this._indexToken(token, session.id, entry, tokenSet);
+            }
+        }
+    }
+
+    /** Shared token-insertion logic used by both title and message indexing. */
+    private _indexToken(token: string, sessionId: string, entry: string, tokenSet: Set<string>): void {
+        tokenSet.add(token);
 
                 // — document-frequency tracking —
                 let docSessions = this.tokenDocSessions.get(token);
@@ -148,13 +171,13 @@ export class FullTextSearchEngine {
                     docSessions = new Set<string>();
                     this.tokenDocSessions.set(token, docSessions);
                 }
-                docSessions.add(session.id);
+                docSessions.add(sessionId);
 
                 if (docSessions.size < MIN_DOC_FREQ) {
                     // Single-session token — store in hapax (not yet promoted).
                     let hapax = this.hapaxStore.get(token);
                     if (hapax === undefined) {
-                        hapax = { sessionId: session.id, postings: new Set<string>() };
+                        hapax = { sessionId, postings: new Set<string>() };
                         this.hapaxStore.set(token, hapax);
                     }
                     hapax.postings.add(entry);
@@ -174,8 +197,6 @@ export class FullTextSearchEngine {
                     }
                     postings.add(entry);
                 }
-            }
-        }
     }
 
     /** Returns statistics about the current state of the index. */
@@ -271,7 +292,12 @@ export class FullTextSearchEngine {
             let candidateSet: Set<string> | undefined;
 
             for (const token of queryTokens) {
-                const postings = this.invertedIndex.get(token);
+                // Try exact token first; fall back to de-pluralized form (e.g. "BDDs" → "BDD").
+                let postings = this.invertedIndex.get(token);
+                if ((postings === undefined || postings.size === 0) && token.length >= 4 && token.endsWith('s')) {
+                    const stem = token.slice(0, -1);
+                    if (stem.length >= 3) { postings = this.invertedIndex.get(stem); }
+                }
                 if (postings === undefined || postings.size === 0) {
                     // No session contains this token → no matches possible.
                     return { results: [], totalCount: 0 };
@@ -308,6 +334,22 @@ export class FullTextSearchEngine {
                 }
 
                 if (!this._sessionPassesFilter(session, filter)) {
+                    continue;
+                }
+
+                // Sentinel msgIdx -1 means this posting came from the session title.
+                if (msgIdx === -1) {
+                    const titleTokenSet = new Set(tokenize(session.title));
+                    const score = queryTokens.filter(t => titleTokenSet.has(t)).length;
+                    results.push({
+                        sessionId:    session.id,
+                        messageIndex: -1,
+                        messageRole:  'user',
+                        snippet:      session.title,
+                        matchStart:   0,
+                        matchEnd:     session.title.length,
+                        score,
+                    });
                     continue;
                 }
 
@@ -514,7 +556,7 @@ export class FullTextSearchEngine {
                     }
                 }
             }
-            return { sessionId, score, snippet };
+            return { sessionId, score, snippet: snippet || session.title };
         });
     }
 }

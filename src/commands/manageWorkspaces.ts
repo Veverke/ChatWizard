@@ -69,11 +69,14 @@ export function registerManageWorkspacesCommand(
                 Promise.all(allAvailable.map(ws => calcWorkspaceSizeBytes(ws.storageDir, ws.source))),
                 Promise.all(allAvailable.map(ws => countWorkspaceSessions(ws.storageDir, ws.source))),
             ]);
+            // Use additive accumulation so that when the same workspace ID appears in both
+            // Code-stable and Code-Insiders storage roots, their sizes/counts are summed
+            // rather than one overwriting the other.
             const byteMap = new Map<string, number>();
             const diskCountMap = new Map<string, number>();
             allAvailable.forEach((ws, i) => {
-                byteMap.set(ws.id, byteCounts[i]);
-                diskCountMap.set(ws.id, diskCounts[i]);
+                byteMap.set(ws.id, (byteMap.get(ws.id) ?? 0) + byteCounts[i]);
+                diskCountMap.set(ws.id, (diskCountMap.get(ws.id) ?? 0) + diskCounts[i]);
             });
 
             /** Format bytes to KB or MB depending on magnitude. */
@@ -85,15 +88,22 @@ export function registerManageWorkspacesCommand(
                 return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
             }
 
-            // Index-based session count (Claude stores workspaceId = session UUID → match by filePath prefix).
+            // Index-based session count.
+            // Copilot/Cursor sessions have workspaceId = storage hash directory name → match by ID.
+            // Claude sessions have workspaceId = session UUID (filename) → must match by filePath prefix.
+            // We handle both: ID match covers Copilot/Cursor (and works across Code + Code-Insiders
+            // roots since both resolve to the same hash); filePath prefix covers Claude.
             const allSummaries = index.getAllSummaries();
             function indexCountForIds(ids: string[]): number {
-                const dirs = ids.map(id => {
-                    const ws = allAvailable.find(w => w.id === id)!;
-                    return path.normalize(ws.storageDir);
-                });
+                const idSet = new Set(ids);
+                const storageDirs = ids.map(id => {
+                    const ws = allAvailable.find(w => w.id === id);
+                    return ws ? path.normalize(ws.storageDir) : null;
+                }).filter((d): d is string => d !== null);
+
                 return allSummaries.filter(s =>
-                    dirs.some(dir => path.normalize(s.filePath).startsWith(dir + path.sep))
+                    idSet.has(s.workspaceId) ||
+                    storageDirs.some(dir => path.normalize(s.filePath).startsWith(dir + path.sep))
                 ).length;
             }
 
@@ -129,7 +139,9 @@ export function registerManageWorkspacesCommand(
             const workspaceItems: WorkspaceItem[] = [];
             for (const group of pathGroups.values()) {
                 const representative = group[0];
-                const allIds = group.map(ws => ws.id);
+                // Deduplicate IDs: Code-stable and Code-Insiders generate the same storage hash
+                // for the same workspace folder, so the same ID can appear in the group twice.
+                const allIds = [...new Set(group.map(ws => ws.id))];
                 const groupBytes = allIds.reduce((sum, id) => sum + (byteMap.get(id) ?? 0), 0);
                 const cacheKey = path.normalize(representative.workspacePath).toLowerCase();
                 const isSelected = allIds.some(id => currentSelectedIds.includes(id));
