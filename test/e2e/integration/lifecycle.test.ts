@@ -42,6 +42,10 @@ const EXPECTED_COMMANDS = [
     'chatwizard.exportExcerpt',
     'chatwizard.exportFromTreeSelection',
     'chatwizard.manageWatchedWorkspaces',
+    // 1.4.0 additions
+    'chatwizard.rotateMcpToken',
+    'chatwizard.connectCopilot',
+    'chatwizard.setupGlobalInstructions',
 ];
 
 // ---------------------------------------------------------------------------
@@ -127,6 +131,65 @@ suite('Extension Lifecycle', function () {
             assert.ok(
                 declaredIds.includes(id),
                 `View "${id}" is not declared in package.json contributes.views`
+            );
+        }
+    });
+
+    // ── Test 3c: chat participant commands registered at runtime ─────────
+    // chatwizard.query.continued and chatwizard.query.general are NOT declared
+    // in package.json — they are registered dynamically by registerChatParticipant()
+    // at activation time. If they go missing (e.g. due to a refactor), the "Yes"
+    // and "No" buttons in the chat participant stream would silently do nothing.
+
+    test('chat participant button commands are registered at runtime', async () => {
+        const registeredCommands = await vscode.commands.getCommands(true);
+        const PARTICIPANT_COMMANDS = [
+            'chatwizard.query.continued',
+            'chatwizard.query.general',
+        ];
+        const missing = PARTICIPANT_COMMANDS.filter(cmd => !registeredCommands.includes(cmd));
+        assert.deepStrictEqual(
+            missing,
+            [],
+            `Chat participant commands not registered at runtime: ${missing.join(', ')}`,
+        );
+    });
+
+    // ── Test 3d: chat participant declared in package.json ───────────────
+    // Verifies that the @chatwizard participant and its /queryHistory and
+    // /continueFromHistory slash commands are declared in contributes.chatParticipants.
+    // A mismatch here means the slash commands are invisible in the VS Code chat UI.
+
+    test('chat participant slash commands declared in package.json', () => {
+        const ext = vscode.extensions.getExtension(EXTENSION_ID);
+        assert.ok(ext, 'extension must be present');
+
+        const pkg = ext!.packageJSON as {
+            contributes?: {
+                chatParticipants?: Array<{
+                    id: string;
+                    commands?: Array<{ name: string }>;
+                }>;
+            };
+        };
+
+        const participants = pkg.contributes?.chatParticipants ?? [];
+        const chatwizardParticipant = participants.find(p => p.id === 'Veverke.chatwizard');
+        assert.ok(chatwizardParticipant, 'Veverke.chatwizard chat participant not declared in package.json');
+
+        const declaredCommands = (chatwizardParticipant!.commands ?? []).map(c => c.name);
+        for (const expectedCmd of ['queryHistory', 'continueFromHistory']) {
+            assert.ok(
+                declaredCommands.includes(expectedCmd),
+                `Slash command "/${expectedCmd}" not declared in contributes.chatParticipants`,
+            );
+        }
+
+        // Verify removed commands are NOT present (guards against accidental re-addition)
+        for (const removedCmd of ['answerFromHistory', 'troubleshootFromHistory', 'debugWithHistory']) {
+            assert.ok(
+                !declaredCommands.includes(removedCmd),
+                `Removed command "/${removedCmd}" should NOT be in package.json — was it re-added accidentally?`,
             );
         }
     });

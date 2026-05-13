@@ -169,8 +169,7 @@ suite('createParticipantHandler', () => {
 
         const out = stream.text();
         assert.ok(out.includes('Chat Wizard'), 'output mentions Chat Wizard');
-        assert.ok(out.includes('/answerFromHistory'), 'lists answerFromHistory command');
-        assert.ok(out.includes('/troubleshootFromHistory'), 'lists troubleshootFromHistory command');
+        assert.ok(out.includes('/queryHistory'), 'lists queryHistory command');
         assert.ok(out.includes('/continueFromHistory'), 'lists continueFromHistory command');
     });
 
@@ -197,15 +196,15 @@ suite('createParticipantHandler', () => {
     test('BUG-1 regression: raw prompt text is NOT printed to stream', async () => {
         const RAW_PROMPT_MARKER = 'You must answer the user question using the retrieved ChatWizard history context below first.';
         const rendered = makeRenderedPrompt([]);
-        const prompt   = makePrompt('chatwizard.answerFromHistory', rendered);
+        const prompt   = makePrompt('chatwizard.queryHistory', rendered);
         const index    = new SessionIndex();
         const handler  = createParticipantHandler(
-            new Map([['chatwizard.answerFromHistory', prompt]]),
+            new Map([['chatwizard.queryHistory', prompt]]),
             index,
             fakeMessageFactory,
         );
         const stream  = makeStream();
-        const request = makeRequest('answerFromHistory', 'docker does not start');
+        const request = makeRequest('queryHistory', 'docker does not start');
 
         await handler(request as never, FAKE_CTX, stream as never, FAKE_TOKEN);
 
@@ -220,16 +219,16 @@ suite('createParticipantHandler', () => {
     test('LLM response chunks are streamed to output when sessions found', async () => {
         const session  = makeSession('s-docker-001', 'Docker not starting after reboot');
         const rendered = makeRenderedPrompt(['s-docker-001']);
-        const prompt   = makePrompt('chatwizard.answerFromHistory', rendered);
+        const prompt   = makePrompt('chatwizard.queryHistory', rendered);
         const index    = new SessionIndex();
         index.upsert(session);
         const handler  = createParticipantHandler(
-            new Map([['chatwizard.answerFromHistory', prompt]]),
+            new Map([['chatwizard.queryHistory', prompt]]),
             index,
             fakeMessageFactory,
         );
         const stream  = makeStream();
-        const request = makeRequest('answerFromHistory', 'docker does not start', 'Based on prior history, Docker Desktop had a WSL issue.');
+        const request = makeRequest('queryHistory', 'docker does not start', 'Based on prior history, Docker Desktop had a WSL issue.');
 
         await handler(request as never, FAKE_CTX, stream as never, FAKE_TOKEN);
 
@@ -241,15 +240,15 @@ suite('createParticipantHandler', () => {
 
     test('no sessions: shows no-match message and button without calling LLM', async () => {
         const rendered = makeRenderedPrompt([]);
-        const prompt   = makePrompt('chatwizard.answerFromHistory', rendered);
+        const prompt   = makePrompt('chatwizard.queryHistory', rendered);
         const index    = new SessionIndex();
         const handler  = createParticipantHandler(
-            new Map([['chatwizard.answerFromHistory', prompt]]),
+            new Map([['chatwizard.queryHistory', prompt]]),
             index,
             fakeMessageFactory,
         );
         const stream  = makeStream();
-        const request = makeRequest('answerFromHistory', 'docker does not start', 'Based on prior history, Docker Desktop had a WSL issue.');
+        const request = makeRequest('queryHistory', 'docker does not start', 'Based on prior history, Docker Desktop had a WSL issue.');
 
         await handler(request as never, FAKE_CTX, stream as never, FAKE_TOKEN);
 
@@ -257,7 +256,7 @@ suite('createParticipantHandler', () => {
             'should show no-match message');
         assert.ok(!stream.text().includes('Based on prior history'),
             'LLM answer must NOT appear — LLM should not be called when no sessions found');
-        assert.ok(stream._buttonCalls.some(b => b.command === 'chatwizard.answer.general'),
+        assert.ok(stream._buttonCalls.some(b => b.command === 'chatwizard.query.general'),
             'a "Get general guidance" button should be offered');
     });
 
@@ -266,17 +265,17 @@ suite('createParticipantHandler', () => {
     test('LLM no-match sentinel: shows button instead of LLM answer', async () => {
         const session  = makeSession('s-irrelevant', 'Some unrelated topic');
         const rendered = makeRenderedPrompt(['s-irrelevant']);
-        const prompt   = makePrompt('chatwizard.answerFromHistory', rendered);
+        const prompt   = makePrompt('chatwizard.queryHistory', rendered);
         const index    = new SessionIndex();
         index.upsert(session);
         const handler  = createParticipantHandler(
-            new Map([['chatwizard.answerFromHistory', prompt]]),
+            new Map([['chatwizard.queryHistory', prompt]]),
             index,
             fakeMessageFactory,
         );
         const stream  = makeStream();
         // LLM response contains the sentinel — signals no relevant session found.
-        const request = makeRequest('answerFromHistory', 'create github ci job', 'No relevant history found.');
+        const request = makeRequest('queryHistory', 'create github ci job', 'No relevant history found.');
 
         await handler(request as never, FAKE_CTX, stream as never, FAKE_TOKEN);
 
@@ -284,7 +283,7 @@ suite('createParticipantHandler', () => {
             'should show no-match message when LLM emits sentinel');
         assert.ok(!stream.hasSourcesSection(),
             'no sources section when LLM says no match');
-        assert.ok(stream._buttonCalls.some(b => b.command === 'chatwizard.answer.general'),
+        assert.ok(stream._buttonCalls.some(b => b.command === 'chatwizard.query.general'),
             'a "Get general guidance" button should be offered');
     });
 
@@ -293,16 +292,16 @@ suite('createParticipantHandler', () => {
     test('rendered prompt is forwarded to model.sendRequest', async () => {
         const session  = makeSession('s-001');
         const rendered = makeRenderedPrompt(['s-001'], 'my specific question');
-        const prompt   = makePrompt('chatwizard.answerFromHistory', rendered);
+        const prompt   = makePrompt('chatwizard.queryHistory', rendered);
         const index    = new SessionIndex();
         index.upsert(session);
         const handler  = createParticipantHandler(
-            new Map([['chatwizard.answerFromHistory', prompt]]),
+            new Map([['chatwizard.queryHistory', prompt]]),
             index,
             fakeMessageFactory,
         );
         const stream  = makeStream();
-        const request = makeRequest('answerFromHistory', 'my specific question');
+        const request = makeRequest('queryHistory', 'my specific question');
 
         await handler(request as never, FAKE_CTX, stream as never, FAKE_TOKEN);
 
@@ -318,15 +317,15 @@ suite('createParticipantHandler', () => {
 
     test('BUG-3 regression: no sources section when session IDs not in index', async () => {
         const rendered = makeRenderedPrompt(['session-id-not-in-index']);
-        const prompt   = makePrompt('chatwizard.answerFromHistory', rendered);
+        const prompt   = makePrompt('chatwizard.queryHistory', rendered);
         const index    = new SessionIndex(); // empty — session not loaded
         const handler  = createParticipantHandler(
-            new Map([['chatwizard.answerFromHistory', prompt]]),
+            new Map([['chatwizard.queryHistory', prompt]]),
             index,
             fakeMessageFactory,
         );
         const stream  = makeStream();
-        const request = makeRequest('answerFromHistory', 'some question');
+        const request = makeRequest('queryHistory', 'some question');
 
         await handler(request as never, FAKE_CTX, stream as never, FAKE_TOKEN);
 
@@ -339,17 +338,17 @@ suite('createParticipantHandler', () => {
     test('sources section appended when session IDs exist in index', async () => {
         const session  = makeSession('s-docker-001', 'Docker not starting after reboot');
         const rendered = makeRenderedPrompt(['s-docker-001']);
-        const prompt   = makePrompt('chatwizard.answerFromHistory', rendered);
+        const prompt   = makePrompt('chatwizard.queryHistory', rendered);
         const index    = new SessionIndex();
         index.upsert(session);
 
         const handler = createParticipantHandler(
-            new Map([['chatwizard.answerFromHistory', prompt]]),
+            new Map([['chatwizard.queryHistory', prompt]]),
             index,
             fakeMessageFactory,
         );
         const stream  = makeStream();
-        const request = makeRequest('answerFromHistory', 'docker does not start');
+        const request = makeRequest('queryHistory', 'docker does not start');
 
         await handler(request as never, FAKE_CTX, stream as never, FAKE_TOKEN);
 
@@ -366,18 +365,18 @@ suite('createParticipantHandler', () => {
     test('BUG regression: sources table appears BEFORE LLM answer text in stream', async () => {
         const session  = makeSession('s-ordering', 'Ordering regression session');
         const rendered = makeRenderedPrompt(['s-ordering']);
-        const prompt   = makePrompt('chatwizard.answerFromHistory', rendered);
+        const prompt   = makePrompt('chatwizard.queryHistory', rendered);
         const index    = new SessionIndex();
         index.upsert(session);
 
         const handler = createParticipantHandler(
-            new Map([['chatwizard.answerFromHistory', prompt]]),
+            new Map([['chatwizard.queryHistory', prompt]]),
             index,
             fakeMessageFactory,
         );
         const stream  = makeStream();
         // LLM returns a distinctive answer — we need to find it in _calls by index
-        const request = makeRequest('answerFromHistory', 'docker does not start', 'ANSWER_SENTINEL_TEXT');
+        const request = makeRequest('queryHistory', 'docker does not start', 'ANSWER_SENTINEL_TEXT');
 
         await handler(request as never, FAKE_CTX, stream as never, FAKE_TOKEN);
 
@@ -403,17 +402,17 @@ suite('createParticipantHandler', () => {
     test('BUG-4 regression: sources capped at 3 even when more are in prompt', async () => {
         const ids     = ['s-001', 's-002', 's-003', 's-004', 's-005'];
         const rendered = makeRenderedPrompt(ids);
-        const prompt   = makePrompt('chatwizard.answerFromHistory', rendered);
+        const prompt   = makePrompt('chatwizard.queryHistory', rendered);
         const index    = new SessionIndex();
         for (const id of ids) { index.upsert(makeSession(id)); }
 
         const handler = createParticipantHandler(
-            new Map([['chatwizard.answerFromHistory', prompt]]),
+            new Map([['chatwizard.queryHistory', prompt]]),
             index,
             fakeMessageFactory,
         );
         const stream  = makeStream();
-        const request = makeRequest('answerFromHistory', 'some question');
+        const request = makeRequest('queryHistory', 'some question');
 
         await handler(request as never, FAKE_CTX, stream as never, FAKE_TOKEN);
 
@@ -430,16 +429,160 @@ suite('createParticipantHandler', () => {
 
     // ── Test 9: render error is caught and reported ───────────────────────────
 
-    test('render error is caught and shown as error message', async () => {
-        const prompt  = makeThrowingPrompt('chatwizard.answerFromHistory', 'index not ready');
-        const index   = new SessionIndex();
+    // ── Test NEW-A: Yes button carries session IDs as second argument ─────────
+    // The Phase-2 consolidation flow relies on refIds being passed as the second
+    // argument to chatwizard.query.continued so the QueryHistoryPrompt can fetch
+    // full session content.  If this argument is missing, the consolidation falls
+    // back to getContextTool and the user's confirmed sessions are ignored.
+
+    test('Yes button passes comma-separated session IDs as second argument', async () => {
+        const session1 = makeSession('ref-id-1', 'Session about Docker');
+        const session2 = makeSession('ref-id-2', 'Session about Kubernetes');
+        const rendered = makeRenderedPrompt(['ref-id-1', 'ref-id-2']);
+        const prompt   = makePrompt('chatwizard.queryHistory', rendered);
+        const index    = new SessionIndex();
+        index.upsert(session1);
+        index.upsert(session2);
+
         const handler = createParticipantHandler(
-            new Map([['chatwizard.answerFromHistory', prompt]]),
+            new Map([['chatwizard.queryHistory', prompt]]),
             index,
             fakeMessageFactory,
         );
         const stream  = makeStream();
-        const request = makeRequest('answerFromHistory', 'any question');
+        // LLM returns a match so Phase-1 buttons are shown
+        const request = makeRequest('queryHistory', 'container orchestration', 'The Docker session is relevant.');
+
+        await handler(request as never, FAKE_CTX, stream as never, FAKE_TOKEN);
+
+        const yesButton = stream._buttonCalls.find(b => b.command === 'chatwizard.query.continued');
+        assert.ok(yesButton, '"Yes — use history" button must be emitted');
+        assert.ok(Array.isArray(yesButton!.arguments) && yesButton!.arguments!.length >= 2,
+            'Yes button must have at least 2 arguments: [query, refIds]');
+
+        const refIdsArg = yesButton!.arguments![1] as string;
+        assert.ok(typeof refIdsArg === 'string', 'second argument must be a string of comma-separated IDs');
+        assert.ok(refIdsArg.includes('ref-id-1'), `refIds must include ref-id-1, got: ${refIdsArg}`);
+        assert.ok(refIdsArg.includes('ref-id-2'), `refIds must include ref-id-2, got: ${refIdsArg}`);
+    });
+
+    // ── Test NEW-B: continueFromHistory streams directly, no Phase-1 buttons ──
+    // continueFromHistory is not a queryHistory command, so it bypasses Phase 1
+    // logic entirely: no sources table, no Yes/No buttons.
+
+    test('continueFromHistory: LLM answer streamed without Phase-1 buttons', async () => {
+        const rendered = 'Continue from recent work context — here are recent sessions.';
+        const prompt   = makePrompt('chatwizard.continueFromHistory', rendered, 'topic');
+        const index    = new SessionIndex();
+
+        const handler = createParticipantHandler(
+            new Map([['chatwizard.continueFromHistory', prompt]]),
+            index,
+            fakeMessageFactory,
+        );
+        const stream  = makeStream();
+        const request = makeRequest('continueFromHistory', 'auth work', 'Continue with the OAuth refactor.');
+
+        await handler(request as never, FAKE_CTX, stream as never, FAKE_TOKEN);
+
+        assert.ok(stream.text().includes('Continue with the OAuth refactor.'),
+            'LLM answer must be streamed for continueFromHistory');
+        assert.ok(
+            !stream._buttonCalls.some(b => b.command === 'chatwizard.query.continued'),
+            'Yes button must NOT appear for continueFromHistory',
+        );
+        assert.ok(
+            !stream._buttonCalls.some(b => b.command === 'chatwizard.query.general'),
+            'Get general guidance button must NOT appear for continueFromHistory',
+        );
+    });
+
+    // ── Test NEW-C: Phase-2 (--continued prefix) skips Phase-1 accumulation ──
+    // When the user confirms sessions are relevant (Yes button pressed), the handler
+    // receives "--continued <query> --refs <ids>" as the prompt text.  isPhase2=true
+    // so it must skip the Phase-1 accumulation branch and stream the Phase-2
+    // response directly — no sources table, no Yes/No buttons.
+
+    test('Phase-2 --continued prefix: LLM answer streamed without Phase-1 buttons', async () => {
+        const session = makeSession('confirmed-s1', 'Auth session');
+        // The rendered prompt from QueryHistoryPrompt Phase-2 does NOT contain session ref blocks.
+        const rendered = 'Synthesize the following confirmed sessions and provide a direct answer.';
+        const prompt   = makePrompt('chatwizard.queryHistory', rendered);
+        const index    = new SessionIndex();
+        index.upsert(session);
+
+        const handler = createParticipantHandler(
+            new Map([['chatwizard.queryHistory', prompt]]),
+            index,
+            fakeMessageFactory,
+        );
+        const stream  = makeStream();
+        // Simulate what happens when the "Yes" button is pressed: prompt has --continued prefix
+        const request = makeRequest(
+            'queryHistory',
+            '--continued fix the login redirect bug --refs confirmed-s1',
+            'Based on the confirmed session, the fix is to update redirect URLs.',
+        );
+
+        await handler(request as never, FAKE_CTX, stream as never, FAKE_TOKEN);
+
+        assert.ok(stream.text().includes('Based on the confirmed session'),
+            'LLM Phase-2 answer must be streamed');
+        assert.ok(
+            !stream._buttonCalls.some(b => b.command === 'chatwizard.query.continued'),
+            'Yes button must NOT appear in Phase-2',
+        );
+        assert.ok(
+            !stream._buttonCalls.some(b => b.command === 'chatwizard.query.general'),
+            'No button must NOT appear in Phase-2 (--continued path)',
+        );
+    });
+
+    // ── Test NEW-D: Phase-2 --general prefix skips Phase-1 ───────────────────
+    // When the user presses "No — get general guidance", prompt has "--general prefix".
+    // isPhase2=true → must skip Phase-1 logic and stream the general answer.
+
+    test('Phase-2 --general prefix: LLM answer streamed without Phase-1 buttons', async () => {
+        const rendered = 'No relevant history matches were found. Answer from general knowledge.';
+        const prompt   = makePrompt('chatwizard.queryHistory', rendered);
+        const index    = new SessionIndex();
+
+        const handler = createParticipantHandler(
+            new Map([['chatwizard.queryHistory', prompt]]),
+            index,
+            fakeMessageFactory,
+        );
+        const stream  = makeStream();
+        const request = makeRequest(
+            'queryHistory',
+            '--general how does React reconciliation work?',
+            'React reconciliation uses a virtual DOM diffing algorithm.',
+        );
+
+        await handler(request as never, FAKE_CTX, stream as never, FAKE_TOKEN);
+
+        assert.ok(stream.text().includes('React reconciliation uses a virtual DOM'),
+            'LLM general answer must be streamed');
+        assert.ok(
+            !stream._buttonCalls.some(b => b.command === 'chatwizard.query.continued'),
+            'Yes button must NOT appear in --general Phase-2',
+        );
+        assert.ok(
+            !stream._buttonCalls.some(b => b.command === 'chatwizard.query.general'),
+            'Get general guidance button must NOT appear in --general Phase-2',
+        );
+    });
+
+    test('render error is caught and shown as error message', async () => {
+        const prompt  = makeThrowingPrompt('chatwizard.queryHistory', 'index not ready');
+        const index   = new SessionIndex();
+        const handler = createParticipantHandler(
+            new Map([['chatwizard.queryHistory', prompt]]),
+            index,
+            fakeMessageFactory,
+        );
+        const stream  = makeStream();
+        const request = makeRequest('queryHistory', 'any question');
 
         await handler(request as never, FAKE_CTX, stream as never, FAKE_TOKEN);
 

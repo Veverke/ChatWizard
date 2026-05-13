@@ -52,7 +52,8 @@ import { ListRecentTool } from './mcp/tools/listRecentTool';
 import { GetContextTool } from './mcp/tools/getContextTool';
 import { ListSourcesTool } from './mcp/tools/listSourcesTool';
 import { ServerInfoTool } from './mcp/tools/serverInfoTool';
-import { ContextAnswerPrompt, ContinueFromHistoryPrompt, DebugWithHistoryPrompt } from './mcp/prompts/contextPrompts';
+import { QueryHistoryPrompt, ContinueFromHistoryPrompt } from './mcp/prompts/contextPrompts';
+import { isNewerVersion } from './utils/semver';
 import { registerChatParticipant } from './mcp/chatParticipant';
 import { NullSemanticIndexer, ISemanticIndexer } from './search/semanticContracts';
 
@@ -1064,9 +1065,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             new ServerInfoTool(index, semanticProxy, extensionVersion, mcpServerStartTime),
         ];
 
+        const getSessionFullTool = new GetSessionFullTool(index);
         const prompts = [
-            new ContextAnswerPrompt(getContextTool),
-            new DebugWithHistoryPrompt(searchTool),
+            new QueryHistoryPrompt(getContextTool, getSessionFullTool),
             new ContinueFromHistoryPrompt(listRecentTool, getContextTool),
         ];
 
@@ -1738,18 +1739,4 @@ async function fetchLatestMarketplaceVersion(extensionId: string): Promise<strin
     });
 }
 
-/**
- * Returns true when `candidate` is a strictly higher semver than `current`.
- * Handles `major.minor.patch` strings (extra pre-release segments are ignored).
- */
-function isNewerVersion(candidate: string, current: string): boolean {
-    const parse = (v: string): [number, number, number] => {
-        const parts = v.split('.').map(p => parseInt(p, 10));
-        return [parts[0] ?? 0, parts[1] ?? 0, parts[2] ?? 0];
-    };
-    const [caMaj, caMin, caPatch] = parse(candidate);
-    const [cuMaj, cuMin, cuPatch] = parse(current);
-    if (caMaj !== cuMaj) { return caMaj > cuMaj; }
-    if (caMin !== cuMin) { return caMin > cuMin; }
-    return caPatch > cuPatch;
-}
+

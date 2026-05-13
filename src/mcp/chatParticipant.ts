@@ -143,7 +143,7 @@ export function createParticipantHandler(
         stream: vscode.ChatResponseStream,
         token: vscode.CancellationToken,
     ): Promise<vscode.ChatResult | void> => {
-        const command = request.command; // e.g. 'answerFromHistory'
+        const command = request.command; // e.g. 'queryHistory'
         const userText = request.prompt.trim();
 
         if (!command) {
@@ -188,10 +188,9 @@ export function createParticipantHandler(
 
             stream.progress('Searching chat history…');
 
-            // --- Phase 1 logic for both answerFromHistory and troubleshootFromHistory ---
-            const isTroubleshoot = command === 'troubleshootFromHistory';
-            const isAnswer      = command === 'answerFromHistory';
-            const isPhase2      = userText.startsWith('--continued ') || userText.startsWith('--generic ') || userText.startsWith('--general ');
+            // --- Phase 1 logic for queryHistory ---
+            const isQuery  = command === 'queryHistory';
+            const isPhase2 = userText.startsWith('--continued ') || userText.startsWith('--general ');
 
             // The rendered text is a prompt — send it to the LLM and stream the response.
             // (MCP clients handle this step themselves; the chat participant must do it here.)
@@ -201,7 +200,7 @@ export function createParticipantHandler(
             // llmFoundMatch: true if Phase 1 LLM confirmed at least one session is relevant.
             let llmFoundMatch = false;
 
-            if ((isTroubleshoot || isAnswer) && !isPhase2 && existingRefs.length > 0) {
+            if (isQuery && !isPhase2 && existingRefs.length > 0) {
                 // Accumulate Phase 1 response so we can inspect it before emitting sources.
                 let llmResponse = '';
                 for await (const chunk of modelResponse.text) {
@@ -211,43 +210,29 @@ export function createParticipantHandler(
                 const noMatch = llmResponse.includes('No relevant history found');
                 llmFoundMatch = !noMatch;
                 if (llmFoundMatch) {
-                    // Only show sessions whose title the LLM actually mentioned — drop the rest.
-                    const mentionedRefs = existingRefs.filter(r => llmResponse.includes(r.title));
-                    const refsToShow = mentionedRefs.length > 0 ? mentionedRefs : existingRefs;
+                    // Always show the top-3 best-scoring matches regardless of LLM mention filter.
                     // Sources table first, then the LLM assessment below it.
-                    stream.markdown(buildSourcesMarkdown(refsToShow, sessionIndex, false));
+                    stream.markdown(buildSourcesMarkdown(existingRefs, sessionIndex, false));
                     stream.markdown(llmResponse);
-                    if (isTroubleshoot) {
-                        stream.button({ title: '✅ Yes — show solutions from history', command: 'chatwizard.troubleshoot.continued', arguments: [userText] });
-                        stream.button({ title: '❌ No — show general troubleshooting tips', command: 'chatwizard.troubleshoot.generic', arguments: [userText] });
-                    } else {
-                        stream.button({ title: '✅ Yes — answer from history', command: 'chatwizard.answer.continued', arguments: [userText] });
-                        stream.button({ title: '❌ No — get general guidance', command: 'chatwizard.answer.general', arguments: [userText] });
-                    }
+                    const refIds = existingRefs.map(r => r.id).join(',');
+                    stream.button({ title: '✅ Yes — use history', command: 'chatwizard.query.continued', arguments: [userText, refIds] });
+                    stream.button({ title: '❌ No — get general guidance', command: 'chatwizard.query.general', arguments: [userText] });
                 } else {
                     stream.markdown('No relevant sessions found in your chat history for this question.');
-                    if (isTroubleshoot) {
-                        stream.button({ title: 'Show general troubleshooting tips', command: 'chatwizard.troubleshoot.generic', arguments: [userText] });
-                    } else {
-                        stream.button({ title: 'Get general guidance', command: 'chatwizard.answer.general', arguments: [userText] });
-                    }
+                    stream.button({ title: 'Get general guidance', command: 'chatwizard.query.general', arguments: [userText] });
                 }
             } else {
                 for await (const chunk of modelResponse.text) {
                     stream.markdown(chunk);
                 }
                 // No sessions at all — offer the generic fallback for Phase 1 commands.
-                if ((isTroubleshoot || isAnswer) && !isPhase2) {
-                    if (isTroubleshoot) {
-                        stream.button({ title: 'Show general troubleshooting tips', command: 'chatwizard.troubleshoot.generic', arguments: [userText] });
-                    } else {
-                        stream.button({ title: 'Get general guidance', command: 'chatwizard.answer.general', arguments: [userText] });
-                    }
+                if (isQuery && !isPhase2) {
+                    stream.button({ title: 'Get general guidance', command: 'chatwizard.query.general', arguments: [userText] });
                 }
             }
 
             // Phase 1 complete — buttons already emitted; Phase 2 answer was streamed above.
-            if (isTroubleshoot || isAnswer) {
+            if (isQuery) {
                 return;
             }
         } catch (err) {
@@ -283,27 +268,16 @@ export function registerChatParticipant(
 
     // Commands used by Phase 1 stream.button() calls.
     context.subscriptions.push(
-        vscode.commands.registerCommand('chatwizard.troubleshoot.continued', async (errorText: string) => {
+        vscode.commands.registerCommand('chatwizard.query.continued', async (query: string, refIds?: string) => {
+            const refsPart = refIds ? ` --refs ${refIds}` : '';
             await vscode.commands.executeCommand('workbench.action.chat.open', {
-                query: `@chatwizard /troubleshootFromHistory --continued ${errorText}`,
+                query: `@chatwizard /queryHistory --continued ${query}${refsPart}`,
                 isPartialQuery: false,
             });
         }),
-        vscode.commands.registerCommand('chatwizard.troubleshoot.generic', async (errorText: string) => {
+        vscode.commands.registerCommand('chatwizard.query.general', async (query: string) => {
             await vscode.commands.executeCommand('workbench.action.chat.open', {
-                query: `@chatwizard /troubleshootFromHistory --generic ${errorText}`,
-                isPartialQuery: false,
-            });
-        }),
-        vscode.commands.registerCommand('chatwizard.answer.continued', async (question: string) => {
-            await vscode.commands.executeCommand('workbench.action.chat.open', {
-                query: `@chatwizard /answerFromHistory --continued ${question}`,
-                isPartialQuery: false,
-            });
-        }),
-        vscode.commands.registerCommand('chatwizard.answer.general', async (question: string) => {
-            await vscode.commands.executeCommand('workbench.action.chat.open', {
-                query: `@chatwizard /answerFromHistory --general ${question}`,
+                query: `@chatwizard /queryHistory --general ${query}`,
                 isPartialQuery: false,
             });
         }),

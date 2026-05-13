@@ -190,6 +190,21 @@ The server is **100% local** (`localhost` only), **read-only** (no tool can modi
 
 See [docs/mcp-setup-guide.md](docs/mcp-setup-guide.md) for per-tool setup instructions.
 
+### Copilot Chat Participant (`@chatwizard`)
+Use ChatWizard's history search **directly inside Copilot Chat** — no MCP server, no terminal, no tab-switching. Type `@chatwizard` in the Copilot Chat panel and choose a slash command:
+
+| Command | What it does |
+|---------|--------------|
+| `/queryHistory <question or error>` | Unified two-phase history query covering both Q&A and troubleshooting. Phase 1 retrieves the **top-3 best-scoring** matching sessions and presents them in a ranked table. Click **✅ Yes — use history** to fetch all three sessions in full, consolidate them, semantically derive the core question being asked, and get a grounded answer. Click **❌ No** for general guidance instead. |
+| `/continueFromHistory [topic]` | Lists the 5 most recent sessions (optionally filtered by topic) and proposes the 3 most valuable next actions. |
+
+Both slash commands are also exposed as **MCP prompts** (`chatwizard.queryHistory`, `chatwizard.continueFromHistory`) for any MCP-capable client (Claude Desktop, Cursor, Continue, etc.).
+
+**Requirements:** GitHub Copilot extension. The MCP server does **not** need to be running.
+
+### Extension Update Notifications
+On activation, ChatWizard silently checks the VS Code Marketplace for a newer version of itself. The check is rate-limited to **once per 24 hours** using VS Code's `globalState`. If a newer version is found, an information notification appears with an **Open in Marketplace** button. The check is fire-and-forget — it never blocks activation and never logs or transmits any personal data.
+
 ### Live File Watching
 A `FileSystemWatcher` monitors all configured source directories — Copilot Chat workspace storage, Claude Code projects, Cline/Roo Code task directories, Cursor and Windsurf `state.vscdb` files, Aider `.aider.chat.history.md` files in open workspace folders, and Google Antigravity brain logs (`~/.gemini/antigravity/brain/**/.system_generated/logs/overview.txt`). When a session file is created or updated, only that entry is re-parsed and re-indexed — no full rebuild. All views (Sessions, Code Blocks, Prompt Library, Analytics, Timeline) refresh automatically without user action.
 
@@ -307,6 +322,7 @@ Some tools are supported with constraints. Features that operate on prompts alon
 | `chatwizard.enableTelemetry` | `false` | Enable local-only usage telemetry written to the extension's global storage directory (no external data transmission) |
 | `chatwizard.mcpServer.enabled` | `false` | Start a local MCP server so AI tools can query your chat history as context. Restart VS Code (or use the Start command) after enabling. |
 | `chatwizard.mcpServer.port` | `6789` | Port for the local MCP server (localhost only). Restart VS Code after changing. |
+| `chatwizard.mcpServer.allowTokenRotation` | `false` | When `true`, the **Chat Wizard: Rotate MCP Token** command is permitted to generate a new bearer token, immediately invalidating the previous one. All AI tools configured with the old token must be reconfigured after rotation. |
 
 ---
 
@@ -337,6 +353,9 @@ Some tools are supported with constraints. Features that operate on prompts alon
 | `chatwizard.startMcpServer` | Chat Wizard: Start MCP Server | Command Palette |
 | `chatwizard.stopMcpServer` | Chat Wizard: Stop MCP Server | Command Palette |
 | `chatwizard.copyMcpConfig` | Chat Wizard: Copy MCP Config to Clipboard | Command Palette |
+| `chatwizard.rotateMcpToken` | Chat Wizard: Rotate MCP Token | Command Palette |
+| `chatwizard.connectCopilot` | Chat Wizard: Connect GitHub Copilot | Command Palette |
+| `chatwizard.setupGlobalInstructions` | Chat Wizard: Set Up Global Copilot Instructions | Command Palette |
 
 Sort commands (`chatwizard.sortByDate`, `chatwizard.sortByDate.asc`, `chatwizard.sortByDate.desc`, and equivalents for workspace, length, title, and model) are available in the Sessions view toolbar. Matching commands prefixed `chatwizard.cb` (date, workspace, length, title, language) are available in the Code Blocks view toolbar.
 
@@ -364,6 +383,19 @@ Grouping commands (`chatwizard.enableSessionGrouping` / `chatwizard.disableSessi
 ---
 
 ## Release Notes
+
+### 1.4.0
+
+- **MCP Server Mode** — local HTTP/SSE server exposing your full chat history via the Model Context Protocol. Binds to `localhost` only; all requests require a bearer token. Enable via `chatwizard.mcpServer.enabled`.
+  - **8 MCP tools:** `chatwizard_search`, `chatwizard_find_similar`, `chatwizard_get_session`, `chatwizard_get_session_full`, `chatwizard_list_recent`, `chatwizard_get_context`, `chatwizard_list_sources`, `chatwizard_server_info`.
+  - **2 MCP prompts:** `chatwizard.queryHistory`, `chatwizard.continueFromHistory` — available to any MCP client.
+  - Config clipboard flow, status bar indicator, first-run consent modal.
+  - **Token rotation** — `Chat Wizard: Rotate MCP Token` (`chatwizard.rotateMcpToken`) generates a new bearer token. Gated by `chatwizard.mcpServer.allowTokenRotation`.
+  - **`Chat Wizard: Connect GitHub Copilot`** and **`Chat Wizard: Set Up Global Copilot Instructions`** commands for quick one-click setup.
+- **`@chatwizard` Copilot Chat Participant** — use `/queryHistory` and `/continueFromHistory` directly in Copilot Chat without the MCP server running. `/queryHistory` shows the top-3 matching sessions and, on confirmation, consolidates all three and derives a semantically grounded answer.
+- **VS Code Insiders support** — Copilot workspace storage is now auto-discovered from both stable (`Code`) and Insiders (`Code - Insiders`) installs.
+- **Improved full-text search** — stop-word filtering and basic de-pluralisation raise relevance of keyword results.
+- **Extension update notifier** — silent daily Marketplace check; shows a notification with an Open in Marketplace link when a newer version is available.
 
 ### 1.3.0
 

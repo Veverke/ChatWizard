@@ -5,12 +5,25 @@
 - **MCP Server Mode** — expose your full chat history as a [Model Context Protocol](https://modelcontextprotocol.io/) server so that AI tools can query past conversations as live context when answering new questions. The server binds to `localhost` only, is disabled by default, and requires a bearer token for every request.
   - Enable via `chatwizard.mcpServer.enabled: true` (default `false`). Port configurable via `chatwizard.mcpServer.port` (default `6789`).
   - **8 MCP tools:** `chatwizard_search` (full-text), `chatwizard_find_similar` (semantic), `chatwizard_get_session` (truncated content), `chatwizard_get_session_full` (no truncation), `chatwizard_list_recent`, `chatwizard_get_context` (smart context), `chatwizard_list_sources`, `chatwizard_server_info`.
+  - **2 MCP prompts:** `chatwizard.queryHistory`, `chatwizard.continueFromHistory` — slash-command–style prompts exposed via the MCP prompts protocol so any MCP-capable client can invoke them.
   - **3 new commands:** `Chat Wizard: Start MCP Server`, `Chat Wizard: Stop MCP Server`, `Chat Wizard: Copy MCP Config to Clipboard`.
   - **Config clipboard flow** — `Copy MCP Config` shows a quick-pick (GitHub Copilot, Claude Desktop, Cursor, Continue, Generic) and copies a ready-to-paste JSON snippet to the clipboard, then opens per-tool setup instructions in a read-only document.
   - **Status bar indicator** — a `$(broadcast) MCP` item reflects server state and provides one-click start/stop.
   - **First-run consent modal** — on first start, a modal explains what the server does before generating the bearer token.
+  - **Token rotation** — new `Chat Wizard: Rotate MCP Token` command regenerates the bearer token, immediately invalidating the old one. Gated by the `chatwizard.mcpServer.allowTokenRotation` setting (default `false`). All AI tools must be reconfigured with the new token after rotation.
   - **`NullSemanticIndexer`** — semantic tool paths degrade gracefully when semantic search is disabled.
   - See [docs/mcp-setup-guide.md](docs/mcp-setup-guide.md) for per-tool setup instructions.
+
+- **`@chatwizard` Copilot Chat Participant** — a native VS Code chat participant that surfaces ChatWizard's history search directly inside Copilot Chat, with no MCP server required. Type `@chatwizard` in the Copilot Chat panel to use either slash command:
+  - `/queryHistory <question or error>` — unified two-phase history query. Phase 1 retrieves the top-3 best-scoring matching sessions and shows them in a ranked table with **✅ Yes — use history** / **❌ No — get general guidance** buttons. Clicking Yes (Phase 2) fetches the full content of all three sessions, consolidates them, semantically derives the core question being asked, and delivers a grounded answer. Handles both Q&A and troubleshooting in a single command.
+  - `/continueFromHistory [topic]` — orients to recent work by listing the 5 most recent sessions (optionally filtered by topic) and proposing the 3 most valuable next actions.
+  - Both slash commands are also exposed as **MCP prompts** for any MCP-capable client.
+
+- **`Chat Wizard: Connect GitHub Copilot`** command (`chatwizard.connectCopilot`) — one-click shortcut to configure and enable the ChatWizard MCP server for GitHub Copilot.
+- **`Chat Wizard: Set Up Global Copilot Instructions`** command (`chatwizard.setupGlobalInstructions`) — creates or updates the global Copilot instructions file (`.instructions.md`) to automatically prime every Copilot session with ChatWizard context-retrieval guidance.
+- **VS Code Insiders support** — Copilot workspace storage discovery now automatically covers both VS Code stable (`Code`) and VS Code Insiders (`Code - Insiders`) installs. Sessions from both variants are indexed together without any additional configuration.
+- **Improved full-text search relevance** — stop-word filtering removes ~80 common English words (articles, conjunctions, pronouns, generic computing terms) from query tokenisation so topically distinctive terms drive scoring. Basic de-pluralisation (`errors` → `error`, `hooks` → `hook`) broadens matches without adding noise.
+- **Extension update notifier** — on activation, ChatWizard silently checks the VS Code Marketplace for a newer version (rate-limited to once per 24 hours via `globalState`). When a new version is available, an information notification appears with a direct **Open in Marketplace** link. No version data or usage information is sent; the check uses the public Marketplace REST API and is fire-and-forget.
 
 ## [1.3.0] - 2026-04-30
 
