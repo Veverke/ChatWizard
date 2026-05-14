@@ -6,7 +6,9 @@ import { SemanticMessageResult } from './types';
 
 /** Magic bytes "CWSE" */
 const MAGIC = Buffer.from([0x43, 0x57, 0x53, 0x45]);
-const FILE_VERSION = 2;
+// v3: session titles are now indexed as synthetic user entries (messageIndex = -1).
+// Bumping the version discards any v2 index so all sessions are re-indexed with titles.
+const FILE_VERSION = 3;
 
 /**
  * Composite key format: "sessionId::role::messageIndex::paragraphIndex"

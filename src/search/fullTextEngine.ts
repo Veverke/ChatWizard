@@ -299,8 +299,11 @@ export class FullTextSearchEngine {
                     if (stem.length >= 3) { postings = this.invertedIndex.get(stem); }
                 }
                 if (postings === undefined || postings.size === 0) {
-                    // No session contains this token → no matches possible.
-                    return { results: [], totalCount: 0 };
+                    // Token is absent from the main index (hapax, or a boundary fragment of a
+                    // longer word — e.g. querying "he thing" where the text contains "the thing").
+                    // Skip it: remaining tokens still narrow the candidate set, and findFirstMatch
+                    // below performs the definitive substring verification.
+                    continue;
                 }
 
                 if (candidateSet === undefined) {
@@ -511,28 +514,38 @@ export class FullTextSearchEngine {
         const f = filter ?? {};
         const sessionScores = new Map<string, number>();
 
+        // IDF-like weight: tokens appearing in fewer sessions are more distinctive
+        // and therefore get a higher score. This ensures rare acronyms (e.g. "PAT",
+        // "MCP") outweigh common coding words (e.g. "generate", "repo") when
+        // both are present in the query but only the acronym appears in a session.
+        // Guard n >= 2 so log2 is always positive.
+        const n = Math.max(2, this.sessions.size);
+        const idfWeight = (docCount: number): number =>
+            Math.max(1, Math.round(Math.log2(n / Math.max(1, docCount))));
+
         for (const token of tokens) {
-            // Main index (docFreq ≥ MIN_DOC_FREQ) — score += 1 per matched token.
+            // Main index (docFreq ≥ MIN_DOC_FREQ).
             const postings = this.invertedIndex.get(token);
             if (postings) {
+                const docCount = this.tokenDocSessions.get(token)?.size ?? MIN_DOC_FREQ;
+                const weight = idfWeight(docCount);
                 for (const entry of postings) {
                     const colonIdx = entry.indexOf(':');
                     const sessionId = entry.slice(0, colonIdx);
                     const session = this.sessions.get(sessionId);
                     if (session && this._sessionPassesFilter(session, f)) {
-                        sessionScores.set(sessionId, (sessionScores.get(sessionId) ?? 0) + 1);
+                        sessionScores.set(sessionId, (sessionScores.get(sessionId) ?? 0) + weight);
                     }
                 }
             }
 
-            // Hapax store (tokens that appear in exactly one session).
-            // Score += 2 because a hapax token is highly distinctive — it cannot
-            // appear in many sessions by definition, making it a stronger signal.
+            // Hapax store (docCount = 1 by definition → highest IDF weight).
             const hapax = this.hapaxStore.get(token);
             if (hapax) {
                 const session = this.sessions.get(hapax.sessionId);
                 if (session && this._sessionPassesFilter(session, f)) {
-                    sessionScores.set(hapax.sessionId, (sessionScores.get(hapax.sessionId) ?? 0) + 2);
+                    const weight = idfWeight(1);
+                    sessionScores.set(hapax.sessionId, (sessionScores.get(hapax.sessionId) ?? 0) + weight);
                 }
             }
         }

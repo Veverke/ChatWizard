@@ -54,27 +54,30 @@ export class QueryHistoryPrompt implements IMcpPrompt {
             const refIds = refsMatch ? refsMatch[1].split(',').filter(Boolean) : [];
             const realQuery = refsMatch ? rest.slice(0, rest.length - refsMatch[0].length).trim() : rest;
 
-            // Fetch full content of each confirmed session and consolidate.
-            const sessionContents: string[] = [];
-            for (const id of refIds.slice(0, 3)) {
-                const content = await runTool(this.getSessionFullTool, { sessionId: id });
-                if (content && !content.startsWith('Error:') && !content.startsWith('Session not found')) {
-                    sessionContents.push(content);
-                }
-            }
-
-            if (sessionContents.length > 0) {
-                const consolidated = sessionContents.join('\n\n---\n\n');
+            // Re-run the context tool to get passage-level excerpts for the confirmed sessions.
+            // Using passage excerpts (not full session dumps) keeps the context focused and
+            // ensures the LLM synthesises from all confirmed sessions rather than fixating on
+            // whichever single session happens to have the most content.
+            if (refIds.length > 0) {
+                const contextText = await runTool(this.getContextTool, { topic: realQuery, limit: 8 });
+                // Filter the returned blocks down to only the confirmed ref IDs.
+                const refIdSet = new Set(refIds);
+                const blocks = contextText.split(/\n{2,}/).reduce<string[]>((acc, block) => {
+                    const idMatch = block.match(/^ID:\s*(.+)$/m);
+                    if (idMatch && refIdSet.has(idMatch[1].trim())) { acc.push(block.trim()); }
+                    return acc;
+                }, []);
+                const excerptContext = blocks.length > 0 ? blocks.join('\n\n') : contextText;
                 const prompt = [
-                    `The user confirmed that the following ${sessionContents.length} session(s) are relevant to their query.`,
-                    'Work through these steps in order:',
-                    '  1. Synthesize the content of all sessions below into a consolidated understanding of the topic.',
-                    '  2. From that consolidated content, derive the core semantic theme or question the user is asking about.',
-                    '  3. Provide a direct answer or actionable resolution steps grounded in the session content.',
-                    'Cite each relevant session by title and date. Draw on specific details to ground your response.',
+                    `The user confirmed that the following ${refIds.length} session(s) are relevant to their query.`,
+                    'Each session excerpt below is the most relevant passage from that session.',
+                    'Synthesise ALL excerpts into a single consolidated answer.',
+                    'Cover what each session contributes — if sessions agree, unify; if they differ, note the nuance.',
+                    'Avoid repeating the same advice across sessions. Be direct and actionable.',
+                    'Cite each session by title and date.',
                     '',
-                    'Sessions:',
-                    consolidated,
+                    'Session excerpts:',
+                    excerptContext,
                     '',
                     `Original query: ${realQuery}`,
                 ].join('\n');
@@ -115,16 +118,12 @@ export class QueryHistoryPrompt implements IMcpPrompt {
             'The sessions below were retrieved from the user\'s chat history as potential context.',
             'They may or may not be directly relevant — do not assume relevance.',
             '',
-            'The session list is already displayed to the user in a table — do NOT re-list or describe each session.',
-            'Only provide a relevance assessment using these strict rules:',
-            '  \u2022 Only mention sessions that are clearly relevant OR potentially relevant to the query.',
-            '  \u2022 For each such session: state its title and briefly explain why it is relevant.',
-            '  \u2022 Do NOT mention, reference, or comment on sessions that are unrelated — skip them silently.',
-            '  \u2022 If NO session has any connection to the query: output exactly "No relevant history found." and nothing more.',
-            '  \u2022 Do NOT say things like "appears unrelated", "is not relevant", or "has no connection" about any session.',
+            'Output ONLY a JSON array of the 1-based position numbers of sessions relevant to the query.',
+            'Examples: [1] means only the first session; [1,3] means first and third; [] means none relevant.',
+            'A session is relevant if its Passage text has meaningful overlap with the query topic.',
+            'Do NOT output any explanation, text, markdown, or code fences — ONLY the JSON array.',
             '',
             'IMPORTANT: Do NOT provide answers, fixes, or solutions at this stage.',
-            'The user will indicate whether the sessions are relevant before proceeding.',
             '',
             'Retrieved sessions (may or may not be relevant):',
             contextText || '(none)',

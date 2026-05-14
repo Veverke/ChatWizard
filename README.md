@@ -1,4 +1,4 @@
-# ChatWizard
+﻿# ChatWizard
 
 [![VS Code Marketplace](https://vsmarketplacebadges.dev/version/Veverke.chatwizard.svg)](https://marketplace.visualstudio.com/items?itemName=Veverke.chatwizard)
 [![Installs](https://vsmarketplacebadges.dev/installs/Veverke.chatwizard.svg)](https://marketplace.visualstudio.com/items?itemName=Veverke.chatwizard)
@@ -64,167 +64,21 @@ Your AI chat history — unified, searchable, and always yours. Chat Wizard read
 
 ## Features
 
-### Session Management Panel
-A sortable, filterable, pinnable, and drag-and-drop reorderable TreeView listing every AI chat session across all your workspaces — from GitHub Copilot Chat, Claude Code, Cline, Roo Code, Cursor, Windsurf, Aider, and Google Antigravity. Each row shows workspace, date, message count, and file size. Hover over any session for a rich tooltip showing title, source, model, workspace, date, size, prompt/response split, and pin status. Click any session to open a full Markdown-rendered conversation reader.
+- **Sessions Panel** — browse, sort, filter, pin, group, and reorder every AI session across all tools and workspaces
+- **Full-Text Search** — instant in-memory keyword search with regex support and source/role filters
+- **Semantic Search** — topic-similarity search via a local AI model (opt-in, ~22 MB)
+- **Code Block Library** — every AI-generated code snippet, filterable by language, with one-click copy
+- **Prompt Library** — deduplicated, frequency-ranked archive of all your prompts with near-duplicate clustering and merge
+- **Analytics** — token usage charts, daily activity, top projects, top terms, longest sessions
+- **Model Usage** — per-model request counts with date-range filtering and workspace/session drill-down
+- **Timeline** — chronological feed with activity heat map, work bursts, topic drift ribbon, and streak stats
+- **Export** — single session, multi-select, all sessions, or excerpt — to structured Markdown
+- **MCP Server** — expose your full chat history to Claude Desktop, Cursor, Continue, and Copilot agent mode via the Model Context Protocol
+- **`@chatwizard` Copilot Chat Participant** — `/queryHistory` and `/continueFromHistory` directly in Copilot Chat, no MCP server required
+- **Live Indexing** — file watcher keeps all views up-to-date as new sessions are written, with no manual refresh needed
+- **100% local** — no network calls, no account, read-only access to your existing session files
 
-**Sorting** — Toolbar buttons cycle through five sort keys: Date, Workspace, Length (message count), Title (alphabetical), and Model — each with an ascending/descending direction toggle. Open **Configure Sort Order…** to build a multi-key composite sort with up to 3 criteria, each with its own direction. Sort preferences persist across VS Code restarts.
-
-**Filtering** — The filter toolbar button lets you set any combination of: title substring, date range (from / until, YYYY-MM-DD), AI model substring, and minimum or maximum message count. An active filter is shown in the view header and cleared in one step.
-
-**Organisation** — Pin important sessions to keep them at the top of the list (pins persist across restarts). Drag and drop sessions into a custom manual order (also persisted). Select multiple sessions (`Ctrl+Click`) for bulk export. Inline icon buttons on each row give quick access to pin and export without right-clicking.
-
-**Grouping** — A toolbar toggle button groups sessions into date buckets (Today, Yesterday, This Week, This Month, Older) — on by default. Click the same button to switch to a flat list. The chosen mode persists across VS Code restarts.
-
-**Pagination** — A "Load More (N remaining)" entry appears at the bottom when sessions exceed the page size.
-
-### Session Reader
-Opening any session launches a VS Code webview panel rendering the full conversation in Markdown — user messages with a configurable accent-color border, assistant messages styled to the VS Code theme, and syntax-highlighted fenced code blocks throughout. Re-opening a session reuses the existing tab rather than spawning a duplicate.
-
-For very large sessions (500+ messages) only the most-recent messages are shown initially, with a banner to load earlier content on demand. Rendering is streamed in small batches so the panel is interactive immediately. When opened from the Code Blocks panel, the reader can auto-scroll to and highlight the specific block that was clicked.
-
-### Unified Full-Text Search
-Open **ChatWizard: Search** from the Command Palette to launch an instant QuickPick panel covering all messages in all sessions across all workspaces. Results appear as you type, powered by an in-memory inverted index with no external dependencies.
-
-- **Regex mode** — prefix the query with `/` to switch to regular-expression matching.
-- **Source filter** — toggle between All sources or any individual source (Copilot, Claude, Cline, Roo Code, Cursor, Windsurf, Aider, Antigravity) with an in-panel toolbar button.
-- **Role filter** — toggle between All messages / Prompts only / Responses only.
-- Each result shows a source icon, session title, workspace, date, and a role-labelled snippet (`You: …` or `Copilot: …`) with matched text highlighted.
-- When results exceed 500, a banner prompts you to refine the query.
-- Selecting a result opens the session reader scrolled to the matched message.
-
-### Export to Markdown
-Export any session or set of sessions to structured `.md` files. Exports use H2 headings for user prompts, H3 headings for AI responses, fenced code blocks with language identifiers, and a metadata header (source, model, date, workspace).
-
-| Trigger | How |
-|---------|-----|
-| Single session | Right-click a session → **Export Session to Markdown** |
-| All sessions | Sessions toolbar → **Export All Sessions…** |
-| Multiple sessions | Sessions toolbar → **Export Selected Sessions…** (QuickPick multi-select) |
-| Excerpt | Command Palette → **ChatWizard: Export Session Excerpt…** |
-
-When exporting more than one session you choose between **one file per session** (written to a folder you pick) or a **single combined file** with a navigable table of contents.
-
-### Code Block Library (Code Blocks Panel)
-Browse every fenced code block the AI has ever generated across all sessions and workspaces. Each entry shows language, originating session title, date, source, workspace, and message role. Click any entry to open the parent session and jump directly to that code block, with an optional colored highlight.
-
-**Filter** — Narrow the view by language substring, content substring, source (Copilot / Claude), or message role (user / assistant).
-
-**Sort** — Five sort keys (Date, Workspace, Length, Session Title, Language) each with ascending/descending direction, toggled via toolbar icon buttons.
-
-**Grouping** — A toolbar toggle button groups code blocks by language — on by default. Each language bucket shows the block count. Click the same button to switch to a flat list. The chosen mode persists across VS Code restarts.
-
-**Copy** — One-click clipboard copy for any code block.
-
-Available as both the sidebar tree and as a standalone editor panel (`ChatWizard: Show Code Blocks`). A "Load More" entry appears as the block count grows.
-
-### Prompt Library (Prompt Library Panel)
-A deduplicated, frequency-ranked library of every user-turn prompt you have ever typed. Exact duplicates are collapsed into a single entry showing how many times and across how many projects you have used it. Search the library by keyword and copy any prompt to the clipboard for reuse. Available as both the sidebar tab and as a standalone editor panel (`ChatWizard: Show Prompt Library`).
-
-### Near-Duplicate Prompt Detection
-Integrated into the Prompt Library, a trigram-similarity clustering algorithm groups semantically near-duplicate prompts that are not exact matches. Each cluster shows its total equivalent usage count and lists all variants with originating session and date. A **Merge** action collapses the cluster into a single canonical entry. Clustering runs asynchronously and is cached — it only reruns when the prompt index changes.
-
-### Analytics Dashboard (Analytics Panel)
-A Chart.js-powered webview with live aggregate statistics across all sessions:
-
-- **Summary cards** — total sessions, total messages, total estimated tokens.
-- **Daily activity chart** — line chart of message volume over time.
-- **Top projects table** — projects ranked by estimated token consumption.
-- **Top terms bar chart** — the 20 most frequent words in your user prompts.
-- **Longest sessions tables** — top 10 by message count and top 10 by token count.
-
-Token counts are local approximations (Claude: characters ÷ 4; Copilot/GPT: words × 1.3). No external tokeniser or network call is required. The dashboard refreshes automatically as new sessions are indexed. Open via `ChatWizard: Show Analytics Dashboard` or the **Analytics** sidebar tab.
-
-### Workspace Management
-Control exactly which workspaces ChatWizard indexes and watches. Open **Chat Wizard: Manage Watched Workspaces** from the Command Palette to get a multi-select QuickPick listing every discovered Copilot and Claude workspace on your machine.
-
-Each row shows the workspace folder name, full path, combined data size (KB / MB), and session count. The currently open VS Code workspace is pre-selected and cannot be fully deselected. Confirming a changed selection persists the new scope and restarts the file watcher so only the chosen workspaces are indexed. The session count shown uses live index data when available, falls back to a persistent cache for workspaces that were previously indexed, and uses an approximate disk count for workspaces that have never been loaded.
-
-### Model Usage Panel
-A date-range–scoped dashboard showing how many user requests were sent to each AI model. Open via the **Model Usage** sidebar tab.
-
-- **Date range picker** — set a from/to date range; the panel defaults to the current calendar month.
-- **Model breakdown** — models are ranked by request count and shown with a percentage share of total requests.
-- **Workspace and session drill-down** — expand any model row to see which workspaces and individual sessions drove the most requests.
-- **Friendly model names** — raw API model identifiers are normalised to readable names (e.g. `claude-sonnet-4-6` → `Claude Sonnet 4.6`).
-- Auto-refreshes as new sessions are indexed.
-
-### Timeline View (Timeline Panel)
-A chronological month-grouped feed of all sessions across all workspaces. Each card shows project name, session title, first prompt, message count, and date.
-
-- **Jump to date** — type a `YYYY-MM` value to scroll instantly to any month in history.
-- **Filters** — source dropdown narrows the feed without a full reload.
-- **Pagination** — loads 3 months at a time; a **Load More** button fetches the next batch.
-- **Search** — filter the feed to entries whose title or first prompt match a keyword.
-- **Activity heat map** — a calendar grid colour-coded by session density; click any day to filter the feed to that date.
-- **Work bursts** — sessions within a 2-hour window are clustered into focused work-burst cards, showing duration, source mix, and total messages.
-- **Topic drift ribbon** — displays the top 3 keywords from your prompts for each ISO week, letting you see how your focus shifts over time.
-- **Stats bar** — at-a-glance counters: active days this week, total sessions, current daily streak, longest streak, and "on this day last month" sessions.
-- Clicking any card opens the session reader.
-
-### MCP Server (Local AI Context Bridge)
-Expose your entire chat history as a **Model Context Protocol (MCP) server** so that AI tools — GitHub Copilot, Claude Desktop, Cursor, and Continue — can query your past conversations as live context when answering new questions.
-
-Every other ChatWizard feature makes it a better *viewer*. MCP Server Mode makes it *useful inside the tools you are already in*. A Copilot session that starts with `chatwizard_find_similar("WAL mode SQLite lock")` can surface the exact Aider session from three months ago where you solved that problem — without you switching tabs or running a manual query.
-
-**Quick start:**
-1. Open **VS Code Settings** and set `chatwizard.mcpServer.enabled` to `true`.
-2. Run **Chat Wizard: Copy MCP Config** from the Command Palette.
-3. Select your AI tool (Copilot, Claude Desktop, Cursor, or Continue).
-4. Paste the copied config into the tool's MCP config file (full instructions shown automatically).
-5. Restart or reload the tool. It will connect to the ChatWizard MCP server immediately.
-
-The server is **100% local** (`localhost` only), **read-only** (no tool can modify session data), and **auth-gated** (a 64-character bearer token is generated on first start and stored in VS Code's extension storage — only tools you explicitly configure can query your history). The server starts automatically when enabled and stops when VS Code closes.
-
-**Available MCP tools:**
-
-| Tool | What it does |
-|------|--------------|
-| `chatwizard_search` | Full-text keyword search across all sessions |
-| `chatwizard_find_similar` | Topic / semantic similarity search |
-| `chatwizard_get_session` | Retrieve session content (truncated to 4 000 chars by default) |
-| `chatwizard_get_session_full` | Retrieve complete session content with no truncation |
-| `chatwizard_list_recent` | List recently updated sessions, optionally filtered by source or date |
-| `chatwizard_get_context` | Smart context: best snippets for a topic in a single call |
-| `chatwizard_list_sources` | Show which AI tools are indexed and their session counts |
-| `chatwizard_server_info` | Server metadata, session count, index status, uptime |
-
-See [docs/mcp-setup-guide.md](docs/mcp-setup-guide.md) for per-tool setup instructions.
-
-### Copilot Chat Participant (`@chatwizard`)
-Use ChatWizard's history search **directly inside Copilot Chat** — no MCP server, no terminal, no tab-switching. Type `@chatwizard` in the Copilot Chat panel and choose a slash command:
-
-| Command | What it does |
-|---------|--------------|
-| `/queryHistory <question or error>` | Unified two-phase history query covering both Q&A and troubleshooting. Phase 1 retrieves the **top-3 best-scoring** matching sessions and presents them in a ranked table. Click **✅ Yes — use history** to fetch all three sessions in full, consolidate them, semantically derive the core question being asked, and get a grounded answer. Click **❌ No** for general guidance instead. |
-| `/continueFromHistory [topic]` | Lists the 5 most recent sessions (optionally filtered by topic) and proposes the 3 most valuable next actions. |
-
-Both slash commands are also exposed as **MCP prompts** (`chatwizard.queryHistory`, `chatwizard.continueFromHistory`) for any MCP-capable client (Claude Desktop, Cursor, Continue, etc.).
-
-**Requirements:** GitHub Copilot extension. The MCP server does **not** need to be running.
-
-### Extension Update Notifications
-On activation, ChatWizard silently checks the VS Code Marketplace for a newer version of itself. The check is rate-limited to **once per 24 hours** using VS Code's `globalState`. If a newer version is found, an information notification appears with an **Open in Marketplace** button. The check is fire-and-forget — it never blocks activation and never logs or transmits any personal data.
-
-### Live File Watching
-A `FileSystemWatcher` monitors all configured source directories — Copilot Chat workspace storage, Claude Code projects, Cline/Roo Code task directories, Cursor and Windsurf `state.vscdb` files, Aider `.aider.chat.history.md` files in open workspace folders, and Google Antigravity brain logs (`~/.gemini/antigravity/brain/**/.system_generated/logs/overview.txt`). When a session file is created or updated, only that entry is re-parsed and re-indexed — no full rebuild. All views (Sessions, Code Blocks, Prompt Library, Analytics, Timeline) refresh automatically without user action.
-
-### Configurable Data Source Paths
-Override the default discovery paths for any supported source (Claude Code, Copilot Chat, Cline, Roo Code, Cursor, Windsurf, Google Antigravity) via extension settings — useful for non-standard installs or custom data directories. For Aider, configure additional search roots via `chatwizard.aiderSearchRoots`. Changing a path displays a prompt to reload the window so the new location takes effect immediately.
-
----
-
-## Sidebar Panels at a Glance
-
-Click the ChatWizard icon in the VS Code activity bar to open five sidebar panels:
-
-| Panel | Also openable via Command Palette | Key toolbar actions |
-|-------|----------------------------------|---------------------|
-| **Sessions** | — | Filter, Configure Sort Order, sort buttons (Date / Workspace / Length / Title / Model ↑↓), Group by Date toggle, Export All, Export Selected, Manage Watched Workspaces |
-| **Prompt Library** | `ChatWizard: Show Prompt Library` | Keyword search, Copy prompt, Merge duplicate cluster |
-| **Code Blocks** | `ChatWizard: Show Code Blocks` | Filter (language / content / source / role), sort buttons (Date / Workspace / Length / Title / Language ↑↓), Group by Language toggle, Copy code block, Load More |
-| **Analytics** | `ChatWizard: Show Analytics Dashboard` | (no toolbar; auto-refreshes) |
-| **Model Usage** | — | Date range from/to pickers; auto-refreshes |
-| **Timeline** | `ChatWizard: Show Timeline` | Source filter, Search, Jump-to-Date input, Load More; heat map + work bursts + topic drift + stats bar inline |
+For detailed usage instructions, settings, and commands see the **[User Guide](docs/user-guide.md)**.
 
 ---
 
@@ -301,65 +155,13 @@ Some tools are supported with constraints. Features that operate on prompts alon
 
 ## Extension Settings
 
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `chatwizard.userMessageColor` | `#007acc` | Accent color for user message borders in the session reader (hex or CSS color name) |
-| `chatwizard.tooltipLabelColor` | `` | Color for field labels in session hover tooltips (empty = VS Code theme default) |
-| `chatwizard.codeBlockHighlightColor` | `#EA5C00` | Highlight color applied to code blocks when navigating from the Code Blocks view |
-| `chatwizard.scrollToFirstCodeBlock` | `true` | Auto-scroll to first code block when opening a session from the Code Blocks view |
-| `chatwizard.claudeProjectsPath` | `` | Custom path to the Claude Code projects directory (empty = default `~/.claude/projects`) |
-| `chatwizard.copilotStoragePath` | `` | Custom path to the Copilot Chat workspace storage directory (empty = platform default) |
-| `chatwizard.indexCline` | `true` | Index Cline (`saoudrizwan.claude-dev`) task history |
-| `chatwizard.clineStoragePath` | `` | Custom path to the Cline globalStorage tasks directory (empty = platform default) |
-| `chatwizard.indexRooCode` | `true` | Index Roo Code (`rooveterinaryinc.roo-cline`) task history |
-| `chatwizard.rooCodeStoragePath` | `` | Custom path to the Roo Code globalStorage tasks directory (empty = platform default) |
-| `chatwizard.indexCursor` | `true` | Index Cursor chat sessions |
-| `chatwizard.cursorStoragePath` | `` | Custom path to the Cursor workspaceStorage directory (empty = platform default `%APPDATA%/Cursor/User/workspaceStorage`) |
-| `chatwizard.indexWindsurf` | `true` | Index Windsurf (Codeium) Cascade chat sessions |
-| `chatwizard.windsurfStoragePath` | `` | Custom path to the Windsurf workspaceStorage directory (empty = platform default `%APPDATA%/Windsurf/User/workspaceStorage`) |
-| `chatwizard.indexAntigravity` | `true` | Index Google Antigravity agent conversation sessions |
-| `chatwizard.antigravityBrainPath` | `` | Custom path to the Antigravity brain directory (empty = default `~/.gemini/antigravity/brain`) |
-| `chatwizard.enableTelemetry` | `false` | Enable local-only usage telemetry written to the extension's global storage directory (no external data transmission) |
-| `chatwizard.mcpServer.enabled` | `false` | Start a local MCP server so AI tools can query your chat history as context. Restart VS Code (or use the Start command) after enabling. |
-| `chatwizard.mcpServer.port` | `6789` | Port for the local MCP server (localhost only). Restart VS Code after changing. |
-| `chatwizard.mcpServer.allowTokenRotation` | `false` | When `true`, the **Chat Wizard: Rotate MCP Token** command is permitted to generate a new bearer token, immediately invalidating the previous one. All AI tools configured with the old token must be reconfigured after rotation. |
+See the **[User Guide → Settings Reference](docs/user-guide.md#14-settings-reference)**.
 
 ---
 
 ## Commands
 
-| Command | Title | Where to invoke |
-|---------|-------|------------------|
-| `chatwizard.search` | Search | Command Palette |
-| `chatwizard.openSession` | Open Session | Click session in Sessions panel |
-| `chatwizard.openSessionFromCodeBlock` | Open Session from Code Block | Click entry in Code Blocks panel |
-| `chatwizard.filterSessions` | Filter Sessions… | Sessions view toolbar |
-| `chatwizard.configureSortOrder` | Configure Sort Order… | Sessions view toolbar |
-| `chatwizard.pinSession` | Pin Session | Right-click / inline button on session row |
-| `chatwizard.unpinSession` | Unpin Session | Right-click / inline button on session row |
-| `chatwizard.exportSession` | Export Session to Markdown | Right-click context menu |
-| `chatwizard.exportAll` | Export All Sessions… | Sessions view toolbar |
-| `chatwizard.exportSelected` | Export Selected Sessions… | Sessions view toolbar |
-| `chatwizard.exportExcerpt` | Export Session Excerpt… | Command Palette |
-| `chatwizard.exportFromTreeSelection` | Export Selected… | Right-click context menu |
-| `chatwizard.showCodeBlocks` | Show Code Blocks | Command Palette |
-| `chatwizard.filterCodeBlocks` | Filter Code Blocks… | Code Blocks view toolbar |
-| `chatwizard.showPromptLibrary` | Show Prompt Library | Command Palette |
-| `chatwizard.showAnalytics` | Show Analytics Dashboard | Command Palette |
-| `chatwizard.showTimeline` | Show Timeline | Command Palette |
-| `chatwizard.loadMoreSessions` | Load More Sessions | "Load more" item at bottom of Sessions panel |
-| `chatwizard.loadMoreCodeBlocks` | Load More Code Blocks | "Load more" item at bottom of Code Blocks panel |
-| `chatwizard.manageWatchedWorkspaces` | Manage Watched Workspaces | Command Palette / Sessions view toolbar |
-| `chatwizard.startMcpServer` | Chat Wizard: Start MCP Server | Command Palette |
-| `chatwizard.stopMcpServer` | Chat Wizard: Stop MCP Server | Command Palette |
-| `chatwizard.copyMcpConfig` | Chat Wizard: Copy MCP Config to Clipboard | Command Palette |
-| `chatwizard.rotateMcpToken` | Chat Wizard: Rotate MCP Token | Command Palette |
-| `chatwizard.connectCopilot` | Chat Wizard: Connect GitHub Copilot | Command Palette |
-| `chatwizard.setupGlobalInstructions` | Chat Wizard: Set Up Global Copilot Instructions | Command Palette |
-
-Sort commands (`chatwizard.sortByDate`, `chatwizard.sortByDate.asc`, `chatwizard.sortByDate.desc`, and equivalents for workspace, length, title, and model) are available in the Sessions view toolbar. Matching commands prefixed `chatwizard.cb` (date, workspace, length, title, language) are available in the Code Blocks view toolbar.
-
-Grouping commands (`chatwizard.enableSessionGrouping` / `chatwizard.disableSessionGrouping` and `chatwizard.enableCbGrouping` / `chatwizard.disableCbGrouping`) are available in the respective view toolbars; only the contextually relevant one is shown at a time.
+See the **[User Guide → Commands Reference](docs/user-guide.md#15-commands-reference)**.
 
 ---
 

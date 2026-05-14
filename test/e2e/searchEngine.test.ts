@@ -86,6 +86,26 @@ suite('FullTextSearchEngine', () => {
         assert.ok(results.some(r => r.sessionId === 's-match'),     's-match must appear');
     });
 
+    // 2b. Substring query starting mid-word — boundary-fragment token absent from index.
+    //     Searching "he thing is" should still match a message containing "the thing is"
+    //     because "he thing is" is a literal substring of that text, even though "he" is
+    //     not a standalone indexed word.
+    test('phrase query with boundary fragment finds substring match', () => {
+        const engine = new FullTextSearchEngine();
+
+        const sessionMatch = makeSession('s-phrase', [makeMessage('user', 'the thing is I do not have access')]);
+        // Companion ensures 'thing' reaches MIN_DOC_FREQ so it enters the main index.
+        const companion    = makeSession('s-phrase-cmp', [makeMessage('user', 'this thing works differently')]);
+        engine.index(sessionMatch);
+        engine.index(companion);
+
+        // "he thing is" — "he" is not an indexed standalone word, but the substring exists.
+        const { results } = engine.search({ text: 'he thing is' });
+
+        assert.ok(results.some(r => r.sessionId === 's-phrase'),
+            '"he thing is" must match the session containing "the thing is" as a substring');
+    });
+
     // 3. Role filter â€” searchPrompts:false skips user messages.
     test('searchPrompts:false excludes user messages', () => {
         const engine = new FullTextSearchEngine();

@@ -16,8 +16,9 @@ import * as vscode from 'vscode';
 import type { IMcpPrompt } from './mcpContracts';
 import { PROMPT_DEFS } from './prompts/contextPrompts';
 import { SessionIndex } from '../index/sessionIndex';
+import { tokenizeQuery } from '../search/fullTextEngine';
 
-interface SessionRef { id: string; title: string; source: string; date: string; }
+interface SessionRef { id: string; title: string; source: string; date: string; passage?: string; }
 
 const RANK_MEDALS = ['🥇', '🥈', '🥉'];
 
@@ -31,10 +32,31 @@ const RANK_MEDALS = ['🥇', '🥈', '🥉'];
 function parseSessionRefs(promptText: string): SessionRef[] {
     const refs: SessionRef[] = [];
     let pending: Omit<SessionRef, 'id'> | null = null;
+    let passageLines: string[] = [];
+    let inPassage = false;
     for (const line of promptText.split('\n')) {
         const headerMatch = line.match(/^\[Session:\s*(.+?)\]\s*\|\s*Source:\s*(.+?)\s*\|\s*Date:\s*(.+)$/);
         if (headerMatch) {
             pending = { title: headerMatch[1], source: headerMatch[2], date: headerMatch[3] };
+            passageLines = [];
+            inPassage = false;
+            continue;
+        }
+        if (pending && line.startsWith('Passage: ')) {
+            passageLines = [line.slice('Passage: '.length)];
+            inPassage = true;
+            continue;
+        }
+        if (inPassage) {
+            const idMatch = line.match(/^ID:\s*(.+)$/);
+            if (idMatch) {
+                refs.push({ ...pending!, id: idMatch[1].trim(), passage: passageLines.join('\n') });
+                pending = null;
+                passageLines = [];
+                inPassage = false;
+            } else {
+                passageLines.push(line);
+            }
             continue;
         }
         const idMatch = line.match(/^ID:\s*(.+)$/);
@@ -46,28 +68,115 @@ function parseSessionRefs(promptText: string): SessionRef[] {
     return refs;
 }
 
-/** Build a trusted MarkdownString with a medal-ranked GFM table of session refs. */
-function buildSourcesMarkdown(refs: SessionRef[], sessionIndex: SessionIndex, phase1 = false): vscode.MarkdownString {
+/** Build a trusted MarkdownString with a medal-ranked GFM table of confirmed-relevant session refs. */
+function buildSourcesMarkdown(refs: SessionRef[], queryTokens: string[] = []): vscode.MarkdownString {
     const sessionWord = refs.length === 1 ? 'session' : 'sessions';
     const lines = [
-        `\n---\n📚 **Potential matches** — ${refs.length} ${sessionWord} retrieved\n`,
-        '| | Session | Source | Date | About |',
+        `\n---\n📚 **Found in your history** — ${refs.length} relevant ${sessionWord}\n`,
+        '| | Session | Source | Date | Excerpt |',
         '|---|---|---|---|---|',
     ];
     for (let i = 0; i < refs.length; i++) {
         const ref = refs[i];
-        const marker = phase1 ? `${i + 1}.` : (RANK_MEDALS[i] ?? `${i + 1}.`);
+        const marker = RANK_MEDALS[i] ?? `${i + 1}.`;
         const args = encodeURIComponent(JSON.stringify([{ id: ref.id }]));
         const uri = `command:chatwizard.openSession?${args}`;
         const dateStr = new Date(ref.date).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
-        const session = sessionIndex.get(ref.id);
-        const firstMsg = session?.messages.find(m => m.role === 'user')?.content ?? '';
-        const about = firstMsg.slice(0, 100).replace(/[\n\r]+/g, ' ').trim() + (firstMsg.length > 100 ? '…' : '');
+        const about = keywordAnchoredExcerpt(ref.passage ?? '', queryTokens, 200);
         lines.push(`| ${marker} | [${ref.title}](${uri}) | ${ref.source} | ${dateStr} | ${about} |`);
     }
     const md = new vscode.MarkdownString(lines.join('\n'));
     md.isTrusted = { enabledCommands: ['chatwizard.openSession'] };
     return md;
+}
+
+/**
+ * Return an excerpt from `passage` centred around the first occurrence of any
+ * query keyword.  If keywords appear near the start (within 30 chars) the
+ * excerpt starts from the beginning.  A leading ‘…’ is prepended when the
+ * window starts mid-text so the reader knows context was skipped.
+ */
+function boldKeywords(text: string, keywordTokens: string[]): string {
+    if (keywordTokens.length === 0) { return text; }
+    const escaped = keywordTokens.map(kw => kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    const kwRegex = new RegExp(`\\b(${escaped.join('|')})\\b`, 'gi');
+    const result: string[] = [];
+    const protectedRegex = /(\*\*[^*]+\*\*|`[^`]+`)/g;
+    let lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = protectedRegex.exec(text)) !== null) {
+        if (m.index > lastIndex) {
+            result.push(text.slice(lastIndex, m.index).replace(kwRegex, '**`$1`**'));
+        }
+        const span = m[0];
+        if (span.startsWith('**')) {
+            // Inside an existing bold span — apply `code` only to avoid breaking ** markers
+            const inner = span.slice(2, -2);
+            result.push('**' + inner.replace(kwRegex, '`$1`') + '**');
+        } else {
+            // Inside a code span — pass through untouched
+            result.push(span);
+        }
+        lastIndex = protectedRegex.lastIndex;
+    }
+    if (lastIndex < text.length) {
+        result.push(text.slice(lastIndex).replace(kwRegex, '**`$1`**'));
+    }
+    return result.join('');
+}
+
+/**
+ * Sort `tokens` by ascending corpus frequency (rarest first) using the live
+ * session index as the IDF source.  Rarer tokens are more semantically specific
+ * and should be preferred when anchoring excerpts.
+ */
+function sortTokensByRarity(tokens: string[], sessionIndex: SessionIndex): string[] {
+    if (tokens.length <= 1) { return tokens; }
+    const summaries = sessionIndex.getAllSummaries();
+    const freq = new Map<string, number>();
+    for (const kw of tokens) {
+        let count = 0;
+        for (const s of summaries) {
+            const session = sessionIndex.get(s.id);
+            if (!session) { continue; }
+            const words = new Set(
+                session.messages.map(m => m.content.toLowerCase()).join(' ').split(/\W+/)
+            );
+            if (words.has(kw)) { count++; }
+        }
+        freq.set(kw, count);
+    }
+    return [...tokens].sort((a, b) => (freq.get(a) ?? 0) - (freq.get(b) ?? 0));
+}
+
+function keywordAnchoredExcerpt(passage: string, keywordTokens: string[], maxChars: number): string {
+    const flat = passage.replace(/[\n\r]+/g, ' ').trim();
+    if (!flat) { return ''; }
+    if (keywordTokens.length === 0) {
+        return flat.slice(0, maxChars) + (flat.length > maxChars ? '…' : '');
+    }
+    const lower = flat.toLowerCase();
+    // Priority anchoring: tokens are pre-sorted rarest-first, so the first one
+    // found in the passage is automatically the most specific match.
+    let anchorPos = -1;
+    for (const kw of keywordTokens) {
+        const re = new RegExp(`\\b${kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
+        const match = re.exec(lower);
+        if (match) { anchorPos = match.index; break; }
+    }
+    let excerpt: string;
+    let prefix = '';
+    let suffix = '';
+    if (anchorPos <= 30 || anchorPos === -1) {
+        excerpt = flat.slice(0, maxChars);
+        if (flat.length > maxChars) { suffix = '…'; }
+    } else {
+        const start = anchorPos - 30;
+        excerpt = flat.slice(start, start + maxChars);
+        prefix = '…';
+        if (start + maxChars < flat.length) { suffix = '…'; }
+    }
+    return prefix + boldKeywords(excerpt, keywordTokens) + suffix;
 }
 
 /**
@@ -175,65 +284,57 @@ export function createParticipantHandler(
                 .join('\n\n');
 
             // Parse session refs and filter to sessions that exist in the current index.
-            // Done before the LLM call so refs are available for progress messages and buttons.
             const sessionRefs = parseSessionRefs(text);
             const existingRefs = sessionRefs
                 .filter(ref => sessionIndex.get(ref.id) !== undefined)
                 .slice(0, 3);
 
-            // Strip the prompt down to only the sessions the table will show,
-            // so the LLM cannot reference sessions the user never sees.
+            // Strip the prompt down to only the sessions we'll show, so Phase 2 LLM
+            // cannot reference sessions the user never saw.
             const allowedIds = new Set(existingRefs.map(r => r.id));
             const filteredText = filterPromptToAllowedSessions(text, allowedIds);
 
-            stream.progress('Searching chat history…');
-
-            // --- Phase 1 logic for queryHistory ---
             const isQuery  = command === 'queryHistory';
             const isPhase2 = userText.startsWith('--continued ') || userText.startsWith('--general ');
 
-            // The rendered text is a prompt — send it to the LLM and stream the response.
-            // (MCP clients handle this step themselves; the chat participant must do it here.)
-            const messages = [makeUserMessage(filteredText)] as vscode.LanguageModelChatMessage[];
-            const modelResponse = await request.model.sendRequest(messages, {}, token);
-
-            // llmFoundMatch: true if Phase 1 LLM confirmed at least one session is relevant.
-            let llmFoundMatch = false;
-
-            if (isQuery && !isPhase2 && existingRefs.length > 0) {
-                // Accumulate Phase 1 response so we can inspect it before emitting sources.
-                let llmResponse = '';
-                for await (const chunk of modelResponse.text) {
-                    llmResponse += chunk;
-                }
-                // Suppress table entirely when LLM found no relevant sessions.
-                const noMatch = llmResponse.includes('No relevant history found');
-                llmFoundMatch = !noMatch;
-                if (llmFoundMatch) {
-                    // Always show the top-3 best-scoring matches regardless of LLM mention filter.
-                    // Sources table first, then the LLM assessment below it.
-                    stream.markdown(buildSourcesMarkdown(existingRefs, sessionIndex, false));
-                    stream.markdown(llmResponse);
-                    const refIds = existingRefs.map(r => r.id).join(',');
+            if (isQuery && !isPhase2) {
+                stream.progress('Searching chat history…');
+                // Phase 1 — display pre-filtered sessions directly.
+                // The keyword filter in getContextTool already removed irrelevant sessions.
+                // No LLM gating: LLM filtering was unreliable (too selective) and
+                // caused relevant sessions to be incorrectly excluded from the table.
+                const queryTokens = sortTokensByRarity(tokenizeQuery(userText), sessionIndex);
+                // Enrich passages: if the top-priority (rarest) token is absent from
+                // the tool-returned passage, find it in the full session content instead.
+                const topToken = queryTokens[0];
+                const enrichedRefs = topToken ? existingRefs.map(ref => {
+                    const re = new RegExp(`\\b${topToken.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+                    if (re.test(ref.passage ?? '')) { return ref; }
+                    const session = sessionIndex.get(ref.id);
+                    if (!session) { return ref; }
+                    const fullText = session.messages.map(m => m.content).join('\n');
+                    const match = re.exec(fullText);
+                    if (!match) { return ref; }
+                    const start = Math.max(0, match.index - 100);
+                    return { ...ref, passage: fullText.slice(start, start + 400) };
+                }) : existingRefs;
+                if (enrichedRefs.length > 0) {
+                    stream.markdown(buildSourcesMarkdown(enrichedRefs, queryTokens));
+                    const refIds = enrichedRefs.map(r => r.id).join(',');
                     stream.button({ title: '✅ Yes — use history', command: 'chatwizard.query.continued', arguments: [userText, refIds] });
                     stream.button({ title: '❌ No — get general guidance', command: 'chatwizard.query.general', arguments: [userText] });
                 } else {
                     stream.markdown('No relevant sessions found in your chat history for this question.');
                     stream.button({ title: 'Get general guidance', command: 'chatwizard.query.general', arguments: [userText] });
                 }
-            } else {
-                for await (const chunk of modelResponse.text) {
-                    stream.markdown(chunk);
-                }
-                // No sessions at all — offer the generic fallback for Phase 1 commands.
-                if (isQuery && !isPhase2) {
-                    stream.button({ title: 'Get general guidance', command: 'chatwizard.query.general', arguments: [userText] });
-                }
+                return;
             }
 
-            // Phase 1 complete — buttons already emitted; Phase 2 answer was streamed above.
-            if (isQuery) {
-                return;
+            // Phase 2 (--continued / --general) or other prompts — call LLM and stream.
+            const messages = [makeUserMessage(filteredText)] as vscode.LanguageModelChatMessage[];
+            const modelResponse = await request.model.sendRequest(messages, {}, token);
+            for await (const chunk of modelResponse.text) {
+                stream.markdown(chunk);
             }
         } catch (err) {
             stream.markdown(

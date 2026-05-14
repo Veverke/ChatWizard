@@ -506,6 +506,8 @@ export class SessionWebviewPanel {
     }
     #search-input:focus { border-color: var(--vscode-focusBorder, #007fd4); }
     .search-counter { font-size: 0.8em; opacity: 0.6; white-space: nowrap; min-width: 56px; text-align: right; }
+    #search-whole-word, #search-regex { padding: 3px 6px; border: 1px solid var(--vscode-input-border, #555); background: var(--vscode-input-background, #3c3c3c); font-weight: bold; letter-spacing: -0.02em; }
+    #search-whole-word.cw-active, #search-regex.cw-active { background: var(--cw-accent); color: var(--cw-accent-text); border-color: var(--cw-accent); }
     #sel-ctx-menu {
       position: fixed; z-index: 9999;
       background: var(--vscode-menu-background, #252526);
@@ -565,6 +567,8 @@ export class SessionWebviewPanel {
     <div class="search-group">
       <input id="search-input" type="text" placeholder="Search in messages&#8230;" autocomplete="off" aria-label="Search within session messages" />
       <span class="search-counter" id="search-counter" aria-live="polite"></span>
+      <button id="search-whole-word" title="Match whole word (Alt+W)" aria-label="Match whole word" aria-pressed="false">W</button>
+      <button id="search-regex" title="Use regular expression (Alt+R)" aria-label="Use regular expression" aria-pressed="false">.*</button>
       <button id="search-prev" title="Previous (Shift+Enter)" aria-label="Previous match">&#9650;</button>
       <button id="search-next" title="Next (Enter)" aria-label="Next match">&#9660;</button>
     </div>
@@ -792,10 +796,14 @@ ${cwInteractiveJs()}
   var cwMsgMarks = [], cwMsgIdx = -1;
   // Pending prompt-library highlight: auto-loads more batches until the target is in DOM
   var _pendingHighlight = null;
-  var srchInput   = document.getElementById('search-input');
-  var srchCounter = document.getElementById('search-counter');
-  var srchPrev    = document.getElementById('search-prev');
-  var srchNext    = document.getElementById('search-next');
+  var srchInput     = document.getElementById('search-input');
+  var srchCounter   = document.getElementById('search-counter');
+  var srchPrev      = document.getElementById('search-prev');
+  var srchNext      = document.getElementById('search-next');
+  var srchWholeWord = document.getElementById('search-whole-word');
+  var srchRegex     = document.getElementById('search-regex');
+  var wholeWord     = false;
+  var useRegex      = false;
   function escRx(s) { return s.replace(/[.*+?^{}()|$[\]\\]/g, '\\$&'); }
   function clearMsgMarks() {
     cwMsgMarks.forEach(function(el) { el.classList.remove('cw-msg-hl', 'cw-msg-hl-active'); });
@@ -862,20 +870,33 @@ ${cwInteractiveJs()}
     dehighlightCode(); // flatten spans so multi-word searches work across tokens
 
     // Stage 1: exact regex match within text nodes (works for single-line content)
-    var rx = new RegExp(escRx(query), 'gi');
+    var rx;
+    if (useRegex) {
+      try { rx = new RegExp(query, 'gi'); } catch (err) { srchCounter.textContent = 'Invalid regex'; return; }
+    } else {
+      var rxPat = wholeWord ? '\\\\b' + escRx(query) + '\\\\b' : escRx(query);
+      rx = new RegExp(rxPat, 'gi');
+    }
     document.querySelectorAll('.message-body').forEach(function(body) { walkBody(body, rx); });
     if (cwMarks.length > 0) { cwIdx = 0; setActive(cwIdx); return; }
 
     // Stage 2: whitespace-collapse match — uses the raw source content stored in data-raw
     // (avoids markdown rendering artefacts such as list markers lost from innerText).
     // Both query and content are normalised to single spaces before comparing.
-    var normQuery = query.trim().replace(/\\s+/g, ' ').toLowerCase();
+    var normQuery = useRegex ? query : query.trim().replace(/\\s+/g, ' ').toLowerCase();
+    var normQueryRx;
+    if (useRegex) {
+      try { normQueryRx = new RegExp(normQuery, 'i'); } catch (e) { normQueryRx = null; }
+    } else {
+      normQueryRx = wholeWord ? new RegExp('\\\\b' + escRx(normQuery) + '\\\\b', 'i') : null;
+    }
     document.querySelectorAll('.message-body').forEach(function(body) {
       var raw = (body.dataset && body.dataset.raw !== undefined)
         ? body.dataset.raw
         : (body.innerText !== undefined ? body.innerText : (body.textContent || ''));
       var normBody = raw.replace(/\\s+/g, ' ').trim().toLowerCase();
-      if (normBody.indexOf(normQuery) !== -1) { cwMsgMarks.push(body); }
+      var matched = normQueryRx ? normQueryRx.test(normBody) : normBody.indexOf(normQuery) !== -1;
+      if (matched) { cwMsgMarks.push(body); }
     });
     if (cwMsgMarks.length > 0) { cwMsgIdx = 0; setActiveMsg(cwMsgIdx); return; }
 
@@ -896,6 +917,39 @@ ${cwInteractiveJs()}
   srchInput.addEventListener('keydown', function(e) {
     if (e.key === 'Enter')  { navSearch(e.shiftKey ? -1 : 1); e.preventDefault(); }
     else if (e.key === 'Escape') { srchInput.value = ''; runSearch(''); }
+  });
+  srchWholeWord.addEventListener('click', function() {
+    wholeWord = !wholeWord;
+    srchWholeWord.classList.toggle('cw-active', wholeWord);
+    srchWholeWord.setAttribute('aria-pressed', String(wholeWord));
+    runSearch(srchInput.value);
+  });
+  srchRegex.addEventListener('click', function() {
+    useRegex = !useRegex;
+    srchRegex.classList.toggle('cw-active', useRegex);
+    srchRegex.setAttribute('aria-pressed', String(useRegex));
+    // whole-word is meaningless inside a regex — disable it
+    if (useRegex && wholeWord) {
+      wholeWord = false;
+      srchWholeWord.classList.remove('cw-active');
+      srchWholeWord.setAttribute('aria-pressed', 'false');
+    }
+    runSearch(srchInput.value);
+  });
+  document.addEventListener('keydown', function(e) {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+      e.preventDefault();
+      srchInput.focus();
+      srchInput.select();
+    }
+    if (e.altKey && e.key === 'w') {
+      e.preventDefault();
+      srchWholeWord.click();
+    }
+    if (e.altKey && e.key === 'r') {
+      e.preventDefault();
+      srchRegex.click();
+    }
   });
 
   // ── Scroll helpers ─────────────────────────────────────────────────────────
