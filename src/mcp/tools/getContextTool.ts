@@ -218,7 +218,12 @@ export class GetContextTool implements IMcpTool {
         // Pre-build a summary map so the filter loop doesn't call getAllSummaries() repeatedly.
         const summaryMap = new Map(this.sessionIndex.getAllSummaries().map(s => [s.id, s]));
 
+        const semanticSet = new Set(semanticIds);
+
         const filteredIds = topIds.filter(id => {
+            // Sessions surfaced by semantic search are considered relevant by the
+            // embedding model — skip the keyword rarity filter for them.
+            if (semanticSet.has(id)) { return true; }
             if (titleSet.has(id)) {
                 // Only bypass the content check when the title contains a *required*
                 // (high-IDF) token.  A generic verb like "add" or "fix" matching a

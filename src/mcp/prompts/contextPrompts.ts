@@ -59,25 +59,40 @@ export class QueryHistoryPrompt implements IMcpPrompt {
             // ensures the LLM synthesises from all confirmed sessions rather than fixating on
             // whichever single session happens to have the most content.
             if (refIds.length > 0) {
-                const contextText = await runTool(this.getContextTool, { topic: realQuery, limit: 8 });
-                // Filter the returned blocks down to only the confirmed ref IDs.
-                const refIdSet = new Set(refIds);
-                const blocks = contextText.split(/\n{2,}/).reduce<string[]>((acc, block) => {
-                    const idMatch = block.match(/^ID:\s*(.+)$/m);
-                    if (idMatch && refIdSet.has(idMatch[1].trim())) { acc.push(block.trim()); }
-                    return acc;
-                }, []);
-                const excerptContext = blocks.length > 0 ? blocks.join('\n\n') : contextText;
+                const cappedIds = refIds.slice(0, 3);
+                const sessionContents: string[] = [];
+                for (const id of cappedIds) {
+                    const content = await runTool(this.getSessionFullTool, { sessionId: id });
+                    // Exclude error responses and "session not found" messages
+                    if (!content.toLowerCase().startsWith('error') && !content.toLowerCase().includes('session not found')) {
+                        sessionContents.push(content);
+                    }
+                }
+
+                // If all sessions failed, fall back to getContextTool
+                if (sessionContents.length === 0) {
+                    const contextText = await runTool(this.getContextTool, { topic: realQuery, limit: 8 });
+                    const prompt = [
+                        'The user confirmed that one or more of the previously listed sessions are relevant.',
+                        'Using the sessions below, provide a direct answer or actionable resolution steps as appropriate.',
+                        '',
+                        'Sessions:',
+                        contextText || '(none)',
+                        '',
+                        `Query: ${realQuery}`,
+                    ].join('\n');
+                    return { content: [{ type: 'text', text: prompt }] };
+                }
+
+                const consolidatedContent = sessionContents.join('\n\n---\n\n');
                 const prompt = [
-                    `The user confirmed that the following ${refIds.length} session(s) are relevant to their query.`,
-                    'Each session excerpt below is the most relevant passage from that session.',
-                    'Synthesise ALL excerpts into a single consolidated answer.',
+                    `The user confirmed that the following ${cappedIds.length} session(s) are relevant to their query.`,
+                    'Synthesise ALL session content below into a single consolidated answer.',
                     'Cover what each session contributes — if sessions agree, unify; if they differ, note the nuance.',
                     'Avoid repeating the same advice across sessions. Be direct and actionable.',
-                    'Cite each session by title and date.',
                     '',
-                    'Session excerpts:',
-                    excerptContext,
+                    'Session content:',
+                    consolidatedContent,
                     '',
                     `Original query: ${realQuery}`,
                 ].join('\n');

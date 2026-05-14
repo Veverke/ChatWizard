@@ -287,8 +287,8 @@ suite('SemanticIndexer.scheduleSession', () => {
         indexer.scheduleSession(makeSession('s1', 'hello world'));
         // Wait for async queue to drain
         await new Promise(r => setTimeout(r, 20));
-        assert.strictEqual(engine.embedCallCount, 1);
-        assert.strictEqual(engine.lastEmbedText, 'hello world');
+        // 1 title + 1 user message = 2 embed calls
+        assert.strictEqual(engine.embedCallCount, 2);
         indexer.dispose();
     });
 
@@ -326,7 +326,8 @@ suite('SemanticIndexer.scheduleSession', () => {
         indexer.scheduleSession(makeSession('s2', 'text two'));
         indexer.scheduleSession(makeSession('s3', 'text three'));
         await new Promise(r => setTimeout(r, 50));
-        assert.strictEqual(engine.embedCallCount, 3);
+        // 3 sessions × (1 title + 1 message) = 6 embed calls
+        assert.strictEqual(engine.embedCallCount, 6);
         assert.ok(index.has('s1'));
         assert.ok(index.has('s2'));
         assert.ok(index.has('s3'));
@@ -348,8 +349,16 @@ suite('SemanticIndexer.scheduleSession', () => {
         const indexer = new SemanticIndexer('/storage', () => engine, () => index, api);
         await indexer.initialize();
 
-        indexer.scheduleSession(makeSession('s1', 'will fail'));
-        indexer.scheduleSession(makeSession('s2', 'will succeed'));
+        // Use sessions with no title so each session produces exactly 1 embed entry;
+        // this ensures the single failing call fully prevents s1 from being indexed.
+        const s1: Session = { id: 's1', title: '', source: 'copilot', workspaceId: 'ws',
+            messages: [{ id: 'm1', role: 'user', content: 'will fail', codeBlocks: [] }],
+            filePath: '/fake/s1.jsonl', createdAt: '2025-01-01T00:00:00.000Z', updatedAt: '2025-01-01T00:00:00.000Z' };
+        const s2: Session = { id: 's2', title: '', source: 'copilot', workspaceId: 'ws',
+            messages: [{ id: 'm2', role: 'user', content: 'will succeed', codeBlocks: [] }],
+            filePath: '/fake/s2.jsonl', createdAt: '2025-01-01T00:00:00.000Z', updatedAt: '2025-01-01T00:00:00.000Z' };
+        indexer.scheduleSession(s1);
+        indexer.scheduleSession(s2);
         await new Promise(r => setTimeout(r, 50));
 
         assert.ok(!index.has('s1'), 's1 should not be in index after failed embed');
