@@ -323,6 +323,24 @@
         "icon": "$(history)"
       },
       {
+        "command": "chatwizard.focusSessionTree",
+        "title": "Open Chat Sessions Panel",
+        "category": "Chat Wizard",
+        "icon": "$(list-tree)"
+      },
+      {
+        "command": "chatwizard.regenerateTitle",
+        "title": "Regenerate Title",
+        "category": "Chat Wizard",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "chatwizard.regenerateAllTitles",
+        "title": "Regenerate All Titles",
+        "category": "Chat Wizard",
+        "icon": "$(refresh)"
+      },
+      {
         "command": "chatwizard.rescan",
         "title": "Rescan Sessions",
         "category": "Chat Wizard",
@@ -724,6 +742,11 @@
           "command": "chatwizard.exportSession",
           "when": "viewItem == session || viewItem == session.pinned",
           "group": "inline@2"
+        },
+        {
+          "command": "chatwizard.regenerateTitle",
+          "when": "viewItem == session || viewItem == session.pinned",
+          "group": "session@3"
         }
       ],
       "commandPalette": [
@@ -972,6 +995,10 @@
           {
             "name": "continueFromHistory",
             "description": "Continue from recent sessions"
+          },
+          {
+            "name": "getPrompts",
+            "description": "Find reusable prompts from your chat history"
           }
         ]
       }
