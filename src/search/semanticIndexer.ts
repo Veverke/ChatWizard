@@ -194,6 +194,18 @@ export class SemanticIndexer implements ISemanticIndexer {
         }
 
         let added = 0;
+
+        // Index the session title as a synthetic user entry (messageIndex = -1).
+        // Titles are topic-level abstractions that match natural-language queries more
+        // directly than verbose message content. The search aggregator keeps the best
+        // score per session, so a strong title hit promotes the session without
+        // displacing content-based matches.
+        const titleText = session.title?.trim();
+        if (titleText) {
+            this._queue.push({ sessionId: session.id, role: 'user', messageIndex: -1, paragraphIndex: 0, text: titleText });
+            added++;
+        }
+
         for (let msgIdx = 0; msgIdx < session.messages.length; msgIdx++) {
             const msg = session.messages[msgIdx];
             const text = msg.content?.trim();

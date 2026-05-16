@@ -1,0 +1,58 @@
+{
+  "sessions": [
+    {
+      "sessionId": "windsurf-fx-ci-001",
+      "title": "Set up GitHub Actions CI pipeline",
+      "createdAt": 1714500000000,
+      "messages": [
+        {
+          "role": "user",
+          "content": "How do I set up a GitHub Actions CI pipeline for a Node.js project?",
+          "timestamp": 1714500010000
+        },
+        {
+          "role": "assistant",
+          "content": "Create `.github/workflows/ci.yml` in your repo:\n\n```yaml\nname: CI\n\non:\n  push:\n    branches: [main, develop]\n  pull_request:\n    branches: [main]\n\njobs:\n  build-and-test:\n    runs-on: ubuntu-latest\n\n    strategy:\n      matrix:\n        node-version: [18.x, 20.x]\n\n    steps:\n      - uses: actions/checkout@v4\n\n      - name: Use Node.js ${{ matrix.node-version }}\n        uses: actions/setup-node@v4\n        with:\n          node-version: ${{ matrix.node-version }}\n          cache: 'npm'\n\n      - name: Install dependencies\n        run: npm ci\n\n      - name: Lint\n        run: npm run lint\n\n      - name: Test\n        run: npm test\n\n      - name: Build\n        run: npm run build\n```\n\nThis runs on every push to `main`/`develop` and on all pull requests, testing against Node 18 and 20.",
+          "timestamp": 1714500025000
+        },
+        {
+          "role": "user",
+          "content": "How do I add a step that only runs on the main branch?",
+          "timestamp": 1714500090000
+        },
+        {
+          "role": "assistant",
+          "content": "Use the `if` conditional on a step:\n\n```yaml\n      - name: Deploy to staging\n        if: github.ref == 'refs/heads/main'\n        run: npm run deploy:staging\n        env:\n          DEPLOY_TOKEN: ${{ secrets.DEPLOY_TOKEN }}\n```\n\nAlternatively, put branch-specific work in a separate job:\n\n```yaml\n  deploy:\n    needs: build-and-test\n    if: github.ref == 'refs/heads/main'\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - name: Deploy\n        run: npm run deploy\n```",
+          "timestamp": 1714500140000
+        }
+      ]
+    },
+    {
+      "sessionId": "windsurf-fx-sql-002",
+      "title": "Optimise slow PostgreSQL query",
+      "createdAt": 1714600000000,
+      "messages": [
+        {
+          "role": "user",
+          "content": "This query takes 8 seconds on a table with 2 million rows:\n\n```sql\nSELECT u.id, u.name, COUNT(o.id) AS order_count\nFROM users u\nLEFT JOIN orders o ON o.user_id = u.id\nWHERE u.created_at > '2024-01-01'\nGROUP BY u.id, u.name\nORDER BY order_count DESC\nLIMIT 50;\n```",
+          "timestamp": 1714600010000
+        },
+        {
+          "role": "assistant",
+          "content": "Several optimisations to apply:\n\n**1. Index on `users.created_at` (most impactful)**\n```sql\nCREATE INDEX CONCURRENTLY idx_users_created_at ON users (created_at);\n```\n\n**2. Index on `orders.user_id`**\n```sql\nCREATE INDEX CONCURRENTLY idx_orders_user_id ON orders (user_id);\n```\n\n**3. Rewrite to filter before joining**\n```sql\nSELECT u.id, u.name, COALESCE(o.order_count, 0) AS order_count\nFROM (\n  SELECT id, name\n  FROM users\n  WHERE created_at > '2024-01-01'\n) u\nLEFT JOIN (\n  SELECT user_id, COUNT(*) AS order_count\n  FROM orders\n  GROUP BY user_id\n) o ON o.user_id = u.id\nORDER BY order_count DESC\nLIMIT 50;\n```\n\nRun `EXPLAIN (ANALYZE, BUFFERS)` before and after to confirm the index is being used.",
+          "timestamp": 1714600040000
+        },
+        {
+          "role": "user",
+          "content": "The rewrite helped — down to 300ms. Should I also add a partial index?",
+          "timestamp": 1714600120000
+        },
+        {
+          "role": "assistant",
+          "content": "Yes, if `created_at > '2024-01-01'` is a fixed business threshold a partial index is ideal:\n\n```sql\nCREATE INDEX CONCURRENTLY idx_users_created_after_2024\n  ON users (created_at)\n  WHERE created_at > '2024-01-01';\n```\n\nThe planner will prefer it over the full index because it is smaller and fits in cache more easily. Note: if the threshold changes you will need to rebuild the index.",
+          "timestamp": 1714600160000
+        }
+      ]
+    }
+  ]
+}

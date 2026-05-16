@@ -1,0 +1,588 @@
+// test/suite/mcp/chatParticipant.test.ts
+//
+// Integration tests for the @chatwizard VS Code chat participant handler.
+//
+// Tests the createParticipantHandler() function in isolation — no running
+// VS Code chat API required. A fake request/stream/token replaces the real
+// vscode.ChatRequest / vscode.ChatResponseStream / vscode.CancellationToken.
+//
+// Bugs caught by this suite that were previously invisible:
+//   Bug 1 — rendered prompt text printed verbatim instead of being sent to LLM
+//   Bug 2 — isTrusted = true (boolean) rejected by VS Code chat participant API
+//   Bug 3 — "Session not found" source links when wrong workspace active
+//   Bug 4 — >3 tangential sources listed instead of top 3
+
+import * as assert from 'assert';
+import { createParticipantHandler } from '../../../src/mcp/chatParticipant';
+import { SessionIndex } from '../../../src/index/sessionIndex';
+import type { IMcpPrompt } from '../../../src/mcp/mcpContracts';
+import type { Session, Message } from '../../../src/types/index';
+
+// ── Fixture helpers ──────────────────────────────────────────────────────────
+
+let _idSeq = 0;
+
+function makeMsg(role: 'user' | 'assistant', content: string): Message {
+    return { id: `m${++_idSeq}`, role, content, codeBlocks: [] };
+}
+
+function makeSession(id: string, title = `Session ${id}`): Session {
+    return {
+        id,
+        title,
+        source: 'copilot',
+        workspaceId: 'ws-test',
+        messages: [makeMsg('user', 'test question'), makeMsg('assistant', 'test answer')],
+        filePath: `/fake/${id}.jsonl`,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+}
+
+/**
+ * Build a rendered prompt string that contains N session reference blocks,
+ * matching the format produced by GetContextTool and parsed by parseSessionRefs().
+ */
+function makeRenderedPrompt(sessionIds: string[], question = 'test question'): string {
+    const blocks = sessionIds.map((id, i) => [
+        `[Session: Title ${i + 1}] | Source: copilot | Date: 2026-01-0${i + 1}T00:00:00.000Z`,
+        `Passage: Some relevant passage text ${i + 1}`,
+        `ID: ${id}`,
+        '',
+    ].join('\n')).join('\n');
+
+    return [
+        'You must answer the user question using the retrieved ChatWizard history context below first.',
+        'If prior work exists, mention it explicitly before giving recommendations.',
+        '',
+        'Retrieved context:',
+        blocks,
+        `User question: ${question}`,
+    ].join('\n');
+}
+
+// ── Fake infrastructure ──────────────────────────────────────────────────────
+
+/** Async generator yielding fixed chunks — fakes vscode.LanguageModelChatResponse.text */
+async function* fakeChunks(...parts: string[]) {
+    for (const p of parts) { yield p; }
+}
+
+interface FakeStream {
+    _calls: Array<string | object>;
+    _progressCalls: string[];
+    _buttonCalls: Array<{ title: string; command: string; arguments?: unknown[] }>;
+    markdown(content: string | object): void;
+    progress(message: string): void;
+    button(btn: { title: string; command: string; arguments?: unknown[] }): void;
+    /** All plain-string markdown calls joined */
+    text(): string;
+    /** True if a MarkdownString (sources table) was appended via markdown() */
+    hasSourcesSection(): boolean;
+}
+
+function makeStream(): FakeStream {
+    const calls: Array<string | object> = [];
+    const progressCalls: string[] = [];
+    const buttonCalls: Array<{ title: string; command: string; arguments?: unknown[] }> = [];
+    return {
+        _calls: calls,
+        _progressCalls: progressCalls,
+        _buttonCalls: buttonCalls,
+        markdown(content) { calls.push(content); },
+        progress(message) { progressCalls.push(message); },
+        button(btn) { buttonCalls.push(btn); },
+        text() { return calls.filter(c => typeof c === 'string').join(''); },
+        // A MarkdownString (sources table) has a .value string property.
+        // Button objects { title, command } do not, so they won't false-positive here.
+        hasSourcesSection() {
+            return calls.some(c => typeof c === 'object' && c !== null && typeof (c as { value?: unknown }).value === 'string');
+        },
+    };
+}
+
+interface FakeRequest {
+    command: string | undefined;
+    prompt: string;
+    model: {
+        sendRequest: (messages: unknown, opts: unknown, token: unknown) => Promise<{ text: AsyncIterable<string> }>;
+        _lastMessages: unknown[];
+    };
+}
+
+function makeRequest(command: string | undefined, prompt: string, answer = 'LLM synthesized answer'): FakeRequest {
+    const lastMessages: unknown[] = [];
+    return {
+        command,
+        prompt,
+        model: {
+            _lastMessages: lastMessages,
+            async sendRequest(messages, _opts, _token) {
+                lastMessages.push(...(messages as unknown[]));
+                return { text: fakeChunks(answer) };
+            },
+        },
+    };
+}
+
+/** Fake prompt that renders a fixed text */
+function makePrompt(name: string, renderText: string, argName = 'question'): IMcpPrompt {
+    return {
+        name,
+        description: 'test prompt',
+        arguments: [{ name: argName, description: 'test', required: true }],
+        async render(_args) {
+            return { content: [{ type: 'text', text: renderText }] };
+        },
+    };
+}
+
+/** Fake prompt that throws during render */
+function makeThrowingPrompt(name: string, message: string): IMcpPrompt {
+    return {
+        name,
+        description: 'test prompt',
+        arguments: [],
+        async render(_args) { throw new Error(message); },
+    };
+}
+
+// Fake message factory: avoids needing vscode.LanguageModelChatMessage (requires VS Code ≥ 1.90)
+const fakeMessageFactory = (text: string) => ({ role: 'user', content: text });
+
+const FAKE_TOKEN = {} as unknown as import('vscode').CancellationToken;
+const FAKE_CTX   = {} as unknown as import('vscode').ChatContext;
+
+// ── Tests ────────────────────────────────────────────────────────────────────
+
+suite('createParticipantHandler', () => {
+
+    // ── Test 1: bare @chatwizard mention (no command) ────────────────────────
+
+    test('bare mention: lists available slash commands', async () => {
+        const index  = new SessionIndex();
+        const handler = createParticipantHandler(new Map(), index, fakeMessageFactory);
+        const stream  = makeStream();
+        const request = makeRequest(undefined, '');
+
+        await handler(request as never, FAKE_CTX, stream as never, FAKE_TOKEN);
+
+        const out = stream.text();
+        assert.ok(out.includes('Chat Wizard'), 'output mentions Chat Wizard');
+        assert.ok(out.includes('/queryHistory'), 'lists queryHistory command');
+        assert.ok(out.includes('/continueFromHistory'), 'lists continueFromHistory command');
+    });
+
+    // ── Test 2: unknown command ──────────────────────────────────────────────
+
+    test('unknown command: error message shown', async () => {
+        const index   = new SessionIndex();
+        const handler = createParticipantHandler(new Map(), index, fakeMessageFactory);
+        const stream  = makeStream();
+        const request = makeRequest('nonexistent', 'some text');
+
+        await handler(request as never, FAKE_CTX, stream as never, FAKE_TOKEN);
+
+        const out = stream.text();
+        assert.ok(out.includes('unknown command'), `expected "unknown command" in: ${out}`);
+        assert.ok(out.includes('nonexistent'), `expected command name in: ${out}`);
+    });
+
+    // ── Test 3 (BUG 1 regression): rendered prompt NOT printed raw ───────────
+    // Before the fix, stream.markdown received the entire raw prompt text
+    // ("You must answer the user question using the retrieved ChatWizard history
+    //  context below first.") instead of the LLM's synthesized response.
+
+    test('BUG-1 regression: raw prompt text is NOT printed to stream', async () => {
+        const RAW_PROMPT_MARKER = 'You must answer the user question using the retrieved ChatWizard history context below first.';
+        const rendered = makeRenderedPrompt([]);
+        const prompt   = makePrompt('chatwizard.queryHistory', rendered);
+        const index    = new SessionIndex();
+        const handler  = createParticipantHandler(
+            new Map([['chatwizard.queryHistory', prompt]]),
+            index,
+            fakeMessageFactory,
+        );
+        const stream  = makeStream();
+        const request = makeRequest('queryHistory', 'docker does not start');
+
+        await handler(request as never, FAKE_CTX, stream as never, FAKE_TOKEN);
+
+        assert.ok(!stream.text().includes(RAW_PROMPT_MARKER),
+            'raw prompt instruction text must not appear in stream output');
+    });
+
+    // ── Test 4: Phase-1 shows sources table when sessions exist (no LLM call) ─
+    // Phase-1 shows a sources table + confirmation buttons; no LLM is invoked.
+    // The LLM is only called in Phase-2 (--continued / --general prefix).
+
+    test('LLM response chunks are streamed to output when sessions found', async () => {
+        const session  = makeSession('s-docker-001', 'Docker not starting after reboot');
+        const rendered = makeRenderedPrompt(['s-docker-001']);
+        const prompt   = makePrompt('chatwizard.queryHistory', rendered);
+        const index    = new SessionIndex();
+        index.upsert(session);
+        const handler  = createParticipantHandler(
+            new Map([['chatwizard.queryHistory', prompt]]),
+            index,
+            fakeMessageFactory,
+        );
+        const stream  = makeStream();
+        const request = makeRequest('queryHistory', 'docker does not start');
+
+        await handler(request as never, FAKE_CTX, stream as never, FAKE_TOKEN);
+
+        // Phase-1: sources table shown, LLM NOT called
+        assert.ok(stream.hasSourcesSection(),
+            'sources section must appear in stream when sessions are found');
+        assert.ok(stream._buttonCalls.some(b => b.command === 'chatwizard.query.continued'),
+            'Yes button must be offered when sessions are found');
+    });
+
+    // ── Test 4b: no sessions → button shown, LLM never called ────────────────
+
+    test('no sessions: shows no-match message and button without calling LLM', async () => {
+        const rendered = makeRenderedPrompt([]);
+        const prompt   = makePrompt('chatwizard.queryHistory', rendered);
+        const index    = new SessionIndex();
+        const handler  = createParticipantHandler(
+            new Map([['chatwizard.queryHistory', prompt]]),
+            index,
+            fakeMessageFactory,
+        );
+        const stream  = makeStream();
+        const request = makeRequest('queryHistory', 'docker does not start', 'Based on prior history, Docker Desktop had a WSL issue.');
+
+        await handler(request as never, FAKE_CTX, stream as never, FAKE_TOKEN);
+
+        assert.ok(stream.text().includes('No relevant sessions found'),
+            'should show no-match message');
+        assert.ok(!stream.text().includes('Based on prior history'),
+            'LLM answer must NOT appear — LLM should not be called when no sessions found');
+        assert.ok(stream._buttonCalls.some(b => b.command === 'chatwizard.query.general'),
+            'a "Get general guidance" button should be offered');
+    });
+
+    // ── Test 4c: LLM says no match → button shown instead of answer ──────────
+
+    test('LLM no-match sentinel: shows button instead of LLM answer', async () => {
+        // In Phase-1, LLM is NOT called. Sources are shown directly if sessions exist.
+        // When no sessions match (empty rendered prompt), a no-match message + button is shown.
+        const rendered = makeRenderedPrompt([]); // empty — no sessions in prompt
+        const prompt   = makePrompt('chatwizard.queryHistory', rendered);
+        const index    = new SessionIndex();
+        const handler  = createParticipantHandler(
+            new Map([['chatwizard.queryHistory', prompt]]),
+            index,
+            fakeMessageFactory,
+        );
+        const stream  = makeStream();
+        const request = makeRequest('queryHistory', 'create github ci job');
+
+        await handler(request as never, FAKE_CTX, stream as never, FAKE_TOKEN);
+
+        assert.ok(stream.text().includes('No relevant sessions found'),
+            'should show no-match message when LLM emits sentinel');
+        assert.ok(stream._buttonCalls.some(b => b.command === 'chatwizard.query.general'),
+            'a "Get general guidance" button should be offered');
+    });
+
+    // ── Test 5: rendered prompt sent to LLM ─────────────────────────────────
+
+    test('rendered prompt is forwarded to model.sendRequest', async () => {
+        // Phase-2 (--continued) forwards the rendered prompt to the LLM.
+        // Phase-1 (plain queryHistory) does NOT call the LLM.
+        const session  = makeSession('s-001');
+        const rendered = makeRenderedPrompt(['s-001'], 'my specific question');
+        const prompt   = makePrompt('chatwizard.queryHistory', rendered);
+        const index    = new SessionIndex();
+        index.upsert(session);
+        const handler  = createParticipantHandler(
+            new Map([['chatwizard.queryHistory', prompt]]),
+            index,
+            fakeMessageFactory,
+        );
+        const stream  = makeStream();
+        // Use --continued prefix to trigger Phase-2 which calls the LLM.
+        const request = makeRequest('queryHistory', '--continued my specific question');
+
+        await handler(request as never, FAKE_CTX, stream as never, FAKE_TOKEN);
+
+        const sentMessages = (request.model._lastMessages as Array<{ content: string }>);
+        assert.strictEqual(sentMessages.length, 1, 'exactly one message sent to model');
+    });
+
+    // ── Test 6 (BUG 3 regression): no sources when sessions not in index ─────
+    // Before the fix, source links appeared with IDs from a different workspace
+    // and clicking them showed "Session not found".
+
+    test('BUG-3 regression: no sources section when session IDs not in index', async () => {
+        const rendered = makeRenderedPrompt(['session-id-not-in-index']);
+        const prompt   = makePrompt('chatwizard.queryHistory', rendered);
+        const index    = new SessionIndex(); // empty — session not loaded
+        const handler  = createParticipantHandler(
+            new Map([['chatwizard.queryHistory', prompt]]),
+            index,
+            fakeMessageFactory,
+        );
+        const stream  = makeStream();
+        const request = makeRequest('queryHistory', 'some question');
+
+        await handler(request as never, FAKE_CTX, stream as never, FAKE_TOKEN);
+
+        assert.ok(!stream.hasSourcesSection(),
+            'no MarkdownString sources section should be appended when sessions are not in index');
+    });
+
+    // ── Test 7: sources appended when sessions are in index ──────────────────
+
+    test('sources section appended when session IDs exist in index', async () => {
+        const session  = makeSession('s-docker-001', 'Docker not starting after reboot');
+        const rendered = makeRenderedPrompt(['s-docker-001']);
+        const prompt   = makePrompt('chatwizard.queryHistory', rendered);
+        const index    = new SessionIndex();
+        index.upsert(session);
+
+        const handler = createParticipantHandler(
+            new Map([['chatwizard.queryHistory', prompt]]),
+            index,
+            fakeMessageFactory,
+        );
+        const stream  = makeStream();
+        const request = makeRequest('queryHistory', 'docker does not start');
+
+        await handler(request as never, FAKE_CTX, stream as never, FAKE_TOKEN);
+
+        assert.ok(stream.hasSourcesSection(),
+            'a MarkdownString sources section should be appended when sessions exist in index');
+    });
+
+    // ── Test 7b (BUG regression): sources table appears BEFORE LLM answer ───
+    // Before the Phase-1 refactor the handler streamed LLM chunks live and only
+    // appended the sources table afterward — so sources appeared at the bottom.
+    // After the fix the handler accumulates the full LLM response first, emits
+    // the sources table, then emits the LLM answer text.
+
+    test('BUG regression: sources table appears BEFORE LLM answer text in stream', async () => {
+        // Phase-1 (plain queryHistory) shows sources table + buttons, no LLM answer.
+        // Phase-2 (--continued) calls the LLM and streams its answer — no sources table.
+        // This test verifies Phase-1 shows a sources section (and no raw LLM text).
+        const session  = makeSession('s-ordering', 'Ordering regression session');
+        const rendered = makeRenderedPrompt(['s-ordering']);
+        const prompt   = makePrompt('chatwizard.queryHistory', rendered);
+        const index    = new SessionIndex();
+        index.upsert(session);
+
+        const handler = createParticipantHandler(
+            new Map([['chatwizard.queryHistory', prompt]]),
+            index,
+            fakeMessageFactory,
+        );
+        const stream  = makeStream();
+        const request = makeRequest('queryHistory', 'docker does not start');
+
+        await handler(request as never, FAKE_CTX, stream as never, FAKE_TOKEN);
+
+        // Phase-1: sources table shown, no LLM answer streamed
+        assert.ok(stream.hasSourcesSection(), 'sources section must be present in stream');
+        const sentMessages = (request.model._lastMessages as Array<unknown>);
+        assert.strictEqual(sentMessages.length, 0, 'LLM must NOT be called in Phase-1');
+    });
+
+    // ── Test 8 (BUG 4 regression): sources capped at 3 ──────────────────────
+    // Before the fix, up to 8 sessions from the context retrieval were listed,
+    // many of which were tangential and unrelated to the LLM's actual answer.
+
+    test('BUG-4 regression: sources capped at 3 even when more are in prompt', async () => {
+        const ids     = ['s-001', 's-002', 's-003', 's-004', 's-005'];
+        const rendered = makeRenderedPrompt(ids);
+        const prompt   = makePrompt('chatwizard.queryHistory', rendered);
+        const index    = new SessionIndex();
+        for (const id of ids) { index.upsert(makeSession(id)); }
+
+        const handler = createParticipantHandler(
+            new Map([['chatwizard.queryHistory', prompt]]),
+            index,
+            fakeMessageFactory,
+        );
+        const stream  = makeStream();
+        const request = makeRequest('queryHistory', 'some question');
+
+        await handler(request as never, FAKE_CTX, stream as never, FAKE_TOKEN);
+
+        // The sources section is a single MarkdownString object. Its `.value` property
+        // contains the rendered text with one line per source.
+        const sourcesCalls = stream._calls.filter(c => typeof c !== 'string') as Array<{ value: string }>;
+        assert.strictEqual(sourcesCalls.length, 1, 'exactly one sources MarkdownString appended');
+
+        const sourcesText = sourcesCalls[0].value ?? '';
+        const linkCount   = (sourcesText.match(/chatwizard\.openSession/g) ?? []).length;
+        assert.ok(linkCount <= 3,
+            `sources must show at most 3 links, got ${linkCount}:\n${sourcesText}`);
+    });
+
+    // ── Test 9: render error is caught and reported ───────────────────────────
+
+    // ── Test NEW-A: Yes button carries session IDs as second argument ─────────
+    // The Phase-2 consolidation flow relies on refIds being passed as the second
+    // argument to chatwizard.query.continued so the QueryHistoryPrompt can fetch
+    // full session content.  If this argument is missing, the consolidation falls
+    // back to getContextTool and the user's confirmed sessions are ignored.
+
+    test('Yes button passes comma-separated session IDs as second argument', async () => {
+        const session1 = makeSession('ref-id-1', 'Session about Docker');
+        const session2 = makeSession('ref-id-2', 'Session about Kubernetes');
+        const rendered = makeRenderedPrompt(['ref-id-1', 'ref-id-2']);
+        const prompt   = makePrompt('chatwizard.queryHistory', rendered);
+        const index    = new SessionIndex();
+        index.upsert(session1);
+        index.upsert(session2);
+
+        const handler = createParticipantHandler(
+            new Map([['chatwizard.queryHistory', prompt]]),
+            index,
+            fakeMessageFactory,
+        );
+        const stream  = makeStream();
+        // LLM returns a match so Phase-1 buttons are shown
+        const request = makeRequest('queryHistory', 'container orchestration', 'The Docker session is relevant.');
+
+        await handler(request as never, FAKE_CTX, stream as never, FAKE_TOKEN);
+
+        const yesButton = stream._buttonCalls.find(b => b.command === 'chatwizard.query.continued');
+        assert.ok(yesButton, '"Yes — use history" button must be emitted');
+        assert.ok(Array.isArray(yesButton!.arguments) && yesButton!.arguments!.length >= 2,
+            'Yes button must have at least 2 arguments: [query, refIds]');
+
+        const refIdsArg = yesButton!.arguments![1] as string;
+        assert.ok(typeof refIdsArg === 'string', 'second argument must be a string of comma-separated IDs');
+        assert.ok(refIdsArg.includes('ref-id-1'), `refIds must include ref-id-1, got: ${refIdsArg}`);
+        assert.ok(refIdsArg.includes('ref-id-2'), `refIds must include ref-id-2, got: ${refIdsArg}`);
+    });
+
+    // ── Test NEW-B: continueFromHistory streams directly, no Phase-1 buttons ──
+    // continueFromHistory is not a queryHistory command, so it bypasses Phase 1
+    // logic entirely: no sources table, no Yes/No buttons.
+
+    test('continueFromHistory: LLM answer streamed without Phase-1 buttons', async () => {
+        const rendered = 'Continue from recent work context — here are recent sessions.';
+        const prompt   = makePrompt('chatwizard.continueFromHistory', rendered, 'topic');
+        const index    = new SessionIndex();
+
+        const handler = createParticipantHandler(
+            new Map([['chatwizard.continueFromHistory', prompt]]),
+            index,
+            fakeMessageFactory,
+        );
+        const stream  = makeStream();
+        const request = makeRequest('continueFromHistory', 'auth work', 'Continue with the OAuth refactor.');
+
+        await handler(request as never, FAKE_CTX, stream as never, FAKE_TOKEN);
+
+        assert.ok(stream.text().includes('Continue with the OAuth refactor.'),
+            'LLM answer must be streamed for continueFromHistory');
+        assert.ok(
+            !stream._buttonCalls.some(b => b.command === 'chatwizard.query.continued'),
+            'Yes button must NOT appear for continueFromHistory',
+        );
+        assert.ok(
+            !stream._buttonCalls.some(b => b.command === 'chatwizard.query.general'),
+            'Get general guidance button must NOT appear for continueFromHistory',
+        );
+    });
+
+    // ── Test NEW-C: Phase-2 (--continued prefix) skips Phase-1 accumulation ──
+    // When the user confirms sessions are relevant (Yes button pressed), the handler
+    // receives "--continued <query> --refs <ids>" as the prompt text.  isPhase2=true
+    // so it must skip the Phase-1 accumulation branch and stream the Phase-2
+    // response directly — no sources table, no Yes/No buttons.
+
+    test('Phase-2 --continued prefix: LLM answer streamed without Phase-1 buttons', async () => {
+        const session = makeSession('confirmed-s1', 'Auth session');
+        // The rendered prompt from QueryHistoryPrompt Phase-2 does NOT contain session ref blocks.
+        const rendered = 'Synthesize the following confirmed sessions and provide a direct answer.';
+        const prompt   = makePrompt('chatwizard.queryHistory', rendered);
+        const index    = new SessionIndex();
+        index.upsert(session);
+
+        const handler = createParticipantHandler(
+            new Map([['chatwizard.queryHistory', prompt]]),
+            index,
+            fakeMessageFactory,
+        );
+        const stream  = makeStream();
+        // Simulate what happens when the "Yes" button is pressed: prompt has --continued prefix
+        const request = makeRequest(
+            'queryHistory',
+            '--continued fix the login redirect bug --refs confirmed-s1',
+            'Based on the confirmed session, the fix is to update redirect URLs.',
+        );
+
+        await handler(request as never, FAKE_CTX, stream as never, FAKE_TOKEN);
+
+        assert.ok(stream.text().includes('Based on the confirmed session'),
+            'LLM Phase-2 answer must be streamed');
+        assert.ok(
+            !stream._buttonCalls.some(b => b.command === 'chatwizard.query.continued'),
+            'Yes button must NOT appear in Phase-2',
+        );
+        assert.ok(
+            !stream._buttonCalls.some(b => b.command === 'chatwizard.query.general'),
+            'No button must NOT appear in Phase-2 (--continued path)',
+        );
+    });
+
+    // ── Test NEW-D: Phase-2 --general prefix skips Phase-1 ───────────────────
+    // When the user presses "No — get general guidance", prompt has "--general prefix".
+    // isPhase2=true → must skip Phase-1 logic and stream the general answer.
+
+    test('Phase-2 --general prefix: LLM answer streamed without Phase-1 buttons', async () => {
+        const rendered = 'No relevant history matches were found. Answer from general knowledge.';
+        const prompt   = makePrompt('chatwizard.queryHistory', rendered);
+        const index    = new SessionIndex();
+
+        const handler = createParticipantHandler(
+            new Map([['chatwizard.queryHistory', prompt]]),
+            index,
+            fakeMessageFactory,
+        );
+        const stream  = makeStream();
+        const request = makeRequest(
+            'queryHistory',
+            '--general how does React reconciliation work?',
+            'React reconciliation uses a virtual DOM diffing algorithm.',
+        );
+
+        await handler(request as never, FAKE_CTX, stream as never, FAKE_TOKEN);
+
+        assert.ok(stream.text().includes('React reconciliation uses a virtual DOM'),
+            'LLM general answer must be streamed');
+        assert.ok(
+            !stream._buttonCalls.some(b => b.command === 'chatwizard.query.continued'),
+            'Yes button must NOT appear in --general Phase-2',
+        );
+        assert.ok(
+            !stream._buttonCalls.some(b => b.command === 'chatwizard.query.general'),
+            'Get general guidance button must NOT appear in --general Phase-2',
+        );
+    });
+
+    test('render error is caught and shown as error message', async () => {
+        const prompt  = makeThrowingPrompt('chatwizard.queryHistory', 'index not ready');
+        const index   = new SessionIndex();
+        const handler = createParticipantHandler(
+            new Map([['chatwizard.queryHistory', prompt]]),
+            index,
+            fakeMessageFactory,
+        );
+        const stream  = makeStream();
+        const request = makeRequest('queryHistory', 'any question');
+
+        await handler(request as never, FAKE_CTX, stream as never, FAKE_TOKEN);
+
+        const out = stream.text();
+        assert.ok(out.includes('error running'), `expected "error running" in: ${out}`);
+        assert.ok(out.includes('index not ready'), `expected error detail in: ${out}`);
+        assert.ok(!stream.hasSourcesSection(), 'no sources section on error');
+    });
+});

@@ -111,8 +111,9 @@ suite('scheduleSession — message splitting', () => {
         const session = makeSession({ messages: [makeMessage('user', 'How do I implement JWT auth?')] });
         indexer.scheduleSession(session);
         await new Promise(r => setTimeout(r, 30));
-        assert.strictEqual(engine.calls.length, 1);
-        assert.strictEqual(engine.calls[0].text, 'How do I implement JWT auth?');
+        // 1 title + 1 user message = 2 embed calls
+        assert.strictEqual(engine.calls.length, 2);
+        assert.ok(engine.calls.some(c => c.text === 'How do I implement JWT auth?'));
         indexer.dispose();
     });
 
@@ -123,11 +124,12 @@ suite('scheduleSession — message splitting', () => {
         });
         indexer.scheduleSession(session);
         await new Promise(r => setTimeout(r, 30));
-        assert.strictEqual(engine.calls.length, 3);
+        // 1 title + 3 assistant paragraphs = 4 embed calls
+        assert.strictEqual(engine.calls.length, 4);
         assert.strictEqual(index.addCalls.filter(c => c.role === 'assistant').length, 3);
-        assert.ok(index.addCalls.some(c => c.paragraphIndex === 0));
-        assert.ok(index.addCalls.some(c => c.paragraphIndex === 1));
-        assert.ok(index.addCalls.some(c => c.paragraphIndex === 2));
+        assert.ok(index.addCalls.some(c => c.role === 'assistant' && c.paragraphIndex === 0));
+        assert.ok(index.addCalls.some(c => c.role === 'assistant' && c.paragraphIndex === 1));
+        assert.ok(index.addCalls.some(c => c.role === 'assistant' && c.paragraphIndex === 2));
         indexer.dispose();
     });
 
@@ -141,9 +143,9 @@ suite('scheduleSession — message splitting', () => {
         });
         indexer.scheduleSession(session);
         await new Promise(r => setTimeout(r, 30));
-        // 1 user + 2 assistant paragraphs = 3 total
-        assert.strictEqual(engine.calls.length, 3);
-        assert.strictEqual(index.addCalls.filter(c => c.role === 'user').length, 1);
+        // 1 title + 1 user message + 2 assistant paragraphs = 4 total
+        assert.strictEqual(engine.calls.length, 4);
+        assert.strictEqual(index.addCalls.filter(c => c.role === 'user' && c.messageIndex >= 0).length, 1);
         assert.strictEqual(index.addCalls.filter(c => c.role === 'assistant').length, 2);
         indexer.dispose();
     });
@@ -161,7 +163,8 @@ suite('scheduleSession — message splitting', () => {
 
     test('empty message content is skipped', async () => {
         const { indexer, engine } = await makeReadyIndexer();
-        const session = makeSession({ messages: [makeMessage('user', '   ')] });
+        // No title so only the (whitespace-only) message is evaluated — and skipped
+        const session = makeSession({ title: '', messages: [makeMessage('user', '   ')] });
         indexer.scheduleSession(session);
         await new Promise(r => setTimeout(r, 20));
         assert.strictEqual(engine.calls.length, 0, 'whitespace-only message should be skipped');
@@ -179,7 +182,8 @@ suite('scheduleSession — message splitting', () => {
         });
         indexer.scheduleSession(session);
         await new Promise(r => setTimeout(r, 30));
-        const userCalls = index.addCalls.filter(c => c.role === 'user');
+        // Filter out the synthetic title entry (messageIndex === -1)
+        const userCalls = index.addCalls.filter(c => c.role === 'user' && c.messageIndex >= 0);
         assert.strictEqual(userCalls[0].messageIndex, 0);
         assert.strictEqual(userCalls[1].messageIndex, 2);
         indexer.dispose();

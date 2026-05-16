@@ -265,6 +265,7 @@ this.index.remove(taskId);
      * discovery + indexing flow. Used when the workspace scope changes.
      */
     async restart(): Promise<void> {
+        this.channel.appendLine('[Chat Wizard] restart() triggered — stack: ' + new Error().stack?.split('\n').slice(1, 5).join(' | '));
         this.dispose();
         this.index.clear();
         await this.start();
@@ -278,6 +279,7 @@ this.index.remove(taskId);
     }
 
     private async buildInitialIndex(indexClaude: boolean, indexCopilot: boolean, indexCline: boolean, indexRooCode: boolean = true, indexCursor: boolean = true, indexWindsurf: boolean = true, indexAider: boolean = true, indexAntigravity: boolean = true): Promise<void> {
+        this.channel.appendLine('[Chat Wizard] buildInitialIndex() started');
         await vscode.window.withProgress(
             {
                 location: vscode.ProgressLocation.Window,
@@ -285,8 +287,29 @@ this.index.remove(taskId);
                 cancellable: false,
             },
             async (progress) => {
-                const onProgress = (current: number, total: number) => {
-                    progress.report({ message: `${current}/${total}` });
+                // Each collector runs in parallel with its own current/total counters.
+                // Aggregate into a global count so the status bar shows cumulative
+                // progress (e.g. 1/83, 2/83…) rather than per-source local values.
+                type Slot = { current: number; total: number };
+                const slots = new Map<string, Slot>([
+                    ['claude',       { current: 0, total: 0 }],
+                    ['copilot',      { current: 0, total: 0 }],
+                    ['cline',        { current: 0, total: 0 }],
+                    ['roo',          { current: 0, total: 0 }],
+                    ['cursor',       { current: 0, total: 0 }],
+                    ['windsurf',     { current: 0, total: 0 }],
+                    ['aider',        { current: 0, total: 0 }],
+                    ['antigravity',  { current: 0, total: 0 }],
+                ]);
+                const makeProgress = (key: string) => (current: number, total: number) => {
+                    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+                    const slot = slots.get(key)!;
+                    slot.current = current;
+                    slot.total   = total;
+                    let gCurrent = 0;
+                    let gTotal   = 0;
+                    for (const s of slots.values()) { gCurrent += s.current; gTotal += s.total; }
+                    if (gTotal > 0) { progress.report({ message: `${gCurrent}/${gTotal}` }); }
                 };
 
                 const selectedIds = this.scopeManager.getSelectedIds();
@@ -297,14 +320,14 @@ this.index.remove(taskId);
                 }
                 const [claudeSessions, copilotSessions, clineSessions, rooCodeSessions, cursorSessions, windsurfSessions, aiderSessions, antigravitySessions] = await Promise.all([
                     // Always pass selectedIds (even empty array) — empty = index nothing, no fallback to all.
-                    indexClaude       ? this.collectClaudeSessionsAsync(onProgress, selectedIds)  : Promise.resolve([]),
-                    indexCopilot      ? this.collectCopilotSessionsAsync(onProgress, selectedIds) : Promise.resolve([]),
-                    indexCline        ? this.collectClineTasksAsync(onProgress)                   : Promise.resolve([]),
-                    indexRooCode      ? this.collectRooCodeTasksAsync(onProgress)                 : Promise.resolve([]),
-                    indexCursor       ? this.collectCursorSessionsAsync(onProgress)               : Promise.resolve([]),
-                    indexWindsurf     ? this.collectWindsurfSessionsAsync(onProgress)             : Promise.resolve([]),
-                    indexAider        ? this.collectAiderSessionsAsync(onProgress)                : Promise.resolve([]),
-                    indexAntigravity  ? this.collectAntigravitySessionsAsync(onProgress)          : Promise.resolve([]),
+                    indexClaude       ? this.collectClaudeSessionsAsync(makeProgress('claude'),      selectedIds)  : Promise.resolve([]),
+                    indexCopilot      ? this.collectCopilotSessionsAsync(makeProgress('copilot'),    selectedIds)  : Promise.resolve([]),
+                    indexCline        ? this.collectClineTasksAsync(makeProgress('cline'))                         : Promise.resolve([]),
+                    indexRooCode      ? this.collectRooCodeTasksAsync(makeProgress('roo'))                         : Promise.resolve([]),
+                    indexCursor       ? this.collectCursorSessionsAsync(makeProgress('cursor'))                    : Promise.resolve([]),
+                    indexWindsurf     ? this.collectWindsurfSessionsAsync(makeProgress('windsurf'))                : Promise.resolve([]),
+                    indexAider        ? this.collectAiderSessionsAsync(makeProgress('aider'))                      : Promise.resolve([]),
+                    indexAntigravity  ? this.collectAntigravitySessionsAsync(makeProgress('antigravity'))          : Promise.resolve([]),
                 ]);
 
                 const cfg = vscode.workspace.getConfiguration('chatwizard');

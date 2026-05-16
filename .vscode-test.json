@@ -1,5 +1,5 @@
 {
-  "files": "out/test/suite/**/*.test.js",
+  "files": ["out/test/e2e/*.test.js", "out/test/e2e/mcp/**/*.test.js"],
   "mocha": {
     "ui": "tdd",
     "color": true,

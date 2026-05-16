@@ -86,6 +86,26 @@ suite('FullTextSearchEngine', () => {
         assert.ok(results.some(r => r.sessionId === 's-match'),     's-match must appear');
     });
 
+    // 2b. Substring query starting mid-word — boundary-fragment token absent from index.
+    //     Searching "he thing is" should still match a message containing "the thing is"
+    //     because "he thing is" is a literal substring of that text, even though "he" is
+    //     not a standalone indexed word.
+    test('phrase query with boundary fragment finds substring match', () => {
+        const engine = new FullTextSearchEngine();
+
+        const sessionMatch = makeSession('s-phrase', [makeMessage('user', 'the thing is I do not have access')]);
+        // Companion ensures 'thing' reaches MIN_DOC_FREQ so it enters the main index.
+        const companion    = makeSession('s-phrase-cmp', [makeMessage('user', 'this thing works differently')]);
+        engine.index(sessionMatch);
+        engine.index(companion);
+
+        // "he thing is" — "he" is not an indexed standalone word, but the substring exists.
+        const { results } = engine.search({ text: 'he thing is' });
+
+        assert.ok(results.some(r => r.sessionId === 's-phrase'),
+            '"he thing is" must match the session containing "the thing is" as a substring');
+    });
+
     // 3. Role filter â€” searchPrompts:false skips user messages.
     test('searchPrompts:false excludes user messages', () => {
         const engine = new FullTextSearchEngine();
@@ -245,6 +265,75 @@ suite('FullTextSearchEngine', () => {
         const response = engine.search({ text: '' });
 
         assert.deepStrictEqual(response, { results: [], totalCount: 0 });
+    });
+
+    // 11. searchRelaxedBySession — stop words must not inflate scores over specific terms.
+    //     Regression: "restarted machine and docker does not start anymore" was
+    //     failing to rank a Docker-specific session at the top because stop words
+    //     ("not", "and", "does", "start") matched many generic sessions and gave
+    //     them higher scores than the session containing the rare token "docker".
+    test('searchRelaxedBySession ranks specific-token session above generic sessions', () => {
+        const engine = new FullTextSearchEngine();
+
+        // The target session: the one we want to find.
+        const dockerSession = makeSession('s-docker', [
+            makeMessage('user', 'Docker not starting after reboot issue'),
+            makeMessage('assistant', 'Try restarting the Docker service and checking WSL2 configuration.'),
+        ]);
+
+        // Noise sessions that contain common stop words but nothing docker-specific.
+        const generic1 = makeSession('s-generic-1', [
+            makeMessage('user', 'How does not the build system start when I run it'),
+        ]);
+        const generic2 = makeSession('s-generic-2', [
+            makeMessage('user', 'It does not start and I am not sure why — any ideas?'),
+        ]);
+        const generic3 = makeSession('s-generic-3', [
+            makeMessage('user', 'Machine learning does not start training and fails'),
+        ]);
+
+        engine.index(dockerSession);
+        engine.index(generic1);
+        engine.index(generic2);
+        engine.index(generic3);
+
+        const results = engine.searchRelaxedBySession(
+            'restarted machine and docker does not start anymore',
+            5,
+        );
+
+        assert.ok(results.length >= 1, 'expected at least one result');
+        assert.strictEqual(results[0].sessionId, 's-docker',
+            'docker-specific session must rank first — stop words must not inflate generic sessions');
+    });
+
+    // 12. searchRelaxedBySession — hapax tokens score higher than main-index tokens.
+    //     A rare token (hapax) appearing in only one session is more distinctive
+    //     than a common token and should boost that session's score.
+    test('searchRelaxedBySession boosts hapax-token sessions above common-token sessions', () => {
+        const engine = new FullTextSearchEngine();
+
+        // "kubernetes" only appears in one session (hapax) — it is highly distinctive.
+        const kubernetesSession = makeSession('s-k8s', [
+            makeMessage('user', 'kubernetes cluster pod scheduling issue'),
+        ]);
+
+        // "cluster" appears in two sessions — it's in the main index (less distinctive).
+        const genericCluster = makeSession('s-cluster', [
+            makeMessage('user', 'database cluster configuration problem'),
+        ]);
+
+        engine.index(kubernetesSession);
+        engine.index(genericCluster);
+
+        // Query matches "kubernetes" (hapax, score +2) and "cluster" (main, score +1).
+        // s-k8s should score 3 (kubernetes hapax=2 + cluster main=1).
+        // s-cluster should score 1 (cluster main=1 only).
+        const results = engine.searchRelaxedBySession('kubernetes cluster', 5);
+
+        assert.ok(results.length >= 1);
+        assert.strictEqual(results[0].sessionId, 's-k8s',
+            'session with hapax (rare) token must rank above session with only common tokens');
     });
 });
 

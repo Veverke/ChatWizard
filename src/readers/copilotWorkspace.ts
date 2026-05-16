@@ -4,10 +4,12 @@ import * as os from 'os';
 import { CopilotWorkspaceInfo } from '../types/index';
 
 /**
- * Returns the VS Code workspaceStorage root directory.
+ * Returns the VS Code workspaceStorage root directory for the stable build.
  * On Windows: %APPDATA%/Code/User/workspaceStorage
  * On macOS:   ~/Library/Application Support/Code/User/workspaceStorage
  * On Linux:   ~/.config/Code/User/workspaceStorage
+ *
+ * @deprecated Prefer `getWorkspaceStorageRoots()` which also covers VS Code Insiders.
  */
 export function getWorkspaceStorageRoot(): string {
     const platform = process.platform;
@@ -18,6 +20,39 @@ export function getWorkspaceStorageRoot(): string {
     } else {
         return path.join(process.env['XDG_CONFIG_HOME'] || path.join(os.homedir(), '.config'), 'Code', 'User', 'workspaceStorage');
     }
+}
+
+/**
+ * Returns all VS Code variant workspaceStorage roots that exist on disk.
+ * Covers stable (`Code`) and Insiders (`Code - Insiders`) installs.
+ *
+ * If the `chatwizard.copilotStoragePath` setting is non-empty, only that
+ * single path is used (custom-path override, same behaviour as before).
+ */
+export function getWorkspaceStorageRoots(): string[] {
+    // Check for a user-configured custom path first.
+    try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const vscode = require('vscode') as typeof import('vscode');
+        const cfg = vscode.workspace.getConfiguration('chatwizard');
+        const custom = cfg.get<string>('copilotStoragePath');
+        if (custom && custom.trim() !== '') {
+            return [custom.trim()];
+        }
+    } catch {
+        // Not in VS Code extension host (unit tests) — fall through to defaults.
+    }
+
+    const platform = process.platform;
+    const appDataBase = platform === 'win32'
+        ? (process.env['APPDATA'] || os.homedir())
+        : platform === 'darwin'
+            ? path.join(os.homedir(), 'Library', 'Application Support')
+            : (process.env['XDG_CONFIG_HOME'] || path.join(os.homedir(), '.config'));
+
+    const variants = ['Code', 'Code - Insiders'];
+    const candidates = variants.map(v => path.join(appDataBase, v, 'User', 'workspaceStorage'));
+    return candidates.filter(p => { try { return fs.statSync(p).isDirectory(); } catch { return false; } });
 }
 
 /**
@@ -46,48 +81,48 @@ export function readWorkspaceJson(storageHashDir: string): string | undefined {
 }
 
 /**
- * Scans the workspaceStorage root and returns info for all Copilot-enabled workspaces.
+ * Scans all VS Code variant workspaceStorage roots and returns info for all
+ * Copilot-enabled workspaces. Covers both stable and Insiders installs.
  * A workspace is Copilot-enabled if its hash directory contains a `chatSessions` subdirectory.
  *
  * Returns an array of CopilotWorkspaceInfo, one per discovered workspace.
  */
 export function discoverCopilotWorkspaces(): CopilotWorkspaceInfo[] {
-    try {
-        const root = getWorkspaceStorageRoot();
-        const entries = fs.readdirSync(root);
-        const results: CopilotWorkspaceInfo[] = [];
+    const results: CopilotWorkspaceInfo[] = [];
+    for (const root of getWorkspaceStorageRoots()) {
+        try {
+            const entries = fs.readdirSync(root);
+            for (const entry of entries) {
+                const storageDir = path.join(root, entry);
+                const chatSessionsDir = path.join(storageDir, 'chatSessions');
 
-        for (const entry of entries) {
-            const storageDir = path.join(root, entry);
-            const chatSessionsDir = path.join(storageDir, 'chatSessions');
+                let hasChatSessions = false;
+                try {
+                    hasChatSessions = fs.statSync(chatSessionsDir).isDirectory();
+                } catch {
+                    // chatSessions directory does not exist
+                }
 
-            let hasChatSessions = false;
-            try {
-                hasChatSessions = fs.statSync(chatSessionsDir).isDirectory();
-            } catch {
-                // chatSessions directory does not exist
+                if (!hasChatSessions) {
+                    continue;
+                }
+
+                const workspacePath = readWorkspaceJson(storageDir);
+                if (workspacePath === undefined) {
+                    continue;
+                }
+
+                results.push({
+                    workspaceId: entry,
+                    workspacePath,
+                    storageDir,
+                });
             }
-
-            if (!hasChatSessions) {
-                continue;
-            }
-
-            const workspacePath = readWorkspaceJson(storageDir);
-            if (workspacePath === undefined) {
-                continue;
-            }
-
-            results.push({
-                workspaceId: entry,
-                workspacePath,
-                storageDir,
-            });
+        } catch {
+            // root doesn't exist or can't be read — skip
         }
-
-        return results;
-    } catch {
-        return [];
     }
+    return results;
 }
 
 /**
@@ -128,40 +163,44 @@ async function readWorkspaceJsonAsync(storageHashDir: string): Promise<string | 
 }
 
 /**
- * Async version of `discoverCopilotWorkspaces`. Uses `fs.promises` and
- * `Promise.all` to scan all workspace hash directories concurrently.
+ * Async version of `discoverCopilotWorkspaces`. Scans all VS Code variant roots
+ * (stable + Insiders) concurrently.
  */
 export async function discoverCopilotWorkspacesAsync(): Promise<CopilotWorkspaceInfo[]> {
-    try {
-        const root = getWorkspaceStorageRoot();
-        const entries = await fs.promises.readdir(root);
+    const roots = getWorkspaceStorageRoots();
+    const perRoot = await Promise.all(roots.map(async (root) => {
+        try {
+            const entries = await fs.promises.readdir(root);
 
-        const results = await Promise.all(entries.map(async (entry) => {
-            const storageDir = path.join(root, entry);
-            const chatSessionsDir = path.join(storageDir, 'chatSessions');
-            try {
-                const stat = await fs.promises.stat(chatSessionsDir);
-                if (!stat.isDirectory()) { return null; }
-            } catch {
-                return null;
-            }
-            const workspacePath = await readWorkspaceJsonAsync(storageDir);
-            if (workspacePath === undefined) { return null; }
+            const items = await Promise.all(entries.map(async (entry) => {
+                const storageDir = path.join(root, entry);
+                const chatSessionsDir = path.join(storageDir, 'chatSessions');
+                try {
+                    const stat = await fs.promises.stat(chatSessionsDir);
+                    if (!stat.isDirectory()) { return null; }
+                } catch {
+                    return null;
+                }
+                const workspacePath = await readWorkspaceJsonAsync(storageDir);
+                if (workspacePath === undefined) { return null; }
 
-            // Skip workspaces whose path no longer exists on disk (deleted / renamed folders).
-            try {
-                await fs.promises.access(workspacePath);
-            } catch {
-                return null;
-            }
+                // Skip workspaces whose path no longer exists on disk (deleted / renamed folders).
+                try {
+                    await fs.promises.access(workspacePath);
+                } catch {
+                    return null;
+                }
 
-            return { workspaceId: entry, workspacePath, storageDir } satisfies CopilotWorkspaceInfo;
-        }));
+                return { workspaceId: entry, workspacePath, storageDir } satisfies CopilotWorkspaceInfo;
+            }));
 
-        return results.filter((r): r is CopilotWorkspaceInfo => r !== null);
-    } catch {
-        return [];
-    }
+            return items.filter((r): r is CopilotWorkspaceInfo => r !== null);
+        } catch {
+            return [];
+        }
+    }));
+
+    return perRoot.flat();
 }
 
 /**

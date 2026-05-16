@@ -1,0 +1,57 @@
+{
+  "allComposers": [
+    {
+      "composerId": "cursor-fx-chat-001",
+      "name": "Refactor UserService with dependency injection",
+      "createdAt": 1714000000000,
+      "updatedAt": 1714000900000,
+      "type": 1,
+      "conversation": [
+        {
+          "type": 1,
+          "text": "Refactor UserService to use constructor injection so it can be mocked in tests.",
+          "unixMs": 1714000010000
+        },
+        {
+          "type": 2,
+          "text": "Here is the refactored `UserService` with constructor injection:\n\n```typescript\ninterface Database {\n  query<T>(sql: string, params?: unknown[]): Promise<T | null>;\n}\n\nclass UserService {\n  constructor(private readonly db: Database) {}\n\n  async findById(id: string): Promise<User | null> {\n    return this.db.query<User>(\n      'SELECT id, name, email FROM users WHERE id = $1',\n      [id]\n    );\n  }\n\n  async create(data: Omit<User, 'id'>): Promise<User> {\n    const result = await this.db.query<User>(\n      'INSERT INTO users (name, email) VALUES ($1, $2) RETURNING *',\n      [data.name, data.email]\n    );\n    if (!result) { throw new Error('Insert returned no row'); }\n    return result;\n  }\n}\n```\n\nIn tests, pass a mock that implements the `Database` interface.",
+          "unixMs": 1714000020000
+        },
+        {
+          "type": 1,
+          "text": "Add error handling and logging to `findById`.",
+          "unixMs": 1714000060000
+        },
+        {
+          "type": 2,
+          "text": "With structured error handling and logging:\n\n```typescript\nimport { Logger } from './logger';\n\nclass UserService {\n  constructor(\n    private readonly db: Database,\n    private readonly logger: Logger\n  ) {}\n\n  async findById(id: string): Promise<User | null> {\n    try {\n      this.logger.debug('findById', { id });\n      const user = await this.db.query<User>(\n        'SELECT id, name, email FROM users WHERE id = $1',\n        [id]\n      );\n      return user;\n    } catch (err) {\n      this.logger.error('findById failed', { id, err });\n      throw new Error(\n        `Failed to fetch user ${id}: ${err instanceof Error ? err.message : String(err)}`\n      );\n    }\n  }\n}\n```",
+          "unixMs": 1714000120000
+        }
+      ]
+    },
+    {
+      "composerId": "cursor-fx-agent-002",
+      "name": "Debug React state not updating",
+      "createdAt": 1714010000000,
+      "updatedAt": 1714010800000,
+      "type": 2,
+      "conversation": [
+        {
+          "type": 1,
+          "text": "My `useState` hook update isn't causing a re-render. The component stays stale.",
+          "unixMs": 1714010010000
+        },
+        {
+          "type": 2,
+          "text": "The most common causes of stale state in React:\n\n**1. Mutating state directly (most common)**\n```jsx\n// ❌ Wrong — mutates existing object, React sees same reference\nstate.items.push(newItem);\nsetState(state);\n\n// ✅ Correct — new array reference triggers re-render\nsetState(prev => ({ ...prev, items: [...prev.items, newItem] }));\n```\n\n**2. Stale closure in event handler**\n```jsx\n// ❌ Wrong — onClick captures stale `count`\nuseEffect(() => {\n  document.addEventListener('click', () => setCount(count + 1));\n}, []);\n\n// ✅ Correct — functional update always uses latest state\ndocument.addEventListener('click', () => setCount(c => c + 1));\n```\n\n**3. Object identity in dependency array**\n```jsx\n// ❌ New object on every render → infinite loop\nconst opts = { debounce: 300 };\nuseEffect(() => { /* ... */ }, [opts]);\n\n// ✅ Memoize or move outside the component\nconst opts = useMemo(() => ({ debounce: 300 }), []);\n```",
+          "unixMs": 1714010030000
+        },
+        {
+          "type": 1,
+          "text": "It's option 1 — I was pushing to the array directly. Fixed it. Thanks!",
+          "unixMs": 1714010090000
+        }
+      ]
+    }
+  ]
+}

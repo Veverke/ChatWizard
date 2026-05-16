@@ -178,7 +178,7 @@ Phase 0 — Foundation: contracts + package setup   ← must complete first
 
 ---
 
-## Phase 1 — Tool Implementations ⬜
+## Phase 1 — Tool Implementations ✅
 
 **Goal:** Implement each MCP tool as an independent class implementing `IMcpTool`. Tools are pure data transformers — they accept a typed input, query the existing index/search engines, and return formatted text. No HTTP code here.
 
@@ -191,69 +191,71 @@ Each tool file is independently assignable. All tools follow the same pattern: i
 
 ### Task — `SearchTool` (`src/mcp/tools/searchTool.ts`)
 
-- [ ] Accepts `{ query: string, limit?: number, source?: string, workspaceId?: string }`
-- [ ] Delegates to `FullTextSearchEngine.search()`
-- [ ] Formats each result as:
+- [x] Accepts `{ query: string, limit?: number, source?: string, workspaceId?: string }`
+- [x] Delegates to `FullTextSearchEngine.search()`
+- [x] Formats each result as:
   ```
   [Session: <title>] | Source: <source> | Date: <updatedAt>
   Snippet: <first 300 chars of matching content>
   ID: <sessionId>
   ```
-- [ ] Input validation: `query` must be non-empty string; `limit` clamped to 1–50
+- [x] Input validation: `query` must be non-empty string; `limit` clamped to 1–50
 
 ### Task — `FindSimilarTool` (`src/mcp/tools/findSimilarTool.ts`)
 
-- [ ] Accepts `{ query: string, limit?: number, minScore?: number }`
-- [ ] Delegates to `SemanticIndexer.search()`
-- [ ] Returns error text (not a thrown exception) if semantic search is not enabled or indexer not ready
-- [ ] Formats results the same as `SearchTool` with an additional `Similarity: <score>` field
+- [x] Accepts `{ query: string, limit?: number, minScore?: number }`
+- [x] Delegates to `SemanticIndexer.search()`
+- [x] Returns error text (not a thrown exception) if semantic search is not enabled or indexer not ready
+- [x] Formats results the same as `SearchTool` with an additional `Similarity: <score>` field
 
 ### Task — `GetSessionTool` (`src/mcp/tools/getSessionTool.ts`)
 
-- [ ] Accepts `{ sessionId: string, maxChars?: number }` (default `maxChars`: 4000)
-- [ ] Looks up session in `SessionIndex`
-- [ ] Formats as a structured conversation transcript: role labels, message content, truncated at `maxChars` with a `[truncated — use chatwizard_get_session_full for complete content]` note
-- [ ] Returns `isError: true` with a descriptive message if `sessionId` not found
+- [x] Accepts `{ sessionId: string, maxChars?: number }` (default `maxChars`: 4000)
+- [x] Looks up session in `SessionIndex`
+- [x] Formats as a structured conversation transcript: role labels, message content, truncated at `maxChars` with a `[truncated — use chatwizard_get_session_full for complete content]` note
+- [x] Returns `isError: true` with a descriptive message if `sessionId` not found
 
 ### Task — `GetSessionFullTool` (`src/mcp/tools/getSessionFullTool.ts`)
 
-- [ ] Same as `GetSessionTool` but no truncation
-- [ ] Separate tool so calling models can choose cost/completeness tradeoff explicitly
+- [x] Same as `GetSessionTool` but no truncation
+- [x] Separate tool so calling models can choose cost/completeness tradeoff explicitly
 
 ### Task — `ListRecentTool` (`src/mcp/tools/listRecentTool.ts`)
 
-- [ ] Accepts `{ limit?: number, source?: string, since?: string }` (`since` is an ISO date string)
-- [ ] Queries `SessionIndex.getAll()`, filters, sorts by `updatedAt` descending
-- [ ] Returns lightweight summaries: title, source, date, message count, sessionId
+- [x] Accepts `{ limit?: number, source?: string, since?: string }` (`since` is an ISO date string)
+- [x] Queries `SessionIndex.getAll()`, filters, sorts by `updatedAt` descending
+- [x] Returns lightweight summaries: title, source, date, message count, sessionId
 
 ### Task — `GetContextTool` (`src/mcp/tools/getContextTool.ts`)
 
-- [ ] Accepts `{ topic: string, limit?: number }`
-- [ ] Runs `FindSimilarTool` first (if semantic search enabled), then `SearchTool` as fallback/supplement
-- [ ] Deduplicates by sessionId, merges results, returns top passages with source attribution
-- [ ] This is the "smart" tool intended for agents that want maximum relevance with a single call
+- [x] Accepts `{ topic: string, limit?: number }`
+- [x] Runs `FindSimilarTool` first (if semantic search enabled), then `SearchTool` as fallback/supplement
+- [x] Deduplicates by sessionId, merges results, returns top passages with source attribution
+- [x] This is the "smart" tool intended for agents that want maximum relevance with a single call
 
 ### Task — `ListSourcesTool` (`src/mcp/tools/listSourcesTool.ts`)
 
-- [ ] No inputs
-- [ ] Queries `SessionIndex` to count sessions by source
-- [ ] Returns a table of source names + session counts + most recent session date
+- [x] No inputs
+- [x] Queries `SessionIndex` to count sessions by source
+- [x] Returns a table of source names + session counts + most recent session date
 
 ### Task — `ServerInfoTool` (`src/mcp/tools/serverInfoTool.ts`)
 
-- [ ] No inputs
-- [ ] Returns: extension version, total session count, indexed sources, semantic search enabled/ready, server uptime
+- [x] No inputs
+- [x] Returns: extension version, total session count, indexed sources, semantic search enabled/ready, server uptime
 
 ### Task — Unit tests
 
-- [ ] `test/suite/mcp/tools/searchTool.test.ts` — mock `FullTextSearchEngine`; test input validation, result formatting, empty results
-- [ ] `test/suite/mcp/tools/getSessionTool.test.ts` — mock `SessionIndex`; test found/not-found, truncation
-- [ ] `test/suite/mcp/tools/listRecentTool.test.ts` — mock `SessionIndex`; test filtering and sorting
+- [x] `test/suite/mcp/tools/searchTool.test.ts` — real `FullTextSearchEngine`; tests input validation, result formatting, empty results, source filter
+- [x] `test/suite/mcp/tools/getSessionTool.test.ts` — real `SessionIndex`; tests found/not-found, truncation, full variant
+- [x] `test/suite/mcp/tools/listRecentTool.test.ts` — real `SessionIndex`; tests filtering, sorting, limit clamping
+- [x] `test/suite/mcp/tools/findSimilarTool.test.ts` — stub `ISemanticIndexer`; tests ready/not-ready paths, formatting, error handling
+- [x] `test/suite/mcp/tools/listSourcesTool.test.ts` — covers `ListSourcesTool` and `ServerInfoTool`
 
 ### Deliverables
 
-- `src/mcp/tools/` — 8 tool files
-- `test/suite/mcp/tools/` — 3 test files (critical paths covered)
+- `src/mcp/tools/` — 8 tool files ✅
+- `test/suite/mcp/tools/` — 5 test files, 50 tests, all passing ✅
 
 ---
 
@@ -308,7 +310,7 @@ This is a distinct MCP primitive from Tools. The SDK's `server.prompt()` method 
 
 ---
 
-## Phase 2 — HTTP/SSE Server ⬜
+## Phase 2 — HTTP/SSE Server ✅
 
 **Goal:** Implement the MCP-compliant HTTP server that registers all tools from Phase 1 and handles the SSE transport required by the MCP protocol.
 
@@ -319,30 +321,39 @@ This is a distinct MCP primitive from Tools. The SDK's `server.prompt()` method 
 
 ### Tasks
 
-- [ ] **`McpServer` class skeleton** — implements `IMcpServer`; constructor accepts `config: McpServerConfig`, a tool registry `IMcpTool[]`, and a logger callback
-- [ ] **Tool registry** — `register(tool: IMcpTool): void`; stores tools in a `Map<string, IMcpTool>` keyed by `tool.name`
-- [ ] **MCP SDK wiring** — use `@modelcontextprotocol/sdk`'s `Server` class with `SSEServerTransport`; register all tools by iterating the tool map and calling `server.tool()` with each tool's name, description, input schema, and an executor that calls `tool.execute()`
-- [ ] **`start()` method** — creates an `http.Server`; binds to `127.0.0.1` (never `0.0.0.0`) on `config.port`; attaches MCP SSE transport; sets `isRunning = true`; handles `EADDRINUSE` with a clear error message pointing to the port config setting
-- [ ] **`stop()` method** — closes the HTTP server; sets `isRunning = false`; resolves cleanly even if not running
-- [ ] **Auth middleware** — every request checks `Authorization: Bearer <token>` against the token loaded from `config.tokenPath`; responds `401` on mismatch; skips check for the `/health` endpoint
-- [ ] **`/health` endpoint** — returns `200 OK` with `{ status: "ok", sessions: N }` — used by clients to verify connectivity before adding ChatWizard to their MCP config
-- [ ] **`/mcp-config` endpoint** — returns the JSON snippet a user should paste into their tool's MCP configuration (Copilot `.github/copilot-mcp.json`, Claude Desktop `claude_desktop_config.json`, etc.), pre-filled with the correct URL and token
-- [ ] **Error handling** — tool executor catches thrown errors and returns them as `isError: true` results rather than HTTP 500s; protocol-level errors (malformed JSON, unknown tool name) return appropriate MCP error responses
+- [x] **`McpServer` class skeleton** — implements `IMcpServer`; constructor accepts `config: McpServerConfig`, a tool registry `IMcpTool[]`, and a logger callback
+- [x] **Tool registry** — `register(tool: IMcpTool): void`; stores tools in a `Map<string, IMcpTool>` keyed by `tool.name`
+- [x] **MCP SDK wiring** — uses `@modelcontextprotocol/sdk`'s low-level `Server` class with `SSEServerTransport`; registers all tools via `setRequestHandler(ListToolsRequestSchema)` and `setRequestHandler(CallToolRequestSchema)` using raw JSON schemas from `IMcpTool.inputSchema`
+- [x] **`start()` method** — creates an `http.Server`; binds to `127.0.0.1` (never `0.0.0.0`) on `config.port`; attaches MCP SSE transport; sets `isRunning = true`; handles `EADDRINUSE` with a clear error message pointing to the port config setting
+- [x] **`stop()` method** — closes the HTTP server; sets `isRunning = false`; resolves cleanly even if not running
+- [x] **Auth middleware** — every request checks `Authorization: Bearer <token>` against the token loaded from `config.tokenPath`; responds `401` on mismatch; responds `503` if token file not yet created; skips check for `/health` and `/mcp-config` endpoints
+- [x] **`/health` endpoint** — returns `200 OK` with `{ status: "ok", sessions: N }` — used by clients to verify connectivity before adding ChatWizard to their MCP config
+- [x] **`/mcp-config` endpoint** — returns a generic JSON snippet (`url`, `authorization`, `endpoints`) a user can use as a starting point; full tool-specific snippets are generated by `McpConfigHelper` (Phase 3) via the `chatwizard.copyMcpConfig` command
+- [x] **Error handling** — tool executor catches thrown errors and returns them as `isError: true` results rather than HTTP 500s; `EADDRINUSE` produces a descriptive message pointing to the port config setting
+
+### Unit Tests
+
+- [x] `test/suite/mcp/mcpServer.test.ts` — 28 tests covering:
+  - Lifecycle: `isRunning`/`port` state before/after start and stop, idempotency, restart, logger callback, EADDRINUSE error message
+  - `/health` endpoint: 200 response, unauthenticated access, `sessions` count from callback
+  - `/mcp-config` endpoint: 200 response, JSON content-type, correct URL/port/token/endpoints in body, unauthenticated access
+  - Auth middleware: 401 on missing/wrong/malformed token, 503 when no token file exists
+  - Tool registry: constructor tools, `register()`, overwrite, multiple tools
+  - Unknown paths: 401 before auth check, 404 after auth
+
+### Smoke Tests
+
+- [x] `scripts/smoke-test-mcp-server.mjs` — 20 assertions covering all 4 Phase 2 manual testing scenarios (all pass)
 
 ### Deliverables
 
-- `src/mcp/mcpServer.ts` — `McpServer` class (~200 lines)
-
-### Manual Testing
-
-1. Instantiate `McpServer` with a single `ServerInfoTool` and call `start()` — confirm `isRunning` is true and `GET http://localhost:6789/health` returns `200`.
-2. Send a request without a bearer token — confirm `401`.
-3. Send a valid MCP tool call for `chatwizard_server_info` — confirm a well-formed MCP response.
-4. Call `stop()` — confirm the port is released and subsequent `start()` works cleanly.
+- `src/mcp/mcpServer.ts` — `McpServer` class (~200 lines) ✅
+- `test/suite/mcp/mcpServer.test.ts` — 28 tests, all passing ✅
+- `scripts/smoke-test-mcp-server.mjs` — smoke test script, all passing ✅
 
 ---
 
-## Phase 3 — Auth & Config ⬜
+## Phase 3 — Auth & Config ✅
 
 **Goal:** Implement bearer token generation/persistence and the `McpConfigHelper` that produces ready-to-paste config snippets for each supported AI tool.
 
@@ -354,27 +365,30 @@ This is a distinct MCP primitive from Tools. The SDK's `server.prompt()` method 
 
 ### Tasks — `McpAuthManager` (`src/mcp/mcpAuthManager.ts`)
 
-- [ ] `getOrCreateToken(tokenPath: string): Promise<string>` — reads token from file if it exists; generates a `crypto.randomBytes(32).toString('hex')` token and writes it if not; returns the token string
-- [ ] `rotateToken(tokenPath: string): Promise<string>` — generates and writes a fresh token; returns it; called when the user explicitly requests a token rotation
-- [ ] Never logs or surfaces the raw token to the Output channel (only its length and creation date)
+- [x] `getOrCreateToken(tokenPath: string): Promise<string>` — reads token from file if it exists; generates a `crypto.randomBytes(32).toString('hex')` token and writes it if not; returns the token string
+- [x] `rotateToken(tokenPath: string): Promise<string>` — generates and writes a fresh token; returns it; called when the user explicitly requests a token rotation
+- [x] Never logs or surfaces the raw token to the Output channel (only its length and creation date)
 
 ### Tasks — `McpConfigHelper` (`src/mcp/mcpConfigHelper.ts`)
 
-- [ ] `getConfigSnippet(tool: 'copilot' | 'claude' | 'cursor' | 'continue' | 'generic', port: number, token: string): string` — returns a ready-to-paste JSON or YAML block for the specified tool
-- [ ] Copilot format: VS Code `settings.json` `"github.copilot.chat.mcpServers"` entry
-- [ ] Claude Desktop format: `claude_desktop_config.json` `"mcpServers"` entry
-- [ ] Continue format: `.continue/config.json` `"mcpServers"` entry  
-- [ ] Cursor format: `.cursor/mcp.json` entry
-- [ ] Generic format: a plain `{ url, authorization }` block
+- [x] `getConfigSnippet(tool: 'copilot' | 'claude' | 'cursor' | 'continue' | 'generic', port: number, token: string): string` — returns a ready-to-paste JSON or YAML block for the specified tool
+- [x] Copilot format: VS Code `settings.json` `"github.copilot.chat.mcpServers"` entry
+- [x] Claude Desktop format: `claude_desktop_config.json` `"mcpServers"` entry
+- [x] Continue format: `.continue/mcpServers/chatwizard.json` entry  
+- [x] Cursor format: `.cursor/mcp.json` entry
+- [x] Generic format: a plain `{ url, authorization }` block
 
 ### Deliverables
 
-- `src/mcp/mcpAuthManager.ts`
-- `src/mcp/mcpConfigHelper.ts`
+- `src/mcp/mcpAuthManager.ts` ✅
+- `src/mcp/mcpConfigHelper.ts` ✅
+- `test/suite/mcp/mcpAuthManager.test.ts` — 12 tests, all passing ✅
+- `test/suite/mcp/mcpConfigHelper.test.ts` — 36 tests, all passing ✅
+- `scripts/smoke-test-phase3.mjs` — 34 assertions, all passing ✅
 
 ---
 
-## Phase 4 — Extension Wiring & UX ⬜
+## Phase 4 — Extension Wiring & UX ✅
 
 **Goal:** Wire all Phase 1–3 components together in `extension.ts`; implement the three commands; add a status bar indicator; produce the `chatwizard.copyMcpConfig` quick-pick flow.
 
@@ -382,52 +396,45 @@ This is a distinct MCP primitive from Tools. The SDK's `server.prompt()` method 
 
 ### Tasks — Extension wiring (`extension.ts`)
 
-- [ ] On `activate()`: read `chatwizard.mcpServer.enabled`; if true, instantiate `McpServer` with all 8 tools, call `server.start()`, store in `context.subscriptions`
-- [ ] Register `chatwizard.startMcpServer` command — starts the server if not already running; shows an information message: _"MCP server started on port 6789. Use 'Copy MCP Config' to set up your AI tool."_
-- [ ] Register `chatwizard.stopMcpServer` command — stops the server; shows confirmation message
-- [ ] Register `chatwizard.copyMcpConfig` command — see quick-pick flow below
-- [ ] Pass the `SessionIndex`, `FullTextSearchEngine`, and `SemanticIndexer` instances into the tool constructors; tools are wired at start-up, not on every request
+- [x] On `activate()`: read `chatwizard.mcpServer.enabled`; if true, instantiate `McpServer` with all 8 tools, call `server.start()`, store in `context.subscriptions`
+- [x] Register `chatwizard.startMcpServer` command — starts the server if not already running; shows an information message: _"MCP server started on port 6789. Use 'Copy MCP Config' to set up your AI tool."_
+- [x] Register `chatwizard.stopMcpServer` command — stops the server; shows confirmation message
+- [x] Register `chatwizard.copyMcpConfig` command — see quick-pick flow below
+- [x] Pass the `SessionIndex`, `FullTextSearchEngine`, and `SemanticIndexer` instances into the tool constructors; tools are wired at start-up, not on every request
 
 ### Tasks — Status bar item
 
-- [ ] Create a `vscode.StatusBarItem` aligned `Right` with priority `50`
-- [ ] When server is **running**: text `$(broadcast) MCP`, tooltip `"ChatWizard MCP server running on port 6789 — click to stop"`, command `chatwizard.stopMcpServer`, color default
-- [ ] When server is **stopped**: text `$(broadcast) MCP`, tooltip `"ChatWizard MCP server is stopped — click to start"`, command `chatwizard.startMcpServer`, color `new vscode.ThemeColor('statusBarItem.warningBackground')`
-- [ ] Hide the status bar item entirely when `chatwizard.mcpServer.enabled` is `false` and server has never been started this session
+- [x] Create a `vscode.StatusBarItem` aligned `Right` with priority `50`
+- [x] When server is **running**: text `$(broadcast) MCP`, tooltip `"ChatWizard MCP server running on port 6789 — click to stop"`, command `chatwizard.stopMcpServer`, color default
+- [x] When server is **stopped**: text `$(broadcast) MCP`, tooltip `"ChatWizard MCP server is stopped — click to start"`, command `chatwizard.startMcpServer`, color `new vscode.ThemeColor('statusBarItem.warningBackground')`
+- [x] Hide the status bar item entirely when `chatwizard.mcpServer.enabled` is `false` and server has never been started this session
 
 ### Tasks — `chatwizard.copyMcpConfig` quick-pick flow
 
-- [ ] Show `vscode.window.showQuickPick` with options: `GitHub Copilot`, `Claude Desktop`, `Cursor`, `Continue`, `Generic (URL + token)`
-- [ ] On selection, call `McpConfigHelper.getConfigSnippet()` and copy to clipboard via `vscode.env.clipboard.writeText()`
-- [ ] Show an information message: _"Config copied! Paste it into your tool's MCP configuration."_ with a `Show instructions` button
-- [ ] `Show instructions` opens a read-only virtual document (or Markdown preview) with step-by-step setup instructions for the chosen tool, including where to find the config file and how to restart the tool to pick up the change
+- [x] Show `vscode.window.showQuickPick` with options: `GitHub Copilot`, `Claude Desktop`, `Cursor`, `Continue`, `Generic (URL + token)`
+- [x] On selection, call `McpConfigHelper.getConfigSnippet()` and copy to clipboard via `vscode.env.clipboard.writeText()`
+- [x] Show an information message: _"Config copied! Paste it into your tool's MCP configuration."_ with a `Show instructions` button
+- [x] `Show instructions` opens a read-only virtual document (or Markdown preview) with step-by-step setup instructions for the chosen tool, including where to find the config file and how to restart the tool to pick up the change
 
 ### Tasks — First-run consent
 
-- [ ] When `chatwizard.startMcpServer` is called for the first time (no token file exists), show a modal warning:
+- [x] When `chatwizard.startMcpServer` is called for the first time (no token file exists), show a modal warning:
   > _"The MCP server will listen on localhost only. A bearer token will be generated and stored in your VS Code extension storage. Only tools you configure with this token can query your chat history. Continue?"_
-- [ ] `Cancel` aborts; `Enable` proceeds, generates token, starts server, sets `chatwizard.mcpServer.enabled: true` in global settings
+- [x] `Cancel` aborts; `Enable` proceeds, generates token, starts server, sets `chatwizard.mcpServer.enabled: true` in global settings
 
 ### Deliverables
 
-- `extension.ts` updated with MCP wiring (server instantiation, 3 commands, status bar)
-- `src/mcp/mcpConfigHelper.ts` — instructions virtual document content per tool
-- All 3 commands working end-to-end
-- Status bar item correctly reflects server state
-
-### Manual Testing
-
-1. Set `chatwizard.mcpServer.enabled: true` → restart → confirm server starts automatically, status bar shows `$(broadcast) MCP`.
-2. Open Claude Desktop or Copilot → run `chatwizard.copyMcpConfig` → paste config → confirm the AI tool can call `chatwizard_server_info` and receive a valid response.
-3. Call `chatwizard_search` with a query that matches a known session — confirm results include the correct session title.
-4. Call `chatwizard_find_similar` — confirm results when semantic search is enabled; confirm graceful error text when it is not.
-5. Call `chatwizard_get_session` with a valid and an invalid ID — confirm truncation at 4000 chars and the `isError` path respectively.
-6. Stop the server (`chatwizard.stopMcpServer`) — confirm status bar updates, port is freed, subsequent requests return `ECONNREFUSED`.
-7. Rotate token: manually delete `mcp-token.txt`, restart → confirm a new token is generated and old requests return `401`.
+- `extension.ts` updated with MCP wiring (server instantiation, 3 commands, status bar) ✅
+- `src/mcp/mcpConfigHelper.ts` — `getSetupInstructions()` per tool ✅
+- `src/search/semanticContracts.ts` — `NullSemanticIndexer` for disabled-semantic-search path ✅
+- All 3 commands working end-to-end ✅
+- Status bar item correctly reflects server state ✅
+- `test/suite/mcp/mcpPhase4.test.ts` — 46 tests covering instructions, NullSemanticIndexer, all 8 tools ✅
+- `scripts/smoke-test-phase4.mjs` — 52 assertions, all passing ✅
 
 ---
 
-## Phase 5 — Documentation & Setup Guides ⬜
+## Phase 5 — Documentation & Setup Guides ✅
 
 **Goal:** Write user-facing documentation so users can self-serve MCP setup for each supported AI tool.
 
@@ -435,20 +442,20 @@ This is a distinct MCP primitive from Tools. The SDK's `server.prompt()` method 
 
 ### Tasks
 
-- [ ] Add `## MCP Server` section to `README.md` — one-paragraph explanation, quick-start steps (enable setting → copy config → paste → restart tool)
-- [ ] Create `docs/mcp-setup-guide.md` — per-tool setup instructions with screenshots for:
+- [x] Add `## MCP Server` section to `README.md` — one-paragraph explanation, quick-start steps (enable setting → copy config → paste → restart tool)
+- [x] Create `docs/mcp-setup-guide.md` — per-tool setup instructions with screenshots for:
   - GitHub Copilot (VS Code `settings.json`)
   - Claude Desktop (`claude_desktop_config.json`)
   - Cursor (`.cursor/mcp.json`)
-  - Continue (`.continue/config.json`)
-- [ ] Add CHANGELOG entry for the release that ships MCP Server Mode
-- [ ] Update `whats-next.md` to mark MCP Server Mode as complete
+  - Continue (`.continue/mcpServers/chatwizard.json`)
+- [x] Add CHANGELOG entry for the release that ships MCP Server Mode
+- [x] Update `whats-next.md` to mark MCP Server Mode as complete
 
 ### Deliverables
 
-- `README.md` updated
-- `docs/mcp-setup-guide.md` created
-- `CHANGELOG.md` updated
+- `README.md` updated ✅
+- `docs/mcp-setup-guide.md` created ✅
+- `CHANGELOG.md` updated ✅
 
 ---
 

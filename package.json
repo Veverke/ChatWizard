@@ -2,7 +2,7 @@
   "name": "chatwizard",
   "displayName": "Chat Wizard",
   "description": "Browse, search, and analyze AI coding-assistant conversation history from GitHub Copilot, Claude Code, Cline, Roo Code, Cursor, Windsurf, Aider, and Google Antigravity (prompts only). Chat history viewer, prompt library, code block browser, token analytics, and timeline — all in one extension.",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "publisher": "Veverke",
   "icon": "images/icon.png",
   "license": "SEE LICENSE IN LICENSE",
@@ -474,6 +474,21 @@
         "command": "chatwizard.copyMcpConfig",
         "title": "Chat Wizard: Copy MCP Config to Clipboard",
         "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.rotateMcpToken",
+        "title": "Chat Wizard: Rotate MCP Token",
+        "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.connectCopilot",
+        "title": "Chat Wizard: Connect GitHub Copilot",
+        "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.setupGlobalInstructions",
+        "title": "Chat Wizard: Set Up Global Copilot Instructions",
+        "category": "Chat Wizard"
       }
     ],
     "menus": {
@@ -935,9 +950,32 @@
         {
           "command": "chatwizard.semanticSearch",
           "when": "false"
+        },
+        {
+          "command": "chatwizard.rotateMcpToken",
+          "when": "true"
         }
       ]
     },
+    "chatParticipants": [
+      {
+        "id": "Veverke.chatwizard",
+        "name": "chatwizard",
+        "fullName": "Chat Wizard",
+        "description": "Query your AI chat history — answer questions, troubleshoot errors, and continue prior work.",
+        "isSticky": false,
+        "commands": [
+          {
+            "name": "queryHistory",
+            "description": "Answer questions or troubleshoot using prior chat history"
+          },
+          {
+            "name": "continueFromHistory",
+            "description": "Continue from recent sessions"
+          }
+        ]
+      }
+    ],
     "configuration": {
       "title": "Chat Wizard",
       "properties": {
@@ -1106,6 +1144,11 @@
           "minimum": 1024,
           "maximum": 65535,
           "description": "Port for the local MCP server. Restart VS Code after changing."
+        },
+        "chatwizard.mcpServer.allowTokenRotation": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "When `true`, the **Chat Wizard: Rotate MCP Token** command (`chatwizard.rotateMcpToken`) is permitted to generate a new MCP bearer token, immediately invalidating the previous one. All AI tools configured with the old token must be reconfigured after rotation."
         }
       }
     }
@@ -1117,6 +1160,8 @@
     "pretest": "npm run compile && npm run lint",
     "lint": "eslint \"src/**/*.ts\"",
     "test": "vscode-test",
+    "pretest:integration": "npm run compile",
+    "test:integration": "vscode-test --files \"out/test/e2e/integration/**/*.test.js\"",
     "rebuild:native": "node scripts/rebuild-native.js",
     "bundle": "esbuild src/extension.ts --bundle --platform=node --external:vscode --external:better-sqlite3 --external:@xenova/transformers --outfile=dist/extension.js",
     "bundle:watch": "esbuild src/extension.ts --bundle --platform=node --external:vscode --external:better-sqlite3 --external:@xenova/transformers --outfile=dist/extension.js --sourcemap --watch",

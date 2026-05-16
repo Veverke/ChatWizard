@@ -31,11 +31,60 @@ function isReDoS(pattern: string): boolean {
     return pattern.length > MAX_REGEX_LEN || RE_REDOS_PATTERNS.test(pattern);
 }
 
+/**
+ * Common English stop words that carry little topical meaning.
+ * Filtered out of relaxed OR queries so specific terms (e.g. "docker") are
+ * not drowned out by noise words ("not", "and", "does") that match everywhere.
+ */
+export const STOP_WORDS = new Set([
+    // articles / conjunctions / prepositions
+    'the', 'and', 'or', 'but', 'nor', 'for', 'yet', 'so',
+    'of', 'in', 'on', 'at', 'to', 'by', 'as', 'an', 'a',
+    'from', 'into', 'with', 'about', 'above', 'after', 'before',
+    'between', 'during', 'over', 'under', 'through', 'than', 'then',
+    // pronouns
+    'i', 'me', 'my', 'we', 'our', 'you', 'your', 'he', 'she', 'his', 'her',
+    'it', 'its', 'they', 'their', 'them', 'this', 'that', 'these', 'those',
+    'who', 'what', 'which', 'there', 'here',
+    // common verbs / auxiliaries
+    'is', 'are', 'was', 'were', 'be', 'been', 'being', 'am',
+    'has', 'have', 'had', 'do', 'does', 'did', 'will', 'would',
+    'could', 'should', 'may', 'might', 'shall', 'can', 'get', 'got',
+    'use', 'used', 'make', 'made', 'let', 'set', 'put', 'take',
+    'start', 'stop', 'run', 'try', 'keep', 'work', 'need', 'want',
+    // negations / qualifiers (frequent in ALL sessions — not distinctive)
+    'not', 'no', 'now', 'just', 'only', 'also', 'even', 'still',
+    'back', 'more', 'most', 'some', 'any', 'all', 'both', 'each',
+    'how', 'when', 'where', 'why', 'if', 'up', 'out', 'off',
+    // generic nouns ubiquitous in computing contexts — not topically distinctive
+    'machine', 'system', 'server', 'process', 'service', 'instance',
+    'file', 'code', 'data', 'value', 'type', 'item', 'list',
+]);
+
 function tokenize(text: string): string[] {
     return text
         .toLowerCase()
         .split(/\W+/)
         .filter(t => t.length >= 2 && t.length <= MAX_TOKEN_LENGTH);
+}
+
+/**
+ * Tokenize a user-supplied query and remove stop words.
+ * Used when we want the most topically-meaningful tokens for search
+ * (e.g. keyword AND search and relaxed OR scoring).
+ */
+export function tokenizeQuery(query: string): string[] {
+    const base = tokenize(query).filter(t => !STOP_WORDS.has(t));
+    // Also add de-pluralized form (strip trailing 's') so "BDDs" matches "BDD",
+    // "errors" matches "error", etc. Only applied when de-s'd result is >= 3 chars.
+    const expanded = new Set(base);
+    for (const t of base) {
+        if (t.length >= 4 && t.endsWith('s')) {
+            const stem = t.slice(0, -1);
+            if (stem.length >= 3) { expanded.add(stem); }
+        }
+    }
+    return [...expanded];
 }
 
 /** Statistics about the current state of the inverted index. */
@@ -95,13 +144,26 @@ export class FullTextSearchEngine {
         const tokenSet = new Set<string>();
         this.sessionTokens.set(session.id, tokenSet);
 
+        // Index session title with sentinel msgIdx -1 so title terms are searchable.
+        const titleEntry = `${session.id}:-1`;
+        for (const token of tokenize(session.title)) {
+            this._indexToken(token, session.id, titleEntry, tokenSet);
+        }
+
         for (let msgIdx = 0; msgIdx < session.messages.length; msgIdx++) {
             const message = session.messages[msgIdx];
             const tokens = tokenize(message.content);
             const entry = `${session.id}:${msgIdx}`;
 
             for (const token of tokens) {
-                tokenSet.add(token);
+                this._indexToken(token, session.id, entry, tokenSet);
+            }
+        }
+    }
+
+    /** Shared token-insertion logic used by both title and message indexing. */
+    private _indexToken(token: string, sessionId: string, entry: string, tokenSet: Set<string>): void {
+        tokenSet.add(token);
 
                 // — document-frequency tracking —
                 let docSessions = this.tokenDocSessions.get(token);
@@ -109,13 +171,13 @@ export class FullTextSearchEngine {
                     docSessions = new Set<string>();
                     this.tokenDocSessions.set(token, docSessions);
                 }
-                docSessions.add(session.id);
+                docSessions.add(sessionId);
 
                 if (docSessions.size < MIN_DOC_FREQ) {
                     // Single-session token — store in hapax (not yet promoted).
                     let hapax = this.hapaxStore.get(token);
                     if (hapax === undefined) {
-                        hapax = { sessionId: session.id, postings: new Set<string>() };
+                        hapax = { sessionId, postings: new Set<string>() };
                         this.hapaxStore.set(token, hapax);
                     }
                     hapax.postings.add(entry);
@@ -135,8 +197,6 @@ export class FullTextSearchEngine {
                     }
                     postings.add(entry);
                 }
-            }
-        }
     }
 
     /** Returns statistics about the current state of the index. */
@@ -232,10 +292,18 @@ export class FullTextSearchEngine {
             let candidateSet: Set<string> | undefined;
 
             for (const token of queryTokens) {
-                const postings = this.invertedIndex.get(token);
+                // Try exact token first; fall back to de-pluralized form (e.g. "BDDs" → "BDD").
+                let postings = this.invertedIndex.get(token);
+                if ((postings === undefined || postings.size === 0) && token.length >= 4 && token.endsWith('s')) {
+                    const stem = token.slice(0, -1);
+                    if (stem.length >= 3) { postings = this.invertedIndex.get(stem); }
+                }
                 if (postings === undefined || postings.size === 0) {
-                    // No session contains this token → no matches possible.
-                    return { results: [], totalCount: 0 };
+                    // Token is absent from the main index (hapax, or a boundary fragment of a
+                    // longer word — e.g. querying "he thing" where the text contains "the thing").
+                    // Skip it: remaining tokens still narrow the candidate set, and findFirstMatch
+                    // below performs the definitive substring verification.
+                    continue;
                 }
 
                 if (candidateSet === undefined) {
@@ -269,6 +337,22 @@ export class FullTextSearchEngine {
                 }
 
                 if (!this._sessionPassesFilter(session, filter)) {
+                    continue;
+                }
+
+                // Sentinel msgIdx -1 means this posting came from the session title.
+                if (msgIdx === -1) {
+                    const titleTokenSet = new Set(tokenize(session.title));
+                    const score = queryTokens.filter(t => titleTokenSet.has(t)).length;
+                    results.push({
+                        sessionId:    session.id,
+                        messageIndex: -1,
+                        messageRole:  'user',
+                        snippet:      session.title,
+                        matchStart:   0,
+                        matchEnd:     session.title.length,
+                        score,
+                    });
                     continue;
                 }
 
@@ -403,5 +487,89 @@ export class FullTextSearchEngine {
         if (role === 'user'      && !searchPrompts)   { return false; }
         if (role === 'assistant' && !searchResponses) { return false; }
         return true;
+    }
+
+    /**
+     * Relaxed OR search across both the main inverted index and the hapax store.
+     *
+     * Unlike `search()` (which requires ALL tokens to appear in the same message),
+     * this method finds sessions where ANY query token appears — including hapax
+     * tokens that are excluded from the strict AND index. Sessions are ranked by
+     * the number of distinct query tokens they contain.
+     *
+     * Intended as a fallback for GetContextTool when the strict keyword search
+     * yields no results (e.g. because a topic-specific token only appears in one
+     * session and is therefore in the hapax store).
+     */
+    searchRelaxedBySession(
+        queryText: string,
+        limit: number,
+        filter?: SearchQuery['filter'],
+    ): Array<{ sessionId: string; score: number; snippet: string }> {
+        // Strip stop words first so high-frequency noise words ("not", "and",
+        // "does") don't inflate scores and bury rare, specific tokens like "docker".
+        const tokens = tokenizeQuery(queryText).filter(t => t.length >= 3);
+        if (tokens.length === 0) { return []; }
+
+        const f = filter ?? {};
+        const sessionScores = new Map<string, number>();
+
+        // IDF-like weight: tokens appearing in fewer sessions are more distinctive
+        // and therefore get a higher score. This ensures rare acronyms (e.g. "PAT",
+        // "MCP") outweigh common coding words (e.g. "generate", "repo") when
+        // both are present in the query but only the acronym appears in a session.
+        // Guard n >= 2 so log2 is always positive.
+        const n = Math.max(2, this.sessions.size);
+        const idfWeight = (docCount: number): number =>
+            Math.max(1, Math.round(Math.log2(n / Math.max(1, docCount))));
+
+        for (const token of tokens) {
+            // Main index (docFreq ≥ MIN_DOC_FREQ).
+            const postings = this.invertedIndex.get(token);
+            if (postings) {
+                const docCount = this.tokenDocSessions.get(token)?.size ?? MIN_DOC_FREQ;
+                const weight = idfWeight(docCount);
+                for (const entry of postings) {
+                    const colonIdx = entry.indexOf(':');
+                    const sessionId = entry.slice(0, colonIdx);
+                    const session = this.sessions.get(sessionId);
+                    if (session && this._sessionPassesFilter(session, f)) {
+                        sessionScores.set(sessionId, (sessionScores.get(sessionId) ?? 0) + weight);
+                    }
+                }
+            }
+
+            // Hapax store (docCount = 1 by definition → highest IDF weight).
+            const hapax = this.hapaxStore.get(token);
+            if (hapax) {
+                const session = this.sessions.get(hapax.sessionId);
+                if (session && this._sessionPassesFilter(session, f)) {
+                    const weight = idfWeight(1);
+                    sessionScores.set(hapax.sessionId, (sessionScores.get(hapax.sessionId) ?? 0) + weight);
+                }
+            }
+        }
+
+        if (sessionScores.size === 0) { return []; }
+
+        const ranked = [...sessionScores.entries()]
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, limit);
+
+        return ranked.map(([sessionId, score]) => {
+            const session = this.sessions.get(sessionId)!;
+            // Find the first message that contains any query token for a snippet.
+            let snippet = '';
+            outer: for (const msg of session.messages) {
+                for (const token of tokens) {
+                    const match = findFirstMatch(msg.content, token);
+                    if (match !== undefined) {
+                        snippet = extractSnippet(msg.content, match.offset, match.length).snippet;
+                        break outer;
+                    }
+                }
+            }
+            return { sessionId, score, snippet: snippet || session.title };
+        });
     }
 }

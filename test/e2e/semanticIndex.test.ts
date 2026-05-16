@@ -88,7 +88,9 @@ suite('SemanticIndex — search()', () => {
         for (let i = 0; i < 10; i++) {
             idx.add(`s${i}`, 'user', 0, i, randomUnitVector());
         }
-        const results = idx.search(randomUnitVector(), 3);
+        // Pass minScore=-1 so negative dot-product results are not filtered out,
+        // ensuring exactly topK items are returned regardless of vector orientation.
+        const results = idx.search(randomUnitVector(), 3, -1);
         assert.strictEqual(results.length, 3);
     });
 
@@ -232,8 +234,8 @@ suite('SemanticIndex — save() / load() round-trip', () => {
             assert.strictEqual(buf[1], 0x57);
             assert.strictEqual(buf[2], 0x53);
             assert.strictEqual(buf[3], 0x45);
-            // Version 2
-            assert.strictEqual(buf.readUInt32LE(4), 2);
+            // Version 3
+            assert.strictEqual(buf.readUInt32LE(4), 3);
             // Dims 384
             assert.strictEqual(buf.readUInt32LE(8), 384);
             // Count 0
