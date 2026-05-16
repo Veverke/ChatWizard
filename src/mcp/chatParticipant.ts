@@ -277,6 +277,17 @@ export function createParticipantHandler(
         const args: Record<string, string> = userText ? { [argName]: userText } : {};
 
         try {
+            const sessionCount = sessionIndex.getAllSummaries().length;
+
+            // Emit first progress message before the expensive render() call
+            if (command === 'queryHistory' && !userText.startsWith('--continued ') && !userText.startsWith('--general ')) {
+                stream.progress(`Searching ${sessionCount} sessions…`);
+            } else if (command === 'continueFromHistory') {
+                stream.progress('Retrieving your most recent session…');
+            } else if (command === 'getPrompts') {
+                stream.progress('Loading prompt library…');
+            }
+
             const result = await prompt.render(args);
             const text = result.content
                 .filter((c): c is { type: 'text'; text: string } => c.type === 'text')
@@ -298,7 +309,7 @@ export function createParticipantHandler(
             const isPhase2 = userText.startsWith('--continued ') || userText.startsWith('--general ');
 
             if (isQuery && !isPhase2) {
-                stream.progress('Searching chat history…');
+                stream.progress(`Found ${sessionRefs.length} candidate sessions — evaluating relevance…`);
                 // Phase 1 — display pre-filtered sessions directly.
                 // The keyword filter in getContextTool already removed irrelevant sessions.
                 // No LLM gating: LLM filtering was unreliable (too selective) and
@@ -318,6 +329,7 @@ export function createParticipantHandler(
                     const start = Math.max(0, match.index - 100);
                     return { ...ref, passage: fullText.slice(start, start + 400) };
                 }) : existingRefs;
+                stream.progress(`Assembling answer from ${enrichedRefs.length} confirmed match${enrichedRefs.length === 1 ? '' : 'es'}…`);
                 if (enrichedRefs.length > 0) {
                     stream.markdown(buildSourcesMarkdown(enrichedRefs, queryTokens));
                     const refIds = enrichedRefs.map(r => r.id).join(',');
@@ -331,10 +343,59 @@ export function createParticipantHandler(
             }
 
             // Phase 2 (--continued / --general) or other prompts — call LLM and stream.
+            if (command === 'continueFromHistory') {
+                stream.progress('Building continuation summary…');
+            } else if (command === 'getPrompts') {
+                stream.progress('Ranking prompts by relevance…');
+            }
+
             const messages = [makeUserMessage(filteredText)] as vscode.LanguageModelChatMessage[];
             const modelResponse = await request.model.sendRequest(messages, {}, token);
+
+            if (command === 'continueFromHistory') {
+                stream.progress('Ready — here is where you left off…');
+            } else if (command === 'getPrompts') {
+                stream.progress('Found matching prompts — assembling response…');
+            }
+
             for await (const chunk of modelResponse.text) {
                 stream.markdown(chunk);
+            }
+
+            // Inline action buttons (requires VS Code ≥ 1.90)
+            if (typeof stream.button === 'function') {
+                if (command === 'continueFromHistory') {
+                    const lastSessionId = existingRefs[0]?.id;
+                    if (lastSessionId) {
+                        stream.button({
+                            command: 'chatwizard.openSession',
+                            title: '$(arrow-right) Pick up where I left off',
+                            tooltip: 'Open the last session in the reader',
+                            arguments: [{ id: lastSessionId }],
+                        });
+                    }
+                    stream.button({
+                        command: 'chatwizard.focusSessionTree',
+                        title: '$(history) Open last session in tree',
+                        tooltip: 'Reveal this session in the ChatWizard tree',
+                        arguments: [],
+                    });
+                } else if (command === 'queryHistory' && isPhase2) {
+                    stream.button({
+                        command: 'chatwizard.focusSessionTree',
+                        title: '$(list-tree) Open in ChatWizard',
+                        tooltip: 'Focus the ChatWizard session tree',
+                        arguments: [],
+                    });
+                    if (existingRefs[0]?.id) {
+                        stream.button({
+                            command: 'chatwizard.exportSession',
+                            title: '$(export) Export answer',
+                            tooltip: 'Export this answer to Markdown',
+                            arguments: [{ id: existingRefs[0].id }],
+                        });
+                    }
+                }
             }
         } catch (err) {
             stream.markdown(

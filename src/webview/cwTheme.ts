@@ -23,6 +23,11 @@ export function cwThemeCss(): string {
   --cw-copilot:        #f0883e;
   --cw-claude:         #a67bf0;
   --cw-antigravity:    #4285F4;
+  --cw-source-cursor:  #00b4d8;
+  --cw-source-cline:   #9b59b6;
+  --cw-source-roocode: #e67e22;
+  --cw-source-windsurf:#1abc9c;
+  --cw-source-aider:   #e74c3c;
   --cw-surface:        #181c2a;
   --cw-surface-raised: #1f2438;
   --cw-surface-subtle: #252b40;
@@ -42,6 +47,11 @@ export function cwThemeCss(): string {
   --cw-copilot:        #c05c00;
   --cw-claude:         #7b4fd4;
   --cw-antigravity:    #1a73e8;
+  --cw-source-cursor:  #0096b3;
+  --cw-source-cline:   #7d3cb5;
+  --cw-source-roocode: #c0620a;
+  --cw-source-windsurf:#148f77;
+  --cw-source-aider:   #c0392b;
   --cw-surface:        #f4f6fb;
   --cw-surface-raised: #ffffff;
   --cw-surface-subtle: #eef1f8;
@@ -158,6 +168,66 @@ export function cwThemeCss(): string {
   background:    rgba(66,133,244,0.15);
   color:         var(--cw-antigravity);
   border:        1px solid rgba(66,133,244,0.35);
+  white-space:   nowrap;
+}
+
+.cw-badge-cursor {
+  display:       inline-block;
+  font-size:     0.73em;
+  font-weight:   600;
+  padding:       1px 6px;
+  border-radius: var(--cw-radius-xs);
+  background:    rgba(0,180,216,0.15);
+  color:         var(--cw-source-cursor);
+  border:        1px solid rgba(0,180,216,0.35);
+  white-space:   nowrap;
+}
+
+.cw-badge-cline {
+  display:       inline-block;
+  font-size:     0.73em;
+  font-weight:   600;
+  padding:       1px 6px;
+  border-radius: var(--cw-radius-xs);
+  background:    rgba(155,89,182,0.15);
+  color:         var(--cw-source-cline);
+  border:        1px solid rgba(155,89,182,0.35);
+  white-space:   nowrap;
+}
+
+.cw-badge-roocode {
+  display:       inline-block;
+  font-size:     0.73em;
+  font-weight:   600;
+  padding:       1px 6px;
+  border-radius: var(--cw-radius-xs);
+  background:    rgba(230,126,34,0.15);
+  color:         var(--cw-source-roocode);
+  border:        1px solid rgba(230,126,34,0.35);
+  white-space:   nowrap;
+}
+
+.cw-badge-windsurf {
+  display:       inline-block;
+  font-size:     0.73em;
+  font-weight:   600;
+  padding:       1px 6px;
+  border-radius: var(--cw-radius-xs);
+  background:    rgba(26,188,156,0.15);
+  color:         var(--cw-source-windsurf);
+  border:        1px solid rgba(26,188,156,0.35);
+  white-space:   nowrap;
+}
+
+.cw-badge-aider {
+  display:       inline-block;
+  font-size:     0.73em;
+  font-weight:   600;
+  padding:       1px 6px;
+  border-radius: var(--cw-radius-xs);
+  background:    rgba(231,76,60,0.15);
+  color:         var(--cw-source-aider);
+  border:        1px solid rgba(231,76,60,0.35);
   white-space:   nowrap;
 }
 

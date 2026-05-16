@@ -12,32 +12,30 @@ interface SearchResultItem extends vscode.QuickPickItem {
     summary: SessionSummary;
 }
 
-type SourceFilterState = 'all' | 'copilot' | 'claude' | 'antigravity';
+type SourceFilterState = 'all' | SessionSource;
 type MessageTypeState = 'all' | 'prompts' | 'responses';
 
 // ---------------------------------------------------------------------------
 // Source filter button
 // ---------------------------------------------------------------------------
 
+const SOURCE_CYCLE_ORDER: SourceFilterState[] = [
+    'all', 'copilot', 'claude', 'antigravity', 'cursor', 'cline', 'roocode', 'windsurf', 'aider',
+];
+
 function nextSourceState(current: SourceFilterState): SourceFilterState {
-    if (current === 'all') { return 'copilot'; }
-    if (current === 'copilot') { return 'claude'; }
-    if (current === 'claude') { return 'antigravity'; }
-    return 'all';
+    const idx = SOURCE_CYCLE_ORDER.indexOf(current);
+    return SOURCE_CYCLE_ORDER[(idx + 1) % SOURCE_CYCLE_ORDER.length];
 }
 
 function sourceButtonIcon(state: SourceFilterState): vscode.ThemeIcon {
-    if (state === 'copilot') { return new vscode.ThemeIcon('github'); }
-    if (state === 'claude') { return new vscode.ThemeIcon('hubot'); }
-    if (state === 'antigravity') { return new vscode.ThemeIcon('rocket'); }
-    return new vscode.ThemeIcon('list-filter');
+    if (state === 'all') { return new vscode.ThemeIcon('list-filter'); }
+    return new vscode.ThemeIcon(sourceCodiconId(state as SessionSource));
 }
 
 function sourceButtonTooltip(state: SourceFilterState): string {
-    if (state === 'all') { return 'Source: All — click for Copilot only'; }
-    if (state === 'copilot') { return 'Source: Copilot — click for Claude only'; }
-    if (state === 'claude') { return 'Source: Claude — click for Antigravity only'; }
-    return 'Source: Antigravity — click for All';
+    if (state === 'all') { return 'Source: All — click to filter by source'; }
+    return `Source: ${friendlySourceName(state as SessionSource)} — click to cycle`;
 }
 
 // ---------------------------------------------------------------------------

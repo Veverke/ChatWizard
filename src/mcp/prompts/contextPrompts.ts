@@ -1,4 +1,6 @@
 import { IMcpPrompt, IMcpTool, McpToolInput, McpToolResult } from '../mcpContracts';
+import { SessionIndex } from '../../index/sessionIndex';
+import { isArchitectureQuery } from '../../utils/queryClassifier';
 
 function extractText(result: McpToolResult): string {
     return result.content
@@ -84,33 +86,42 @@ export class QueryHistoryPrompt implements IMcpPrompt {
                     return { content: [{ type: 'text', text: prompt }] };
                 }
 
+                const mermaidHint = isArchitectureQuery(realQuery)
+                    ? '\nIf the question concerns architecture, system design, component relationships, or data flow,\ninclude a Mermaid diagram (```mermaid ... ```) in your response to illustrate the structure\ndescribed in the sessions above. Use flowchart LR or sequenceDiagram as appropriate.'
+                    : '';
+
                 const consolidatedContent = sessionContents.join('\n\n---\n\n');
                 const prompt = [
                     `The user confirmed that the following ${cappedIds.length} session(s) are relevant to their query.`,
                     'Synthesise ALL session content below into a single consolidated answer.',
                     'Cover what each session contributes — if sessions agree, unify; if they differ, note the nuance.',
                     'Avoid repeating the same advice across sessions. Be direct and actionable.',
+                    mermaidHint,
                     '',
                     'Session content:',
                     consolidatedContent,
                     '',
                     `Original query: ${realQuery}`,
-                ].join('\n');
+                ].filter(s => s !== undefined).join('\n');
                 return { content: [{ type: 'text', text: prompt }] };
             }
 
             // Fallback: no session IDs provided or sessions not found in index.
             const contextText = await runTool(this.getContextTool, { topic: realQuery, limit: 8 });
+            const mermaidHintFallback = isArchitectureQuery(realQuery)
+                ? '\nIf the question concerns architecture, system design, component relationships, or data flow,\ninclude a Mermaid diagram (```mermaid ... ```) in your response to illustrate the structure\ndescribed in the sessions above. Use flowchart LR or sequenceDiagram as appropriate.'
+                : '';
             const prompt = [
                 'The user confirmed that one or more of the previously listed sessions are relevant.',
                 'Using the sessions below, provide a direct answer or actionable resolution steps as appropriate.',
                 'Cite each relevant session by title and date. Draw on its content to ground your response.',
+                mermaidHintFallback,
                 '',
                 'Sessions:',
                 contextText || '(none)',
                 '',
                 `Query: ${realQuery}`,
-            ].join('\n');
+            ].filter(s => s !== undefined).join('\n');
             return { content: [{ type: 'text', text: prompt }] };
         }
 
@@ -164,7 +175,11 @@ export class ContinueFromHistoryPrompt implements IMcpPrompt {
         },
     ];
 
-    constructor(private readonly listRecentTool: IMcpTool, private readonly getContextTool: IMcpTool) {}
+    constructor(
+        private readonly listRecentTool: IMcpTool,
+        private readonly getContextTool: IMcpTool,
+        private readonly sessionIndex?: SessionIndex,
+    ) {}
 
     async render(args: Record<string, string>): Promise<McpToolResult> {
         const topic = (args.topic ?? '').trim();
@@ -173,16 +188,91 @@ export class ContinueFromHistoryPrompt implements IMcpPrompt {
             ? await runTool(this.getContextTool, { topic, limit: 5 })
             : '';
 
+        // Look up Chronicle checkpoint data for the most recent Copilot session.
+        let chronicleSection = '';
+        let chronicleFooter = '';
+        if (this.sessionIndex) {
+            const copilotSessions = this.sessionIndex.getAllSummaries()
+                .filter(s => s.source === 'copilot');
+            const mostRecent = copilotSessions[0]; // already sorted by updatedAt desc
+            if (mostRecent) {
+                const full = this.sessionIndex.get(mostRecent.id);
+                const chronicle = full?.chronicleData;
+                if (chronicle) {
+                    const parts: string[] = [];
+                    if (chronicle.overview) { parts.push(`**Overview:** ${chronicle.overview}`); }
+                    if (chronicle.workDone) { parts.push(`**Work done:** ${chronicle.workDone}`); }
+                    if (chronicle.technicalDetails) { parts.push(`**Technical details:** ${chronicle.technicalDetails}`); }
+                    if (chronicle.nextSteps) { parts.push(`**Suggested next steps:** ${chronicle.nextSteps}`); }
+                    if (parts.length > 0) {
+                        chronicleSection = [
+                            '',
+                            'Copilot Chronicle checkpoint for the most recent session:',
+                            ...parts,
+                        ].join('\n');
+                        chronicleFooter = '\n\n*Chronicle checkpoint data provided by Copilot Chronicle.*';
+                    }
+                }
+            }
+        }
+
         const prompt = [
             'You are continuing an ongoing codebase session.',
             'First summarise the most recent relevant work from history, then propose the top 3 next actions.',
             '',
             'Recent sessions:',
             recentText || '(none)',
+            chronicleSection,
             topic ? '' : '',
             topic ? `Topic focus: ${topic}` : '',
             topic ? 'Topic-specific context:' : '',
             topic ? (contextText || '(none)') : '',
+            chronicleFooter,
+        ].filter(s => s !== undefined && s !== null).join('\n');
+
+        return { content: [{ type: 'text', text: prompt }] };
+    }
+}
+
+/**
+ * Slash prompt: surface reusable prompts from the user's prompt library.
+ */
+export class GetPromptsPrompt implements IMcpPrompt {
+    readonly name = 'chatwizard.getPrompts';
+    readonly description = 'Find reusable prompts from your chat history';
+    readonly arguments = [
+        {
+            name: 'topic',
+            description: 'Optional topic or context to rank prompts by relevance.',
+            required: false,
+        },
+    ];
+
+    constructor(
+        private readonly getContextTool: IMcpTool,
+        private readonly listRecentTool: IMcpTool,
+    ) {}
+
+    async render(args: Record<string, string>): Promise<McpToolResult> {
+        const topic = (args.topic ?? '').trim();
+        const recentText = await runTool(this.listRecentTool, { limit: 5 });
+        const contextText = topic
+            ? await runTool(this.getContextTool, { topic, limit: 8 })
+            : '';
+
+        const prompt = [
+            'You are a prompt engineering assistant. Extract and surface the most reusable, high-quality prompts from the sessions below.',
+            'A reusable prompt is a user message that asks for something broadly applicable — not overly specific to one debugging incident.',
+            'For each prompt you surface, include: the verbatim text, the source session title, and a one-sentence description of its intent.',
+            'Format as a numbered Markdown list.',
+            '',
+            'Recent sessions:',
+            recentText || '(none)',
+            topic ? `\nTopic filter: ${topic}` : '',
+            topic ? '\nTopic-specific sessions:' : '',
+            topic ? (contextText || '(none)') : '',
+            '',
+            'Return the top 10 reusable prompts, ranked by generality and reusability.',
         ].filter(Boolean).join('\n');
 
         return { content: [{ type: 'text', text: prompt }] };
@@ -212,6 +302,11 @@ export const PROMPT_DEFS: ReadonlyArray<{
     {
         command: 'continueFromHistory',
         description: 'Continue from recent sessions',
+        argName: 'topic',
+    },
+    {
+        command: 'getPrompts',
+        description: 'Find reusable prompts from your chat history',
         argName: 'topic',
     },
 ];

@@ -1,6 +1,7 @@
 // src/index/sessionIndex.ts
 
-import { Session, SessionSummary, Prompt, SessionSource, IndexedCodeBlock } from '../types/index';
+import { Session, SessionSummary, Prompt, SessionSource, IndexedCodeBlock, ChronicleData, SessionMetadata } from '../types/index';
+import type { SidecarMetadataStore } from './sidecarMetadataStore';
 
 export type SessionIndexEvent =
     | { type: 'upsert'; session: Session }
@@ -54,6 +55,9 @@ export class SessionIndex {
     private _version = 0;
     private _codeBlockCache: IndexedCodeBlock[] | null = null;
     private _promptCache: Prompt[] | null = null;
+    /** Preloaded sidecar metadata — set by `setSidecarCache()` after async load */
+    private _sidecarCache: Map<string, SessionMetadata> | null = null;
+    private _sidecarStore: SidecarMetadataStore | null = null;
 
     constructor() {
         this.sessions = new Map();
@@ -61,6 +65,36 @@ export class SessionIndex {
 
     /** Monotonically-increasing counter — incremented on every upsert, remove, or batchUpsert. */
     get version(): number { return this._version; }
+
+    /**
+     * Wires in the sidecar metadata store.
+     * Call `store.load()` first, then pass the resulting Map here so the store
+     * is immediately available for sync title/pin lookups.
+     */
+    setSidecarStore(store: SidecarMetadataStore, cache: Map<string, SessionMetadata>): void {
+        this._sidecarStore = store;
+        this._sidecarCache = cache;
+    }
+
+    /**
+     * Returns the effective title for a session, applying any `customTitle` override
+     * from the sidecar metadata store.
+     */
+    getTitleFor(sessionId: string): string | undefined {
+        const custom = this._sidecarCache?.get(sessionId)?.customTitle;
+        if (custom) { return custom; }
+        return this.sessions.get(sessionId)?.title;
+    }
+
+    /** Returns the sidecar metadata for a session, if available. */
+    getSidecarMeta(sessionId: string): SessionMetadata | undefined {
+        return this._sidecarCache?.get(sessionId);
+    }
+
+    /** Exposes the sidecar store for commands that need to write metadata. */
+    get sidecarStore(): SidecarMetadataStore | null {
+        return this._sidecarStore;
+    }
 
     addChangeListener(fn: () => void): { dispose: () => void } {
         this._changeListeners.push(fn);
@@ -144,6 +178,26 @@ export class SessionIndex {
     /** Get a full session by id. Returns undefined if not found. */
     get(sessionId: string): Session | undefined {
         return this.sessions.get(sessionId);
+    }
+
+    /**
+     * Attach Chronicle checkpoint data to existing Copilot sessions.
+     * Matches by sessionId. Silently ignores IDs that are not in the index.
+     */
+    mergeChronicleData(entries: Array<{ sessionId: string; data: ChronicleData }>): void {
+        let changed = false;
+        for (const { sessionId, data } of entries) {
+            const session = this.sessions.get(sessionId);
+            if (session) {
+                this.sessions.set(sessionId, { ...session, chronicleData: data });
+                changed = true;
+            }
+        }
+        if (changed) {
+            this._version++;
+            this._invalidateCaches();
+            this._notifyListeners();
+        }
     }
 
     /** Get all sessions as lightweight summaries, sorted by updatedAt descending. */

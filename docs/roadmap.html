@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
@@ -13,900 +13,702 @@
       --accent2: #3fb950;
       --accent3: #d29922;
       --accent4: #f78166;
+      --accent5: #bc8cff;
       --text: #e6edf3;
       --muted: #8b949e;
-      --done-bg: #1c2b1c;
       --done-border: #3fb950;
-      --progress-bg: #1c2535;
-      --progress-border: #58a6ff;
-      --todo-bg: #1c1c1c;
-      --todo-border: #30363d;
     }
-
     * { box-sizing: border-box; margin: 0; padding: 0; }
-
     body {
-      background: var(--bg);
-      color: var(--text);
+      background: var(--bg); color: var(--text);
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      font-size: 14px;
-      line-height: 1.5;
-      padding: 2rem;
+      font-size: 14px; line-height: 1.5; padding: 2rem;
+      max-width: 1100px; margin: 0 auto;
     }
-
-    header {
-      margin-bottom: 2.5rem;
+    header { margin-bottom: 2.5rem; }
+    header h1 { font-size: 2rem; font-weight: 700; color: var(--accent); margin-bottom: 0.25rem; }
+    header p { color: var(--muted); font-size: 0.95rem; }
+    .version-pill {
+      display: inline-block; background: #1c2b1c; border: 1px solid #3fb950;
+      color: #3fb950; font-size: 0.78rem; font-weight: 600;
+      padding: 0.15rem 0.6rem; border-radius: 20px; margin-left: 0.6rem; vertical-align: middle;
     }
-
-    header h1 {
-      font-size: 2rem;
-      font-weight: 700;
-      color: var(--accent);
-      margin-bottom: 0.25rem;
-    }
-
-    header p {
-      color: var(--muted);
-      font-size: 0.95rem;
-    }
-
-    /* Legend */
-    .legend {
-      display: flex;
-      gap: 1.5rem;
-      flex-wrap: wrap;
-      margin-bottom: 2rem;
-      padding: 0.75rem 1rem;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-    }
-
-    .legend-item {
-      display: flex;
-      align-items: center;
-      gap: 0.4rem;
-      font-size: 0.85rem;
-      color: var(--muted);
-    }
-
-    .legend-dot {
-      width: 12px;
-      height: 12px;
-      border-radius: 50%;
-      flex-shrink: 0;
-    }
-
-    /* Summary cards */
     .summary {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-      gap: 1rem;
-      margin-bottom: 2.5rem;
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 1rem; margin-bottom: 2.5rem;
     }
-
     .card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 1rem 1.25rem;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 10px; padding: 1rem 1.25rem;
     }
-
-    .card .label {
-      font-size: 0.78rem;
-      color: var(--muted);
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      margin-bottom: 0.35rem;
+    .card .label { font-size: 0.78rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.35rem; }
+    .card .value { font-size: 1.5rem; font-weight: 700; color: var(--text); }
+    .card .sub { font-size: 0.78rem; color: var(--muted); margin-top: 0.15rem; }
+    .legend {
+      display: flex; gap: 1.5rem; flex-wrap: wrap; margin-bottom: 2rem;
+      padding: 0.75rem 1rem; background: var(--surface);
+      border: 1px solid var(--border); border-radius: 8px;
     }
-
-    .card .value {
-      font-size: 1.5rem;
-      font-weight: 700;
-      color: var(--text);
-    }
-
-    .card .sub {
-      font-size: 0.78rem;
-      color: var(--muted);
-      margin-top: 0.15rem;
-    }
-
-    /* Timeline */
-    .timeline {
-      position: relative;
-      padding-left: 2rem;
-    }
-
-    .timeline::before {
-      content: '';
-      position: absolute;
-      left: 7px;
-      top: 0;
-      bottom: 0;
-      width: 2px;
-      background: var(--border);
-    }
-
-    .phase {
-      position: relative;
-      margin-bottom: 1.5rem;
-    }
-
-    .phase-dot {
-      position: absolute;
-      left: -1.75rem;
-      top: 1.1rem;
-      width: 16px;
-      height: 16px;
-      border-radius: 50%;
-      border: 2px solid var(--bg);
-      flex-shrink: 0;
-    }
-
-    .phase-card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      overflow: hidden;
-      transition: border-color 0.15s;
-    }
-
-    .phase-card:hover {
-      border-color: var(--accent);
-    }
-
-    .phase-header {
-      display: flex;
-      align-items: center;
-      gap: 0.75rem;
-      padding: 0.85rem 1.25rem;
-      cursor: pointer;
-      user-select: none;
-    }
-
-    .phase-number {
-      font-size: 0.72rem;
-      font-weight: 700;
-      color: var(--muted);
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      min-width: 56px;
-    }
-
-    .phase-title {
-      font-size: 1rem;
-      font-weight: 600;
-      flex: 1;
-    }
-
-    .badges {
-      display: flex;
-      gap: 0.5rem;
-      flex-wrap: wrap;
-      align-items: center;
-    }
-
-    .badge {
-      font-size: 0.72rem;
-      font-weight: 600;
-      padding: 0.2rem 0.55rem;
-      border-radius: 20px;
-      white-space: nowrap;
-    }
-
-    .badge-effort    { background: #1c2535; color: #58a6ff; border: 1px solid #2d4a7a; }
-    .badge-complex   { background: #2a1f1c; color: #f0883e; border: 1px solid #7a4020; }
-    .badge-complex.low  { background: #1c2b1c; color: #3fb950; border: 1px solid #2a5a2a; }
-    .badge-complex.med  { background: #2a2a1c; color: #d29922; border: 1px solid #5a4a10; }
-    .badge-complex.high { background: #2a1f1c; color: #f78166; border: 1px solid #7a3020; }
-    .badge-audience  { background: #1c1c2b; color: #bc8cff; border: 1px solid #3d2a7a; }
-
-    .chevron {
-      color: var(--muted);
-      font-size: 0.9rem;
-      transition: transform 0.2s;
-    }
-
-    .phase-card.open .chevron {
-      transform: rotate(90deg);
-    }
-
-    /* Status strip */
-    .status-strip {
-      height: 3px;
-    }
-
-    .status-strip.done     { background: var(--done-border); }
-    .status-strip.progress { background: var(--accent); }
-    .status-strip.todo     { background: var(--border); }
-
-    /* Phase state borders */
-    .phase-card.done     { border-color: var(--done-border); }
-    .phase-card.progress { border-color: var(--accent); }
-
-    /* Phase body */
-    .phase-body {
-      display: none;
-      padding: 0 1.25rem 1rem;
-      border-top: 1px solid var(--border);
-    }
-
-    .phase-card.open .phase-body {
-      display: block;
-    }
-
-    .phase-meta {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 1.5rem;
-      padding: 0.75rem 0;
-      margin-bottom: 0.75rem;
-      font-size: 0.83rem;
-      color: var(--muted);
-    }
-
-    .phase-meta span strong {
-      color: var(--text);
-    }
-
-    .phase-desc {
-      color: var(--muted);
-      font-size: 0.88rem;
-      margin-bottom: 0.9rem;
-      line-height: 1.6;
-    }
-
-    /* Task list */
-    .task-list {
-      list-style: none;
-      display: flex;
-      flex-direction: column;
-      gap: 0.3rem;
-    }
-
-    .task-list li {
-      display: flex;
-      align-items: flex-start;
-      gap: 0.5rem;
-      font-size: 0.85rem;
-      color: var(--muted);
-      padding: 0.3rem 0;
-    }
-
-    .task-check {
-      width: 16px;
-      height: 16px;
-      border-radius: 4px;
-      border: 1.5px solid var(--border);
-      flex-shrink: 0;
-      margin-top: 1px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 10px;
-      cursor: pointer;
-      transition: background 0.15s, border-color 0.15s;
-    }
-
-    .task-check.checked {
-      background: var(--accent2);
-      border-color: var(--accent2);
-      color: #000;
-    }
-
-    .task-check.checked + .task-text {
-      text-decoration: line-through;
-      opacity: 0.5;
-    }
-
-    /* Effort bar */
-    .effort-bar-wrap {
-      margin-top: 0.75rem;
-    }
-
-    .effort-bar-label {
-      font-size: 0.75rem;
-      color: var(--muted);
-      margin-bottom: 0.3rem;
-    }
-
-    .effort-bar {
-      height: 6px;
-      background: var(--border);
-      border-radius: 4px;
-      overflow: hidden;
-    }
-
-    .effort-bar-fill {
-      height: 100%;
-      border-radius: 4px;
-      transition: width 0.4s;
-    }
-
-    /* Timeline bar (top of page) */
-    .gantt {
-      margin-bottom: 2.5rem;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      overflow: hidden;
-    }
-
-    .gantt-title {
-      padding: 0.75rem 1.25rem;
-      font-size: 0.85rem;
-      font-weight: 600;
-      color: var(--muted);
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
-      border-bottom: 1px solid var(--border);
-    }
-
-    .gantt-body {
-      padding: 0.75rem 1.25rem 1.25rem;
-      overflow-x: auto;
-    }
-
-    .gantt-row {
-      display: flex;
-      align-items: center;
-      gap: 0.75rem;
-      margin-bottom: 0.45rem;
-    }
-
-    .gantt-row-label {
-      font-size: 0.78rem;
-      color: var(--muted);
-      min-width: 160px;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    .gantt-track {
-      flex: 1;
-      height: 20px;
-      background: var(--bg);
-      border-radius: 4px;
-      position: relative;
-      min-width: 600px;
-    }
-
-    .gantt-bar {
-      position: absolute;
-      height: 100%;
-      border-radius: 4px;
-      display: flex;
-      align-items: center;
-      padding: 0 6px;
-      font-size: 0.7rem;
-      font-weight: 600;
-      white-space: nowrap;
-      overflow: hidden;
-    }
-
-    .gantt-weeks {
-      display: flex;
-      gap: 0;
-      margin-bottom: 0.5rem;
-      margin-left: 160px + 0.75rem;
-    }
-
-    .gantt-week-labels {
-      display: flex;
-      margin-left: calc(160px + 0.75rem);
-      min-width: 600px;
-      margin-bottom: 0.5rem;
-    }
-
-    .gantt-week-label {
-      font-size: 0.7rem;
-      color: var(--muted);
-      flex: 1;
-      border-left: 1px solid var(--border);
-      padding-left: 3px;
-    }
-
-    /* Status colors for dots */
-    .dot-todo     { background: var(--border); }
-    .dot-progress { background: var(--accent); }
-    .dot-done     { background: var(--accent2); }
+    .legend-item { display: flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; color: var(--muted); }
+    .legend-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+    .gantt { margin-bottom: 2.5rem; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+    .gantt-title { padding: 0.75rem 1.25rem; font-size: 0.85rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; border-bottom: 1px solid var(--border); }
+    .gantt-body { padding: 0.75rem 1.25rem 1.25rem; overflow-x: auto; }
+    .gantt-header { display: flex; margin-left: 170px; min-width: 600px; margin-bottom: 0.5rem; }
+    .gantt-quarter-label { flex: 1; font-size: 0.7rem; color: var(--muted); border-left: 1px solid var(--border); padding-left: 4px; white-space: nowrap; }
+    .gantt-row { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.4rem; }
+    .gantt-row-label { font-size: 0.78rem; color: var(--muted); width: 162px; min-width: 162px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .gantt-track { flex: 1; height: 22px; background: var(--bg); border-radius: 4px; position: relative; min-width: 600px; }
+    .gantt-bar { position: absolute; height: 100%; border-radius: 4px; display: flex; align-items: center; padding: 0 8px; font-size: 0.7rem; font-weight: 600; white-space: nowrap; overflow: hidden; }
+    .gantt-now { position: absolute; top: 0; bottom: 0; width: 2px; background: rgba(255,255,255,0.25); z-index: 1; }
+    .section-header { display: flex; align-items: center; gap: 0.75rem; margin: 2rem 0 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border); }
+    .section-header h2 { font-size: 1.15rem; font-weight: 700; color: var(--text); }
+    .section-badge { font-size: 0.72rem; font-weight: 700; padding: 0.2rem 0.6rem; border-radius: 20px; }
+    .section-badge.done   { background: #1c2b1c; color: #3fb950; border: 1px solid #3fb950; }
+    .section-badge.todo   { background: #1c2535; color: #58a6ff; border: 1px solid #3d6a9e; }
+    .section-badge.future { background: #2a1f3d; color: #bc8cff; border: 1px solid #6a3aaa; }
+    .timeline { position: relative; padding-left: 2rem; }
+    .timeline::before { content: ''; position: absolute; left: 7px; top: 0; bottom: 0; width: 2px; background: var(--border); }
+    .phase { position: relative; margin-bottom: 1.25rem; }
+    .phase-dot { position: absolute; left: -1.75rem; top: 1.1rem; width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--bg); flex-shrink: 0; }
+    .phase-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; transition: border-color 0.15s; }
+    .phase-card:hover { border-color: var(--accent); }
+    .phase-card.done  { border-color: var(--done-border); }
+    .phase-card.p1-tier { border-color: #f78166; }
+    .phase-header { display: flex; align-items: center; gap: 0.75rem; padding: 0.85rem 1.25rem; cursor: pointer; user-select: none; }
+    .phase-number { font-size: 0.72rem; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; min-width: 64px; }
+    .phase-title { font-size: 1rem; font-weight: 600; flex: 1; }
+    .badges { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
+    .badge { font-size: 0.72rem; font-weight: 600; padding: 0.2rem 0.55rem; border-radius: 20px; white-space: nowrap; }
+    .badge-effort   { background: #1c2535; color: #58a6ff; border: 1px solid #2d4a7a; }
+    .badge-released { background: #1c2b1c; color: #3fb950; border: 1px solid #2a5a2a; }
+    .badge-p1       { background: #2a1f1c; color: #f78166; border: 1px solid #7a3020; }
+    .badge-p2       { background: #2a2a1c; color: #d29922; border: 1px solid #5a4a10; }
+    .badge-p3       { background: #1c2535; color: #58a6ff; border: 1px solid #2d4a7a; }
+    .badge-p4       { background: #2a1f3d; color: #bc8cff; border: 1px solid #6a3aaa; }
+    .badge-audience { background: #1c1c2b; color: #bc8cff; border: 1px solid #3d2a7a; }
+    .chevron { color: var(--muted); font-size: 0.9rem; transition: transform 0.2s; }
+    .phase-card.open .chevron { transform: rotate(90deg); }
+    .status-strip { height: 3px; }
+    .status-strip.done { background: var(--done-border); }
+    .status-strip.p1   { background: #f78166; }
+    .status-strip.p2   { background: #d29922; }
+    .status-strip.p3   { background: #58a6ff; }
+    .status-strip.p4   { background: #bc8cff; }
+    .phase-body { display: none; padding: 0 1.25rem 1rem; border-top: 1px solid var(--border); }
+    .phase-card.open .phase-body { display: block; }
+    .phase-desc { color: var(--muted); font-size: 0.88rem; margin-bottom: 0.9rem; line-height: 1.6; padding-top: 0.75rem; }
+    .task-list { list-style: none; display: flex; flex-direction: column; gap: 0.25rem; }
+    .task-list li { display: flex; align-items: flex-start; gap: 0.5rem; font-size: 0.85rem; color: var(--muted); padding: 0.25rem 0; border-bottom: 1px solid rgba(48,54,61,0.4); }
+    .task-list li:last-child { border-bottom: none; }
+    .task-check { width: 16px; height: 16px; border-radius: 4px; border: 1.5px solid var(--border); flex-shrink: 0; margin-top: 1px; display: flex; align-items: center; justify-content: center; font-size: 10px; cursor: pointer; transition: background 0.15s, border-color 0.15s; }
+    .task-check.checked { background: var(--accent2); border-color: var(--accent2); color: #000; }
+    .task-check.checked + .task-meta { opacity: 0.45; }
+    .task-check.checked + .task-meta .task-name { text-decoration: line-through; }
+    .task-meta { flex: 1; }
+    .task-name { color: var(--text); font-weight: 500; }
+    .task-desc { font-size: 0.8rem; color: var(--muted); margin-top: 1px; }
+    .task-badges { display: flex; gap: 0.3rem; margin-top: 0.2rem; flex-wrap: wrap; }
+    .task-badge { font-size: 0.68rem; font-weight: 600; padding: 0.1rem 0.4rem; border-radius: 12px; }
+    .tb-effort-xs { background: #1c2b1c; color: #3fb950; }
+    .tb-effort-s  { background: #1c2535; color: #58a6ff; }
+    .tb-effort-m  { background: #2a2a1c; color: #d29922; }
+    .tb-effort-l  { background: #2a1f1c; color: #f78166; }
+    .tb-effort-xl { background: #2a1f3d; color: #bc8cff; }
+    .tb-gap { background: #1c1c2b; color: #bc8cff; }
+    .comp-table-wrap { margin: 2rem 0; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+    .comp-table-title { padding: 0.75rem 1.25rem; font-size: 0.85rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; border-bottom: 1px solid var(--border); }
+    .comp-table-wrap table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+    .comp-table-wrap th { text-align: left; padding: 0.55rem 1rem; background: rgba(255,255,255,0.03); color: var(--muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--border); }
+    .comp-table-wrap td { padding: 0.55rem 1rem; color: var(--muted); border-bottom: 1px solid rgba(48,54,61,0.5); vertical-align: top; }
+    .comp-table-wrap td:first-child { color: var(--text); font-weight: 600; }
+    .comp-table-wrap tr:last-child td { border-bottom: none; }
+    .mono-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; margin: 1.5rem 0; }
+    .mono-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 1.25rem; }
+    .mono-card.active { border-color: var(--accent2); }
+    .mono-card.next   { border-color: var(--accent3); }
+    .mono-card.plan   { border-color: var(--accent); }
+    .mono-card.future { border-color: var(--accent5); }
+    .mono-card .tier-name { font-size: 1rem; font-weight: 700; margin-bottom: 0.25rem; }
+    .mono-card.active .tier-name { color: var(--accent2); }
+    .mono-card.next   .tier-name { color: var(--accent3); }
+    .mono-card.plan   .tier-name { color: var(--accent); }
+    .mono-card.future .tier-name { color: var(--accent5); }
+    .mono-card .tier-price { font-size: 0.85rem; color: var(--muted); margin-bottom: 0.75rem; }
+    .mono-card .tier-status { font-size: 0.72rem; font-weight: 600; padding: 0.15rem 0.5rem; border-radius: 12px; display: inline-block; margin-bottom: 0.75rem; }
+    .mono-card.active .tier-status { background: #1c2b1c; color: #3fb950; }
+    .mono-card.next   .tier-status { background: #2a2a1c; color: #d29922; }
+    .mono-card.plan   .tier-status { background: #1c2535; color: #58a6ff; }
+    .mono-card.future .tier-status { background: #2a1f3d; color: #bc8cff; }
+    .mono-card ul { list-style: none; font-size: 0.82rem; color: var(--muted); }
+    .mono-card ul li { padding: 0.2rem 0; padding-left: 1rem; position: relative; }
+    .mono-card ul li::before { content: "\203A"; position: absolute; left: 0; color: var(--border); }
+    .dot-done { background: #3fb950; }
+    .dot-p1   { background: #f78166; }
+    .dot-p2   { background: #d29922; }
+    .dot-p3   { background: #58a6ff; }
+    .dot-p4   { background: #bc8cff; }
   </style>
 </head>
 <body>
 
 <header>
-  <h1>ChatWizard</h1>
-  <p>VS Code Extension — Development Roadmap &amp; Phase Tracker</p>
+  <h1>ChatWizard <span class="version-pill">v1.4.0 Shipped</span></h1>
+  <p>VS Code Extension &mdash; Release History &amp; Development Roadmap &nbsp;&middot;&nbsp; Last updated: May 2026</p>
 </header>
 
-<!-- Summary Cards -->
 <div class="summary">
   <div class="card">
-    <div class="label">Total Phases</div>
-    <div class="value">10</div>
-    <div class="sub">10 done · 0 remaining</div>
-  </div>
-  <div class="card">
-    <div class="label">Total Effort</div>
-    <div class="value">~17.5w</div>
-    <div class="sub">estimated weeks</div>
-  </div>
-  <div class="card">
-    <div class="label">Target Audience</div>
-    <div class="value" style="font-size:1rem; padding-top:4px">Power-user devs</div>
-    <div class="sub">heavy AI chat users</div>
+    <div class="label">Current Version</div>
+    <div class="value" style="font-size:1.25rem;padding-top:3px">v1.4.0</div>
+    <div class="sub">Released May 5 2026</div>
   </div>
   <div class="card">
     <div class="label">Data Sources</div>
-    <div class="value">2</div>
-    <div class="sub">Copilot Chat + Claude Code</div>
+    <div class="value">8</div>
+    <div class="sub">Copilot &middot; Claude &middot; Cursor &middot; Cline &middot; Roo Code &middot; Windsurf &middot; Aider &middot; Antigravity</div>
   </div>
   <div class="card">
-    <div class="label">External Deps</div>
-    <div class="value">Local only</div>
-    <div class="sub">no cloud · opt-in local telemetry</div>
+    <div class="label">Features Shipped</div>
+    <div class="value">50+</div>
+    <div class="sub">across 5 releases</div>
+  </div>
+  <div class="card">
+    <div class="label">Planned Features</div>
+    <div class="value">56</div>
+    <div class="sub">P1 &rarr; P4 roadmap tiers</div>
+  </div>
+  <div class="card">
+    <div class="label">Monetization</div>
+    <div class="value" style="font-size:1rem;padding-top:4px">4 Tiers</div>
+    <div class="sub">Free &rarr; Pro &rarr; Team &rarr; Enterprise</div>
   </div>
 </div>
 
-<!-- Legend -->
 <div class="legend">
-  <div class="legend-item"><div class="legend-dot" style="background:#3fb950"></div> Done</div>
-  <div class="legend-item"><div class="legend-dot" style="background:#58a6ff"></div> In Progress</div>
-  <div class="legend-item"><div class="legend-dot" style="background:#30363d"></div> To Do</div>
-  <div class="legend-item"><div class="legend-dot" style="background:#d29922"></div> Medium complexity</div>
-  <div class="legend-item"><div class="legend-dot" style="background:#f78166"></div> High complexity</div>
-  <div class="legend-item"><div class="legend-dot" style="background:#3fb950"></div> Low complexity</div>
+  <div class="legend-item"><div class="legend-dot dot-done"></div> Shipped</div>
+  <div class="legend-item"><div class="legend-dot dot-p1"></div> P1 &mdash; Do Now</div>
+  <div class="legend-item"><div class="legend-dot dot-p2"></div> P2 &mdash; Next Quarter</div>
+  <div class="legend-item"><div class="legend-dot dot-p3"></div> P3 &mdash; H2 2026</div>
+  <div class="legend-item"><div class="legend-dot dot-p4"></div> P4 &mdash; 2027+ / Corporate</div>
+  <div class="legend-item" style="margin-left:auto;font-size:0.78rem;">
+    <strong style="color:var(--text)">Effort:</strong>&nbsp;XS &lt;1d &middot; S 1&ndash;3d &middot; M 1&ndash;2w &middot; L 3&ndash;6w &middot; XL 2+mo
+  </div>
 </div>
 
-<!-- Gantt chart -->
 <div class="gantt">
-  <div class="gantt-title">Timeline Overview — 18 weeks</div>
+  <div class="gantt-title">Timeline Overview &mdash; Jan 2026 &rarr; 2027+</div>
   <div class="gantt-body">
-    <div class="gantt-week-labels" id="weekLabels"></div>
+    <div class="gantt-header" id="quarterLabels"></div>
     <div id="ganttRows"></div>
   </div>
 </div>
 
-<!-- Phase timeline -->
-<div class="timeline" id="timeline"></div>
+<div class="section-header">
+  <h2>Released Milestones</h2>
+  <span class="section-badge done">&#10003; All Shipped</span>
+</div>
+<div class="timeline" id="shippedTimeline"></div>
+
+<div class="section-header" style="margin-top:3rem">
+  <h2>Upcoming Roadmap</h2>
+  <span class="section-badge todo">56 features across 4 tiers</span>
+</div>
+<div class="timeline" id="roadmapTimeline"></div>
+
+<div class="section-header" style="margin-top:3rem">
+  <h2>Competitive Landscape</h2>
+  <span class="section-badge todo">Top 10 Tools &mdash; May 2026</span>
+</div>
+<div class="comp-table-wrap">
+  <div class="comp-table-title">VS Code Marketplace &amp; Broader Market</div>
+  <table>
+    <thead><tr><th>#</th><th>Tool</th><th>Type</th><th>Scale</th><th>Key Strengths</th><th>ChatWizard Gap</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>Pieces for Developers</td><td>VS Code + desktop + mobile</td><td>500K+</td><td>On-device ML search, AI descriptions per snippet, JetBrains/Neovim/Chrome/Slack integrations, cross-machine sync</td><td>No AI descriptions, no web/mobile, no entity extraction, no JetBrains plugin</td></tr>
+      <tr><td>2</td><td>SpecStory</td><td>VS Code ext</td><td>~21K installs</td><td>Auto-saves every AI conversation as Markdown, zero setup, clean git integration</td><td>Single-source only; no cross-session search, no analytics, no MCP</td></tr>
+      <tr><td>3</td><td>Continue.dev</td><td>VS Code + JetBrains + Neovim</td><td>100K+</td><td>Open-source AI assistant, multi-provider (GPT/Claude/Ollama), active community</td><td>Not a history tool; no multi-source aggregation, no analytics</td></tr>
+      <tr><td>4</td><td>DevChat</td><td>VS Code ext</td><td>~30K</td><td>Team prompt sharing, session history, PR descriptions, Git/JIRA integration</td><td>No multi-source aggregation, cloud-dependent for team features, no MCP</td></tr>
+      <tr><td>5</td><td>Copilot Chat History</td><td>VS Code ext</td><td>~4.6K</td><td>Simple Copilot session viewer</td><td>Single-source; no search, no analytics, no export, no MCP</td></tr>
+      <tr><td>6</td><td>Recall</td><td>macOS app</td><td>50K+ est</td><td>Records everything on-screen, cross-app local ML search, annotations, Obsidian integration</td><td>macOS only; not VS Code native; not AI-session focused</td></tr>
+      <tr><td>7</td><td>mem0.ai</td><td>Library + cloud</td><td>10K+ GitHub stars</td><td>Persistent memory for AI agents, auto-extracts memories, API-first</td><td>Cloud-based (privacy trade-off); not VS Code native; requires API integration</td></tr>
+      <tr><td>8</td><td>PromptLayer / Langfuse</td><td>Cloud web app</td><td>50K+ (Langfuse)</td><td>LLM observability, prompt versioning, team analytics, cost tracking</td><td>Cloud-based; requires API key; no VS Code extension; no MCP</td></tr>
+      <tr><td>9</td><td>Opik &mdash; Chat History Exporter</td><td>VS Code ext</td><td>~552</td><td>Exports Cursor + Zencoder sessions to Opik cloud</td><td>Cloud-dependent, limited sources, no search, no privacy guarantee</td></tr>
+      <tr><td>10</td><td>CursorChat Downloader / Claude Code History</td><td>VS Code exts</td><td>975&ndash;1.7K</td><td>Single-source viewer/exporter</td><td>Single-source, no search, no analytics, no MCP</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="section-header" style="margin-top:3rem">
+  <h2>Monetization Roadmap</h2>
+  <span class="section-badge future">4-Tier Model</span>
+</div>
+<div class="mono-grid">
+  <div class="mono-card active">
+    <div class="tier-name">Individual Free</div>
+    <div class="tier-price">Open source &middot; free forever</div>
+    <div class="tier-status">&#10003; Current</div>
+    <ul>
+      <li>All 8 AI tool sources</li>
+      <li>Full-text + semantic search</li>
+      <li>MCP server (local)</li>
+      <li>Analytics, code blocks, prompt library</li>
+      <li>@chatwizard chat participant</li>
+    </ul>
+  </div>
+  <div class="mono-card next">
+    <div class="tier-name">Individual Pro</div>
+    <div class="tier-price">~$5&ndash;10/mo</div>
+    <div class="tier-status">&#9197; ~4&ndash;6 months</div>
+    <ul>
+      <li>Cross-machine cloud sync (user&#x2019;s own storage)</li>
+      <li>Unlimited session archive (free: 90-day rolling)</li>
+      <li>AI-generated session summaries (beyond free quota)</li>
+      <li>Advanced cost analytics</li>
+      <li>Priority support + early access</li>
+    </ul>
+  </div>
+  <div class="mono-card plan">
+    <div class="tier-name">Team</div>
+    <div class="tier-price">~$10&ndash;20/seat/mo</div>
+    <div class="tier-status">&#128203; ~9&ndash;12 months</div>
+    <ul>
+      <li>Team Knowledge Base (promoted sessions)</li>
+      <li>@chatwizard Agent app (one-click deploy)</li>
+      <li>Shared &amp; governed prompt library</li>
+      <li>Team analytics dashboard</li>
+      <li>Standup/sprint digest &rarr; Slack/Teams</li>
+    </ul>
+  </div>
+  <div class="mono-card future">
+    <div class="tier-name">Enterprise</div>
+    <div class="tier-price">~$30&ndash;50/seat/mo &middot; site licence, self-hosted</div>
+    <div class="tier-status">&#128302; ~18&ndash;24 months</div>
+    <ul>
+      <li>AI usage compliance &amp; audit trail (CISO sell)</li>
+      <li>Security &amp; data governance policy engine</li>
+      <li>SSO/SAML (Azure AD, Okta)</li>
+      <li>On-premise hub (Docker, zero cloud)</li>
+      <li>Private agent registry via MDM/SCCM</li>
+    </ul>
+  </div>
+</div>
 
 <script>
-  const TOTAL_WEEKS = 18;
+  const TOTAL_MONTHS = 24;
+  const nowMonth = 4;
 
-  const phases = [
+  const quarters = [
+    'Q1 2026','','','Q2 2026','','','Q3 2026','','','Q4 2026','','',
+    'Q1 2027','','','Q2 2027','','','Q3 2027','','','Q4 2027','',''
+  ];
+
+  const ganttItems = [
+    { label: 'v1.0  Foundation through Polish', start: 2,   span: 0.5, color: '#3fb950', border: '#2a7a3a' },
+    { label: 'v1.1  Workspaces + Timeline',     start: 2,   span: 0.5, color: '#3fb950', border: '#2a7a3a' },
+    { label: 'v1.2  5 Sources + Streaming',     start: 3,   span: 0.5, color: '#3fb950', border: '#2a7a3a' },
+    { label: 'v1.3  Semantic + Antigravity',     start: 3.5, span: 0.5, color: '#3fb950', border: '#2a7a3a' },
+    { label: 'v1.4  MCP + Chat Participant',     start: 4,   span: 0.5, color: '#3fb950', border: '#2a7a3a' },
+    { label: 'P1  Do Now (9 features)',          start: 4.5, span: 1.5, color: '#f78166', border: '#7a3020' },
+    { label: 'P2  Next Quarter (13 features)',   start: 6,   span: 3,   color: '#d29922', border: '#7a5a10' },
+    { label: 'P3  H2 2026 (22 features)',        start: 9,   span: 4,   color: '#58a6ff', border: '#2d4a7a' },
+    { label: 'P4  2027+ Corporate (12)',         start: 13,  span: 11,  color: '#bc8cff', border: '#6a3aaa' },
+  ];
+
+  const shipped = [
     {
-      id: 0,
-      title: "Foundation & Scaffolding",
-      status: "done",
-      effort: 3,
-      effortLabel: "3 weeks",
-      complexity: "high",
-      complexityLabel: "High",
-      startWeek: 0,
-      audience: "Internal / dev foundation",
-      goal: "Establish the extension skeleton, data-layer contracts, and file-system access patterns. No UI — purely the parsing and indexing engine.",
+      id: 'v1.0.0', title: 'Foundation through Polish (9 phases)', released: '2026-03-18',
+      audience: 'All users', effortLabel: '~10 weeks',
+      goal: 'Complete initial release covering all 9 development phases: parsers for Copilot + Claude, session management panel, full-text search, Markdown export, code block extraction, prompt library, analytics dashboard, duplicate prompt detection, timeline view, and production packaging.',
       tasks: [
-        "Scaffold VS Code extension with TypeScript (yo code)",
-        "Define data model interfaces: Session, Message, CodeBlock, Prompt",
-        "Implement Copilot JSONL parser (log replay → conversation state)",
-        "Implement Claude Code JSONL parser (~/.claude/projects/**/*.jsonl)",
-        "Implement Copilot workspace mapping reader (workspace.json + state.vscdb SQLite)",
-        "Implement FileSystemWatcher for live index updates",
-        "Build in-memory session index with basic CRUD",
-        "Unit tests for all parsers against sample fixture files",
-      ],
-      color: "#f78166",
-      barColor: "rgba(247,129,102,0.75)",
+        { name: 'Copilot JSONL + Claude JSONL parsers', desc: '' },
+        { name: 'Session management panel (TreeView + reader)', desc: '' },
+        { name: 'Unified full-text search (inverted index, QuickPick, regex, role filters)', desc: '' },
+        { name: 'Markdown export (single / all / multi-select / excerpt)', desc: '' },
+        { name: 'Code block extraction (language filter, sidebar panel, copy-to-clipboard)', desc: '' },
+        { name: 'Prompt library (deduplication, frequency ranking)', desc: '' },
+        { name: 'Analytics dashboard (Chart.js, token counts, daily activity chart, top terms)', desc: '' },
+        { name: 'Duplicate prompt detection (trigram similarity clusters, merge action)', desc: '' },
+        { name: 'Timeline view (chronological feed, month groups, workspace filter, jump-to-date)', desc: '' },
+        { name: 'Polish: configurable paths, local telemetry opt-in, marketplace packaging', desc: '' },
+      ]
     },
     {
-      id: 1,
-      title: "Session Management Panel",
-      status: "done",
-      effort: 2,
-      effortLabel: "2 weeks",
-      complexity: "medium",
-      complexityLabel: "Medium",
-      startWeek: 3,
-      audience: "All users",
-      goal: "First visible surface — a TreeView listing all sessions across all workspaces, with a reader view for each session.",
+      id: 'v1.1.0', title: 'Workspace Management \u00b7 Model Usage \u00b7 Timeline Enhancements', released: '2026-03-22',
+      audience: 'Power users', effortLabel: '~1 week',
+      goal: 'Manage Watched Workspaces command, new Model Usage sidebar panel, and five timeline enhancements: activity heat map, work burst clustering, topic drift ribbon, summary stats bar, inline keyword search.',
       tasks: [
-        "Register VS Code TreeView (vscode.window.createTreeView)",
-        "Show session nodes: title, source badge, workspace, date",
-        "Show per-session metadata: prompt count, response count",
-        "Implement sorting: by date, workspace, session length",
-        "Implement reader view (Webview panel rendering conversation as Markdown)",
-        "Wire FileSystemWatcher updates to refresh TreeView live",
-      ],
-      color: "#58a6ff",
-      barColor: "rgba(88,166,255,0.75)",
+        { name: 'Manage Watched Workspaces command', desc: 'shows size + session count per workspace, persists selection' },
+        { name: 'Model Usage panel', desc: 'per-model user request counts over configurable date range with workspace drill-down' },
+        { name: 'Timeline: activity heat map (click a day to filter)', desc: '' },
+        { name: 'Timeline: work burst clustering (2-hour window)', desc: '' },
+        { name: 'Timeline: per-week topic drift ribbon + summary stats bar (streak, active days)', desc: '' },
+        { name: 'Timeline: inline keyword search', desc: '' },
+      ]
     },
     {
-      id: 2,
-      title: "Unified Search",
-      status: "done",
-      effort: 2,
-      effortLabel: "2 weeks",
-      complexity: "medium-high",
-      complexityLabel: "Medium-High",
-      startWeek: 3,
-      audience: "All users",
-      goal: "Full-text search across all sessions, all workspaces, all supported extensions — separated by user prompts vs. LLM responses.",
+      id: 'v1.2.0', title: '5 New Sources \u00b7 Session Streaming \u00b7 UI Improvements', released: '2026-04-21',
+      audience: 'All users', effortLabel: '~4 weeks',
+      goal: 'Added Cline, Roo Code, Cursor (SQLite), Windsurf (SQLite), and Aider parsers. All five fully integrated across all panels. Session reader streaming, tree view pagination, date grouping, code block grouping by language, and prompt clustering performance improvements.',
       tasks: [
-        "Implement in-memory full-text index (trigram or inverted index)",
-        "Separate indexing of user prompts vs. LLM responses",
-        "Build search UI (QuickPick or dedicated Webview panel)",
-        "Display results with highlighted snippets",
-        "Add filters: source, workspace/project, date range",
-        "Add regex search support",
-        "Debounce live-search as user types",
-      ],
-      color: "#58a6ff",
-      barColor: "rgba(88,166,255,0.75)",
+        { name: 'Cline parser (api_conversation_history.json per task)', desc: '' },
+        { name: 'Roo Code parser (same format as Cline, different extension ID)', desc: '' },
+        { name: 'Cursor parser (SQLite state.vscdb, composer.composerData)', desc: '' },
+        { name: 'Windsurf/Codeium parser (SQLite state.vscdb, cascade.sessionData)', desc: '' },
+        { name: 'Aider parser (.aider.chat.history.md discovery and parsing)', desc: '' },
+        { name: 'Session reader streaming (500+ messages, load-earlier banner)', desc: '' },
+        { name: 'Tree view pagination (Load More N remaining)', desc: '' },
+        { name: 'Session grouping by date (Today / Yesterday / This Week / This Month)', desc: '' },
+        { name: 'Code block grouping by language with toolbar toggle', desc: '' },
+        { name: 'Prompt clustering: MinHash pre-filter + async batches, caps at 5K entries', desc: '' },
+        { name: 'CI: unit tests on Windows/Linux/macOS per release', desc: '' },
+      ]
     },
     {
-      id: 3,
-      title: "Export to Markdown",
-      status: "done",
-      effort: 1,
-      effortLabel: "1 week",
-      complexity: "low",
-      complexityLabel: "Low",
-      startWeek: 5,
-      audience: "All users",
-      goal: "Export any session or set of sessions to a navigable .md file, with VS Code Outline panel providing immediate navigation.",
+      id: 'v1.3.0', title: 'Semantic Search \u00b7 Antigravity Support \u00b7 Search Deduplication', released: '2026-04-30',
+      audience: 'All users', effortLabel: '~2 weeks',
+      goal: 'Local semantic/topic similarity search via @xenova/transformers (all-MiniLM-L6-v2 ONNX, 22 MB, fully on-device, no API key). Google Antigravity parser. Search results deduplicated by session.',
       tasks: [
-        "Implement Markdown serializer: H2 per user prompt, H3 per AI response, language-labeled code blocks",
-        "Add Export Session command from TreeView context menu; open exported file in VS Code editor",
-        "Add Export All Sessions command (bulk export with save dialog)",
-        "Add multi-select export via QuickPick (Export Selected Sessions)",
-        "Add session excerpt export — select specific messages from within the reader",
-      ],
-      color: "#3fb950",
-      barColor: "rgba(63,185,80,0.75)",
+        { name: 'Semantic search via local ONNX model (Xenova/all-MiniLM-L6-v2)', desc: 'user-message + AI-response paragraph vectors, persisted to semantic-embeddings.bin' },
+        { name: 'Semantic search scope toggle (Both / My questions / AI responses)', desc: '' },
+        { name: 'Google Antigravity parser (JSONL step logs, USER_REQUEST/PLANNER_RESPONSE XML)', desc: '' },
+        { name: 'Antigravity brand icon + CSS variable + .cw-badge-antigravity class', desc: '' },
+        { name: 'Analytics: Antigravity session summary card', desc: '' },
+        { name: 'Timeline: Antigravity added to source filter dropdown', desc: '' },
+        { name: 'Search: source filter cycle expanded to include Antigravity', desc: '' },
+        { name: 'Search results deduplicated by session (one highest-scoring hit per session)', desc: '' },
+      ]
     },
     {
-      id: 4,
-      title: "Code Block Extraction",
-      status: "done",
-      effort: 1.5,
-      effortLabel: "1.5 weeks",
-      complexity: "medium",
-      complexityLabel: "Medium",
-      startWeek: 5,
-      audience: "All users",
-      goal: "Index all fenced code blocks across all sessions. Make them browsable, filterable by language, and copyable.",
+      id: 'v1.4.0', title: 'MCP Server \u00b7 @chatwizard Chat Participant \u00b7 VS Code Insiders', released: '2026-05-05',
+      audience: 'Power users / AI agents', effortLabel: '~2 weeks',
+      goal: 'Full Model Context Protocol server (8 tools, 2 prompts, bearer token auth, localhost-only). Native @chatwizard Copilot chat participant with /queryHistory and /continueFromHistory. VS Code Insiders auto-detection. Improved full-text search relevance. Extension update notifier.',
       tasks: [
-        "Extend parsers to extract fenced code blocks with language, content, and session context",
-        "Build CodeBlockSearchEngine: language filter + content search + removeBySession/upsertBySession",
-        "Build CodeBlocksPanel Webview with sticky toolbar (language filter + search input)",
-        "Build CodeBlockTreeProvider TreeView for the activity bar sidebar",
-        "Add one-click copy-to-clipboard for each block",
-        "Show originating session title, date, source, workspace, and message role per block",
-      ],
-      color: "#d29922",
-      barColor: "rgba(210,153,34,0.75)",
-    },
-    {
-      id: 5,
-      title: "Prompt Library",
-      status: "done",
-      effort: 1.5,
-      effortLabel: "1.5 weeks",
-      complexity: "medium",
-      complexityLabel: "Medium",
-      startWeek: 7,
-      audience: "Power users",
-      goal: "Extract, deduplicate, and cluster all user-turn prompts for re-use. Surface frequency to show which prompts the user reaches for repeatedly.",
-      tasks: [
-        "Extract all user-turn messages across sessions; normalise prompt text",
-        "Deduplicate exact matches; count frequency across sessions and projects",
-        "Build PromptLibraryPanel Webview: searchable, sorted by frequency, copy button per entry",
-        "Build PromptLibraryViewProvider sidebar WebviewView tab (persistent panel in activity bar)",
-        "Add copy-to-clipboard per prompt",
-        "Show frequency count: 'Asked N times across M projects'",
-      ],
-      color: "#d29922",
-      barColor: "rgba(210,153,34,0.75)",
-    },
-    {
-      id: 6,
-      title: "Analytics & Usage Stats",
-      status: "done",
-      effort: 2,
-      effortLabel: "2 weeks",
-      complexity: "medium-high",
-      complexityLabel: "Medium-High",
-      startWeek: 8.5,
-      audience: "Power users / managers",
-      goal: "Aggregate statistics computed from the session index. Token counting using BPE tokenizers shipped locally by Copilot and Claude.",
-      tasks: [
-        "Token counting utility: chars/4 for Claude, words×1.3 for Copilot (no external deps)",
-        "Analytics engine: computeAnalytics() → sessions, prompts, responses, tokens by source",
-        "Compute aggregate metrics: daily activity, token totals, session counts over time",
-        "Surface most active projects (by token count), top 20 frequent user-prompt terms",
-        "Build Analytics Webview panel with Chart.js (CDN): summary cards, daily chart, tables",
-        "Show longest sessions by message count and token count (top 10 each)",
-        "Register chatwizard.showAnalytics command; live refresh on index changes",
-        "Unit tests for tokenCounter and analyticsEngine (all aggregations and edge cases)",
-      ],
-      color: "#f78166",
-      barColor: "rgba(247,129,102,0.75)",
-    },
-    {
-      id: 7,
-      title: "Duplicate Prompt Detection",
-      status: "done",
-      effort: 1.5,
-      effortLabel: "1.5 weeks",
-      complexity: "medium",
-      complexityLabel: "Medium",
-      startWeek: 8.5,
-      audience: "Power users",
-      goal: "Surface semantically equivalent prompts across sessions using TF-IDF or trigram similarity — no ML dependencies required.",
-      tasks: [
-        "Implement trigram similarity scoring between prompt texts",
-        "Cluster near-duplicate prompts with clusterPrompts() using similarity threshold",
-        "Enrich PromptEntry with sessionMeta: source session title, date, source per occurrence",
-        "Show variant session + date info in the Prompt Library cluster view",
-        "Merge button per cluster collapses variants into canonical (client-side + extension message)",
-        "Track merged texts in PromptLibraryViewProvider to prevent re-surfacing",
-      ],
-      color: "#d29922",
-      barColor: "rgba(210,153,34,0.75)",
-    },
-    {
-      id: 8,
-      title: "Timeline View",
-      status: "done",
-      effort: 1,
-      effortLabel: "1 week",
-      complexity: "low",
-      complexityLabel: "Low",
-      startWeek: 10.5,
-      audience: "All users",
-      goal: "Chronological feed of all sessions across all workspaces. Answers 'What was I working on last Tuesday?'",
-      tasks: [
-        "buildTimeline(): skips epoch/empty sessions, sorts newest-first, extracts firstPrompt",
-        "TimelineViewProvider sidebar WebviewView with month-grouped chronological feed",
-        "Each entry: project, session title, first user prompt preview, message count, date",
-        "Sticky filter bar: workspace dropdown + source dropdown",
-        "Jump-to-date input scrolls the feed to the nearest month group",
-        "Live refresh on index change events; tests: timelineBuilder (20 cases) + viewProvider (12 cases)",
-      ],
-      color: "#3fb950",
-      barColor: "rgba(63,185,80,0.75)",
-    },
-    {
-      id: 9,
-      title: "Polish & Release",
-      status: "done",
-      effort: 2,
-      effortLabel: "2 weeks",
-      complexity: "medium",
-      complexityLabel: "Medium",
-      startWeek: 11.5,
-      audience: "All users (marketplace)",
-      goal: "Production-readiness: batch initial build, incremental live updates, configurable source paths, local telemetry, README, and package metadata for VS Code Marketplace.",
-      tasks: [
-        "Batch initial index build — collect all sessions then batchUpsert once (N→1 listener notification)",
-        "Typed change events (SessionIndexEvent) + addTypedChangeListener() on SessionIndex",
-        "Incremental full-text search updates — O(1) per live file change instead of O(n) full rebuild",
-        "CodeBlockSearchEngine: removeBySession(), upsertBySession(), get size",
-        "Configurable source paths: chatwizard.claudeProjectsPath, chatwizard.copilotStoragePath",
-        "Local telemetry opt-in: TelemetryRecorder writes JSONL to globalStorageUri, no network calls",
-        "Write README with full feature walkthrough, settings table, commands, architecture notes",
-        "Package metadata: version 1.0.0, MIT license, keywords, Visualization category",
-        "Unit tests: codeBlockSearchIncremental (17), sessionIndex extended, configPaths, telemetryRecorder",
-      ],
-      color: "#bc8cff",
-      barColor: "rgba(188,140,255,0.75)",
+        { name: 'MCP server: 8 tools', desc: 'chatwizard_search, find_similar, get_session, get_session_full, list_recent, get_context, list_sources, server_info' },
+        { name: 'MCP prompts: chatwizard.queryHistory + chatwizard.continueFromHistory', desc: '' },
+        { name: 'Config clipboard flow (Copilot / Claude Desktop / Cursor / Continue / Generic)', desc: '' },
+        { name: 'MCP status bar indicator; first-run consent modal; token rotation command', desc: '' },
+        { name: '@chatwizard chat participant: /queryHistory (two-phase ranked search)', desc: '' },
+        { name: '@chatwizard chat participant: /continueFromHistory (recent sessions + next actions)', desc: '' },
+        { name: 'Connect GitHub Copilot command (one-click MCP setup)', desc: '' },
+        { name: 'Set Up Global Copilot Instructions command', desc: '' },
+        { name: 'VS Code Insiders support (auto-discovers Code-Insiders workspace storage)', desc: '' },
+        { name: 'Full-text search: stop-word filtering + basic de-pluralisation', desc: '' },
+        { name: 'Extension update notifier (marketplace check, rate-limited 24h)', desc: '' },
+      ]
     },
   ];
 
-  /* ---- Build week labels ---- */
-  const weekLabelsEl = document.getElementById('weekLabels');
-  for (let w = 0; w < TOTAL_WEEKS; w++) {
-    const el = document.createElement('div');
-    el.className = 'gantt-week-label';
-    el.style.flex = '1';
-    el.textContent = `W${w + 1}`;
-    weekLabelsEl.appendChild(el);
-  }
+  const roadmap = [
+    {
+      id: 'P1', tier: 'p1', effortLabel: '~3-4 weeks total', audience: 'All users',
+      title: 'Do Now \u2014 Correctness, Polish &amp; Quick Wins',
+      goal: 'Nine high-value, low-effort features that fix visible gaps in correctness (multi-source UI completeness) and add immediately demonstrable capabilities (chat participant polish, Chronicle depth, session title normalization).',
+      features: [
+        { num:'#1',  name:'Multi-source UI fixes (Cursor/Cline/Roo/Windsurf/Aider)', desc:'Analytics source cards, timeline dropdown options, search filter cycle, brand CSS variables for all 5 missing sources', effort:'S', gap:'ChatWizard appears broken when session counts are wrong for these sources' },
+        { num:'#2',  name:'Chat participant: live progress messages', desc:'stream.progress at each /queryHistory pipeline stage — eliminates the 2-3s silent hang', effort:'XS', gap:'Copilot own commands show live progress' },
+        { num:'#3',  name:'Chat participant: inline action buttons', desc:'stream.button after results — [Open in ChatWizard], [Export answer], [Pick up where I left off]', effort:'S', gap:'Copilot responses use inline buttons extensively' },
+        { num:'#4',  name:'Copilot Chronicle Phase 1 — search quality boost', desc:'Index checkpoints.work_done/technical_details/overview from session-store.db — dense topical text improves get_context precision', effort:'S', gap:'No competitor reads Chronicle. Pure differentiation.' },
+        { num:'#5',  name:'Copilot Chronicle Phase 2 — enhanced /continueFromHistory', desc:'Return checkpoints.next_steps/work_done directly (no LLM call) — faster, more accurate continuation summary', effort:'S', gap:'Copilot own /continue has Chronicle access' },
+        { num:'#6',  name:'Antigravity conversations/ JSON support', desc:'Reader for ~/.gemini/antigravity/conversations/*.json (full role/content pairs, dedup by UUID)', effort:'S', gap:'ChatSync competitor already reads this directory' },
+        { num:'#7',  name:'Mermaid diagram generation in architecture queries', desc:'Detect architecture questions in /queryHistory, add LLM hint to include Mermaid — VS Code renders them natively in chat', effort:'S', gap:'Unique — no other history tool renders diagrams from past sessions' },
+        { num:'#8',  name:'Session title normalization', desc:'3-tier: Chronicle overview (free) > VS Code LM API > offline TF-IDF. Multi-topic format: "3 topics: Docker -> React hooks -> TS generics". Stored in sidecar.', effort:'M', gap:'Pieces auto-generates descriptions; Copilot titles are notoriously cryptic' },
+        { num:'#9',  name:'Sidecar metadata model (foundational prerequisite)', desc:'SessionMetadata interface + chatwizard-metadata.json. Unlocks tags, annotations, custom titles, session linking, status flags. Migrates existing pin state.', effort:'S', gap:'Foundational — required before tagging, annotations, KB generation' },
+      ]
+    },
+    {
+      id: 'P2', tier: 'p2', effortLabel: '~1 quarter (3 months)', audience: 'Power users',
+      title: 'Next Quarter \u2014 Depth, Retention &amp; New Sources',
+      goal: 'Thirteen features driving retention (session archive, tagging, AI summaries), expanding sources (Continue.dev, Amazon Q, Gemini Code Assist), and building the intelligence layer (entity extraction, prompt cost analysis, MCP reranker, Obsidian export).',
+      features: [
+        { num:'#10', name:'Copilot Chronicle Phase 3 — file-centric history', desc:'chatwizard_sessions_for_file MCP tool. Status bar + CodeLens: "3 sessions touched this file". Explorer context menu.', effort:'M', gap:'Unique — no other history tool does per-file session association' },
+        { num:'#11', name:'Copilot Chronicle Phase 4 — work item & branch grouping', desc:'"By Context" tree tab (git branch + work item pattern). MCP tools: sessions_for_work_item, sessions_for_branch.', effort:'M', gap:'GitHub Copilot links sessions to issues; ChatWizard must match across all sources' },
+        { num:'#12', name:'Session archive (own storage)', desc:'Mirror every session into globalStorageUri/archive/. Survives source-tool pruning. "archived" badge. Opt-in max age/size pruning.', effort:'M', gap:'Recall records everything permanently; no VS Code competitor archives AI sessions' },
+        { num:'#13', name:'Session tagging / labels', desc:'User-defined labels (#bugfix, topic:auth, kind:decision) via right-click + QuickPick. Tag chips in tree + reader. Filter by tag.', effort:'M', gap:'Pieces has rich metadata per snippet; ChatWizard has only pinning' },
+        { num:'#14', name:'Chat participant: clickable file links', desc:'stream.anchor pills replacing plain-text file paths in /continueFromHistory output. Requires Chronicle Phase 2.', effort:'S', gap:'Copilot output uses file anchors everywhere' },
+        { num:'#15', name:'Continue.dev source support', desc:'Index ~/.continue/sessions/ (JSONL). 100K+ VS Code install user base.', effort:'M', gap:'Opens large user segment; ChatWizard is the obvious aggregator for Continue users' },
+        { num:'#16', name:'Amazon Q Developer source support', desc:'Index Amazon Q sessions. Growing enterprise AWS adoption.', effort:'M', gap:'No competitor indexes Q sessions — enterprise entry point' },
+        { num:'#17', name:'Gemini Code Assist source support', desc:'Index Google Gemini Code Assist VS Code extension conversations.', effort:'M', gap:'SpecStory focuses on Copilot; Gemini coverage is differentiation' },
+        { num:'#18', name:'AI-generated session summaries / auto-descriptions', desc:'One-line summary via VS Code LM API (user Copilot sub, no extra key). Chronicle sessions: free (use overview). Cache in sidecar metadata.', effort:'M', gap:'Critical gap vs. Pieces — their AI descriptions are a headline feature' },
+        { num:'#19', name:'Entity extraction from sessions', desc:'Extract + index file paths, function/class names, error messages, decisions from session content. Expose in search + reader.', effort:'M', gap:'Critical gap vs. Pieces — they extract git repo, file, branch, language server context per snippet' },
+        { num:'#20', name:'Prompt cost analysis (@chatwizard /analyzePrompt)', desc:'Token count, similarity to past sessions, verbosity heuristics, model suggestion — zero LLM calls. Local tiktoken-compatible tokenizer.', effort:'M', gap:'Unique — no other history tool cross-references a draft prompt against your history before sending' },
+        { num:'#21', name:'MCP Phase II: reranker for chatwizard_get_context', desc:'Cross-encoder reranker pass after semantic + keyword merge. Resolves rank disagreements. Significant precision gain at >500 sessions.', effort:'M', gap:'Competes with cloud RAG services on retrieval quality without cloud dependency' },
+        { num:'#22', name:'Obsidian / Notion native export', desc:'Obsidian-compatible Markdown (YAML frontmatter, wikilinks, backlinks). One-click Notion export via public Notion API (user provides key, optional).', effort:'S', gap:'Gap vs. Recall and Readwise — both integrate natively with Obsidian' },
+      ]
+    },
+    {
+      id: 'P3', tier: 'p3', effortLabel: '~6 months (H2 2026)', audience: 'Power users / Pro tier',
+      title: 'H2 2026 \u2014 Power Features &amp; Session Intelligence',
+      goal: 'Twenty-two features transforming ChatWizard from a viewer into an intelligence layer: KB generation, SQLite persistence, cloud sync, deep session management (bookmarks, annotations, linking, rating), sharing, retention controls, and REST API.',
+      features: [
+        { num:'#23', name:'KB entry classification + KB generation', desc:'Classify sessions (Decision / Learning / Pattern / Gotcha / Architecture). Cluster by tags + embeddings. Export as Obsidian-compatible Markdown KB.', effort:'L', gap:'Unique — no competitor converts AI sessions into a structured KB' },
+        { num:'#24', name:'SQLite persistent cache', desc:'Replace in-memory index with chatwizard-cache.db (FTS5 BM25 search, incremental JSONL parsing, proper schema for tags/notes/code_blocks).', effort:'L', gap:'Gap vs. Pieces — FTS5 brings search performance to the same tier as local ML indexes' },
+        { num:'#25', name:'Git / branch linkage', desc:'Record active branch + HEAD commit per session (from Chronicle sessions.branch or git HEAD). Tag sessions by branch in TreeView.', effort:'M', gap:'Gap vs. DevChat and GitHub Copilot — both track branch/commit context natively' },
+        { num:'#26', name:'Workspace Digest / Standup Reports', desc:'Command generating "what I worked on today/this week/this sprint" from timeline + summaries. Copy-pasteable standup or PR description.', effort:'M', gap:'Gap vs. DevChat — DevChat generates standup reports from sessions' },
+        { num:'#27', name:'Cloud sync (opt-in)', desc:'Encrypted sync of session index to user own S3 / Azure Blob / GitHub Gist. Keys managed locally. Cross-machine history without privacy trade-off.', effort:'L', gap:'Critical gap vs. Pieces — Pieces syncs across all devices. Largest single acquisition barrier.' },
+        { num:'#28', name:'Session status lifecycle', desc:'Mark sessions as open / resolved / revisit. Filter tree by status.', effort:'S', gap:'Minimal competitive precedent — opportunity to differentiate' },
+        { num:'#29', name:'Bookmarks within a session', desc:'Mark a specific exchange in a long session. Jump-to-bookmark in reader. Stored in sidecar metadata.', effort:'S', gap:'Gap vs. Pieces precise snippet retrieval' },
+        { num:'#30', name:'Inline annotations', desc:'Attach a personal note to any message. Displayed inline as a comment thread. Stored in sidecar metadata.', effort:'S', gap:'Gap vs. Recall — Recall lets you annotate captured memories' },
+        { num:'#31', name:'Session linking', desc:'Explicitly link two sessions (forward/backward navigation). Graph of related conversations. MCP tool chatwizard_get_linked.', effort:'M', gap:'Unique — no competitor models session relationships as a graph' },
+        { num:'#32', name:'Response rating', desc:'Per-response thumbs-up/down. Filter search to highly-rated responses. Signal for reranker training.', effort:'S', gap:'Gap vs. PromptLayer — built-in response rating for prompt evaluation' },
+        { num:'#33', name:'Duplicate / related session detection', desc:'Detect cross-tool split conversations (Claude + Cursor for same task). Surface as related in tree + reader.', effort:'M', gap:'Unique to multi-source position — deduplication is uniquely valuable' },
+        { num:'#34', name:'Outcome / follow-up tracking', desc:'Lightweight checklist of action items per session. chatwizard_get_action_items MCP tool.', effort:'S', gap:'Gap vs. DevChat — DevChat extracts tasks from conversations' },
+        { num:'#35', name:'Keyboard-only navigation', desc:'Vim-style j/k in session tree + reader; / to jump to search.', effort:'S', gap:'Standard expectation for developer tools' },
+        { num:'#36', name:'Session sharing', desc:'Read-only shareable link or exportable HTML bundle. Recipient needs no ChatWizard install.', effort:'M', gap:'Gap vs. Pieces and DevChat — both support sharing' },
+        { num:'#37', name:'Post-session cost tips & analytics', desc:'Cost tip after high-token sessions. Analytics: cost efficiency dimension (output tokens per input per prompt type).', effort:'S', gap:'Gap vs. PromptLayer / Langfuse — both provide cost analytics; ChatWizard does it locally' },
+        { num:'#38', name:'MCP tools: includeCode flag', desc:'includeCode: boolean strips fenced code blocks + inline code. Reduces token cost 50-80% for code-heavy sessions.', effort:'S', gap:'Cloud RAG services all offer content chunking controls' },
+        { num:'#39', name:'MCP /mcp-config auth hardening', desc:'Bearer token check on /mcp-config endpoint to prevent local port scanner enumeration.', effort:'XS', gap:'Security best-practice for any local server' },
+        { num:'#40', name:'Antigravity .pb (protobuf) support', desc:'Wire-type 2 scan for best-effort text extraction from Antigravity binary protobuf session files. Sessions flagged lowFidelity.', effort:'S', gap:'Completes remaining Antigravity coverage' },
+        { num:'#41', name:'Zed AI source support', desc:'Index AI conversations from Zed editor. Growing Rust/performance-focused audience.', effort:'S', gap:'No competitor indexes Zed sessions' },
+        { num:'#42', name:'Tabnine Chat source support', desc:'Index Tabnine chat history. Significant enterprise market share in regulated industries.', effort:'M', gap:'No competitor indexes Tabnine' },
+        { num:'#43', name:'Session retention controls', desc:'chatwizard.semanticIndexMaxAgeDays (semantic only) + chatwizard.sessionRetentionDays (all surfaces). Source files never deleted.', effort:'S', gap:'Standard for any history tool — required for 8K+ sessions/year power users' },
+        { num:'#44', name:'API / programmatic access', desc:'Read-only REST endpoint exposing session index beyond MCP. Enables external scripts, dashboards, CI/CD without VS Code open.', effort:'M', gap:'Gap vs. PromptLayer / Langfuse — both offer full APIs; ChatWizard MCP is VS Code-dependent' },
+      ]
+    },
+    {
+      id: 'P4', tier: 'p4', effortLabel: '2027+ (18-24 months)', audience: 'Teams / Enterprise',
+      title: '2027+ / Corporate Tier \u2014 Team &amp; Enterprise',
+      goal: 'Twelve corporate-tier features enabling institutional memory, AI usage compliance, governed prompt libraries, team analytics, policy enforcement, and multi-IDE expansion. Foundation for the Team and Enterprise monetization tiers.',
+      features: [
+        { num:'#45', name:'Team Knowledge Base & Institutional Memory', desc:'Shared layer: developers promote sessions to team store. Full-text + semantic search scoped to team/project. Team hub as MCP server.', effort:'XL', gap:'Unique — no competitor offers cross-developer AI session aggregation' },
+        { num:'#46', name:'AI Usage Compliance & Audit Trail', desc:'Read-only tamper-evident log: model, workstation, timestamp, project. Pattern-based sensitive data detection. Signed JSON export bundles.', effort:'L', gap:'Unique in VS Code ecosystem — no competitor addresses AI usage compliance at session level' },
+        { num:'#47', name:'Shared & Governed Prompt Library', desc:'Company-managed prompt templates via fetch-from-URL source. Template variables. Usage analytics.', effort:'M', gap:'Gap vs. DevChat — DevChat supports team prompt sharing' },
+        { num:'#48', name:'Team & Project-Level Analytics', desc:'Roll per-developer metrics up to team + project dimensions: sessions/developer/sprint, models used, token burn vs commit rate.', effort:'L', gap:'Gap vs. PromptLayer / Langfuse — both offer team analytics; ChatWizard does it on-premise' },
+        { num:'#49', name:'Security & Data Governance Policy Engine', desc:'Centrally-configured rules: flag internal IPs/domains/codenames, block-list models per workspace, redaction before team promotion.', effort:'L', gap:'No VS Code competitor has a local policy engine for AI tool usage' },
+        { num:'#50', name:'Standup / Sprint Digest (team-level)', desc:'Per-developer standup auto-generated + sprint retro across team. Post to Slack/Teams on schedule.', effort:'M', gap:'Gap vs. DevChat — DevChat supports automated standups' },
+        { num:'#51', name:'Git / JIRA / ADO work item correlation', desc:'Link sessions to work items via branch conventions (feature/ABC-1234). ADR generation from pivotal exchanges.', effort:'M', gap:'GitHub Copilot links sessions to issues; ChatWizard must match across all sources' },
+        { num:'#52', name:'@chatwizard Agent app', desc:'Publish .agent.md to VS Code Marketplace or company registry. Queries session index through policy engine. Zero manual MCP config.', effort:'M', gap:'VS Code Agent apps are the future of enterprise AI tool distribution' },
+        { num:'#53', name:'Corporate deployment hub', desc:'Self-hosted Docker: team sessions, MCP queries, policy engine, prompt library. Web admin, SSO/SAML, per-seat licence validation.', effort:'XL', gap:'Gap vs. Langfuse / PromptLayer — both offer self-hosted deployments; ChatWizard adds no cloud dependency' },
+        { num:'#54', name:'Avante.nvim / CodeCompanion.nvim support', desc:'Index AI sessions from Neovim AI plugins. First non-VS Code IDE source.', effort:'L', gap:'No competitor indexes Neovim AI sessions' },
+        { num:'#55', name:'JetBrains AI Assistant support (separate plugin)', desc:'IntelliJ plugin SDK. JetBrains has ~10M active users.', effort:'XL', gap:'Critical gap vs. Pieces — they have a JetBrains plugin; ChatWizard is VS Code-locked' },
+        { num:'#56', name:'Browser extension', desc:'Read-only search over local index via native messaging. Works in GitHub PRs, Confluence, Slack.', effort:'XL', gap:'Gap vs. Pieces and Recall — both work outside the IDE' },
+      ]
+    },
+  ];
 
-  /* ---- Build Gantt rows ---- */
-  const ganttRowsEl = document.getElementById('ganttRows');
-  phases.forEach(p => {
+  // Build Gantt
+  const qlEl = document.getElementById('quarterLabels');
+  for (let m = 0; m < TOTAL_MONTHS; m++) {
+    const el = document.createElement('div');
+    el.className = 'gantt-quarter-label';
+    el.style.flex = '1';
+    if (quarters[m]) el.textContent = quarters[m];
+    qlEl.appendChild(el);
+  }
+  const grEl = document.getElementById('ganttRows');
+  ganttItems.forEach(item => {
     const row = document.createElement('div');
     row.className = 'gantt-row';
-
-    const label = document.createElement('div');
-    label.className = 'gantt-row-label';
-    label.textContent = `P${p.id}: ${p.title}`;
-    label.style.minWidth = '160px';
-
+    const lbl = document.createElement('div');
+    lbl.className = 'gantt-row-label';
+    lbl.textContent = item.label;
     const track = document.createElement('div');
     track.className = 'gantt-track';
-
+    const nowLine = document.createElement('div');
+    nowLine.className = 'gantt-now';
+    nowLine.style.left = ((nowMonth / TOTAL_MONTHS) * 100) + '%';
+    track.appendChild(nowLine);
     const bar = document.createElement('div');
     bar.className = 'gantt-bar';
-    const pct = (v) => `${(v / TOTAL_WEEKS) * 100}%`;
-    bar.style.left = pct(p.startWeek);
-    bar.style.width = pct(p.effort);
-    bar.style.background = p.barColor;
-    bar.style.border = `1px solid ${p.color}`;
-    bar.style.color = '#e6edf3';
-    bar.textContent = p.effortLabel;
-
+    bar.style.left = ((item.start / TOTAL_MONTHS) * 100) + '%';
+    bar.style.width = ((item.span / TOTAL_MONTHS) * 100) + '%';
+    bar.style.background = item.color + '22';
+    bar.style.border = '1px solid ' + item.border;
+    bar.style.color = item.color;
+    bar.textContent = item.label.split('  ')[0];
     track.appendChild(bar);
-    row.appendChild(label);
+    row.appendChild(lbl);
     row.appendChild(track);
-    ganttRowsEl.appendChild(row);
+    grEl.appendChild(row);
   });
 
-  /* ---- Build timeline ---- */
-  const timeline = document.getElementById('timeline');
-
-  const complexityClass = {
-    'low': 'low',
-    'medium': 'med',
-    'medium-high': 'med',
-    'high': 'high',
-  };
-
-  const statusColors = {
-    done: '#3fb950',
-    progress: '#58a6ff',
-    todo: '#30363d',
-  };
-
-  const effortWidths = {
-    1: '6%',
-    1.5: '9%',
-    2: '11%',
-    3: '17%',
-  };
-
-  phases.forEach(p => {
-    const phase = document.createElement('div');
-    phase.className = 'phase';
-
-    const dot = document.createElement('div');
-    dot.className = `phase-dot dot-${p.status}`;
-    dot.style.background = statusColors[p.status];
-
-    const card = document.createElement('div');
-    card.className = `phase-card ${p.status}`;
-
-    // Status strip
-    const strip = document.createElement('div');
-    strip.className = `status-strip ${p.status}`;
-    card.appendChild(strip);
-
-    // Header
-    const header = document.createElement('div');
-    header.className = 'phase-header';
-
-    const num = document.createElement('div');
-    num.className = 'phase-number';
-    num.textContent = `Phase ${p.id}`;
-
-    const title = document.createElement('div');
-    title.className = 'phase-title';
-    title.textContent = p.title;
-
-    const badges = document.createElement('div');
-    badges.className = 'badges';
-
-    const bEffort = document.createElement('span');
-    bEffort.className = 'badge badge-effort';
-    bEffort.textContent = `⏱ ${p.effortLabel}`;
-
-    const bComplex = document.createElement('span');
-    bComplex.className = `badge badge-complex ${complexityClass[p.complexity] || 'med'}`;
-    bComplex.textContent = `◆ ${p.complexityLabel}`;
-
-    const bAud = document.createElement('span');
-    bAud.className = 'badge badge-audience';
-    bAud.textContent = `👥 ${p.audience}`;
-
-    badges.appendChild(bEffort);
-    badges.appendChild(bComplex);
-    badges.appendChild(bAud);
-
-    const chev = document.createElement('span');
-    chev.className = 'chevron';
-    chev.textContent = '▶';
-
-    header.appendChild(num);
-    header.appendChild(title);
-    header.appendChild(badges);
-    header.appendChild(chev);
-
-    card.appendChild(header);
-
-    // Body
-    const body = document.createElement('div');
-    body.className = 'phase-body';
-
-    const meta = document.createElement('div');
-    meta.className = 'phase-meta';
-    meta.innerHTML = `
-      <span><strong>Start:</strong> Week ${Math.floor(p.startWeek) + 1}</span>
-      <span><strong>End:</strong> Week ${Math.ceil(p.startWeek + p.effort)}</span>
-      <span><strong>Effort:</strong> ${p.effortLabel}</span>
-      <span><strong>Complexity:</strong> ${p.complexityLabel}</span>
-    `;
-
-    const desc = document.createElement('div');
-    desc.className = 'phase-desc';
-    desc.textContent = p.goal;
-
-    const taskList = document.createElement('ul');
-    taskList.className = 'task-list';
-
-    const savedKey = `phase-${p.id}-tasks`;
-    const savedState = JSON.parse(localStorage.getItem(savedKey) || '{}');
-
-    p.tasks.forEach((t, i) => {
-      const li = document.createElement('li');
-
-      const isChecked = p.status === 'done' || !!savedState[i];
-      const check = document.createElement('div');
-      check.className = `task-check${isChecked ? ' checked' : ''}`;
-      check.textContent = isChecked ? '✓' : '';
-
-      const text = document.createElement('span');
-      text.className = 'task-text';
-      text.textContent = t;
-
-      check.addEventListener('click', () => {
-        const isChecked = check.classList.toggle('checked');
-        check.textContent = isChecked ? '✓' : '';
-        const state = JSON.parse(localStorage.getItem(savedKey) || '{}');
-        state[i] = isChecked;
-        localStorage.setItem(savedKey, JSON.stringify(state));
+  // Build shipped timeline
+  function buildShipped(items, container) {
+    items.forEach(p => {
+      const phase = document.createElement('div');
+      phase.className = 'phase';
+      const dot = document.createElement('div');
+      dot.className = 'phase-dot dot-done';
+      const card = document.createElement('div');
+      card.className = 'phase-card done';
+      const strip = document.createElement('div');
+      strip.className = 'status-strip done';
+      card.appendChild(strip);
+      const hdr = document.createElement('div');
+      hdr.className = 'phase-header';
+      const num = document.createElement('div');
+      num.className = 'phase-number';
+      num.textContent = p.id;
+      const ttl = document.createElement('div');
+      ttl.className = 'phase-title';
+      ttl.textContent = p.title;
+      const bdgs = document.createElement('div');
+      bdgs.className = 'badges';
+      const b1 = document.createElement('span');
+      b1.className = 'badge badge-released';
+      b1.textContent = '\u2713 ' + p.released;
+      const b2 = document.createElement('span');
+      b2.className = 'badge badge-effort';
+      b2.textContent = '\u23f1 ' + p.effortLabel;
+      const b3 = document.createElement('span');
+      b3.className = 'badge badge-audience';
+      b3.textContent = '\ud83d\udc65 ' + p.audience;
+      bdgs.appendChild(b1); bdgs.appendChild(b2); bdgs.appendChild(b3);
+      const chev = document.createElement('span');
+      chev.className = 'chevron';
+      chev.textContent = '\u25b6';
+      hdr.appendChild(num); hdr.appendChild(ttl); hdr.appendChild(bdgs); hdr.appendChild(chev);
+      card.appendChild(hdr);
+      const body = document.createElement('div');
+      body.className = 'phase-body';
+      const desc = document.createElement('div');
+      desc.className = 'phase-desc';
+      desc.textContent = p.goal;
+      body.appendChild(desc);
+      const ul = document.createElement('ul');
+      ul.className = 'task-list';
+      p.tasks.forEach(t => {
+        const li = document.createElement('li');
+        const chk = document.createElement('div');
+        chk.className = 'task-check checked';
+        chk.textContent = '\u2713';
+        const meta = document.createElement('div');
+        meta.className = 'task-meta';
+        const nm = document.createElement('div');
+        nm.className = 'task-name';
+        nm.textContent = t.name;
+        meta.appendChild(nm);
+        if (t.desc) {
+          const ds = document.createElement('div');
+          ds.className = 'task-desc';
+          ds.textContent = t.desc;
+          meta.appendChild(ds);
+        }
+        li.appendChild(chk); li.appendChild(meta);
+        ul.appendChild(li);
       });
-
-      li.appendChild(check);
-      li.appendChild(text);
-      taskList.appendChild(li);
+      body.appendChild(ul);
+      card.appendChild(body);
+      hdr.addEventListener('click', () => card.classList.toggle('open'));
+      phase.appendChild(dot); phase.appendChild(card);
+      container.appendChild(phase);
     });
+  }
 
-    // Effort bar
-    const barWrap = document.createElement('div');
-    barWrap.className = 'effort-bar-wrap';
-    const barLabel = document.createElement('div');
-    barLabel.className = 'effort-bar-label';
-    barLabel.textContent = `Effort — ${p.effortLabel} of ${TOTAL_WEEKS} weeks total`;
-    const effortBar = document.createElement('div');
-    effortBar.className = 'effort-bar';
-    const effortFill = document.createElement('div');
-    effortFill.className = 'effort-bar-fill';
-    effortFill.style.width = `${(p.effort / TOTAL_WEEKS) * 100}%`;
-    effortFill.style.background = p.color;
-    effortBar.appendChild(effortFill);
-    barWrap.appendChild(barLabel);
-    barWrap.appendChild(effortBar);
+  // Build roadmap timeline
+  const effortClass = { XS:'tb-effort-xs', S:'tb-effort-s', M:'tb-effort-m', L:'tb-effort-l', XL:'tb-effort-xl' };
 
-    body.appendChild(meta);
-    body.appendChild(desc);
-    body.appendChild(taskList);
-    body.appendChild(barWrap);
-
-    card.appendChild(body);
-
-    // Toggle
-    header.addEventListener('click', () => {
-      card.classList.toggle('open');
+  function buildRoadmap(items, container) {
+    items.forEach(p => {
+      const phase = document.createElement('div');
+      phase.className = 'phase';
+      const dot = document.createElement('div');
+      dot.className = 'phase-dot dot-' + p.tier;
+      const card = document.createElement('div');
+      card.className = 'phase-card' + (p.tier === 'p1' ? ' p1-tier' : '');
+      const strip = document.createElement('div');
+      strip.className = 'status-strip ' + p.tier;
+      card.appendChild(strip);
+      const hdr = document.createElement('div');
+      hdr.className = 'phase-header';
+      const num = document.createElement('div');
+      num.className = 'phase-number';
+      num.textContent = p.id;
+      const ttl = document.createElement('div');
+      ttl.className = 'phase-title';
+      ttl.innerHTML = p.title;
+      const bdgs = document.createElement('div');
+      bdgs.className = 'badges';
+      const tierLabel = {p1:'\ud83d\udd25 Do Now', p2:'\u23f3 Next Quarter', p3:'\ud83d\udcc5 H2 2026', p4:'\ud83d\udd2e 2027+'};
+      const b0 = document.createElement('span');
+      b0.className = 'badge badge-' + p.tier;
+      b0.textContent = tierLabel[p.tier];
+      const b1 = document.createElement('span');
+      b1.className = 'badge badge-effort';
+      b1.textContent = p.features.length + ' features';
+      const b2 = document.createElement('span');
+      b2.className = 'badge badge-effort';
+      b2.textContent = '\u23f1 ' + p.effortLabel;
+      const b3 = document.createElement('span');
+      b3.className = 'badge badge-audience';
+      b3.textContent = '\ud83d\udc65 ' + p.audience;
+      bdgs.appendChild(b0); bdgs.appendChild(b1); bdgs.appendChild(b2); bdgs.appendChild(b3);
+      const chev = document.createElement('span');
+      chev.className = 'chevron';
+      chev.textContent = '\u25b6';
+      hdr.appendChild(num); hdr.appendChild(ttl); hdr.appendChild(bdgs); hdr.appendChild(chev);
+      card.appendChild(hdr);
+      const body = document.createElement('div');
+      body.className = 'phase-body';
+      const desc = document.createElement('div');
+      desc.className = 'phase-desc';
+      desc.textContent = p.goal;
+      body.appendChild(desc);
+      const ul = document.createElement('ul');
+      ul.className = 'task-list';
+      const savedKey = 'roadmap-' + p.id;
+      const savedState = JSON.parse(localStorage.getItem(savedKey) || '{}');
+      p.features.forEach((f, i) => {
+        const li = document.createElement('li');
+        const isChecked = !!savedState[i];
+        const chk = document.createElement('div');
+        chk.className = 'task-check' + (isChecked ? ' checked' : '');
+        chk.textContent = isChecked ? '\u2713' : '';
+        chk.addEventListener('click', () => {
+          const c = chk.classList.toggle('checked');
+          chk.textContent = c ? '\u2713' : '';
+          const st = JSON.parse(localStorage.getItem(savedKey) || '{}');
+          st[i] = c; localStorage.setItem(savedKey, JSON.stringify(st));
+        });
+        const meta = document.createElement('div');
+        meta.className = 'task-meta';
+        const row1 = document.createElement('div');
+        row1.style.cssText = 'display:flex;align-items:baseline;gap:0.4rem';
+        const ns = document.createElement('span');
+        ns.style.cssText = 'font-size:0.72rem;color:var(--muted)';
+        ns.textContent = f.num;
+        const nm = document.createElement('span');
+        nm.className = 'task-name';
+        nm.textContent = f.name;
+        row1.appendChild(ns); row1.appendChild(nm);
+        meta.appendChild(row1);
+        if (f.desc) {
+          const ds = document.createElement('div');
+          ds.className = 'task-desc';
+          ds.textContent = f.desc;
+          meta.appendChild(ds);
+        }
+        if (f.effort || f.gap) {
+          const tbRow = document.createElement('div');
+          tbRow.className = 'task-badges';
+          if (f.effort) {
+            const eb = document.createElement('span');
+            eb.className = 'task-badge ' + (effortClass[f.effort] || 'tb-effort-m');
+            eb.textContent = 'Effort: ' + f.effort;
+            tbRow.appendChild(eb);
+          }
+          if (f.gap) {
+            const gb = document.createElement('span');
+            gb.className = 'task-badge tb-gap';
+            gb.textContent = f.gap.length > 70 ? f.gap.substring(0, 70) + '\u2026' : f.gap;
+            tbRow.appendChild(gb);
+          }
+          meta.appendChild(tbRow);
+        }
+        li.appendChild(chk); li.appendChild(meta);
+        ul.appendChild(li);
+      });
+      body.appendChild(ul);
+      card.appendChild(body);
+      hdr.addEventListener('click', () => card.classList.toggle('open'));
+      if (p.tier === 'p1') card.classList.add('open');
+      phase.appendChild(dot); phase.appendChild(card);
+      container.appendChild(phase);
     });
+  }
 
-    phase.appendChild(dot);
-    phase.appendChild(card);
-    timeline.appendChild(phase);
-  });
+  buildShipped(shipped, document.getElementById('shippedTimeline'));
+  buildRoadmap(roadmap, document.getElementById('roadmapTimeline'));
 </script>
-
 </body>
 </html>
