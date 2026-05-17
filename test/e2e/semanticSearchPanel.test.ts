@@ -166,8 +166,28 @@ suite('nextSourceState', () => {
         assert.strictEqual(nextSourceState('claude'), 'antigravity');
     });
 
-    test('antigravity → all (wraps)', () => {
-        assert.strictEqual(nextSourceState('antigravity'), 'all');
+    test('antigravity → cursor', () => {
+        assert.strictEqual(nextSourceState('antigravity'), 'cursor');
+    });
+
+    test('cursor → cline', () => {
+        assert.strictEqual(nextSourceState('cursor'), 'cline');
+    });
+
+    test('cline → roocode', () => {
+        assert.strictEqual(nextSourceState('cline'), 'roocode');
+    });
+
+    test('roocode → windsurf', () => {
+        assert.strictEqual(nextSourceState('roocode'), 'windsurf');
+    });
+
+    test('windsurf → aider', () => {
+        assert.strictEqual(nextSourceState('windsurf'), 'aider');
+    });
+
+    test('aider → all (wraps)', () => {
+        assert.strictEqual(nextSourceState('aider'), 'all');
     });
 });
 
@@ -189,8 +209,13 @@ suite('sourceButtonTooltip', () => {
         assert.ok(tip.toLowerCase().includes('antigravity'), `tooltip: ${tip}`);
     });
 
-    test('antigravity state mentions All as next', () => {
+    test('antigravity state mentions Cursor as next', () => {
         const tip = sourceButtonTooltip('antigravity');
+        assert.ok(tip.toLowerCase().includes('cursor'), `tooltip: ${tip}`);
+    });
+
+    test('aider state mentions All as next', () => {
+        const tip = sourceButtonTooltip('aider');
         assert.ok(tip.toLowerCase().includes('all'), `tooltip: ${tip}`);
     });
 });
