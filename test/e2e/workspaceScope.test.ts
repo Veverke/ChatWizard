@@ -4,7 +4,7 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { WorkspaceScopeManager, calcWorkspaceSizeMb, ExtensionContextLike } from '../../src/watcher/workspaceScope';
+import { WorkspaceScopeManager, calcWorkspaceSizeMb, calcWorkspaceSizeBytes, countWorkspaceSessions, ExtensionContextLike } from '../../src/watcher/workspaceScope';
 import { ScopedWorkspace } from '../../src/types/index';
 
 // ---------------------------------------------------------------------------
@@ -222,6 +222,188 @@ suite('calcWorkspaceSizeMb', () => {
     test('returns 0 when copilot chatSessions directory is missing', async () => {
         // storageDir exists but has no chatSessions/ subdirectory
         const result = await calcWorkspaceSizeMb(tmpDir, 'copilot');
+        assert.strictEqual(result, 0);
+    });
+});
+
+// ------------------------------------------------------------------ //
+// countWorkspaceSessions
+// ------------------------------------------------------------------ //
+
+suite('countWorkspaceSessions', () => {
+    let tmpDir: string;
+
+    setup(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cw-count-'));
+    });
+
+    teardown(() => {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    test('copilot — counts .jsonl files in chatSessions/', async () => {
+        const chatDir = path.join(tmpDir, 'chatSessions');
+        fs.mkdirSync(chatDir);
+        fs.writeFileSync(path.join(chatDir, 'a.jsonl'), '');
+        fs.writeFileSync(path.join(chatDir, 'b.jsonl'), '');
+        fs.writeFileSync(path.join(chatDir, 'other.txt'), '');
+        const result = await countWorkspaceSessions(tmpDir, 'copilot');
+        assert.strictEqual(result, 2);
+    });
+
+    test('copilot — returns 0 when chatSessions/ is missing', async () => {
+        const result = await countWorkspaceSessions(tmpDir, 'copilot');
+        assert.strictEqual(result, 0);
+    });
+
+    test('claude — counts .jsonl files directly in storageDir', async () => {
+        fs.writeFileSync(path.join(tmpDir, 'session1.jsonl'), '');
+        fs.writeFileSync(path.join(tmpDir, 'session2.jsonl'), '');
+        fs.writeFileSync(path.join(tmpDir, 'ignore.json'), '');
+        const result = await countWorkspaceSessions(tmpDir, 'claude');
+        assert.strictEqual(result, 2);
+    });
+
+    test('claude — returns 0 for empty dir', async () => {
+        const result = await countWorkspaceSessions(tmpDir, 'claude');
+        assert.strictEqual(result, 0);
+    });
+
+    test('cline — counts subdirs that contain api_conversation_history.json', async () => {
+        const t1 = path.join(tmpDir, 'task1');
+        const t2 = path.join(tmpDir, 'task2');
+        const t3 = path.join(tmpDir, 'task3');
+        fs.mkdirSync(t1); fs.mkdirSync(t2); fs.mkdirSync(t3);
+        fs.writeFileSync(path.join(t1, 'api_conversation_history.json'), '[]');
+        fs.writeFileSync(path.join(t2, 'api_conversation_history.json'), '[]');
+        // t3 has no conversation file → should not be counted
+        const result = await countWorkspaceSessions(tmpDir, 'cline');
+        assert.strictEqual(result, 2);
+    });
+
+    test('roocode — same counting logic as cline', async () => {
+        const t1 = path.join(tmpDir, 'task1');
+        fs.mkdirSync(t1);
+        fs.writeFileSync(path.join(t1, 'api_conversation_history.json'), '[]');
+        const result = await countWorkspaceSessions(tmpDir, 'roocode');
+        assert.strictEqual(result, 1);
+    });
+
+    test('cursor — returns 1 when state.vscdb exists', async () => {
+        fs.writeFileSync(path.join(tmpDir, 'state.vscdb'), '');
+        const result = await countWorkspaceSessions(tmpDir, 'cursor');
+        assert.strictEqual(result, 1);
+    });
+
+    test('cursor — returns 0 when state.vscdb is missing', async () => {
+        const result = await countWorkspaceSessions(tmpDir, 'cursor');
+        assert.strictEqual(result, 0);
+    });
+
+    test('windsurf — returns 1 when state.vscdb exists', async () => {
+        fs.writeFileSync(path.join(tmpDir, 'state.vscdb'), '');
+        const result = await countWorkspaceSessions(tmpDir, 'windsurf');
+        assert.strictEqual(result, 1);
+    });
+
+    test('windsurf — returns 0 when state.vscdb is missing', async () => {
+        const result = await countWorkspaceSessions(tmpDir, 'windsurf');
+        assert.strictEqual(result, 0);
+    });
+
+    test('aider — returns 1 when .aider.chat.history.md exists', async () => {
+        fs.writeFileSync(path.join(tmpDir, '.aider.chat.history.md'), '');
+        const result = await countWorkspaceSessions(tmpDir, 'aider');
+        assert.strictEqual(result, 1);
+    });
+
+    test('aider — returns 0 when history file is missing', async () => {
+        const result = await countWorkspaceSessions(tmpDir, 'aider');
+        assert.strictEqual(result, 0);
+    });
+
+    test('antigravity — always returns 0', async () => {
+        const result = await countWorkspaceSessions(tmpDir, 'antigravity');
+        assert.strictEqual(result, 0);
+    });
+
+    test('returns 0 when storageDir does not exist', async () => {
+        const result = await countWorkspaceSessions('/nonexistent/path/xyz', 'copilot');
+        assert.strictEqual(result, 0);
+    });
+});
+
+// ------------------------------------------------------------------ //
+// calcWorkspaceSizeBytes — sources not yet covered
+// ------------------------------------------------------------------ //
+
+suite('calcWorkspaceSizeBytes — additional sources', () => {
+    let tmpDir: string;
+
+    setup(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cw-bytes-'));
+    });
+
+    teardown(() => {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    test('cline — sums bytes in api_conversation_history.json files across task subdirs', async () => {
+        const t1 = path.join(tmpDir, 'task1');
+        const t2 = path.join(tmpDir, 'task2');
+        fs.mkdirSync(t1); fs.mkdirSync(t2);
+        fs.writeFileSync(path.join(t1, 'api_conversation_history.json'), 'abc');       // 3 bytes
+        fs.writeFileSync(path.join(t2, 'api_conversation_history.json'), 'defgh');     // 5 bytes
+        const result = await calcWorkspaceSizeBytes(tmpDir, 'cline');
+        assert.strictEqual(result, 8);
+    });
+
+    test('roocode — same logic as cline', async () => {
+        const t1 = path.join(tmpDir, 'task1');
+        fs.mkdirSync(t1);
+        fs.writeFileSync(path.join(t1, 'api_conversation_history.json'), 'hello');   // 5 bytes
+        const result = await calcWorkspaceSizeBytes(tmpDir, 'roocode');
+        assert.strictEqual(result, 5);
+    });
+
+    test('cursor — returns state.vscdb size when it exists', async () => {
+        const content = Buffer.alloc(100);
+        fs.writeFileSync(path.join(tmpDir, 'state.vscdb'), content);
+        const result = await calcWorkspaceSizeBytes(tmpDir, 'cursor');
+        assert.strictEqual(result, 100);
+    });
+
+    test('cursor — returns 0 when state.vscdb is missing', async () => {
+        const result = await calcWorkspaceSizeBytes(tmpDir, 'cursor');
+        assert.strictEqual(result, 0);
+    });
+
+    test('windsurf — returns state.vscdb size when it exists', async () => {
+        const content = Buffer.alloc(50);
+        fs.writeFileSync(path.join(tmpDir, 'state.vscdb'), content);
+        const result = await calcWorkspaceSizeBytes(tmpDir, 'windsurf');
+        assert.strictEqual(result, 50);
+    });
+
+    test('aider — returns history file size when it exists', async () => {
+        const text = 'hello aider';
+        fs.writeFileSync(path.join(tmpDir, '.aider.chat.history.md'), text);
+        const result = await calcWorkspaceSizeBytes(tmpDir, 'aider');
+        assert.strictEqual(result, Buffer.byteLength(text));
+    });
+
+    test('aider — returns 0 when history file is missing', async () => {
+        const result = await calcWorkspaceSizeBytes(tmpDir, 'aider');
+        assert.strictEqual(result, 0);
+    });
+
+    test('antigravity — always returns 0', async () => {
+        const result = await calcWorkspaceSizeBytes(tmpDir, 'antigravity');
+        assert.strictEqual(result, 0);
+    });
+
+    test('returns 0 when storageDir does not exist', async () => {
+        const result = await calcWorkspaceSizeBytes('/nonexistent/xyz', 'cline');
         assert.strictEqual(result, 0);
     });
 });

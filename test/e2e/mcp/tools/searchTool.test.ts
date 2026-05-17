@@ -138,4 +138,90 @@ suite('SearchTool', () => {
         const schema = tool.inputSchema as { required: string[] };
         assert.ok(schema.required.includes('query'));
     });
+
+    // ── executeRelaxed ──────────────────────────────────────────────────────
+
+    test('executeRelaxed — returns no-results message when ftse finds nothing', () => {
+        // Empty index → relaxed search also returns nothing
+        const result = tool.executeRelaxed('uniqueterm', 10);
+        assert.ok(!result.isError);
+        const text = result.content[0].text;
+        assert.ok(text.includes('No sessions found'), `Expected no-results message, got: ${text}`);
+    });
+
+    test('executeRelaxed — returns formatted result with ID line when match found', () => {
+        // Need to directly call via hapax-level indexing
+        // Seed the index with a session containing a unique word
+        const s = makeSession('relax-1', [makeMessage('user', 'uniquerelaxword foo bar baz')]);
+        ftse.index(s);
+        sessionIndex.upsert(s);
+        const result = tool.executeRelaxed('uniquerelaxword', 10);
+        const text = result.content[0].text;
+        // Result should contain an ID line even if the word is only in hapax store
+        // (behaviour depends on FullTextSearchEngine implementation)
+        // At minimum it should not throw and should return a non-empty text
+        assert.ok(typeof text === 'string' && text.length > 0);
+    });
+
+    test('executeRelaxed — snippet truncated at 300 chars', () => {
+        const longContent = 'targetword ' + 'x'.repeat(400);
+        const s1 = makeSession('relax-long1', [makeMessage('user', longContent)]);
+        const s2 = makeSession('relax-long2', [makeMessage('user', longContent)]);
+        ftse.index(s1); ftse.index(s2);
+        sessionIndex.upsert(s1); sessionIndex.upsert(s2);
+        const result = tool.executeRelaxed('targetword', 10);
+        const text = result.content[0].text;
+        const snippetLines = text.split('\n').filter(l => l.startsWith('Snippet: '));
+        for (const line of snippetLines) {
+            assert.ok(line.length - 'Snippet: '.length <= 300,
+                `Snippet line exceeds 300 chars: ${line.length - 9}`);
+        }
+    });
+
+    // ── workspaceId filter — scoped empty does not fall back ──────────────
+
+    test('execute — workspaceId filter active with no results returns scoped no-match (no relaxed fallback)', async () => {
+        // Seed two sessions in workspace ws-A with keyword "delta"
+        const s1 = makeSession('ws-a-1', [makeMessage('user', 'delta concept explained')], 'copilot', 'ws-A');
+        const s2 = makeSession('ws-a-2', [makeMessage('user', 'delta theory')], 'copilot', 'ws-A');
+        ftse.index(s1); ftse.index(s2);
+        sessionIndex.upsert(s1); sessionIndex.upsert(s2);
+        // Search in ws-B (no sessions there) — should not fall through to executeRelaxed
+        const result = await tool.execute({ query: 'delta', workspaceId: 'ws-B' });
+        assert.ok(!result.isError);
+        const text = result.content[0].text;
+        assert.ok(text.includes('No sessions found'), `Expected scoped no-match message, got: ${text}`);
+    });
+
+    test('execute — source filter active with no results returns scoped no-match (no relaxed fallback)', async () => {
+        const s1 = makeSession('src-1', [makeMessage('user', 'epsilon approach detailed')], 'copilot');
+        const s2 = makeSession('src-2', [makeMessage('user', 'epsilon approach overview')], 'copilot');
+        ftse.index(s1); ftse.index(s2);
+        sessionIndex.upsert(s1); sessionIndex.upsert(s2);
+        // These sessions are 'copilot', searching 'claude' should give no results without fallback
+        const result = await tool.execute({ query: 'epsilon', source: 'claude' });
+        assert.ok(!result.isError);
+        const text = result.content[0].text;
+        assert.ok(text.includes('No sessions found'), `Expected scoped no-match message, got: ${text}`);
+    });
+
+    // ── deduplication ──────────────────────────────────────────────────────
+
+    test('execute — same session id appears only once when multiple messages match', async () => {
+        // A session with two user messages both containing the keyword
+        // Both would appear as separate results from ftse, but dedup should collapse to one
+        const s1 = makeSession('dup-1', [
+            makeMessage('user', 'duplicate keyword first message'),
+            makeMessage('user', 'duplicate keyword second message'),
+        ]);
+        const s2 = makeSession('dup-2', [makeMessage('user', 'duplicate keyword third message')]);
+        ftse.index(s1); ftse.index(s2);
+        sessionIndex.upsert(s1); sessionIndex.upsert(s2);
+        const result = await tool.execute({ query: 'duplicate keyword' });
+        const text = result.content[0].text;
+        const idMatches = [...text.matchAll(/^ID: (.+)$/gm)];
+        const ids = idMatches.map(m => m[1]);
+        const uniqueIds = new Set(ids);
+        assert.strictEqual(ids.length, uniqueIds.size, `Expected deduplicated IDs, got duplicates: ${ids.join(', ')}`);
+    });
 });

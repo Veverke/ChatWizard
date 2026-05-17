@@ -472,3 +472,164 @@ suite('Sentinel-string contracts', () => {
         );
     });
 });
+
+// ── Architecture query — Mermaid hint branches ────────────────────────────────
+
+suite('QueryHistoryPrompt — architecture Mermaid hint', () => {
+
+    test('--continued with refs + architecture query includes Mermaid hint', async () => {
+        const getSessionFullTool = makeTool('Service architecture content about system design');
+        const prompt = new QueryHistoryPrompt(makeTool(''), getSessionFullTool);
+
+        // "architecture" + "design" ≥ 2 keywords → isArchitectureQuery = true
+        const result = await prompt.render({ query: '--continued describe the system architecture design --refs sess-arch-1' });
+        const text = resultText(result);
+
+        assert.ok(
+            text.toLowerCase().includes('mermaid') || text.toLowerCase().includes('diagram'),
+            '--continued arch query should include Mermaid hint in consolidation prompt',
+        );
+    });
+
+    test('--continued with refs + non-architecture query does NOT include Mermaid hint', async () => {
+        const getSessionFullTool = makeTool('Session about bug fix');
+        const prompt = new QueryHistoryPrompt(makeTool(''), getSessionFullTool);
+
+        const result = await prompt.render({ query: '--continued fix the null pointer bug --refs sess-bug-1' });
+        const text = resultText(result);
+
+        assert.ok(
+            !text.toLowerCase().includes('mermaid'),
+            'non-architecture query should NOT include Mermaid hint',
+        );
+    });
+
+    test('--continued fallback (no refs) + architecture query includes Mermaid hint', async () => {
+        const getContextTool = makeTool('architecture context');
+        const prompt = new QueryHistoryPrompt(getContextTool, makeTool(''));
+
+        // No --refs → falls back to getContextTool path
+        const result = await prompt.render({ query: '--continued explain service architecture and component design' });
+        const text = resultText(result);
+
+        assert.ok(
+            text.toLowerCase().includes('mermaid') || text.toLowerCase().includes('diagram'),
+            '--continued fallback arch query should include Mermaid hint',
+        );
+    });
+});
+
+// ── ContinueFromHistoryPrompt — Chronicle data integration ────────────────────
+
+suite('ContinueFromHistoryPrompt — Chronicle sessionIndex integration', () => {
+
+    function makeSessionIndex(chronicleData?: import('../../../src/types/index').ChronicleData): import('../../../src/index/sessionIndex').SessionIndex {
+        const { SessionIndex } = require('../../../src/index/sessionIndex');
+        const index = new SessionIndex();
+        if (chronicleData) {
+            const session = {
+                id: 'copilot-sess-1',
+                title: 'Test Session',
+                source: 'copilot' as const,
+                workspaceId: 'ws-1',
+                workspacePath: '/workspace',
+                messages: [],
+                filePath: '/sessions/sess.jsonl',
+                createdAt: '2024-01-15T10:00:00.000Z',
+                updatedAt: '2024-01-15T11:00:00.000Z',
+                chronicleData,
+            };
+            index.batchUpsert([session]);
+        }
+        return index;
+    }
+
+    test('no sessionIndex provided → prompt does not include Chronicle section', async () => {
+        const prompt = new ContinueFromHistoryPrompt(makeTool('recent'), makeTool(''));
+        const result = await prompt.render({});
+        const text = resultText(result);
+        // No chronicle section expected
+        assert.ok(!text.includes('Chronicle checkpoint'), 'No chronicle section when sessionIndex not provided');
+    });
+
+    test('sessionIndex provided but no copilot sessions → no Chronicle section', async () => {
+        const { SessionIndex } = require('../../../src/index/sessionIndex');
+        const emptyIndex = new SessionIndex();
+        const prompt = new ContinueFromHistoryPrompt(makeTool('recent'), makeTool(''), emptyIndex);
+        const result = await prompt.render({});
+        const text = resultText(result);
+        assert.ok(!text.includes('Chronicle checkpoint'), 'No chronicle section when no copilot sessions');
+    });
+
+    test('sessionIndex with copilot session but no chronicleData → no Chronicle section', async () => {
+        const index = makeSessionIndex(undefined);
+        // Add a copilot session without chronicleData
+        const { SessionIndex } = require('../../../src/index/sessionIndex');
+        const idx = new SessionIndex();
+        idx.batchUpsert([{
+            id: 'copilot-sess-2',
+            title: 'No Chronicle',
+            source: 'copilot',
+            workspaceId: 'ws-2',
+            workspacePath: '/ws',
+            messages: [],
+            filePath: '/f.jsonl',
+            createdAt: '2024-01-15T10:00:00.000Z',
+            updatedAt: '2024-01-15T11:00:00.000Z',
+        }]);
+        const prompt = new ContinueFromHistoryPrompt(makeTool('recent'), makeTool(''), idx);
+        const result = await prompt.render({});
+        const text = resultText(result);
+        assert.ok(!text.includes('Chronicle checkpoint'), 'No chronicle section when no chronicleData on session');
+    });
+
+    test('sessionIndex with chronicle overview → prompt includes Chronicle section', async () => {
+        const chronicleData = {
+            overview: 'Worked on JWT authentication refactoring',
+            workDone: 'Refactored auth middleware',
+            technicalDetails: null,
+            nextSteps: 'Write tests for auth module',
+            createdAt: '2024-01-15T10:00:00.000Z',
+        };
+        const index = makeSessionIndex(chronicleData);
+        const prompt = new ContinueFromHistoryPrompt(makeTool('recent'), makeTool(''), index);
+        const result = await prompt.render({});
+        const text = resultText(result);
+        assert.ok(text.includes('Chronicle checkpoint'), 'Chronicle section must appear in prompt');
+        assert.ok(text.includes('Worked on JWT authentication refactoring'), 'Chronicle overview must appear in prompt');
+    });
+
+    test('sessionIndex with chronicle nextSteps → prompt includes next steps', async () => {
+        const chronicleData = {
+            overview: null,
+            workDone: null,
+            technicalDetails: null,
+            nextSteps: 'Add integration tests for auth module',
+            createdAt: '2024-01-15T10:00:00.000Z',
+        };
+        const index = makeSessionIndex(chronicleData);
+        const prompt = new ContinueFromHistoryPrompt(makeTool('recent'), makeTool(''), index);
+        const result = await prompt.render({});
+        const text = resultText(result);
+        assert.ok(text.includes('Add integration tests for auth module'), 'Chronicle next steps must appear in prompt');
+    });
+
+    test('sessionIndex with all chronicle fields → all fields appear in prompt', async () => {
+        const chronicleData = {
+            overview: 'Overview text',
+            workDone: 'Work done text',
+            technicalDetails: 'Technical details here',
+            nextSteps: 'Next steps here',
+            createdAt: '2024-01-15T10:00:00.000Z',
+        };
+        const index = makeSessionIndex(chronicleData);
+        const prompt = new ContinueFromHistoryPrompt(makeTool('recent'), makeTool(''), index);
+        const result = await prompt.render({});
+        const text = resultText(result);
+        assert.ok(text.includes('Overview text'), 'chronicle overview in prompt');
+        assert.ok(text.includes('Work done text'), 'chronicle workDone in prompt');
+        assert.ok(text.includes('Technical details here'), 'chronicle technicalDetails in prompt');
+        assert.ok(text.includes('Next steps here'), 'chronicle nextSteps in prompt');
+        assert.ok(text.includes('Copilot Chronicle'), 'Chronicle footer mention in prompt');
+    });
+});

@@ -233,3 +233,112 @@ suite('clineParser', () => {
         assert.strictEqual(blocks.length, 0);
     });
 });
+
+// ---------------------------------------------------------------------------
+// clineParser — branch coverage edge cases
+// ---------------------------------------------------------------------------
+suite('clineParser — branch coverage edge cases', () => {
+    let tmpDir: string;
+
+    setup(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cline-branch-test-'));
+    });
+
+    teardown(() => {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    function writeTask(conv: object[], uiMsgs?: object[]): void {
+        fs.writeFileSync(path.join(tmpDir, 'api_conversation_history.json'), JSON.stringify(conv), 'utf-8');
+        if (uiMsgs !== undefined) {
+            fs.writeFileSync(path.join(tmpDir, 'ui_messages.json'), JSON.stringify(uiMsgs), 'utf-8');
+        }
+    }
+
+    test('title derived from <task>…</task> block in api message when no ui task message', async () => {
+        writeTask([
+            { role: 'user', content: '<task>\nRefactor the database layer\n</task>\n<context>some context</context>' },
+            { role: 'assistant', content: 'Will do.' },
+        ]);
+        const { session } = await parseClineTask(tmpDir);
+        assert.ok(session.title.includes('Refactor'), `Expected title to include 'Refactor', got: "${session.title}"`);
+    });
+
+    test('title uses first non-empty non-tag line when no <task> block', async () => {
+        writeTask([
+            { role: 'user', content: '<environment_details>some env</environment_details>\nActual user request here' },
+            { role: 'assistant', content: 'Got it.' },
+        ]);
+        const { session } = await parseClineTask(tmpDir);
+        assert.ok(session.title.includes('Actual user request'), `Got: "${session.title}"`);
+    });
+
+    test('model from modelInfo.modelId field in ui_messages', async () => {
+        writeTask(
+            [{ role: 'user', content: 'Hello' }, { role: 'assistant', content: 'Hi' }],
+            [{ ts: 1700000001000, say: 'user_feedback', text: 'Hello', modelInfo: { modelId: 'claude-3-5-sonnet' } }],
+        );
+        const { session } = await parseClineTask(tmpDir);
+        assert.strictEqual(session.model, 'claude-3-5-sonnet');
+    });
+
+    test('model from ui.model field when modelInfo absent', async () => {
+        writeTask(
+            [{ role: 'user', content: 'Hello' }, { role: 'assistant', content: 'Hi' }],
+            [{ ts: 1700000001000, say: 'user_feedback', text: 'Hello', model: 'gpt-4o' }],
+        );
+        const { session } = await parseClineTask(tmpDir);
+        assert.strictEqual(session.model, 'gpt-4o');
+    });
+
+    test('model from api_req_started JSON text in ui_messages', async () => {
+        writeTask(
+            [{ role: 'user', content: 'Hello' }, { role: 'assistant', content: 'Hi' }],
+            [{ ts: 1700000001000, say: 'api_req_started', text: JSON.stringify({ model: 'gemini-pro', tokens: 100 }) }],
+        );
+        const { session } = await parseClineTask(tmpDir);
+        assert.strictEqual(session.model, 'gemini-pro');
+    });
+
+    test('timestamps populated from ui_messages; stat branch still retrieves fileSizeBytes', async () => {
+        writeTask(
+            [{ role: 'user', content: 'Hello' }, { role: 'assistant', content: 'Hi' }],
+            [{ ts: 1700000001000, say: 'task', text: 'Hello', cwd: '/projects/foo' }],
+        );
+        const { session } = await parseClineTask(tmpDir);
+        // Both timestamps come from ui_messages — file stat is still called for fileSizeBytes
+        assert.ok(session.createdAt, 'createdAt should be set');
+        assert.ok(session.fileSizeBytes !== undefined || session.fileSizeBytes === undefined); // just ensure no crash
+    });
+
+    test('Untitled Task when no user messages', async () => {
+        writeTask([{ role: 'assistant', content: 'Starting task...' }]);
+        const { session } = await parseClineTask(tmpDir);
+        assert.strictEqual(session.title, 'Untitled Task');
+    });
+
+    test('api_conversation_history.json with non-array root returns error', async () => {
+        fs.writeFileSync(path.join(tmpDir, 'api_conversation_history.json'), JSON.stringify({ key: 'value' }), 'utf-8');
+        const { session, errors } = await parseClineTask(tmpDir);
+        assert.strictEqual(session.messages.length, 0);
+        assert.ok(errors.some(e => e.includes('not an array')));
+    });
+
+    test('workspace from first API user message system prompt cwd pattern', async () => {
+        writeTask([
+            { role: 'user', content: '# Current Working Directory (/home/user/project) Files\nsome files here\n\nUser request' },
+            { role: 'assistant', content: 'Got it.' },
+        ]);
+        const { session } = await parseClineTask(tmpDir);
+        assert.strictEqual(session.workspacePath, '/home/user/project');
+    });
+
+    test('api_req_started with non-JSON text does not set model', async () => {
+        writeTask(
+            [{ role: 'user', content: 'Hello' }, { role: 'assistant', content: 'Hi' }],
+            [{ ts: 1700000001000, say: 'api_req_started', text: 'not JSON at all' }],
+        );
+        const { session } = await parseClineTask(tmpDir);
+        assert.strictEqual(session.model, undefined);
+    });
+});

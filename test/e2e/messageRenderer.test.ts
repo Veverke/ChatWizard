@@ -4,7 +4,8 @@
 // Verifies: pre-compiled regexes, MessageRenderer class, < 5ms for 10KB input.
 
 import * as assert from 'assert';
-import { MessageRenderer, markdownToHtml, escapeHtml } from '../../src/views/sessionRenderer';
+import { MessageRenderer, markdownToHtml, escapeHtml, renderMessage, renderChunk } from '../../src/views/sessionRenderer';
+import { Message } from '../../src/types/index';
 
 // â”€â”€ Fixture: ~10 KB Markdown message â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -157,6 +158,109 @@ suite('S8 â€” MessageRenderer correctness', () => {
         assert.strictEqual(typeof MessageRenderer.markdownToHtml, 'function');
         assert.strictEqual(typeof MessageRenderer.renderMessage,  'function');
         assert.strictEqual(typeof MessageRenderer.renderChunk,    'function');
+    });
+});
+
+// ---------------------------------------------------------------------------
+// renderMessage — branch coverage for skipped/unanswered/timestamp cases
+// ---------------------------------------------------------------------------
+
+function makeMsg(overrides: Partial<Message> & { id: string; role: 'user' | 'assistant'; content: string }): Message {
+    return {
+        codeBlocks: [],
+        ...overrides,
+    };
+}
+
+function makeVisible(msgs: Message[]): import('../../src/views/sessionRenderer').VisibleMessage[] {
+    return msgs.map((msg, i) => ({ msg, origIdx: i }));
+}
+
+suite('renderMessage — branch coverage', () => {
+    test('skipped message renders skipped-notice without skippedLineLength', () => {
+        const msg = makeMsg({ id: 'm1', role: 'user', content: '', skipped: true });
+        const visible = makeVisible([msg]);
+        const html = renderMessage(msg, 0, 0, visible, 'Assistant', undefined);
+        assert.ok(html.includes('skipped-notice'));
+        assert.ok(html.includes('?&nbsp;KB'));
+    });
+
+    test('skipped message renders with skippedLineLength when set', () => {
+        const msg = makeMsg({ id: 'm1', role: 'user', content: '', skipped: true, skippedLineLength: 51200, skippedLineLimit: 5120 });
+        const visible = makeVisible([msg]);
+        const html = renderMessage(msg, 0, 0, visible, 'Assistant', undefined);
+        assert.ok(html.includes('skipped-notice'));
+        // skippedLineLength = 51200 → 50 KB
+        assert.ok(html.includes('50'));
+    });
+
+    test('message with timestamp renders timestamp span', () => {
+        const msg = makeMsg({ id: 'm1', role: 'user', content: 'Hello', timestamp: '2024-01-15T10:00:00Z' });
+        const visible = makeVisible([msg, makeMsg({ id: 'm2', role: 'assistant', content: 'Hi' })]);
+        const html = renderMessage(msg, 0, 0, visible, 'Assistant', undefined);
+        assert.ok(html.includes('class="timestamp"'));
+    });
+
+    test('unanswered user message (followed by another user) with hasAssistant=true shows aborted notice', () => {
+        const userMsg1 = makeMsg({ id: 'm1', role: 'user', content: 'Question 1' });
+        const userMsg2 = makeMsg({ id: 'm2', role: 'user', content: 'Question 2' });
+        const assistantMsg = makeMsg({ id: 'm3', role: 'assistant', content: 'Answer' });
+        const visible = makeVisible([userMsg1, userMsg2, assistantMsg]);
+        const html = renderMessage(userMsg1, 0, 0, visible, 'Assistant', undefined);
+        assert.ok(html.includes('aborted-notice'));
+        assert.ok(html.includes('cancelled or incomplete'));
+    });
+
+    test('user message with no assistant in session shows not-stored notice', () => {
+        const userMsg1 = makeMsg({ id: 'm1', role: 'user', content: 'Question 1' });
+        const userMsg2 = makeMsg({ id: 'm2', role: 'user', content: 'Question 2' });
+        const visible = makeVisible([userMsg1, userMsg2]);
+        const html = renderMessage(userMsg1, 0, 0, visible, 'Assistant', undefined);
+        assert.ok(html.includes('not stored locally'));
+    });
+
+    test('assistant message is rendered normally without placeholder', () => {
+        const msg = makeMsg({ id: 'm1', role: 'assistant', content: 'Hello there!' });
+        const visible = makeVisible([msg]);
+        const html = renderMessage(msg, 0, 0, visible, 'Claude', undefined);
+        assert.ok(html.includes('Hello there!'));
+        assert.ok(!html.includes('aborted-notice'));
+    });
+
+    test('fadeIdx < 16 applies fade style', () => {
+        const msg = makeMsg({ id: 'm1', role: 'user', content: 'Hello' });
+        const visible = makeVisible([msg, makeMsg({ id: 'm2', role: 'assistant', content: 'Hi' })]);
+        const html = renderMessage(msg, 0, 0, visible, 'Assistant', 5);
+        assert.ok(html.includes('--cw-i:5'));
+    });
+
+    test('fadeIdx >= 16 does not apply fade style', () => {
+        const msg = makeMsg({ id: 'm1', role: 'user', content: 'Hello' });
+        const visible = makeVisible([msg, makeMsg({ id: 'm2', role: 'assistant', content: 'Hi' })]);
+        const html = renderMessage(msg, 0, 0, visible, 'Assistant', 20);
+        assert.ok(!html.includes('--cw-i:20'));
+    });
+});
+
+// ---------------------------------------------------------------------------
+// MessageRenderer static methods — function coverage
+// ---------------------------------------------------------------------------
+suite('MessageRenderer static methods', () => {
+    test('MessageRenderer.renderMessage delegates to standalone renderMessage', () => {
+        const msg = makeMsg({ id: 'm1', role: 'user', content: 'Static test' });
+        const visible = makeVisible([msg, makeMsg({ id: 'm2', role: 'assistant', content: 'Hi' })]);
+        const html = MessageRenderer.renderMessage(msg, 0, 0, visible, 'Copilot', 3);
+        assert.ok(html.includes('Static test'));
+    });
+
+    test('MessageRenderer.renderChunk delegates to standalone renderChunk', () => {
+        const m1 = makeMsg({ id: 'm1', role: 'user', content: 'Question' });
+        const m2 = makeMsg({ id: 'm2', role: 'assistant', content: 'Answer' });
+        const visible = makeVisible([m1, m2]);
+        const cache: (string | null)[] = [null, null];
+        const html = MessageRenderer.renderChunk(visible, cache, 0, 2, 'Copilot', false);
+        assert.ok(html.includes('Question'));
+        assert.ok(html.includes('Answer'));
     });
 });
 
