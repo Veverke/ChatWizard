@@ -24,7 +24,7 @@ jobs:
         run: npm run compile && npm run lint
 
       - name: TypeScript strict typecheck
-        run: npx tsc --noEmit
+        run: npx tsc --noEmit && npx tsc --noEmit -p tsconfig.scripts.json
 
       # Download VS Code first so rebuild-native.js can read the exact Electron
       # version from .vscode-test/ before recompiling better-sqlite3.
@@ -47,7 +47,7 @@ jobs:
           fail_ci_if_error: true
 
       - name: Smoke tests (MCP)
-        run: node scripts/smoke-test-mcp-server.mjs && node scripts/smoke-test-phase4.mjs
+        run: npx tsx scripts/smoke-test-mcp-server.ts && npx tsx scripts/smoke-test-phase4.ts
 
       - name: Build extension bundle
         run: npm run bundle

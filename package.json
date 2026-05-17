@@ -1194,6 +1194,8 @@
     "bundle:watch": "esbuild src/extension.ts --bundle --platform=node --external:vscode --external:better-sqlite3 --external:@xenova/transformers --outfile=dist/extension.js --sourcemap --watch",
     "test:coverage": "c8 --reporter=lcov --reporter=text vscode-test",
     "test:flaky": "node scripts/detect-flaky.mjs",
+    "smoke": "tsx scripts/smoke-test-mcp-server.ts && tsx scripts/smoke-test-phase4.ts",
+    "e2e:mcp": "tsx scripts/e2e-mcp-scenarios.ts",
     "package:vsix:win32-x64": "npm run rebuild:native && npm run bundle && npx @vscode/vsce package --target win32-x64 --out chatwizard-win32-x64.vsix",
     "package:vsix:linux-x64": "npm run rebuild:native && npm run bundle && npx @vscode/vsce package --target linux-x64 --out chatwizard-linux-x64.vsix",
     "package:vsix:darwin-arm64": "npm run rebuild:native && npm run bundle && npx @vscode/vsce package --target darwin-arm64 --out chatwizard-darwin-arm64.vsix"
@@ -1216,6 +1218,7 @@
     "c8": "^11.0.0",
     "esbuild": "^0.27.4",
     "eslint": "^8.56.0",
+    "tsx": "^4.22.1",
     "typescript": "^5.3.3"
   }
 }
