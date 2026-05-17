@@ -23,6 +23,9 @@ jobs:
       - name: Compile & lint
         run: npm run compile && npm run lint
 
+      - name: TypeScript strict typecheck
+        run: npx tsc --noEmit
+
       # Download VS Code first so rebuild-native.js can read the exact Electron
       # version from .vscode-test/ before recompiling better-sqlite3.
       # Without this step the native binary is compiled against system Node.js ABI
@@ -33,8 +36,18 @@ jobs:
       - name: Rebuild native modules for VS Code's Electron
         run: npm run rebuild:native
 
-      - name: Run tests
-        run: xvfb-run -a npm test
+      - name: Run tests with coverage
+        run: xvfb-run -a npm run test:coverage
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage/lcov.info
+          fail_ci_if_error: true
+
+      - name: Smoke tests (MCP)
+        run: node scripts/smoke-test-mcp-server.mjs && node scripts/smoke-test-phase4.mjs
 
       - name: Build extension bundle
         run: npm run bundle

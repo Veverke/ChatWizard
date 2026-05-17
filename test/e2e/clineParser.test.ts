@@ -163,7 +163,12 @@ suite('clineParser', () => {
             );
             const result = await parseClineTask(tmpDir);
             assert.ok(result.errors.length === 0, 'Should have no errors when ui_messages.json is absent');
-            assert.ok(result.session.messages.length === 1);
+            assert.strictEqual(result.session.messages.length, 1, 'expected exactly 1 message from the single-turn conversation');
+            assert.strictEqual(result.session.messages[0].role, 'user', 'single message should have role "user"');
+            assert.ok(
+                result.session.messages[0].content.includes('Test without ui_messages'),
+                `message content should include the original text, got: "${result.session.messages[0].content}"`,
+            );
             // Timestamps should fall back to file mtime (not epoch).
             assert.ok(
                 result.session.createdAt !== new Date(0).toISOString(),

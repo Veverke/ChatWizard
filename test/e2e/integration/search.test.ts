@@ -59,7 +59,7 @@ suite('Full-Text Search', function () {
         assert.ok(sessionIds.includes(s1.id), `session "${s1.id}" not found in results`);
     });
 
-    test('23c — search results include a non-empty snippet', () => {
+    test('23c — search results include a non-empty snippet containing relevant vocabulary', () => {
         const engine = new FullTextSearchEngine();
 
         const { session: s1 } = parseCopilotSession(path.join(COPILOT_FX, 'session-with-model.jsonl'), 'ws-23e');
@@ -70,7 +70,11 @@ suite('Full-Text Search', function () {
         const response = engine.search({ text: 'typescript' });
         assert.ok(response.results.length >= 1);
         const hit = response.results[0];
-        assert.ok(hit.snippet && hit.snippet.length > 0, 'snippet should be non-empty');
+        assert.ok(hit.snippet && hit.snippet.length >= 20, `snippet "${hit.snippet}" should be at least 20 characters`);
+        assert.ok(
+            hit.snippet.toLowerCase().includes('typescript'),
+            `snippet "${hit.snippet}" should contain the query term "typescript"`,
+        );
     });
 
     // ── Test 24: No results ───────────────────────────────────────────────

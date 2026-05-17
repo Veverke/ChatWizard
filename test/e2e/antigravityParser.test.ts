@@ -156,7 +156,14 @@ suite('Antigravity Parser', () => {
             overviewFile: path.join(tmpDir, 'does-not-exist', 'overview.txt'),
         });
 
-        assert.ok(result.errors.length > 0);
+        assert.ok(result.errors.length > 0, 'expected at least one error for missing file');
+        assert.ok(
+            result.errors[0].toLowerCase().includes('does-not-exist') ||
+            result.errors[0].toLowerCase().includes('no such file') ||
+            result.errors[0].toLowerCase().includes('not found') ||
+            result.errors[0].toLowerCase().includes('enoent'),
+            `error message should reference the missing file, got: "${result.errors[0]}"`,
+        );
         assert.strictEqual(result.session.messages.length, 0);
         assert.strictEqual(result.session.id, 'missing-uuid');
     });

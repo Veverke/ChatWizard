@@ -360,3 +360,115 @@ suite('ContinueFromHistoryPrompt.render', () => {
         assert.strictEqual(getContextTool.calls.length, 0, 'whitespace topic should not trigger getContextTool');
     });
 });
+
+// ── Contract / Sentinel-string tests (INFRA-3) ────────────────────────────────
+//
+// These tests lock the exact sentinel strings and structural contracts that
+// chatParticipant.ts relies on when routing Phase 1 → Phase 2.  If either
+// contextPrompts.ts or chatParticipant.ts drifts, one of these will fail.
+
+suite('Sentinel-string contracts', () => {
+
+    // Contract 1 — Phase 1 prompt must instruct the LLM to return a JSON array.
+    // chatParticipant.ts relies on parsing a JSON array from the LLM response to
+    // know which sessions are relevant.  This exact instruction drives that contract.
+    test('Phase 1 prompt contains JSON array instruction sentinel', async () => {
+        const getContextTool = makeTool('[Session: Auth] | Source: copilot | Date: 2026-01-01T00:00:00Z\nPassage: jwt auth\nID: sess-1\n');
+        const prompt = new QueryHistoryPrompt(getContextTool, makeTool(''));
+
+        const result = await prompt.render({ query: 'handleAuthError JWT' });
+        const text = resultText(result);
+
+        assert.ok(
+            text.includes('Output ONLY a JSON array'),
+            'Phase 1 prompt must contain the JSON array routing sentinel used by chatParticipant.ts',
+        );
+    });
+
+    // Contract 2 — "Retrieved sessions" block appears BEFORE the query line.
+    // chatParticipant.ts and the LLM must see session context before the query.
+    test('Phase 1 prompt: sources block appears before the query line', async () => {
+        const sessionBlock = '[Session: DB Migration] | Source: copilot | Date: 2026-01-01T00:00:00Z\nPassage: prisma migration\nID: sess-2\n';
+        const getContextTool = makeTool(sessionBlock);
+        const prompt = new QueryHistoryPrompt(getContextTool, makeTool(''));
+
+        const result = await prompt.render({ query: 'database migration rollback' });
+        const text = resultText(result);
+
+        const retrievedIdx = text.indexOf('Retrieved sessions');
+        const queryIdx = text.indexOf('Query:');
+        assert.ok(retrievedIdx !== -1, 'Phase 1 prompt must contain "Retrieved sessions" header');
+        assert.ok(queryIdx !== -1, 'Phase 1 prompt must contain "Query:" line');
+        assert.ok(
+            retrievedIdx < queryIdx,
+            'Sources block ("Retrieved sessions") must appear before the "Query:" line in Phase 1 prompt',
+        );
+    });
+
+    // Contract 3 — Empty fallback prompt must contain the "No relevant history found." sentinel.
+    // This is the exact string the prompt instructs the LLM to output when nothing is relevant,
+    // and is also shown verbatim in the ChatWizard UI.
+    test('empty-query fallback prompt contains "No relevant history found." sentinel', async () => {
+        const prompt = new QueryHistoryPrompt(makeTool(''), makeTool(''));
+
+        const result = await prompt.render({});
+        const text = resultText(result);
+
+        assert.ok(
+            text.includes('No relevant history found.'),
+            'fallback prompt must contain the exact sentinel string "No relevant history found."',
+        );
+    });
+
+    // Contract 4 — The --general prefix that chatParticipant.ts sends MUST be exactly
+    // '--general ' (with trailing space).  contextPrompts.ts checks startsWith('--general ').
+    // If either side changes the exact token the routing breaks silently.
+    test('--general prefix: QueryHistoryPrompt routes to general-knowledge path', async () => {
+        const getContextTool = makeTool('some context');
+        const prompt = new QueryHistoryPrompt(getContextTool, makeTool(''));
+
+        // chatParticipant.ts sends exactly `--general ${query}` when user clicks "No"
+        const result = await prompt.render({ query: '--general how do I fix ECONNREFUSED' });
+        const text = resultText(result);
+
+        assert.ok(
+            text.toLowerCase().includes('general knowledge') || text.toLowerCase().includes('no relevant history'),
+            '--general path must produce a general-knowledge prompt, not a session-grounded one',
+        );
+        assert.strictEqual(
+            getContextTool.calls.length,
+            0,
+            '--general path must NOT call getContextTool — general guidance is knowledge-only',
+        );
+    });
+
+    // Contract 5 — The --continued prefix sentinel.
+    // chatParticipant.ts sends '--continued <query> --refs <ids>' to trigger Phase 2.
+    // This test verifies the exact prefix token is honoured.
+    test('--continued prefix: QueryHistoryPrompt routes to phase-2 consolidation path', async () => {
+        const getSessionFullTool = makeTool('Auth session content: jwt middleware fixed');
+        const prompt = new QueryHistoryPrompt(makeTool(''), getSessionFullTool);
+
+        const result = await prompt.render({ query: '--continued auth error --refs sess-auth-1' });
+        const text = resultText(result);
+
+        assert.ok(
+            text.includes('Auth session content: jwt middleware fixed'),
+            '--continued path must embed the fetched session content in the consolidation prompt',
+        );
+    });
+
+    // Contract 6 — Phase 1 prompt must NOT already contain an answer.
+    // The LLM must only rank sessions in Phase 1 — answers come in Phase 2.
+    test('Phase 1 prompt instructs LLM NOT to provide answers', async () => {
+        const prompt = new QueryHistoryPrompt(makeTool('session context'), makeTool(''));
+
+        const result = await prompt.render({ query: 'slow query optimization' });
+        const text = resultText(result);
+
+        assert.ok(
+            text.includes('Do NOT provide answers') || text.includes('IMPORTANT: Do NOT provide'),
+            'Phase 1 prompt must explicitly forbid the LLM from providing answers before Phase 2',
+        );
+    });
+});

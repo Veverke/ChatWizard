@@ -1,0 +1,41 @@
+[
+  {
+    "role": "user",
+    "content": "I need to write a down migration to rollback the ALTER TABLE changes we made yesterday. The migration added two non-null columns to the orders table."
+  },
+  {
+    "role": "assistant",
+    "content": [
+      {
+        "type": "text",
+        "text": "For a down migration that reverses ALTER TABLE operations, you need to drop the columns in reverse order. Non-null columns without defaults are trickier to restore, but dropping them is straightforward:\n\n```sql\n-- down migration: reverse the ALTER TABLE from yesterday\nALTER TABLE orders DROP COLUMN IF EXISTS fulfilled_at;\nALTER TABLE orders DROP COLUMN IF EXISTS fulfillment_status;\n\n-- Update migration tracking\nUPDATE schema_migrations SET rolled_back_at = NOW() WHERE version = '20260114_add_fulfillment_columns';\n```\n\nBefore running this, snapshot the data in those columns if you need to preserve it:\n\n```sql\nCREATE TABLE orders_fulfillment_backup AS\n  SELECT id, fulfilled_at, fulfillment_status FROM orders WHERE fulfilled_at IS NOT NULL;\n```"
+      }
+    ]
+  },
+  {
+    "role": "user",
+    "content": "The migration also added a non-null column without a default value. How do we handle that in the rollback — do we need to backfill first?"
+  },
+  {
+    "role": "assistant",
+    "content": [
+      {
+        "type": "text",
+        "text": "When rolling back a migration that added a non-null column without a default, the column already has data (it was backfilled during the forward migration). The rollback just needs to DROP the column — no backfill required for the rollback itself.\n\nHowever, if you need to **re-apply** the migration later, you'll need to handle the backfill again:\n\n```sql\n-- Step 1: Add the column as nullable first\nALTER TABLE orders ADD COLUMN payment_reference TEXT;\n\n-- Step 2: Backfill existing rows\nUPDATE orders SET payment_reference = 'LEGACY-' || id::text WHERE payment_reference IS NULL;\n\n-- Step 3: Add the NOT NULL constraint only after backfill\nALTER TABLE orders ALTER COLUMN payment_reference SET NOT NULL;\n```\n\nThis three-step ALTER TABLE pattern avoids the 'column has no default' error on tables with existing rows. Always test down migrations in a staging environment with production-like data volumes before running on production."
+      }
+    ]
+  },
+  {
+    "role": "user",
+    "content": "What's the safest way to run this down migration on production with zero downtime?"
+  },
+  {
+    "role": "assistant",
+    "content": [
+      {
+        "type": "text",
+        "text": "Zero-downtime schema rollback on PostgreSQL requires careful ordering to avoid locking:\n\n```sql\n-- Safe rollback sequence for zero-downtime:\n-- 1. Drop constraints that reference the column (FK, CHECK, UNIQUE)\nALTER TABLE order_items DROP CONSTRAINT IF EXISTS fk_order_fulfillment;\n\n-- 2. Drop the index on the column before dropping the column\nDROP INDEX CONCURRENTLY IF EXISTS orders_fulfillment_status_idx;\n\n-- 3. Drop the column — this takes an ACCESS EXCLUSIVE lock but is fast\nALTER TABLE orders DROP COLUMN IF EXISTS fulfillment_status;\n```\n\nUsing `DROP INDEX CONCURRENTLY` is critical — a regular `DROP INDEX` takes an exclusive lock that blocks all reads and writes on the table. Run this during a low-traffic window even with `CONCURRENTLY` for large tables."
+      }
+    ]
+  }
+]
