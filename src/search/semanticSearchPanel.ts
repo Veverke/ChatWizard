@@ -23,7 +23,7 @@ type SourceFilterState = 'all' | SessionSource;
 // ---------------------------------------------------------------------------
 
 const SOURCE_CYCLE_ORDER: SourceFilterState[] = [
-    'all', 'copilot', 'claude', 'antigravity',
+    'all', 'copilot', 'claude', 'antigravity', 'cursor', 'cline', 'roocode', 'windsurf', 'aider',
 ];
 
 export function nextSourceState(current: SourceFilterState): SourceFilterState {

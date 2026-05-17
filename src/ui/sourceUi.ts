@@ -33,7 +33,7 @@ export function sourceCodiconId(source: SessionSource): string {
 
 /**
  * Maps every SessionSource (and unknown strings) to the correct CSS badge class.
- * Shared by analyticsPanel, timelineViewProvider, and search panels.
+ * Use `sourceBadgeClass(source)` for a safe lookup with fallback.
  */
 export const SOURCE_BADGE_CLASS: Record<string, string> = {
     copilot:     'cw-badge-copilot',

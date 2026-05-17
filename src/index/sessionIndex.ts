@@ -74,6 +74,8 @@ export class SessionIndex {
     setSidecarStore(store: SidecarMetadataStore, cache: Map<string, SessionMetadata>): void {
         this._sidecarStore = store;
         this._sidecarCache = cache;
+        this._invalidateCaches();
+        this._notifyListeners();
     }
 
     /**
@@ -203,7 +205,11 @@ export class SessionIndex {
     /** Get all sessions as lightweight summaries, sorted by updatedAt descending. */
     getAllSummaries(): SessionSummary[] {
         return Array.from(this.sessions.values())
-            .map(toSummary)
+            .map(s => {
+                const summary = toSummary(s);
+                const custom = this._sidecarCache?.get(s.id)?.customTitle;
+                return custom ? { ...summary, title: custom } : summary;
+            })
             .sort(byUpdatedAtDesc);
     }
 

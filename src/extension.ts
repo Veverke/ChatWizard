@@ -92,7 +92,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                         for (const id of ids) {
                             await sidecarStore.setPin(id, true);
                         }
-                        await context.globalState.update('pinnedIds', undefined);
+                        // Note: 'pinnedIds' is intentionally kept in globalState until
+                        // pinning is fully migrated to the sidecar store in the tree provider.
                         channel.appendLine(`[sidecar] Migrated ${ids.length} pinned session(s) to sidecar store.`);
                     }
                 }
@@ -990,6 +991,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             let sessionId: string | undefined;
             if (typeof treeItemOrSessionId === 'string') {
                 sessionId = treeItemOrSessionId;
+            } else if (treeItemOrSessionId && 'summary' in (treeItemOrSessionId as object)) {
+                sessionId = (treeItemOrSessionId as { summary: { id: string } }).summary.id;
             } else if (treeItemOrSessionId && typeof (treeItemOrSessionId as { sessionId?: string }).sessionId === 'string') {
                 sessionId = (treeItemOrSessionId as { sessionId: string }).sessionId;
             }
