@@ -12,7 +12,6 @@
 [![GitHub Stars](https://img.shields.io/github/stars/veverke/chatwizard?style=social)](https://github.com/veverke/chatwizard)
 [![GitHub Issues](https://img.shields.io/github/issues/veverke/chatwizard)](https://github.com/veverke/chatwizard/issues)
 [![Last Commit](https://img.shields.io/github/last-commit/veverke/chatwizard)](https://github.com/veverke/chatwizard/commits/main)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/veverke/chatwizard/pulls)
 [![TypeScript](https://img.shields.io/badge/TypeScript-blue?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![VS Code](https://img.shields.io/badge/VS%20Code-%E2%89%A51.85-0098FF?logo=visual-studio-code&logoColor=white)](https://marketplace.visualstudio.com/items?itemName=Veverke.chatwizard)
 [![MCP](https://img.shields.io/badge/MCP-server%20included-7B2FBE?logo=anthropic&logoColor=white)](https://modelcontextprotocol.io)
