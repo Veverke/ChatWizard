@@ -141,6 +141,26 @@ Research covers the VS Code Marketplace (sorted by installs, May 2026) and the b
 
 ## 3. Monetization Roadmap
 
+### 3.0 Licensing & Open Core Strategy
+
+**Repo visibility: stays public.** GitHub discoverability, Marketplace search, and community trust all depend on the public repo. Going private harms organic installs. The extension core stays open source under MIT + Commons Clause. The Commons Clause is already correct — it blocks anyone from selling the software itself as a competing service. No license change is needed to charge for Pro features.
+
+**What stays open vs. what goes private:**
+
+| Component | Visibility | Reason |
+|---|---|---|
+| Core VS Code extension | **Public** (MIT + Commons Clause) | Distribution, community, organic growth |
+| Pro feature code in VSIX | Public source, gated by license flag | Ships in the same bundle; gating is behavioural, not structural |
+| License validation endpoint | **Private** (minimal server) | Just validates keys; not user data |
+| Cloud sync backend | **Private** | It is a service, not a library |
+| Team hub / Enterprise hub | **Private** | The commercial product itself |
+
+**Add a CLA before community grows.** Without a Contributor License Agreement, community-contributed code is MIT-only — it cannot be included in proprietary Pro/Enterprise features without each contributor's individual written consent. Add GitHub CLA Assistant (a free GitHub App) now, before this becomes a retroactive problem.
+
+**Payment processor: LemonSqueezy.** Standard choice for indie VS Code extensions. Acts as merchant of record (handles VAT/sales tax globally — you never touch tax), generates license keys natively, exposes a one-call validation API, and handles renewals and cancellations automatically. ~5% + $0.50 per transaction, no monthly cost.
+
+---
+
 ### 3.1 Tier Model
 
 | Tier | Who Buys | Price Model | Status |
@@ -184,6 +204,81 @@ SQLite persistent cache              ← #24 (P3) ← required for performance a
 **Recommended path to Individual Pro launch:** Complete P1 features (sprint 1) → Complete Session Archive + Tagging + AI Summaries (P2, sprint 2–3) → SQLite cache (P3, sprint 4–6) → Cloud sync (P3, sprint 7–8) → Launch Pro tier.
 
 **Estimated time to launch:** 4–6 months from today.
+
+#### Implementation: In-Extension License Gating
+
+Pro features ship inside the same VSIX, gated by a `LicenseService` singleton called once on extension activation. The key is stored in VS Code settings (`chatwizard.licenseKey`), validated against the LemonSqueezy API, and the result cached in `globalState` for 24 hours to avoid a network call on every startup.
+
+```typescript
+// src/license/LicenseService.ts
+export type Tier = 'free' | 'pro' | 'team';
+
+export class LicenseService {
+  private static _tier: Tier = 'free';
+
+  static async activate(context: vscode.ExtensionContext): Promise<void> {
+    const cached = context.globalState.get<{ tier: Tier; expiresAt: number }>('chatwizard.licenseCache');
+    if (cached && Date.now() < cached.expiresAt) { this._tier = cached.tier; return; }
+
+    const key = vscode.workspace.getConfiguration('chatwizard').get<string>('licenseKey', '');
+    if (!key) return; // stays 'free'
+
+    const tier = await this.validateRemote(key);
+    this._tier = tier;
+    await context.globalState.update('chatwizard.licenseCache', {
+      tier, expiresAt: Date.now() + 24 * 60 * 60 * 1000
+    });
+  }
+
+  static get isPro(): boolean { return this._tier === 'pro' || this._tier === 'team'; }
+  static get tier(): Tier { return this._tier; }
+
+  private static async validateRemote(key: string): Promise<Tier> {
+    try {
+      const resp = await fetch('https://api.lemonsqueezy.com/v1/licenses/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ license_key: key }),
+      });
+      const json = await resp.json() as { valid: boolean };
+      return json.valid ? 'pro' : 'free';
+    } catch {
+      return 'free'; // graceful degradation — never hard-block on network failure
+    }
+  }
+}
+```
+
+Gating a feature at the call site is a single guard:
+
+```typescript
+export async function runProFeature(): Promise<void> {
+  if (!LicenseService.isPro) {
+    const action = await vscode.window.showInformationMessage(
+      'Session Archive is a ChatWizard Pro feature.',
+      'Upgrade to Pro', 'Learn More'
+    );
+    if (action === 'Upgrade to Pro') {
+      vscode.env.openExternal(vscode.Uri.parse('https://chatwizard.dev/pro'));
+    }
+    return;
+  }
+  // ... actual feature code
+}
+```
+
+**Enforcement model by feature tier:**
+
+| Feature | Gate type | Bypassable by decompiling? |
+|---|---|---|
+| Session archive | In-extension flag | Yes (Commons Clause violation) |
+| Advanced analytics dashboard | In-extension flag | Yes |
+| AI summaries beyond free quota | Counter in `globalState` + flag | Yes |
+| Cloud sync | **Server-side auth** | No |
+| Team KB / hub | **Server-side auth** | No |
+| Enterprise compliance / audit | **Server-side auth** | No |
+
+Webpack minification + terser obfuscation makes decompilation annoying in practice. The Commons Clause makes it a license violation. Once cloud sync ships, the enforcement model becomes airtight because the backend physically cannot serve requests without a valid auth token.
 
 ---
 

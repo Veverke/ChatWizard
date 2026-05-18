@@ -71,7 +71,8 @@ export class ChatWizardWatcher implements vscode.Disposable {
         // SEC-10: per-source enable/disable settings
         const enabled       = cfg.get<boolean>('enabled', true);
         const indexClaude   = cfg.get<boolean>('indexClaude', true);
-        const indexCopilot  = cfg.get<boolean>('indexCopilot', true);
+        const indexCopilot   = cfg.get<boolean>('indexCopilot', true);
+        const indexChronicle = cfg.get<boolean>('indexChronicle', true);
         const indexCline    = cfg.get<boolean>('indexCline', true);
         const indexRooCode  = cfg.get<boolean>('indexRooCode', true);
         const indexCursor   = cfg.get<boolean>('indexCursor', true);
@@ -86,7 +87,7 @@ export class ChatWizardWatcher implements vscode.Disposable {
             return;
         }
 
-        await this.buildInitialIndex(indexClaude, indexCopilot, indexCline, indexRooCode, indexCursor, indexWindsurf, indexAider, indexAntigravity);
+        await this.buildInitialIndex(indexClaude, indexCopilot, indexCline, indexRooCode, indexCursor, indexWindsurf, indexAider, indexAntigravity, indexChronicle);
 
         if (indexClaude) {
             // Watch Claude sessions
@@ -289,7 +290,7 @@ this.index.remove(taskId);
         // Watch Chronicle session-store.db files for changes (Copilot Chronicle feature).
         // Chronicle DBs live in workspaceStorage/<hash>/GitHub.copilot-chat/debug-logs/session-store.db
         // We watch all workspaceStorage roots since the roots are known at startup.
-        if (indexCopilot) {
+        if (indexCopilot && indexChronicle) {
             for (const root of getWorkspaceStorageRoots()) {
                 const chroniclePattern = new vscode.RelativePattern(
                     vscode.Uri.file(root),
@@ -322,7 +323,7 @@ this.index.remove(taskId);
         this.disposables = [];
     }
 
-    private async buildInitialIndex(indexClaude: boolean, indexCopilot: boolean, indexCline: boolean, indexRooCode: boolean = true, indexCursor: boolean = true, indexWindsurf: boolean = true, indexAider: boolean = true, indexAntigravity: boolean = true): Promise<void> {
+    private async buildInitialIndex(indexClaude: boolean, indexCopilot: boolean, indexCline: boolean, indexRooCode: boolean = true, indexCursor: boolean = true, indexWindsurf: boolean = true, indexAider: boolean = true, indexAntigravity: boolean = true, indexChronicle: boolean = true): Promise<void> {
         this.channel.appendLine('[Chat Wizard] buildInitialIndex() started');
         await vscode.window.withProgress(
             {
@@ -385,7 +386,7 @@ this.index.remove(taskId);
                 this.channel.appendLine(`[init] Batch indexed ${all.length} sessions`);
 
                 // Merge Chronicle checkpoint data for Copilot sessions (best-effort, non-blocking).
-                if (indexCopilot) {
+                if (indexCopilot && indexChronicle) {
                     void this.mergeChronicleDataAsync();
                 }
             }
@@ -824,7 +825,10 @@ this.index.remove(taskId);
     async mergeChronicleDataAsync(): Promise<void> {
         try {
             const dbs = await discoverChronicleDbsAsync();
-            if (dbs.length === 0) { return; }
+            if (dbs.length === 0) {
+                this.channel.appendLine('[chronicle] No session-store.db found — Copilot Chronicle not active for this workspace');
+                return;
+            }
 
             const entries: Array<{ sessionId: string; data: ChronicleData }> = [];
             for (const { dbPath } of dbs) {

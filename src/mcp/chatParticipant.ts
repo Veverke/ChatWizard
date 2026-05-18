@@ -82,7 +82,8 @@ function buildSourcesMarkdown(refs: SessionRef[], queryTokens: string[] = []): v
         const args = encodeURIComponent(JSON.stringify([{ id: ref.id }]));
         const uri = `command:chatwizard.openSession?${args}`;
         const dateStr = new Date(ref.date).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
-        const about = keywordAnchoredExcerpt(ref.passage ?? '', queryTokens, 200);
+        // Escape pipe characters so they don't break the GFM table cell.
+        const about = keywordAnchoredExcerpt(ref.passage ?? '', queryTokens, 200).replace(/\|/g, '\\|');
         lines.push(`| ${marker} | [${ref.title}](${uri}) | ${ref.source} | ${dateStr} | ${about} |`);
     }
     const md = new vscode.MarkdownString(lines.join('\n'));

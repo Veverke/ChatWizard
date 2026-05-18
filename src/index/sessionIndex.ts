@@ -72,9 +72,24 @@ export class SessionIndex {
      * is immediately available for sync title/pin lookups.
      */
     setSidecarStore(store: SidecarMetadataStore, cache: Map<string, SessionMetadata>): void {
+        const prev = this._sidecarCache;
         this._sidecarStore = store;
         this._sidecarCache = cache;
         this._invalidateCaches();
+
+        // Re-index sessions whose effective title changed so the full-text search engine
+        // can find them by their new title. We fire a typed 'upsert' event with the session
+        // object patched to carry the new title — the engine's existing listener picks it up.
+        for (const [sessionId, meta] of cache.entries()) {
+            if (!meta.customTitle) { continue; }
+            const session = this.sessions.get(sessionId);
+            if (!session) { continue; }
+            const prevTitle = prev?.get(sessionId)?.customTitle ?? session.title;
+            if (meta.customTitle !== prevTitle) {
+                this._notifyTyped({ type: 'upsert', session: { ...session, title: meta.customTitle } });
+            }
+        }
+
         this._notifyListeners();
     }
 

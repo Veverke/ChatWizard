@@ -234,6 +234,16 @@ export class ContinueFromHistoryPrompt implements IMcpPrompt {
     }
 }
 
+/** Parse `ID: <id>` lines from tool output (same pattern used by getContextTool). */
+function extractSessionIds(text: string): string[] {
+    const ids: string[] = [];
+    for (const line of text.split('\n')) {
+        const match = line.match(/^ID:\s*(.+)$/);
+        if (match) { ids.push(match[1].trim()); }
+    }
+    return ids;
+}
+
 /**
  * Slash prompt: surface reusable prompts from the user's prompt library.
  */
@@ -251,6 +261,7 @@ export class GetPromptsPrompt implements IMcpPrompt {
     constructor(
         private readonly getContextTool: IMcpTool,
         private readonly listRecentTool: IMcpTool,
+        private readonly getSessionFullTool?: IMcpTool,
     ) {}
 
     async render(args: Record<string, string>): Promise<McpToolResult> {
@@ -260,17 +271,43 @@ export class GetPromptsPrompt implements IMcpPrompt {
             ? await runTool(this.getContextTool, { topic, limit: 8 })
             : '';
 
+        // Fetch actual session content so the LLM can extract verbatim prompts.
+        // Cap each session at 3000 chars to keep the context window manageable;
+        // user messages appear first in the transcript so the best prompts are at the top.
+        const MAX_SESSION_CHARS = 3000;
+        const sessionContents: string[] = [];
+        if (this.getSessionFullTool) {
+            const ids = [
+                ...extractSessionIds(topic ? contextText : recentText),
+                ...extractSessionIds(recentText),
+            ];
+            const uniqueIds = [...new Set(ids)].slice(0, 4);
+            for (const id of uniqueIds) {
+                const content = await runTool(this.getSessionFullTool, { sessionId: id });
+                if (
+                    !content.toLowerCase().startsWith('error') &&
+                    !content.toLowerCase().includes('session not found')
+                ) {
+                    sessionContents.push(content.slice(0, MAX_SESSION_CHARS));
+                }
+            }
+        }
+
         const prompt = [
             'You are a prompt engineering assistant. Extract and surface the most reusable, high-quality prompts from the sessions below.',
             'A reusable prompt is a user message that asks for something broadly applicable — not overly specific to one debugging incident.',
             'For each prompt you surface, include: the verbatim text, the source session title, and a one-sentence description of its intent.',
             'Format as a numbered Markdown list.',
             '',
-            'Recent sessions:',
-            recentText || '(none)',
+            sessionContents.length > 0
+                ? 'Session transcripts (user messages are marked "You:"):'
+                : 'Recent sessions (metadata only):',
+            sessionContents.length > 0
+                ? sessionContents.join('\n\n---\n\n')
+                : recentText || '(none)',
             topic ? `\nTopic filter: ${topic}` : '',
-            topic ? '\nTopic-specific sessions:' : '',
-            topic ? (contextText || '(none)') : '',
+            topic && contextText ? '\nTopic-specific context:' : '',
+            topic && contextText ? contextText : '',
             '',
             'Return the top 10 reusable prompts, ranked by generality and reusability.',
         ].filter(Boolean).join('\n');
