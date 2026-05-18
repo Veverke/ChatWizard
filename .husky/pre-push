@@ -1,1 +1,7 @@
+echo "-------------------- git husky pre-push hook starting ----------------"
 npm run test:coverage
+EXIT_CODE=$?
+if [ $EXIT_CODE -ne 0 ]; then
+  echo "--------------pre-push hook failed: test:coverage exited with code $EXIT_CODE-------------------"
+  exit $EXIT_CODE
+fi

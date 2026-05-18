@@ -11,6 +11,7 @@
   ],
   "coverage": {
     "exclude": [
+      "**/dist/**",
       "**/watcher/fileWatcher.ts",
       "**/mcp/chatParticipant.ts",
       "**/timeline/timelineViewProvider.ts",
