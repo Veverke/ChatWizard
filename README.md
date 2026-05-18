@@ -242,9 +242,20 @@ Initial release. All nine development phases complete:
 
 ---
 
+## Support the Project
+
+If ChatWizard is saving you time, a quick ⭐ review takes 30 seconds and makes a real difference for discoverability:
+
+→ [**Leave a review on VS Code Marketplace**](https://marketplace.visualstudio.com/items?itemName=Veverke.chatwizard&ssr=false#review-details)  
+→ [**Leave a review on Open VSX Registry**](https://open-vsx.org/extension/Veverke/chatwizard)
+
+---
+
 ## Contributing
 
 Issues and pull requests are welcome at [https://github.com/veverke/chatwizard](https://github.com/veverke/chatwizard).
+
+Found a bug or have a feature request? [Open an issue on GitHub](https://github.com/veverke/chatwizard/issues) — every report is read and responded to.
 
 ---
 
