@@ -47,7 +47,7 @@ export function getWorkspaceStorageRoots(): string[] {
     const appDataBase = platform === 'win32'
         ? (process.env['APPDATA'] || os.homedir())
         : platform === 'darwin'
-            ? path.join(os.homedir(), 'Library', 'Application Support')
+            ? (process.env['XDG_CONFIG_HOME'] || path.join(os.homedir(), 'Library', 'Application Support'))
             : (process.env['XDG_CONFIG_HOME'] || path.join(os.homedir(), '.config'));
 
     const variants = ['Code', 'Code - Insiders'];

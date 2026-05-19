@@ -40,7 +40,9 @@ export function toSummary(session: Session): SessionSummary {
 
 /** Sort comparator: descending by updatedAt (ISO strings sort lexicographically) */
 function byUpdatedAtDesc(a: SessionSummary, b: SessionSummary): number {
-    return b.updatedAt.localeCompare(a.updatedAt);
+    if (b.updatedAt > a.updatedAt) { return 1; }
+    if (b.updatedAt < a.updatedAt) { return -1; }
+    return 0;
 }
 
 /**
@@ -55,6 +57,7 @@ export class SessionIndex {
     private _version = 0;
     private _codeBlockCache: IndexedCodeBlock[] | null = null;
     private _promptCache: Prompt[] | null = null;
+    private _summaryCache: SessionSummary[] | null = null;
     /** Preloaded sidecar metadata — set by `setSidecarCache()` after async load */
     private _sidecarCache: Map<string, SessionMetadata> | null = null;
     private _sidecarStore: SidecarMetadataStore | null = null;
@@ -134,6 +137,7 @@ export class SessionIndex {
     private _invalidateCaches(): void {
         this._codeBlockCache = null;
         this._promptCache = null;
+        this._summaryCache = null;
     }
 
     /** Add or replace a session by id. */
@@ -219,13 +223,15 @@ export class SessionIndex {
 
     /** Get all sessions as lightweight summaries, sorted by updatedAt descending. */
     getAllSummaries(): SessionSummary[] {
-        return Array.from(this.sessions.values())
+        if (this._summaryCache !== null) { return this._summaryCache; }
+        this._summaryCache = Array.from(this.sessions.values())
             .map(s => {
                 const summary = toSummary(s);
                 const custom = this._sidecarCache?.get(s.id)?.customTitle;
                 return custom ? { ...summary, title: custom } : summary;
             })
             .sort(byUpdatedAtDesc);
+        return this._summaryCache;
     }
 
     /** Get summaries filtered to a specific source, sorted by updatedAt descending. */
