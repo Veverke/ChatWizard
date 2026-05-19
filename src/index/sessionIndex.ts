@@ -191,6 +191,9 @@ export class SessionIndex {
         if (sessions.length > 0) {
             this._version++;
             this._invalidateCaches();
+            // Pre-build the summary cache so the first getAllSummaries() call after a bulk
+            // load is O(1). The sort cost is paid here (outside any UI hot-path).
+            this._buildSummaryCache();
         }
         this._notifyTyped({ type: 'batch', sessions });
         this._notifyListeners();
@@ -221,9 +224,8 @@ export class SessionIndex {
         }
     }
 
-    /** Get all sessions as lightweight summaries, sorted by updatedAt descending. */
-    getAllSummaries(): SessionSummary[] {
-        if (this._summaryCache !== null) { return this._summaryCache; }
+    /** Build (or rebuild) the sorted summary cache from current sessions. */
+    private _buildSummaryCache(): void {
         this._summaryCache = Array.from(this.sessions.values())
             .map(s => {
                 const summary = toSummary(s);
@@ -231,7 +233,13 @@ export class SessionIndex {
                 return custom ? { ...summary, title: custom } : summary;
             })
             .sort(byUpdatedAtDesc);
-        return this._summaryCache;
+    }
+
+    /** Get all sessions as lightweight summaries, sorted by updatedAt descending. */
+    getAllSummaries(): SessionSummary[] {
+        if (this._summaryCache !== null) { return this._summaryCache; }
+        this._buildSummaryCache();
+        return this._summaryCache!;
     }
 
     /** Get summaries filtered to a specific source, sorted by updatedAt descending. */
