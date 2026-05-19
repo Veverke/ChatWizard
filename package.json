@@ -307,6 +307,12 @@
         "icon": "$(export)"
       },
       {
+        "command": "chatwizard.injectAsContext",
+        "title": "Inject as Context…",
+        "category": "Chat Wizard",
+        "icon": "$(comment-discussion)"
+      },
+      {
         "command": "chatwizard.showCodeBlocks",
         "title": "Show Code Blocks",
         "category": "Chat Wizard",
@@ -743,6 +749,11 @@
           "group": "2_export@2"
         },
         {
+          "command": "chatwizard.injectAsContext",
+          "when": "viewItem == session || viewItem == session.pinned",
+          "group": "2_export@3"
+        },
+        {
           "command": "chatwizard.pinSession",
           "when": "viewItem == session",
           "group": "inline@1"
@@ -903,6 +914,10 @@
         },
         {
           "command": "chatwizard.exportFromTreeSelection",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.injectAsContext",
           "when": "false"
         },
         {

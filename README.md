@@ -99,6 +99,7 @@ Capabilities not available in the built-in GitHub Copilot Chat panel or the Clau
 | Pin & drag-and-drop reorder sessions | ✅ | ❌ | ❌ |
 | Export conversations to Markdown | ✅ | ❌ | ❌ |
 | Export a message excerpt (selected turns only) | ✅ | ❌ | ❌ |
+| Inject a past session as context into a new chat | ✅ | ❌ | ❌ |
 | Unified code block library across all sessions | ✅ | ❌ | ❌ |
 | Filter & sort AI-generated code blocks by language, content, source, role | ✅ | ❌ | ❌ |
 | One-click copy of any historical code block | ✅ | ❌ | ❌ |
@@ -232,7 +233,7 @@ Initial release. All nine development phases complete:
 - Phase 0: Foundation — parsers, file watchers, session index
 - Phase 1: Session Management Panel — TreeView, reader, sort, filter, pin, drag-drop
 - Phase 2: Unified Full-Text Search — inverted index, QuickPick UI, regex, role filters
-- Phase 3: Export to Markdown — single, all, multi-select, excerpt
+- Phase 3: Export to Markdown — single, all, multi-select, excerpt, inject as context
 - Phase 4: Code Block Extraction — language filter, content search, copy-to-clipboard
 - Phase 5: Prompt Library — deduplication, frequency ranking, copy
 - Phase 6: Analytics Dashboard — token usage, daily activity chart, top projects, top terms

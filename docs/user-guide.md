@@ -99,6 +99,7 @@ Pin important sessions so they float to the top. Use the **pin icon** on the row
 | Pin / Unpin Session | Keeps session at top of list |
 | Export Session to Markdown | Save single session as `.md` |
 | Export Selected… | Multi-select export |
+| Inject as Context… | Export session and open it as context in a new Copilot Chat |
 
 ---
 
@@ -276,6 +277,21 @@ Ctrl+Shift+P → Chat Wizard: Export… → Export Session Excerpt…
 ```
 
 **Output format:** Each file has a metadata header (source, model, date, workspace), H2 headings for user messages, H3 for AI responses, and syntax-highlighted code blocks.
+
+### Inject a Session as Context into a New Chat
+
+Turn any past session into live context for a brand-new Copilot Chat conversation in one click:
+
+1. Right-click any session in the Sessions panel
+2. Choose **Inject as Context…**
+
+ChatWizard will:
+- Silently export the session to a Markdown file in your workspace root (no save dialog)
+- Open that file in the editor so you can inspect it
+- Open Copilot Chat pre-filled with `#file:/path/to/session.md Use this exported chat session as context for our conversation.`
+- Leave the message unsent so you can customise the prompt before pressing **Enter**
+
+> **Tip:** You can edit the pre-filled message to add a specific question, e.g. `#file:my-session.md We were debugging a race condition here — continue from where we left off.`
 
 ---
 
@@ -560,6 +576,7 @@ Leave a path override empty to use the platform default location.
 | `chatwizard.exportAll` | Chat Wizard: Export All Sessions… |
 | `chatwizard.exportSelected` | Chat Wizard: Export Selected Sessions… |
 | `chatwizard.exportExcerpt` | Chat Wizard: Export Session Excerpt… |
+| `chatwizard.injectAsContext` | Right-click session → Inject as Context… |
 | `chatwizard.manageWatchedWorkspaces` | Chat Wizard: Manage Watched Workspaces |
 | `chatwizard.rescan` | Chat Wizard: Rescan Sessions |
 | `chatwizard.startMcpServer` | Chat Wizard: Start MCP Server |
@@ -576,6 +593,7 @@ Leave a path override empty to use the platform default location.
 | `chatwizard.pinSession` / `chatwizard.unpinSession` | Pin icon on session row / right-click menu |
 | `chatwizard.exportSession` | Right-click menu / inline export icon |
 | `chatwizard.exportFromTreeSelection` | Right-click menu (multi-select) |
+| `chatwizard.injectAsContext` | Right-click menu → Inject as Context… |
 | `chatwizard.openSession` | Click a session in the Sessions panel |
 | `chatwizard.openSessionFromCodeBlock` | Click an entry in the Code Blocks panel |
 | `chatwizard.loadMoreSessions` | "Load More" item at bottom of Sessions panel |
@@ -600,6 +618,7 @@ Code Blocks panel toolbar cycles through: `chatwizard.cbSortByDate`, `chatwizard
 | Check token usage this month | Analytics panel |
 | See which models you've used | Model Usage panel |
 | Export a session to Markdown | Right-click session → Export Session to Markdown |
+| Inject a session as context into a new chat | Right-click session → Inject as Context… |
 | Ask Copilot using your history | `@chatwizard /queryHistory <question>` |
 | Connect Claude Desktop to your history | Enable MCP server → Copy MCP Config → paste & restart |
 | Force a full re-index | `Ctrl+Shift+P` → **Chat Wizard: Rescan Sessions** |
