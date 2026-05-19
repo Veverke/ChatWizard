@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { Session, Message, ParseResult } from '../types/index';
 import { extractCodeBlocks } from './claude';
-import { AntigravityConversationInfo } from '../types/index';
+import { AntigravityConversationInfo, AntigravityJsonConversationInfo } from '../types/index';
 
 /** Maximum characters to keep in a title derived from the first user message. */
 const MAX_TITLE_CHARS = 120;
@@ -198,6 +198,157 @@ export function parseAntigravityConversation(info: AntigravityConversationInfo):
             'the running Language Server to decode. Only your prompts are shown here. ' +
             'Prompt Library, search, analytics, and timeline work fully.',
         ],
+    };
+
+    return { session, errors };
+}
+
+// ─── JSON conversation parser ─────────────────────────────────────────────────
+
+export interface AntigravityJsonMessage {
+    role: 'user' | 'model';
+    parts: Array<{ text?: string }>;
+    createTime?: string; // ISO-8601
+}
+
+export interface AntigravityJsonConversation {
+    conversationId?: string;
+    messages?: AntigravityJsonMessage[];
+    createTime?: string;
+    updateTime?: string;
+}
+
+/**
+ * Parses an Antigravity conversations/*.json file into a `ParseResult`.
+ * Maps `role: 'model'` → `role: 'assistant'`.
+ * Never throws; populates `errors[]` on malformed JSON.
+ */
+export function parseAntigravityJsonConversation(
+    info: AntigravityJsonConversationInfo
+): ParseResult {
+    const { conversationId, jsonFile } = info;
+    const errors: string[] = [];
+
+    const emptySession: Session = {
+        id: conversationId,
+        title: conversationId,
+        source: 'antigravity',
+        subSource: 'conversations',
+        workspaceId: conversationId,
+        workspacePath: undefined,
+        messages: [],
+        filePath: jsonFile,
+        createdAt: new Date(0).toISOString(),
+        updatedAt: new Date(0).toISOString(),
+    };
+
+    let raw: string;
+    try {
+        raw = fs.readFileSync(jsonFile, 'utf-8');
+    } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        errors.push(`Failed to read file: ${message}`);
+        return { session: emptySession, errors };
+    }
+
+    let parsed: AntigravityJsonConversation;
+    try {
+        parsed = JSON.parse(raw) as AntigravityJsonConversation;
+    } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        errors.push(`Failed to parse JSON: ${message}`);
+        return { session: emptySession, errors };
+    }
+
+    const rawMessages = Array.isArray(parsed.messages) ? parsed.messages : [];
+    const messages: Message[] = [];
+
+    for (let i = 0; i < rawMessages.length; i++) {
+        const raw = rawMessages[i];
+        const rawRole = raw.role ?? '';
+        let role: 'user' | 'assistant';
+        if (rawRole === 'user') {
+            role = 'user';
+        } else if (rawRole === 'model') {
+            role = 'assistant';
+        } else {
+            // Skip unknown roles
+            continue;
+        }
+
+        const text = (raw.parts ?? [])
+            .map(p => p.text ?? '')
+            .join('')
+            .trim();
+        if (!text) { continue; }
+
+        const timestamp = raw.createTime ?? undefined;
+        const codeBlocks = extractCodeBlocks(text, conversationId, i);
+        messages.push({
+            id: `${conversationId}-${i}`,
+            role,
+            content: text,
+            codeBlocks,
+            timestamp,
+        });
+    }
+
+    // Derive title from first user message
+    const firstUser = messages.find(m => m.role === 'user');
+    const title = firstUser
+        ? firstUser.content.slice(0, MAX_TITLE_CHARS).replace(/\s+/g, ' ').trim()
+        : conversationId;
+
+    const createdAt = (() => {
+        if (parsed.createTime) {
+            try {
+                const d = new Date(parsed.createTime);
+                if (!isNaN(d.getTime())) { return d.toISOString(); }
+            } catch { /* fall through */ }
+        }
+        if (messages[0]?.timestamp) {
+            try {
+                const d = new Date(messages[0].timestamp);
+                if (!isNaN(d.getTime())) { return d.toISOString(); }
+            } catch { /* fall through */ }
+        }
+        return new Date(0).toISOString();
+    })();
+
+    const updatedAt = (() => {
+        if (parsed.updateTime) {
+            try {
+                const d = new Date(parsed.updateTime);
+                if (!isNaN(d.getTime())) { return d.toISOString(); }
+            } catch { /* fall through */ }
+        }
+        const lastMsg = messages[messages.length - 1];
+        if (lastMsg?.timestamp) {
+            try {
+                const d = new Date(lastMsg.timestamp);
+                if (!isNaN(d.getTime())) { return d.toISOString(); }
+            } catch { /* fall through */ }
+        }
+        return createdAt;
+    })();
+
+    const fileSizeBytes = (() => {
+        try { return fs.statSync(jsonFile).size; } catch { return undefined; }
+    })();
+
+    const session: Session = {
+        id: conversationId,
+        title,
+        source: 'antigravity',
+        subSource: 'conversations',
+        workspaceId: conversationId,
+        workspacePath: undefined,
+        messages,
+        filePath: jsonFile,
+        fileSizeBytes,
+        createdAt,
+        updatedAt,
+        parseErrors: errors.length > 0 ? errors : undefined,
     };
 
     return { session, errors };

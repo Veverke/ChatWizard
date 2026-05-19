@@ -543,9 +543,14 @@ export class TimelineViewProvider implements vscode.WebviewViewProvider {
     <label>Source</label>
     <select id="srcFilter" onchange="applyFilter()" aria-label="Filter by source">
       <option value="">All</option>
-      <option value="copilot">Copilot</option>
-      <option value="claude">Claude</option>
-      <option value="antigravity">Antigravity</option>
+      <option value="copilot">GitHub Copilot</option>
+      <option value="claude">Claude Code</option>
+      <option value="antigravity">Google Antigravity</option>
+      <option value="cursor">Cursor</option>
+      <option value="cline">Cline</option>
+      <option value="roocode">Roo Code</option>
+      <option value="windsurf">Windsurf</option>
+      <option value="aider">Aider</option>
     </select>
     <label>Jump to</label>
     <select id="jumpDate" onchange="jumpToMonth(this.value)" aria-label="Jump to month">
@@ -746,9 +751,16 @@ export class TimelineViewProvider implements vscode.WebviewViewProvider {
   function renderEntryHtml(entry, fadeIdx) {
     const fadeAttr     = fadeIdx < 25 ? ' style="--cw-i:' + fadeIdx + '"' : '';
     const sourceLabel  = (SRC_LABEL && SRC_LABEL[entry.source]) ? SRC_LABEL[entry.source] : entry.source;
-    const badgeClass   = entry.source === 'copilot' ? 'cw-badge-copilot'
-                       : entry.source === 'antigravity' ? 'cw-badge-antigravity'
-                       : 'cw-badge-claude';
+    const badgeClass   = ({
+      copilot: 'cw-badge-copilot',
+      claude:  'cw-badge-claude',
+      antigravity: 'cw-badge-antigravity',
+      cursor:  'cw-badge-cursor',
+      cline:   'cw-badge-cline',
+      roocode: 'cw-badge-roocode',
+      windsurf:'cw-badge-windsurf',
+      aider:   'cw-badge-aider',
+    } as Record<string,string>)[entry.source] ?? 'cw-badge-claude';
     const wsMeta       = entry.workspaceName || '(unknown workspace)';
     const promptText   = entry.firstPrompt   || '(no prompt)';
     const ariaLabel    = escHtml(entry.sessionTitle) + ', ' + sourceLabel + ', ' + escHtml(entry.date);

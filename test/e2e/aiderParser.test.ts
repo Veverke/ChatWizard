@@ -152,6 +152,13 @@ suite('Aider Parser', () => {
         const result = parseAiderHistory(makeInfo(historyFile));
 
         assert.ok(result.errors.length > 0, 'expected at least one error');
+        assert.ok(
+            result.errors[0].toLowerCase().includes('nonexistent') ||
+            result.errors[0].toLowerCase().includes('no such file') ||
+            result.errors[0].toLowerCase().includes('not found') ||
+            result.errors[0].toLowerCase().includes('enoent'),
+            `error message should reference the missing file, got: "${result.errors[0]}"`,
+        );
         assert.strictEqual(result.session.messages.length, 0);
     });
 
@@ -220,5 +227,162 @@ suite('Aider Parser', () => {
         const r2 = parseAiderHistory(makeInfo(historyFile));
 
         assert.strictEqual(r1.session.id, r2.session.id, 'ID must not change when file content grows');
+    });
+});
+
+// ---------------------------------------------------------------------------
+// aiderParser — branch coverage edge cases
+// ---------------------------------------------------------------------------
+suite('aiderParser — branch coverage edge cases', () => {
+    let tmpDir: string;
+
+    setup(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aider-branch-test-'));
+    });
+
+    teardown(() => {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    function makeInfo(historyFile: string, configFile?: string): AiderHistoryInfo {
+        return { historyFile, configFile, workspacePath: tmpDir };
+    }
+
+    function writeHistory(name: string, content: string): string {
+        const filePath = path.join(tmpDir, name);
+        fs.writeFileSync(filePath, content, 'utf-8');
+        return filePath;
+    }
+
+    test('no user messages → title is Untitled Aider Session', () => {
+        const historyFile = writeHistory('no-user.md',
+            '# Aider session\n\n> Cmd line only\n\nAssistant only response\n'
+        );
+        const { session } = parseAiderHistory(makeInfo(historyFile));
+        assert.strictEqual(session.title, 'Untitled Aider Session');
+    });
+
+    test('assistant buffer with only whitespace is discarded without message', () => {
+        // Create file where assistant section has only blank lines
+        const historyFile = writeHistory('whitespace-asst.md',
+            '#### Hello\n\n   \n\n#### Second\n\nActual assistant response\n'
+        );
+        const { session } = parseAiderHistory(makeInfo(historyFile));
+        // The whitespace-only assistant output should be discarded, not produce a message
+        assert.ok(session.messages.every(m => m.content.trim().length > 0));
+    });
+
+    test('_readModel reads model from config file with quotes', () => {
+        const configFile = path.join(tmpDir, '.aider.conf.yml');
+        fs.writeFileSync(configFile, 'model: "claude-3-5-sonnet-20241022"\n');
+        const historyFile = writeHistory('with-model.md',
+            '#### User asked something\n\nAssistant replied\n'
+        );
+        const { session } = parseAiderHistory(makeInfo(historyFile, configFile));
+        assert.strictEqual(session.model, 'claude-3-5-sonnet-20241022');
+    });
+
+    test('_readModel reads model from config without quotes', () => {
+        const configFile = path.join(tmpDir, '.aider.conf2.yml');
+        fs.writeFileSync(configFile, 'model: gpt-4o\nother: value\n');
+        const historyFile = writeHistory('with-model2.md',
+            '#### User asked something\n\nAssistant replied\n'
+        );
+        const { session } = parseAiderHistory(makeInfo(historyFile, configFile));
+        assert.strictEqual(session.model, 'gpt-4o');
+    });
+
+    test('blank line inside assistant block adds paragraph break', () => {
+        const historyFile = writeHistory('para-break.md',
+            '#### User question\n\nFirst paragraph.\n\nSecond paragraph.\n'
+        );
+        const { session } = parseAiderHistory(makeInfo(historyFile));
+        const asst = session.messages.find(m => m.role === 'assistant');
+        assert.ok(asst);
+        assert.ok(asst.content.includes('First paragraph'));
+        assert.ok(asst.content.includes('Second paragraph'));
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Branch coverage suite
+// ---------------------------------------------------------------------------
+
+suite('Aider Parser — branch coverage', () => {
+    let tmpDir: string;
+
+    setup(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cw-aider-branch-'));
+    });
+
+    teardown(() => {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    function makeInfo2(historyFile: string, configFile?: string): AiderHistoryInfo {
+        return { historyFile, workspacePath: path.dirname(historyFile), configFile };
+    }
+
+    test('file read failure returns empty session with error', () => {
+        const missing = path.join(tmpDir, 'does-not-exist.md');
+        const { session, errors } = parseAiderHistory(makeInfo2(missing));
+        assert.ok(errors.length > 0, 'should have errors');
+        assert.ok(errors[0].includes('Failed to read'), `got: ${errors[0]}`);
+        assert.strictEqual(session.messages.length, 0);
+    });
+
+    test('empty history file returns session with no messages', () => {
+        const fp = path.join(tmpDir, 'empty.md');
+        fs.writeFileSync(fp, '   ');
+        const { session } = parseAiderHistory(makeInfo2(fp));
+        assert.strictEqual(session.messages.length, 0);
+    });
+
+    test('user line with empty text after prefix is skipped', () => {
+        const fp = path.join(tmpDir, 'empty-user.md');
+        fs.writeFileSync(fp, '####    \n');
+        const { session } = parseAiderHistory(makeInfo2(fp));
+        assert.strictEqual(session.messages.filter(m => m.role === 'user').length, 0);
+    });
+
+    test('aider command line (> prefix) is skipped', () => {
+        const fp = path.join(tmpDir, 'cmd-skip.md');
+        fs.writeFileSync(fp, '> aider command\n#### user question\n');
+        const { session } = parseAiderHistory(makeInfo2(fp));
+        // Command line should not appear in messages
+        const allContent = session.messages.map(m => m.content).join('');
+        assert.ok(!allContent.includes('aider command'), 'command line should be skipped');
+    });
+
+    test('assistant message truncated when it exceeds MAX_MESSAGE_BYTES', () => {
+        const fp = path.join(tmpDir, 'truncated.md');
+        // Write a 1.1MB assistant block by repeating lines
+        const bigLine = 'A'.repeat(1000);
+        let content = '>? user asks\n';
+        for (let i = 0; i < 1100; i++) {
+            content += bigLine + '\n';
+        }
+        fs.writeFileSync(fp, content);
+        const { session, errors } = parseAiderHistory(makeInfo2(fp));
+        const asst = session.messages.find(m => m.role === 'assistant');
+        assert.ok(asst, 'should have an assistant message');
+        assert.ok(asst.content.includes('[...truncated'), 'should have truncation marker');
+        assert.ok(errors.some(e => e.includes('truncated')), 'should have truncation error');
+    });
+
+    test('no title: title falls back to "Untitled Aider Session" when no user messages', () => {
+        const fp = path.join(tmpDir, 'no-user.md');
+        fs.writeFileSync(fp, 'Just some assistant text without user prefix\n');
+        const { session } = parseAiderHistory(makeInfo2(fp));
+        assert.strictEqual(session.title, 'Untitled Aider Session');
+    });
+
+    test('oversized line is skipped with error', () => {
+        const fp = path.join(tmpDir, 'oversized.md');
+        const longLine = 'B'.repeat(2001);
+        fs.writeFileSync(fp, `#### user\n${longLine}\n`);
+        // Pass a small maxLineChars to trigger the oversized path
+        const { errors } = parseAiderHistory(makeInfo2(fp), 2000);
+        assert.ok(errors.some(e => e.includes('Line skipped')), `errors: ${JSON.stringify(errors)}`);
     });
 });

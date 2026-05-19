@@ -68,6 +68,7 @@ const serverInfoTool = new ServerInfoTool(
 const server = new McpServer(
     { enabled: true, port: 19999, tokenPath },
     [serverInfoTool],
+    [],
     (msg) => console.log(`  [log] ${msg}`),
     () => sessionIndex.getAllSummaries().length,
 );
@@ -113,6 +114,7 @@ assert(server.port === 0, 'port is 0 after stop()');
 // Verify port is released (a new server can bind to it)
 const server2 = new McpServer(
     { enabled: true, port: 19999, tokenPath },
+    [],
     [],
     () => {},
     () => 0,

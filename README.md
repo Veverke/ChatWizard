@@ -3,15 +3,18 @@
 [![VS Code Marketplace](https://vsmarketplacebadges.dev/version/Veverke.chatwizard.svg)](https://marketplace.visualstudio.com/items?itemName=Veverke.chatwizard)
 [![Installs](https://vsmarketplacebadges.dev/installs/Veverke.chatwizard.svg)](https://marketplace.visualstudio.com/items?itemName=Veverke.chatwizard)
 [![Rating](https://vsmarketplacebadges.dev/rating/Veverke.chatwizard.svg)](https://marketplace.visualstudio.com/items?itemName=Veverke.chatwizard)
+[![GitHub release](https://img.shields.io/github/v/release/veverke/chatwizard?logo=github&label=release)](https://github.com/veverke/chatwizard/releases/latest)
 [![Open VSX Version](https://img.shields.io/open-vsx/v/Veverke/chatwizard?label=Open%20VSX)](https://open-vsx.org/extension/Veverke/chatwizard)
 [![Open VSX Downloads](https://img.shields.io/open-vsx/dt/Veverke/chatwizard)](https://open-vsx.org/extension/Veverke/chatwizard)
 [![License: MIT + Commons Clause](https://img.shields.io/badge/license-MIT%20%2B%20Commons%20Clause-blue.svg)](LICENSE)
 [![CI](https://github.com/veverke/chatwizard/actions/workflows/ci.yml/badge.svg)](https://github.com/veverke/chatwizard/actions/workflows/ci.yml)
+[![Coverage](https://codecov.io/gh/veverke/chatwizard/graph/badge.svg)](https://codecov.io/gh/veverke/chatwizard)
 [![GitHub Stars](https://img.shields.io/github/stars/veverke/chatwizard?style=social)](https://github.com/veverke/chatwizard)
 [![GitHub Issues](https://img.shields.io/github/issues/veverke/chatwizard)](https://github.com/veverke/chatwizard/issues)
 [![Last Commit](https://img.shields.io/github/last-commit/veverke/chatwizard)](https://github.com/veverke/chatwizard/commits/main)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/veverke/chatwizard/pulls)
 [![TypeScript](https://img.shields.io/badge/TypeScript-blue?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![VS Code](https://img.shields.io/badge/VS%20Code-%E2%89%A51.85-0098FF?logo=visual-studio-code&logoColor=white)](https://marketplace.visualstudio.com/items?itemName=Veverke.chatwizard)
+[![MCP](https://img.shields.io/badge/MCP-server%20included-7B2FBE?logo=anthropic&logoColor=white)](https://modelcontextprotocol.io)
 
 Inspired by https://github.com/Veverke/bAInder, I decided to make a VS Code extension, with a developer perspective in mind.
 
@@ -239,9 +242,20 @@ Initial release. All nine development phases complete:
 
 ---
 
+## Support the Project
+
+If ChatWizard is saving you time, a quick ⭐ review takes 30 seconds and makes a real difference for discoverability:
+
+→ [**Leave a review on VS Code Marketplace**](https://marketplace.visualstudio.com/items?itemName=Veverke.chatwizard&ssr=false#review-details)  
+→ [**Leave a review on Open VSX Registry**](https://open-vsx.org/extension/Veverke/chatwizard)
+
+---
+
 ## Contributing
 
 Issues and pull requests are welcome at [https://github.com/veverke/chatwizard](https://github.com/veverke/chatwizard).
+
+Found a bug or have a feature request? [Open an issue on GitHub](https://github.com/veverke/chatwizard/issues) — every report is read and responded to.
 
 ---
 

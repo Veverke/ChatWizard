@@ -418,23 +418,51 @@ export class AnalyticsPanel {
           ? '(' + escHtml(data.oldestDate) + ' \\u2013 ' + escHtml(data.newestDate) + ')'
           : '';
 
-        var cards = [
+        var SOURCE_BADGE_CLASS = {
+          copilot: 'cw-badge-copilot', claude: 'cw-badge-claude',
+          antigravity: 'cw-badge-antigravity', cursor: 'cw-badge-cursor',
+          cline: 'cw-badge-cline', roocode: 'cw-badge-roocode',
+          windsurf: 'cw-badge-windsurf', aider: 'cw-badge-aider',
+        };
+        var SOURCE_LABEL = {
+          copilot: 'GitHub Copilot', claude: 'Claude Code',
+          antigravity: 'Google Antigravity', cursor: 'Cursor',
+          cline: 'Cline', roocode: 'Roo Code', windsurf: 'Windsurf', aider: 'Aider',
+        };
+
+        var baseCards = [
           { label: 'Total Sessions',   value: data.totalSessions,   sub: '' },
           { label: 'Total Prompts',    value: data.totalPrompts,     sub: '' },
           { label: 'Total Responses',  value: data.totalResponses,   sub: '' },
           { label: 'Est. Tokens *',    value: data.totalTokens,      sub: '' },
-          { label: 'Copilot Sessions',      value: data.copilotSessions,      sub: '' },
-          { label: 'Claude Sessions',       value: data.claudeSessions,       sub: '' },
-          { label: 'Antigravity Sessions',  value: data.antigravitySessions,  sub: '' },
           { label: 'Time Span',        value: timeSpanValue,         sub: timeSpanSub, noAnim: true },
         ];
+
+        // Build per-source cards for sources that have at least one session
+        var sourceCards = [];
+        var counts = data.sessionCountsBySource || {};
+        var sourceOrder = ['copilot','claude','cursor','cline','roocode','windsurf','aider','antigravity'];
+        sourceOrder.forEach(function(src) {
+          var n = counts[src] || 0;
+          if (n > 0) {
+            var badgeClass = SOURCE_BADGE_CLASS[src] || 'cw-badge-claude';
+            var lbl = SOURCE_LABEL[src] || src;
+            sourceCards.push({ label: lbl, value: n, sub: '', badgeClass: badgeClass });
+          }
+        });
+
+        var cards = baseCards.concat(sourceCards);
 
         var html = cards.map(function(card, idx) {
           var valStr = typeof card.value === 'number' ? card.value.toLocaleString() : escHtml(String(card.value));
           var sub = card.sub ? '<div class="summary-sub">' + card.sub + '</div>' : '';
+          var badge = card.badgeClass ? ' <span class="' + card.badgeClass + '">' + escHtml(card.label) + '</span>' : '';
+          var labelHtml = card.badgeClass ? badge : '<div class="summary-label">' + escHtml(card.label) + '</div>';
           return '<div class="summary-card cw-fade-item" style="--cw-i:' + idx + '">'
             + '<div class="summary-value">' + valStr + '</div>'
-            + '<div class="summary-label">' + escHtml(card.label) + '</div>'
+            + (card.badgeClass
+                ? '<div class="summary-label">' + badge + '</div>'
+                : '<div class="summary-label">' + escHtml(card.label) + '</div>')
             + sub
             + '</div>';
         }).join('');
@@ -612,13 +640,24 @@ export class AnalyticsPanel {
         if (sessions.length === 0) {
           rows = '<tr><td colspan="' + colspan + '" class="empty-state">No sessions.</td></tr>';
         } else {
+          var SOURCE_BADGE_CLASS = {
+            copilot: 'cw-badge-copilot', claude: 'cw-badge-claude',
+            antigravity: 'cw-badge-antigravity', cursor: 'cw-badge-cursor',
+            cline: 'cw-badge-cline', roocode: 'cw-badge-roocode',
+            windsurf: 'cw-badge-windsurf', aider: 'cw-badge-aider',
+          };
+          var SOURCE_LABEL = {
+            copilot: 'Copilot', claude: 'Claude', antigravity: 'Antigravity',
+            cursor: 'Cursor', cline: 'Cline', roocode: 'Roo Code',
+            windsurf: 'Windsurf', aider: 'Aider',
+          };
           rows = sessions.slice(0, 10).map(function(s) {
             var ws = s.workspacePath
               ? (s.workspacePath.replace(/\\\\/g, '/').split('/').pop() || '')
               : '';
-            var srcBadge = s.sessionSource === 'copilot'
-              ? '<span class="cw-badge-copilot">Copilot</span>'
-              : '<span class="cw-badge-claude">Claude</span>';
+            var badgeClass = SOURCE_BADGE_CLASS[s.sessionSource] || 'cw-badge-claude';
+            var badgeLabel = SOURCE_LABEL[s.sessionSource] || s.sessionSource;
+            var srcBadge = '<span class="' + badgeClass + '">' + escHtml(badgeLabel) + '</span>';
             return '<tr data-sid="' + escHtml(s.sessionId) + '" title="Click to open session">'
               + '<td title="' + escHtml(s.sessionId) + '">' + escHtml(s.sessionTitle) + '</td>'
               + '<td>' + srcBadge + '</td>'

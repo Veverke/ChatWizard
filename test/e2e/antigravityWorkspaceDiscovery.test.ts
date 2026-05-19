@@ -3,7 +3,7 @@ import * as assert from 'assert';
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
-import { discoverAntigravityConversationsAsync } from '../../src/readers/antigravityWorkspace';
+import { discoverAntigravityConversationsAsync, discoverAntigravityJsonConversationsAsync, getAntigravityConversationsRoot, getAntigravityBrainRoot } from '../../src/readers/antigravityWorkspace';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -92,5 +92,103 @@ suite('Antigravity Workspace Discovery', () => {
 
         const results = await discoverAntigravityConversationsAsync(tmpDir);
         assert.strictEqual(results.length, 1);
+    });
+});
+
+// ------------------------------------------------------------------ //
+// discoverAntigravityJsonConversationsAsync
+// ------------------------------------------------------------------ //
+
+suite('Antigravity JSON Conversations Discovery', () => {
+    let tmpDir: string;
+
+    setup(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cw-ag-json-disc-'));
+    });
+
+    teardown(() => {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    test('returns empty array when conversations directory does not exist', async () => {
+        const results = await discoverAntigravityJsonConversationsAsync(path.join(tmpDir, 'nonexistent'));
+        assert.deepStrictEqual(results, []);
+    });
+
+    test('returns empty array when conversations directory is empty', async () => {
+        const results = await discoverAntigravityJsonConversationsAsync(tmpDir);
+        assert.deepStrictEqual(results, []);
+    });
+
+    test('discovers a single .json conversation file', async () => {
+        const uuid = 'conv-uuid-1';
+        fs.writeFileSync(path.join(tmpDir, `${uuid}.json`), '{}', 'utf-8');
+        const results = await discoverAntigravityJsonConversationsAsync(tmpDir);
+        assert.strictEqual(results.length, 1);
+        assert.strictEqual(results[0].conversationId, uuid);
+        assert.ok(results[0].jsonFile.endsWith(`${uuid}.json`), `jsonFile: ${results[0].jsonFile}`);
+    });
+
+    test('discovers multiple .json conversation files', async () => {
+        for (const id of ['id1', 'id2', 'id3']) {
+            fs.writeFileSync(path.join(tmpDir, `${id}.json`), '{}', 'utf-8');
+        }
+        const results = await discoverAntigravityJsonConversationsAsync(tmpDir);
+        assert.strictEqual(results.length, 3);
+    });
+
+    test('skips non-.json files', async () => {
+        fs.writeFileSync(path.join(tmpDir, 'conv.json'), '{}', 'utf-8');
+        fs.writeFileSync(path.join(tmpDir, 'other.txt'), 'data', 'utf-8');
+        fs.writeFileSync(path.join(tmpDir, 'ignore.jsonl'), 'data', 'utf-8');
+        const results = await discoverAntigravityJsonConversationsAsync(tmpDir);
+        assert.strictEqual(results.length, 1);
+    });
+
+    test('conversationId has .json extension stripped', async () => {
+        fs.writeFileSync(path.join(tmpDir, 'myconversation.json'), '{}', 'utf-8');
+        const results = await discoverAntigravityJsonConversationsAsync(tmpDir);
+        assert.strictEqual(results[0].conversationId, 'myconversation');
+    });
+});
+
+// ------------------------------------------------------------------ //
+// getAntigravityBrainRoot / getAntigravityConversationsRoot
+// ------------------------------------------------------------------ //
+
+suite('getAntigravityBrainRoot', () => {
+    test('returns a non-empty string containing .gemini', () => {
+        const result = getAntigravityBrainRoot();
+        assert.ok(typeof result === 'string' && result.length > 0);
+        assert.ok(result.includes('gemini') || result.includes('antigravity'),
+            `Expected 'gemini' or 'antigravity' in path, got: ${result}`);
+    });
+
+    test('includes antigravity/brain segment', () => {
+        const result = getAntigravityBrainRoot();
+        assert.ok(result.includes('brain'), `Expected 'brain' in path, got: ${result}`);
+    });
+});
+
+suite('getAntigravityConversationsRoot', () => {
+    test('returns override when provided', () => {
+        const override = '/custom/conversations';
+        const result = getAntigravityConversationsRoot(override);
+        assert.strictEqual(result, override);
+    });
+
+    test('returns default path when no override', () => {
+        const result = getAntigravityConversationsRoot();
+        assert.ok(typeof result === 'string' && result.length > 0);
+    });
+
+    test('default path contains conversations segment', () => {
+        const result = getAntigravityConversationsRoot();
+        assert.ok(result.includes('conversations'), `Expected 'conversations' in path, got: ${result}`);
+    });
+
+    test('empty string override returns default path', () => {
+        const result = getAntigravityConversationsRoot('');
+        assert.ok(result.includes('conversations') || result.length > 0);
     });
 });

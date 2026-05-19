@@ -90,10 +90,11 @@ export function registerExportCommands(
     // chatwizard.exportSession — export a single session from the context menu
     // -----------------------------------------------------------------------
     context.subscriptions.push(
-        vscode.commands.registerCommand('chatwizard.exportSession', async (item: SessionTreeItem) => {
-            const session = index.get(item.summary.id);
+        vscode.commands.registerCommand('chatwizard.exportSession', async (item: SessionTreeItem | { id: string }) => {
+            const sessionId = 'summary' in item ? item.summary.id : item.id;
+            const session = index.get(sessionId);
             if (!session) {
-                vscode.window.showErrorMessage(`Session not found: ${item.summary.id}`);
+                vscode.window.showErrorMessage(`Session not found: ${sessionId}`);
                 return;
             }
             const filename = `${safeFilename(session.title)}.md`;

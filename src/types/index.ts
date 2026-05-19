@@ -69,6 +69,27 @@ export interface Session {
     parseErrors?: string[];
     /** Informational notes (e.g. Cursor recovered prompts from aiService only) — not parse failures */
     sourceNotes?: string[];
+    /** Copilot Chronicle checkpoint data merged into this session (if available) */
+    chronicleData?: ChronicleData;
+    /**
+     * Distinguishes sub-paths within a source (e.g. Antigravity brain/ vs conversations/).
+     * Source remains unchanged (e.g. 'antigravity'); this field provides finer provenance.
+     */
+    subSource?: string;
+}
+
+/** Copilot Chronicle checkpoint summary attached to a Copilot session */
+export interface ChronicleData {
+    /** High-level overview of what happened in this session */
+    overview: string | null;
+    /** Work items completed */
+    workDone: string | null;
+    /** Technical details / implementation notes */
+    technicalDetails: string | null;
+    /** Suggested next steps */
+    nextSteps: string | null;
+    /** ISO timestamp when the checkpoint was created */
+    createdAt: string | null;
 }
 
 /** A fenced code block with session metadata attached, for the Code Blocks panel */
@@ -239,4 +260,44 @@ export interface AntigravityConversationInfo {
     conversationId: string;
     /** Absolute path to the JSONL overview.txt log file */
     overviewFile: string;
+}
+
+/** Descriptor for a discovered Antigravity JSON conversation (conversations/ directory) */
+export interface AntigravityJsonConversationInfo {
+    /** Conversation UUID (filename stem) */
+    conversationId: string;
+    /** Absolute path to the .json conversation file */
+    jsonFile: string;
+}
+
+// ─── Sidecar metadata (Feature 9) ────────────────────────────────────────────
+
+/** Per-session metadata persisted in chatwizard-metadata.json (never written to source files) */
+export interface SessionMetadata {
+    sessionId: string;
+    /** User-set or AI-generated title override */
+    customTitle?: string;
+    /** Tags, e.g. ['#bugfix', 'topic:auth', 'kind:decision'] */
+    tags?: string[];
+    status?: 'open' | 'resolved' | 'revisit';
+    /** Pinned to top of tree view */
+    isPinned?: boolean;
+    annotations?: SessionAnnotation[];
+    /** Explicit forward/backward session links */
+    linkedSessionIds?: string[];
+    /** Sub-source discriminator (e.g. 'brain' | 'conversations' for Antigravity) */
+    subSource?: string;
+    /** ISO-8601, when this metadata entry was first written */
+    createdAt?: string;
+    /** ISO-8601, when it was last modified */
+    updatedAt?: string;
+}
+
+/** An in-line annotation attached to a specific message in a session */
+export interface SessionAnnotation {
+    /** 0-based index into session.messages */
+    messageIndex: number;
+    noteText: string;
+    /** ISO-8601 */
+    createdAt: string;
 }

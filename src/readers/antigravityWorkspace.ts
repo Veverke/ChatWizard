@@ -2,7 +2,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { AntigravityConversationInfo } from '../types/index';
+import { AntigravityConversationInfo, AntigravityJsonConversationInfo } from '../types/index';
 
 // ─── Storage root ─────────────────────────────────────────────────────────────
 
@@ -72,4 +72,64 @@ export async function discoverAntigravityConversationsAsync(
     }));
 
     return results.filter((r): r is AntigravityConversationInfo => r !== null);
+}
+
+// ─── JSON conversations/ discovery ────────────────────────────────────────────
+
+const MAX_JSON_CONVERSATIONS = 10_000;
+
+/**
+ * Resolves the Antigravity conversations directory: ~/.gemini/antigravity/conversations
+ */
+export function getAntigravityConversationsRoot(override?: string): string {
+    if (override !== undefined && override !== '') { return override; }
+    return path.join(os.homedir(), '.gemini', 'antigravity', 'conversations');
+}
+
+/**
+ * Scans the Antigravity conversations directory and returns an
+ * `AntigravityJsonConversationInfo` for each `.json` file found.
+ *
+ * Storage layout:
+ *   ~/.gemini/antigravity/conversations/<uuid>.json
+ *
+ * Applies the same symlink guard as `discoverAntigravityConversationsAsync`.
+ * Caps at 10,000 files with a warning logged to stderr.
+ *
+ * @param override  Override the conversations root (for tests or user config).
+ */
+export async function discoverAntigravityJsonConversationsAsync(
+    override?: string
+): Promise<AntigravityJsonConversationInfo[]> {
+    const conversationsRoot = getAntigravityConversationsRoot(override);
+
+    let entries: string[];
+    try {
+        entries = await fs.promises.readdir(conversationsRoot);
+    } catch {
+        return [];
+    }
+
+    const jsonFiles = entries.filter(e => e.endsWith('.json'));
+    if (jsonFiles.length > MAX_JSON_CONVERSATIONS) {
+        console.warn(`[chatwizard] Antigravity conversations/ has ${jsonFiles.length} files; capping at ${MAX_JSON_CONVERSATIONS}.`);
+    }
+    const capped = jsonFiles.slice(0, MAX_JSON_CONVERSATIONS);
+
+    const results = await Promise.all(capped.map(async (filename): Promise<AntigravityJsonConversationInfo | null> => {
+        const jsonFile = path.join(conversationsRoot, filename);
+
+        // SEC-6: symlink guard — must be a real file.
+        try {
+            const lstat = await fs.promises.lstat(jsonFile);
+            if (!lstat.isFile() || lstat.isSymbolicLink()) { return null; }
+        } catch {
+            return null;
+        }
+
+        const conversationId = path.basename(filename, '.json');
+        return { conversationId, jsonFile };
+    }));
+
+    return results.filter((r): r is AntigravityJsonConversationInfo => r !== null);
 }

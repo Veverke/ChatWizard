@@ -7,7 +7,11 @@ on:
 
 jobs:
   build-and-test:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+      fail-fast: false
+    runs-on: ${{ matrix.os }}
 
     steps:
       - uses: actions/checkout@v4
@@ -23,6 +27,9 @@ jobs:
       - name: Compile & lint
         run: npm run compile && npm run lint
 
+      - name: TypeScript strict typecheck
+        run: npx tsc --noEmit && npx tsc --noEmit -p tsconfig.scripts.json
+
       # Download VS Code first so rebuild-native.js can read the exact Electron
       # version from .vscode-test/ before recompiling better-sqlite3.
       # Without this step the native binary is compiled against system Node.js ABI
@@ -33,11 +40,35 @@ jobs:
       - name: Rebuild native modules for VS Code's Electron
         run: npm run rebuild:native
 
-      - name: Run tests
-        run: xvfb-run -a npm test
+      - name: Run tests with coverage
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" == "Linux" ]; then
+            xvfb-run -a npm run test:coverage
+          else
+            npm run test:coverage
+          fi
+
+      - name: Upload coverage to Codecov
+        if: matrix.os == 'ubuntu-latest'
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage/lcov.info
+          fail_ci_if_error: true
+
+      - name: Smoke tests (MCP)
+        shell: bash
+        run: npx tsx scripts/smoke-test-mcp-server.ts && npx tsx scripts/smoke-test-phase4.ts
 
       - name: Build extension bundle
         run: npm run bundle
 
       - name: Run integration tests
-        run: xvfb-run -a npm run test:integration
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" == "Linux" ]; then
+            xvfb-run -a npm run test:integration
+          else
+            npm run test:integration
+          fi

@@ -16,6 +16,7 @@
     "cursor",
     "aider",
     "codeium",
+    "antigravity",
     "ai",
     "chat",
     "history",
@@ -25,11 +26,18 @@
     "code-blocks",
     "timeline",
     "chat-history",
+    "copilot-history",
+    "claude-history",
     "conversation-history",
     "history-viewer",
+    "session-history",
     "token-usage",
     "ai-productivity",
     "llm",
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "semantic-search",
     "vscode",
     "ide"
   ],
@@ -321,6 +329,30 @@
         "title": "Show Timeline",
         "category": "Chat Wizard",
         "icon": "$(history)"
+      },
+      {
+        "command": "chatwizard.focusSessionTree",
+        "title": "Open Chat Sessions Panel",
+        "category": "Chat Wizard",
+        "icon": "$(list-tree)"
+      },
+      {
+        "command": "chatwizard.regenerateTitle",
+        "title": "Regenerate Title",
+        "category": "Chat Wizard",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "chatwizard.regenerateAllTitles",
+        "title": "Regenerate All Titles",
+        "category": "Chat Wizard",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "chatwizard.regenerateTitlesInGroup",
+        "title": "Regenerate Titles in Group",
+        "category": "Chat Wizard",
+        "icon": "$(edit)"
       },
       {
         "command": "chatwizard.rescan",
@@ -724,6 +756,16 @@
           "command": "chatwizard.exportSession",
           "when": "viewItem == session || viewItem == session.pinned",
           "group": "inline@2"
+        },
+        {
+          "command": "chatwizard.regenerateTitle",
+          "when": "viewItem == session || viewItem == session.pinned",
+          "group": "session@3"
+        },
+        {
+          "command": "chatwizard.regenerateTitlesInGroup",
+          "when": "viewItem == dateGroup",
+          "group": "session@1"
         }
       ],
       "commandPalette": [
@@ -864,6 +906,10 @@
           "when": "false"
         },
         {
+          "command": "chatwizard.regenerateTitlesInGroup",
+          "when": "false"
+        },
+        {
           "command": "chatwizard.showCodeBlocks",
           "when": "false"
         },
@@ -972,6 +1018,10 @@
           {
             "name": "continueFromHistory",
             "description": "Continue from recent sessions"
+          },
+          {
+            "name": "getPrompts",
+            "description": "Find reusable prompts from your chat history"
           }
         ]
       }
@@ -1031,6 +1081,11 @@
           "type": "boolean",
           "default": true,
           "description": "Index GitHub Copilot Chat sessions from VS Code workspace storage."
+        },
+        "chatwizard.indexChronicle": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enrich sessions with Copilot Chronicle checkpoint summaries (overview, work done, technical details, next steps). Only active when indexCopilot is also true."
         },
         "chatwizard.oldestSessionDate": {
           "type": "string",
@@ -1154,6 +1209,7 @@
     }
   },
   "scripts": {
+    "prepare": "husky",
     "vscode:prepublish": "npm run rebuild:native && npm run bundle",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
@@ -1165,6 +1221,10 @@
     "rebuild:native": "node scripts/rebuild-native.js",
     "bundle": "esbuild src/extension.ts --bundle --platform=node --external:vscode --external:better-sqlite3 --external:@xenova/transformers --outfile=dist/extension.js",
     "bundle:watch": "esbuild src/extension.ts --bundle --platform=node --external:vscode --external:better-sqlite3 --external:@xenova/transformers --outfile=dist/extension.js --sourcemap --watch",
+    "test:coverage": "vscode-test --coverage --coverage-reporter lcov --coverage-reporter text --coverage-reporter json-summary && node -e \"const s=require('./coverage/coverage-summary.json'),T=90,EXCL=['fileWatcher.ts','sessionWebviewPanel.ts','analyticsPanel.ts','codeBlocksPanel.ts','mcpServer.ts','chatParticipant.ts','configPaths.ts','timelineViewProvider.ts','getContextTool.ts','cursor.ts','copilot.ts','antigravity.ts','copilotWorkspace.ts'];function adj(k){let tot=s.total[k].total,cov=s.total[k].covered;for(const[f,d]of Object.entries(s)){if(f==='total')continue;const n=f.split(/[/\\\\\\\\]/).pop();if(EXCL.includes(n)){tot-=d[k].total;cov-=d[k].covered;}}return tot>0?cov/tot*100:100;}const f=['branches','functions','lines','statements'].filter(k=>adj(k)<T);if(f.length){console.error('\\nCoverage below '+T+'%: '+f.map(k=>k+' '+adj(k).toFixed(2)+'%').join(', '));process.exit(1);}console.log('Coverage OK (>='+T+'%)')\"",
+    "test:flaky": "node scripts/detect-flaky.mjs",
+    "smoke": "tsx scripts/smoke-test-mcp-server.ts && tsx scripts/smoke-test-phase4.ts",
+    "e2e:mcp": "tsx scripts/e2e-mcp-scenarios.ts",
     "package:vsix:win32-x64": "npm run rebuild:native && npm run bundle && npx @vscode/vsce package --target win32-x64 --out chatwizard-win32-x64.vsix",
     "package:vsix:linux-x64": "npm run rebuild:native && npm run bundle && npx @vscode/vsce package --target linux-x64 --out chatwizard-linux-x64.vsix",
     "package:vsix:darwin-arm64": "npm run rebuild:native && npm run bundle && npx @vscode/vsce package --target darwin-arm64 --out chatwizard-darwin-arm64.vsix"
@@ -1182,10 +1242,13 @@
     "@types/vscode": "^1.85.0",
     "@typescript-eslint/eslint-plugin": "^7.0.0",
     "@typescript-eslint/parser": "^7.0.0",
-    "@vscode/test-cli": "^0.0.6",
+    "@vscode/test-cli": "^0.0.12",
     "@vscode/test-electron": "^2.3.8",
+    "c8": "^11.0.0",
     "esbuild": "^0.27.4",
     "eslint": "^8.56.0",
+    "husky": "^9.1.7",
+    "tsx": "^4.22.1",
     "typescript": "^5.3.3"
   }
 }

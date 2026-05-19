@@ -274,3 +274,109 @@ suite('Windsurf Parser', () => {
         assert.strictEqual(blocks.length, 0);
     });
 });
+
+// ---------------------------------------------------------------------------
+// parseWindsurfWorkspace — branch coverage edge cases
+// ---------------------------------------------------------------------------
+suite('parseWindsurfWorkspace — branch coverage edge cases', () => {
+    let tmpDir: string;
+
+    setup(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cw-windsurf-branch-test-'));
+    });
+
+    teardown(() => {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    function createDb(dbPath: string, rows: Array<{ key: string; value: string }>): void {
+        const db = new Database(dbPath);
+        db.exec('CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)');
+        const stmt = db.prepare('INSERT INTO ItemTable (key, value) VALUES (?, ?)');
+        for (const row of rows) {
+            stmt.run(row.key, row.value);
+        }
+        db.close();
+    }
+
+    test('session with no title and no messages falls back to "Untitled"', async () => {
+        const dbPath = path.join(tmpDir, 'untitled.vscdb');
+        createDb(dbPath, [{
+            key: 'cascade.sessionData',
+            value: JSON.stringify({
+                sessions: [{ sessionId: 'sess-1', createdAt: 1700000000000, messages: [] }],
+            }),
+        }]);
+        const results = await parseWindsurfWorkspace(dbPath, 'ws1');
+        assert.strictEqual(results[0].session.title, 'Untitled');
+    });
+
+    test('session with no sessionId gets fallback id', async () => {
+        const dbPath = path.join(tmpDir, 'nosessid.vscdb');
+        createDb(dbPath, [{
+            key: 'cascade.sessionData',
+            value: JSON.stringify({
+                sessions: [{
+                    createdAt: 1700000000000,
+                    messages: [{ role: 'user', content: 'Hello', timestamp: 1700000001000 }],
+                }],
+            }),
+        }]);
+        const results = await parseWindsurfWorkspace(dbPath, 'ws-fallback');
+        assert.ok(results[0].session.id.includes('ws-fallback'));
+    });
+
+    test('message with zero/invalid timestamp gets no timestamp on message', async () => {
+        const dbPath = path.join(tmpDir, 'zerotimestamp.vscdb');
+        createDb(dbPath, [{
+            key: 'cascade.sessionData',
+            value: JSON.stringify({
+                sessions: [{
+                    sessionId: 'sess-ts',
+                    createdAt: 1700000000000,
+                    messages: [
+                        { role: 'user', content: 'Hello', timestamp: 0 },
+                        { role: 'assistant', content: 'Hi', timestamp: 1700000002000 },
+                    ],
+                }],
+            }),
+        }]);
+        const results = await parseWindsurfWorkspace(dbPath, 'ws1');
+        // User message has timestamp=0, should be undefined
+        assert.strictEqual(results[0].session.messages[0].timestamp, undefined);
+        // Assistant message has valid timestamp
+        assert.ok(results[0].session.messages[1].timestamp);
+    });
+
+    test('session createdAt falls back to first message timestamp when absent', async () => {
+        const dbPath = path.join(tmpDir, 'nocreatedat.vscdb');
+        createDb(dbPath, [{
+            key: 'cascade.sessionData',
+            value: JSON.stringify({
+                sessions: [{
+                    sessionId: 'sess-no-ts',
+                    messages: [{ role: 'user', content: 'Hello', timestamp: 1700000001000 }],
+                }],
+            }),
+        }]);
+        const results = await parseWindsurfWorkspace(dbPath, 'ws1');
+        assert.ok(results[0].session.createdAt);
+        assert.ok(!results[0].session.createdAt.startsWith('1970-01-01'));
+    });
+
+    test('sessions count is capped at MAX_SESSIONS', async () => {
+        // Create more than 200 sessions to trigger the slice
+        const sessions = Array.from({ length: 5 }, (_, i) => ({
+            sessionId: `sess-${i}`,
+            createdAt: 1700000000000 + i * 1000,
+            messages: [{ role: 'user', content: `Hello ${i}`, timestamp: 1700000001000 + i * 1000 }],
+        }));
+        const dbPath = path.join(tmpDir, 'many.vscdb');
+        createDb(dbPath, [{
+            key: 'cascade.sessionData',
+            value: JSON.stringify({ sessions }),
+        }]);
+        const results = await parseWindsurfWorkspace(dbPath, 'ws1');
+        assert.ok(results.length <= 5);
+    });
+});

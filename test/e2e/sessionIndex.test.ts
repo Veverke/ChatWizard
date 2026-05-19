@@ -1,7 +1,11 @@
 // test/suite/sessionIndex.test.ts
 
 import * as assert from 'assert';
+import * as os from 'os';
+import * as path from 'path';
+import * as fs from 'fs';
 import { SessionIndex, toSummary, SessionIndexEvent } from '../../src/index/sessionIndex';
+import { SidecarMetadataStore } from '../../src/index/sidecarMetadataStore';
 import { Session, Message, SessionSource } from '../../src/types/index';
 
 // ---------------------------------------------------------------------------
@@ -539,5 +543,235 @@ suite('SessionIndex — typed events and batchUpsert', () => {
         index.remove('g1');
         assert.strictEqual(plainCount, 1, 'plain listener must fire on remove');
         assert.strictEqual(typedCount, 1, 'typed listener must fire on remove');
+    });
+});
+
+// ------------------------------------------------------------------ //
+// mergeChronicleData
+// ------------------------------------------------------------------ //
+
+suite('SessionIndex — mergeChronicleData', () => {
+    let index: SessionIndex;
+
+    setup(() => {
+        index = new SessionIndex();
+    });
+
+    test('attaches chronicle data to an existing session', () => {
+        const session = makeSession({ id: 'chr-1' });
+        index.upsert(session);
+
+        const data = { overview: 'did some work', workDone: 'fixed bug', technicalDetails: null, nextSteps: null, createdAt: '2026-01-01T00:00:00Z' };
+        index.mergeChronicleData([{ sessionId: 'chr-1', data }]);
+
+        const updated = index.get('chr-1');
+        assert.deepStrictEqual(updated?.chronicleData, data);
+    });
+
+    test('increments version when at least one session updated', () => {
+        const session = makeSession({ id: 'chr-v' });
+        index.upsert(session);
+        const before = index.version;
+
+        index.mergeChronicleData([{ sessionId: 'chr-v', data: { overview: 'x', workDone: null, technicalDetails: null, nextSteps: null, createdAt: null } }]);
+        assert.ok(index.version > before);
+    });
+
+    test('does not increment version when no sessionId matches', () => {
+        const session = makeSession({ id: 'chr-nomatch' });
+        index.upsert(session);
+        const before = index.version;
+
+        index.mergeChronicleData([{ sessionId: 'chr-unknown', data: { overview: null, workDone: null, technicalDetails: null, nextSteps: null, createdAt: null } }]);
+        assert.strictEqual(index.version, before);
+    });
+
+    test('silently ignores entries where sessionId is not in the index', () => {
+        assert.doesNotThrow(() => {
+            index.mergeChronicleData([{ sessionId: 'nonexistent', data: { overview: null, workDone: null, technicalDetails: null, nextSteps: null, createdAt: null } }]);
+        });
+    });
+
+    test('updates multiple sessions in one call', () => {
+        const s1 = makeSession({ id: 'chr-m1' });
+        const s2 = makeSession({ id: 'chr-m2' });
+        index.upsert(s1); index.upsert(s2);
+
+        index.mergeChronicleData([
+            { sessionId: 'chr-m1', data: { overview: 'a', workDone: null, technicalDetails: null, nextSteps: null, createdAt: null } },
+            { sessionId: 'chr-m2', data: { overview: 'b', workDone: null, technicalDetails: null, nextSteps: null, createdAt: null } },
+        ]);
+
+        assert.strictEqual(index.get('chr-m1')?.chronicleData?.overview, 'a');
+        assert.strictEqual(index.get('chr-m2')?.chronicleData?.overview, 'b');
+    });
+});
+
+// ------------------------------------------------------------------ //
+// getTitleFor / getSidecarMeta
+// ------------------------------------------------------------------ //
+
+suite('SessionIndex — getTitleFor and getSidecarMeta', () => {
+    let index: SessionIndex;
+
+    setup(() => {
+        index = new SessionIndex();
+    });
+
+    test('getTitleFor returns session title when no sidecar cache', () => {
+        const session = makeSession({ id: 'title-1', title: 'Original Title' });
+        index.upsert(session);
+        assert.strictEqual(index.getTitleFor('title-1'), 'Original Title');
+    });
+
+    test('getTitleFor returns undefined for unknown sessionId', () => {
+        assert.strictEqual(index.getTitleFor('nonexistent'), undefined);
+    });
+
+    test('getSidecarMeta returns undefined when no sidecar store is set', () => {
+        const session = makeSession({ id: 'meta-1' });
+        index.upsert(session);
+        assert.strictEqual(index.getSidecarMeta('meta-1'), undefined);
+    });
+
+    test('getSidecarMeta returns undefined for unknown sessionId', () => {
+        assert.strictEqual(index.getSidecarMeta('unknown'), undefined);
+    });
+});
+
+// ------------------------------------------------------------------ //
+// removeSessionsForStateFileNotIn
+// ------------------------------------------------------------------ //
+
+suite('SessionIndex — removeSessionsForStateFileNotIn', () => {
+    let index: SessionIndex;
+
+    setup(() => {
+        index = new SessionIndex();
+    });
+
+    test('removes sessions matching filePath+source not in keepIds', () => {
+        const s1 = makeSession({ id: 'r1', filePath: '/path/state.db', source: 'cursor' });
+        const s2 = makeSession({ id: 'r2', filePath: '/path/state.db', source: 'cursor' });
+        const s3 = makeSession({ id: 'r3', filePath: '/path/state.db', source: 'cursor' });
+        index.upsert(s1); index.upsert(s2); index.upsert(s3);
+
+        index.removeSessionsForStateFileNotIn('/path/state.db', 'cursor', new Set(['r1']));
+
+        assert.ok(index.get('r1') !== undefined, 'r1 should be kept');
+        assert.ok(index.get('r2') === undefined, 'r2 should be removed');
+        assert.ok(index.get('r3') === undefined, 'r3 should be removed');
+    });
+
+    test('does not remove sessions with different filePath', () => {
+        const s1 = makeSession({ id: 'fp1', filePath: '/path/a.db', source: 'cursor' });
+        const s2 = makeSession({ id: 'fp2', filePath: '/path/b.db', source: 'cursor' });
+        index.upsert(s1); index.upsert(s2);
+
+        index.removeSessionsForStateFileNotIn('/path/a.db', 'cursor', new Set<string>());
+
+        assert.ok(index.get('fp1') === undefined, 'fp1 should be removed (matches path)');
+        assert.ok(index.get('fp2') !== undefined, 'fp2 should remain (different path)');
+    });
+
+    test('does not remove sessions with different source', () => {
+        const s1 = makeSession({ id: 'src1', filePath: '/path/x.db', source: 'cursor' });
+        const s2 = makeSession({ id: 'src2', filePath: '/path/x.db', source: 'windsurf' });
+        index.upsert(s1); index.upsert(s2);
+
+        index.removeSessionsForStateFileNotIn('/path/x.db', 'cursor', new Set<string>());
+
+        assert.ok(index.get('src1') === undefined, 'src1 should be removed (cursor)');
+        assert.ok(index.get('src2') !== undefined, 'src2 should remain (windsurf)');
+    });
+
+    test('no-ops gracefully when nothing matches', () => {
+        const s = makeSession({ id: 'noop-1' });
+        index.upsert(s);
+        assert.doesNotThrow(() => {
+            index.removeSessionsForStateFileNotIn('/nonexistent/path', 'cursor', new Set<string>());
+        });
+        assert.ok(index.get('noop-1') !== undefined, 'unrelated session should remain');
+    });
+
+    test('no-ops when keepIds contains all matching sessions', () => {
+        const s1 = makeSession({ id: 'keep1', filePath: '/keep/state.db', source: 'windsurf' });
+        const s2 = makeSession({ id: 'keep2', filePath: '/keep/state.db', source: 'windsurf' });
+        index.upsert(s1); index.upsert(s2);
+
+        index.removeSessionsForStateFileNotIn('/keep/state.db', 'windsurf', new Set(['keep1', 'keep2']));
+
+        assert.ok(index.get('keep1') !== undefined);
+        assert.ok(index.get('keep2') !== undefined);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// SessionIndex — setSidecarStore and customTitle override in getAllSummaries
+// ---------------------------------------------------------------------------
+
+suite('SessionIndex — setSidecarStore and customTitle override', () => {
+    let index: SessionIndex;
+    let tmpDir: string;
+
+    setup(() => {
+        index = new SessionIndex();
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cw-sidecar-test-'));
+    });
+
+    teardown(() => {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    test('getTitleFor returns customTitle when sidecar cache has override', async () => {
+        const session = makeSession({ id: 'sidecar-1', title: 'Original Title' });
+        index.upsert(session);
+        const store = new SidecarMetadataStore(tmpDir);
+        const cacheMap = new Map([['sidecar-1', { sessionId: 'sidecar-1', customTitle: 'Custom Title' }]]);
+        index.setSidecarStore(store, cacheMap);
+        assert.strictEqual(index.getTitleFor('sidecar-1'), 'Custom Title');
+    });
+
+    test('getAllSummaries uses customTitle from sidecar cache', async () => {
+        const session = makeSession({ id: 'sidecar-2', title: 'Original' });
+        index.upsert(session);
+        const store = new SidecarMetadataStore(tmpDir);
+        const cacheMap = new Map([['sidecar-2', { sessionId: 'sidecar-2', customTitle: 'Custom' }]]);
+        index.setSidecarStore(store, cacheMap);
+        const summaries = index.getAllSummaries();
+        assert.strictEqual(summaries[0].title, 'Custom');
+    });
+
+    test('getAllSummaries falls back to session title when no custom title', async () => {
+        const session = makeSession({ id: 'sidecar-3', title: 'Original' });
+        index.upsert(session);
+        const store = new SidecarMetadataStore(tmpDir);
+        const cacheMap = new Map<string, { sessionId: string; customTitle?: string }>([
+            ['sidecar-3', { sessionId: 'sidecar-3' }], // no customTitle
+        ]);
+        index.setSidecarStore(store, cacheMap as Map<string, import('../../src/types/index').SessionMetadata>);
+        const summaries = index.getAllSummaries();
+        assert.strictEqual(summaries[0].title, 'Original');
+    });
+
+    test('getSidecarMeta returns metadata when sidecar cache is set', async () => {
+        const session = makeSession({ id: 'sidecar-4' });
+        index.upsert(session);
+        const store = new SidecarMetadataStore(tmpDir);
+        const meta = { sessionId: 'sidecar-4', customTitle: 'My Custom Title', pinnedAt: '2024-01-01T00:00:00Z' };
+        const cacheMap = new Map([['sidecar-4', meta]]);
+        index.setSidecarStore(store, cacheMap as Map<string, import('../../src/types/index').SessionMetadata>);
+        const result = index.getSidecarMeta('sidecar-4');
+        assert.ok(result !== undefined);
+        assert.strictEqual(result.customTitle, 'My Custom Title');
+    });
+
+    test('setSidecarStore fires change listener', async () => {
+        let notified = false;
+        index.addChangeListener(() => { notified = true; });
+        const store = new SidecarMetadataStore(tmpDir);
+        const cacheMap = new Map<string, import('../../src/types/index').SessionMetadata>();
+        index.setSidecarStore(store, cacheMap);
+        assert.strictEqual(notified, true);
     });
 });

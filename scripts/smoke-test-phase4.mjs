@@ -183,6 +183,7 @@ fs.writeFileSync(tokenPath, TOKEN, 'utf8');
 const server = new McpServer(
     { enabled: true, port: 7654, tokenPath },
     [...tools],
+    [],
     (msg) => { /* silent */ },
     () => index.size,
 );

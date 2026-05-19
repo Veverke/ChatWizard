@@ -3,7 +3,7 @@ import * as assert from 'assert';
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
-import { parseCursorWorkspace, extractCursorCodeBlocks } from '../../src/parsers/cursor';
+import { parseCursorWorkspace, parseCursorGlobalDb, extractCursorCodeBlocks } from '../../src/parsers/cursor';
 
 // ---------------------------------------------------------------------------
 // Helpers to create minimal SQLite fixtures in a temp directory
@@ -404,5 +404,343 @@ suite('Cursor Parser', () => {
     test('extractCursorCodeBlocks: no blocks returns empty array', () => {
         const blocks = extractCursorCodeBlocks('No code here.', 'session-y', 0);
         assert.strictEqual(blocks.length, 0);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// parseCursorGlobalDb — tests for the Cursor 0.43+ global cursorDiskKV DB
+// ---------------------------------------------------------------------------
+
+function createGlobalDb(
+    dbPath: string,
+    rows: Array<{ key: string; value: string }>,
+    createTable = true
+): void {
+    const db = new Database(dbPath);
+    if (createTable) {
+        db.exec('CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)');
+        const stmt = db.prepare('INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)');
+        for (const row of rows) {
+            stmt.run(row.key, row.value);
+        }
+    } else {
+        // Create a different table so cursorDiskKV is missing
+        db.exec('CREATE TABLE SomeOtherTable (key TEXT PRIMARY KEY, value TEXT)');
+    }
+    db.close();
+}
+
+suite('parseCursorGlobalDb', () => {
+
+    let tmpDir: string;
+
+    setup(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cw-cursor-global-test-'));
+    });
+
+    teardown(() => {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    test('non-existent file returns empty array', async () => {
+        const results = await parseCursorGlobalDb(path.join(tmpDir, 'does-not-exist.db'));
+        assert.deepStrictEqual(results, []);
+    });
+
+    test('non-SQLite file returns empty array', async () => {
+        const dbPath = path.join(tmpDir, 'not-sqlite.db');
+        fs.writeFileSync(dbPath, 'not a sqlite database');
+        const results = await parseCursorGlobalDb(dbPath);
+        assert.deepStrictEqual(results, []);
+    });
+
+    test('SQLite DB without cursorDiskKV table returns empty array', async () => {
+        const dbPath = path.join(tmpDir, 'no-table.db');
+        createGlobalDb(dbPath, [], false);
+        const results = await parseCursorGlobalDb(dbPath);
+        assert.deepStrictEqual(results, []);
+    });
+
+    test('empty cursorDiskKV table returns empty array', async () => {
+        const dbPath = path.join(tmpDir, 'empty.db');
+        createGlobalDb(dbPath, []);
+        const results = await parseCursorGlobalDb(dbPath);
+        assert.deepStrictEqual(results, []);
+    });
+
+    test('composerData row with no matching bubbles is skipped', async () => {
+        const dbPath = path.join(tmpDir, 'no-bubbles.db');
+        createGlobalDb(dbPath, [
+            { key: 'composerData:composer-abc', value: JSON.stringify({ name: 'My Chat', createdAt: 1700000000000 }) },
+        ]);
+        const results = await parseCursorGlobalDb(dbPath);
+        assert.deepStrictEqual(results, []);
+    });
+
+    test('happy path: returns session with user and assistant messages', async () => {
+        const composerId = 'composer-happy-1';
+        const dbPath = path.join(tmpDir, 'happy.db');
+        createGlobalDb(dbPath, [
+            { key: `composerData:${composerId}`, value: JSON.stringify({ name: 'Auth Refactor', createdAt: 1700000000000, model: 'claude-3-opus' }) },
+            { key: `bubbleId:${composerId}:bubble-001`, value: JSON.stringify({ type: 1, text: 'How do I fix JWT?', unixMs: 1700000001000 }) },
+            { key: `bubbleId:${composerId}:bubble-002`, value: JSON.stringify({ type: 2, text: 'You should use a proper signing key.', unixMs: 1700000002000 }) },
+        ]);
+        const results = await parseCursorGlobalDb(dbPath);
+        assert.strictEqual(results.length, 1);
+        assert.strictEqual(results[0].session.source, 'cursor');
+        assert.strictEqual(results[0].session.title, 'Auth Refactor');
+        assert.strictEqual(results[0].session.messages.length, 2);
+        assert.strictEqual(results[0].session.messages[0].role, 'user');
+        assert.strictEqual(results[0].session.messages[1].role, 'assistant');
+        assert.strictEqual(results[0].session.model, 'claude-3-opus');
+    });
+
+    test('title derived from first user message when name is empty', async () => {
+        const composerId = 'composer-notitle';
+        const dbPath = path.join(tmpDir, 'notitle.db');
+        createGlobalDb(dbPath, [
+            { key: `composerData:${composerId}`, value: JSON.stringify({ name: '', createdAt: 1700000000000 }) },
+            { key: `bubbleId:${composerId}:bubble-001`, value: JSON.stringify({ type: 1, text: 'Help me refactor this function', unixMs: 1700000001000 }) },
+            { key: `bubbleId:${composerId}:bubble-002`, value: JSON.stringify({ type: 2, text: 'Sure!', unixMs: 1700000002000 }) },
+        ]);
+        const results = await parseCursorGlobalDb(dbPath);
+        assert.ok(results[0].session.title.includes('Help me refactor'));
+    });
+
+    test('title is Untitled when no user messages', async () => {
+        const composerId = 'composer-nouser';
+        const dbPath = path.join(tmpDir, 'nouser.db');
+        createGlobalDb(dbPath, [
+            { key: `composerData:${composerId}`, value: JSON.stringify({ name: '', createdAt: 1700000000000 }) },
+            { key: `bubbleId:${composerId}:bubble-001`, value: JSON.stringify({ type: 2, text: 'Assistant message only', unixMs: 1700000001000 }) },
+        ]);
+        const results = await parseCursorGlobalDb(dbPath);
+        assert.strictEqual(results[0].session.title, 'Untitled');
+    });
+
+    test('createdAt falls back to first message timestamp when composerMeta.createdAt is missing', async () => {
+        const composerId = 'composer-notimestamp';
+        const dbPath = path.join(tmpDir, 'notimestamp.db');
+        createGlobalDb(dbPath, [
+            { key: `composerData:${composerId}`, value: JSON.stringify({ name: 'No Timestamp' }) },
+            { key: `bubbleId:${composerId}:bubble-001`, value: JSON.stringify({ type: 1, text: 'Hello', unixMs: 1700000005000 }) },
+        ]);
+        const results = await parseCursorGlobalDb(dbPath);
+        assert.strictEqual(results.length, 1);
+        assert.ok(results[0].session.createdAt);
+    });
+
+    test('bubbles with empty text are skipped', async () => {
+        const composerId = 'composer-empty-text';
+        const dbPath = path.join(tmpDir, 'empty-text.db');
+        createGlobalDb(dbPath, [
+            { key: `composerData:${composerId}`, value: JSON.stringify({ name: 'Chat', createdAt: 1700000000000 }) },
+            { key: `bubbleId:${composerId}:bubble-001`, value: JSON.stringify({ type: 1, text: '', unixMs: 1700000001000 }) },
+            { key: `bubbleId:${composerId}:bubble-002`, value: JSON.stringify({ type: 1, text: 'Real message', unixMs: 1700000002000 }) },
+        ]);
+        const results = await parseCursorGlobalDb(dbPath);
+        assert.strictEqual(results[0].session.messages.length, 1);
+        assert.strictEqual(results[0].session.messages[0].content, 'Real message');
+    });
+
+    test('bubbles with unsupported type (not 1 or 2) are skipped', async () => {
+        const composerId = 'composer-bad-type';
+        const dbPath = path.join(tmpDir, 'bad-type.db');
+        createGlobalDb(dbPath, [
+            { key: `composerData:${composerId}`, value: JSON.stringify({ name: 'Chat', createdAt: 1700000000000 }) },
+            { key: `bubbleId:${composerId}:bubble-001`, value: JSON.stringify({ type: 99, text: 'Unknown type', unixMs: 1700000001000 }) },
+            { key: `bubbleId:${composerId}:bubble-002`, value: JSON.stringify({ type: 1, text: 'Valid user', unixMs: 1700000002000 }) },
+        ]);
+        const results = await parseCursorGlobalDb(dbPath);
+        assert.strictEqual(results[0].session.messages.length, 1);
+    });
+
+    test('bubbles ordered by fullConversationHeadersOnly when present', async () => {
+        const composerId = 'composer-ordered';
+        const dbPath = path.join(tmpDir, 'ordered.db');
+        // Bubble 2 has earlier timestamp but appears second in headers
+        createGlobalDb(dbPath, [
+            {
+                key: `composerData:${composerId}`,
+                value: JSON.stringify({
+                    name: 'Ordered Chat',
+                    createdAt: 1700000000000,
+                    fullConversationHeadersOnly: [
+                        { bubbleId: 'bubble-002' },
+                        { bubbleId: 'bubble-001' },
+                    ],
+                }),
+            },
+            { key: `bubbleId:${composerId}:bubble-001`, value: JSON.stringify({ type: 2, text: 'Assistant last', unixMs: 1700000002000 }) },
+            { key: `bubbleId:${composerId}:bubble-002`, value: JSON.stringify({ type: 1, text: 'User first', unixMs: 1700000001000 }) },
+        ]);
+        const results = await parseCursorGlobalDb(dbPath);
+        assert.strictEqual(results[0].session.messages[0].role, 'user');
+        assert.strictEqual(results[0].session.messages[1].role, 'assistant');
+    });
+
+    test('returns multiple sessions for multiple composer rows', async () => {
+        const c1 = 'composer-multi-1';
+        const c2 = 'composer-multi-2';
+        const dbPath = path.join(tmpDir, 'multi.db');
+        createGlobalDb(dbPath, [
+            { key: `composerData:${c1}`, value: JSON.stringify({ name: 'Chat 1', createdAt: 1700000000000 }) },
+            { key: `bubbleId:${c1}:bubble-001`, value: JSON.stringify({ type: 1, text: 'Q1', unixMs: 1700000001000 }) },
+            { key: `composerData:${c2}`, value: JSON.stringify({ name: 'Chat 2', createdAt: 1700000010000 }) },
+            { key: `bubbleId:${c2}:bubble-001`, value: JSON.stringify({ type: 1, text: 'Q2', unixMs: 1700000011000 }) },
+        ]);
+        const results = await parseCursorGlobalDb(dbPath);
+        assert.strictEqual(results.length, 2);
+    });
+
+    test('malformed JSON bubble value is skipped', async () => {
+        const composerId = 'composer-bad-json';
+        const dbPath = path.join(tmpDir, 'bad-bubble-json.db');
+        createGlobalDb(dbPath, [
+            { key: `composerData:${composerId}`, value: JSON.stringify({ name: 'Chat', createdAt: 1700000000000 }) },
+            { key: `bubbleId:${composerId}:bubble-001`, value: 'NOT JSON' },
+            { key: `bubbleId:${composerId}:bubble-002`, value: JSON.stringify({ type: 1, text: 'Valid', unixMs: 1700000001000 }) },
+        ]);
+        const results = await parseCursorGlobalDb(dbPath);
+        assert.strictEqual(results[0].session.messages.length, 1);
+    });
+
+    test('malformed JSON composerData value is skipped', async () => {
+        const composerId = 'composer-bad-meta';
+        const dbPath = path.join(tmpDir, 'bad-meta-json.db');
+        createGlobalDb(dbPath, [
+            { key: `composerData:${composerId}`, value: 'NOT JSON' },
+            { key: `bubbleId:${composerId}:bubble-001`, value: JSON.stringify({ type: 1, text: 'Hello', unixMs: 1700000001000 }) },
+        ]);
+        const results = await parseCursorGlobalDb(dbPath);
+        assert.deepStrictEqual(results, []);
+    });
+
+    test('title truncated to MAX_TITLE_CHARS when first user message is very long', async () => {
+        const composerId = 'composer-longtitle';
+        const dbPath = path.join(tmpDir, 'longtitle.db');
+        const longMsg = 'A'.repeat(300);
+        createGlobalDb(dbPath, [
+            { key: `composerData:${composerId}`, value: JSON.stringify({ name: '', createdAt: 1700000000000 }) },
+            { key: `bubbleId:${composerId}:bubble-001`, value: JSON.stringify({ type: 1, text: longMsg, unixMs: 1700000001000 }) },
+        ]);
+        const results = await parseCursorGlobalDb(dbPath);
+        assert.ok(results[0].session.title.length <= 130, 'title should be truncated');
+    });
+});
+
+// ---------------------------------------------------------------------------
+// extractItemRole and extractItemText — branch coverage via parseCursorWorkspace
+// ---------------------------------------------------------------------------
+suite('Cursor Parser — extractItemRole and extractItemText branch coverage', () => {
+    let tmpDir: string;
+
+    setup(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cw-cursor-branch-test-'));
+    });
+
+    teardown(() => {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    test('isUser:true is treated as user role', async () => {
+        const composerData = JSON.stringify({
+            allComposers: [{
+                composerId: 'c-isuser',
+                name: 'isUser test',
+                createdAt: 1700000000000,
+                type: 1,
+                conversation: [
+                    { isUser: true, text: 'Hello from isUser', unixMs: 1700000001000 },
+                    { isUser: false, text: 'Assistant response', unixMs: 1700000002000 },
+                ],
+            }],
+        });
+        const dbPath = path.join(tmpDir, 'isuser.vscdb');
+        createDb(dbPath, [{ key: 'composer.composerData', value: composerData }]);
+        const results = await parseCursorWorkspace(dbPath, 'ws1', '/proj');
+        assert.strictEqual(results[0].session.messages[0].role, 'user');
+        assert.strictEqual(results[0].session.messages[1].role, 'assistant');
+    });
+
+    test('role string field is used for role detection', async () => {
+        const composerData = JSON.stringify({
+            allComposers: [{
+                composerId: 'c-rolestring',
+                name: 'role string test',
+                createdAt: 1700000000000,
+                type: 1,
+                conversation: [
+                    { role: 'user', text: 'User message via role string', unixMs: 1700000001000 },
+                    { role: 'ai', text: 'AI response via role=ai', unixMs: 1700000002000 },
+                    { role: 'model', text: 'Model response', unixMs: 1700000003000 },
+                    { role: 'assistant', text: 'Assistant via role string', unixMs: 1700000004000 },
+                ],
+            }],
+        });
+        const dbPath = path.join(tmpDir, 'rolestring.vscdb');
+        createDb(dbPath, [{ key: 'composer.composerData', value: composerData }]);
+        const results = await parseCursorWorkspace(dbPath, 'ws1', '/proj');
+        const roles = results[0].session.messages.map(m => m.role);
+        assert.ok(roles.includes('user'));
+        assert.ok(roles.includes('assistant'));
+    });
+
+    test('content field used when text/richText absent', async () => {
+        const composerData = JSON.stringify({
+            allComposers: [{
+                composerId: 'c-content',
+                name: 'content field test',
+                createdAt: 1700000000000,
+                type: 1,
+                conversation: [
+                    { type: 1, content: 'Via content field', unixMs: 1700000001000 },
+                    { type: 2, message: 'Via message field', unixMs: 1700000002000 },
+                ],
+            }],
+        });
+        const dbPath = path.join(tmpDir, 'content.vscdb');
+        createDb(dbPath, [{ key: 'composer.composerData', value: composerData }]);
+        const results = await parseCursorWorkspace(dbPath, 'ws1', '/proj');
+        assert.ok(results[0].session.messages.length >= 1);
+        assert.ok(results[0].session.messages.some(m => m.content.includes('content field') || m.content.includes('message field')));
+    });
+
+    test('parts field used when text/richText/content/message absent', async () => {
+        const composerData = JSON.stringify({
+            allComposers: [{
+                composerId: 'c-parts',
+                name: 'parts field test',
+                createdAt: 1700000000000,
+                type: 1,
+                conversation: [
+                    { type: 1, parts: [{ text: 'From parts text' }, { content: 'From parts content' }], unixMs: 1700000001000 },
+                    { type: 2, text: 'Normal response', unixMs: 1700000002000 },
+                ],
+            }],
+        });
+        const dbPath = path.join(tmpDir, 'parts.vscdb');
+        createDb(dbPath, [{ key: 'composer.composerData', value: composerData }]);
+        const results = await parseCursorWorkspace(dbPath, 'ws1', '/proj');
+        assert.ok(results[0].session.messages.some(m => m.content.includes('From parts')));
+    });
+
+    test('markdown field used as last text fallback', async () => {
+        const composerData = JSON.stringify({
+            allComposers: [{
+                composerId: 'c-markdown',
+                name: 'markdown field test',
+                createdAt: 1700000000000,
+                type: 1,
+                conversation: [
+                    { type: 1, text: 'User question', unixMs: 1700000001000 },
+                    { type: 2, markdown: '## Markdown Response', unixMs: 1700000002000 },
+                ],
+            }],
+        });
+        const dbPath = path.join(tmpDir, 'markdown.vscdb');
+        createDb(dbPath, [{ key: 'composer.composerData', value: composerData }]);
+        const results = await parseCursorWorkspace(dbPath, 'ws1', '/proj');
+        assert.ok(results[0].session.messages.some(m => m.content.includes('Markdown Response')));
     });
 });

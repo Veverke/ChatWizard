@@ -617,8 +617,10 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
         if (element instanceof DateGroupTreeItem) {
             const all = this._buildOrderedSummaries();
             const pinnedSet = new Set(this._pinnedIds);
-            return all
-                .filter(s => getDateBucket(s.updatedAt) === element.bucketLabel)
+            const bucketItems = all.filter(s => getDateBucket(s.updatedAt) === element.bucketLabel);
+            const pinnedInBucket   = bucketItems.filter(s =>  pinnedSet.has(s.id));
+            const unpinnedInBucket = bucketItems.filter(s => !pinnedSet.has(s.id));
+            return [...pinnedInBucket, ...unpinnedInBucket]
                 .map(s => new SessionTreeItem(s, pinnedSet.has(s.id), this.extensionUri));
         }
 

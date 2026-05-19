@@ -30,3 +30,23 @@ export function sourceCodiconId(source: SessionSource): string {
         case 'antigravity':  return 'rocket';
     }
 }
+
+/**
+ * Maps every SessionSource (and unknown strings) to the correct CSS badge class.
+ * Use `sourceBadgeClass(source)` for a safe lookup with fallback.
+ */
+export const SOURCE_BADGE_CLASS: Record<string, string> = {
+    copilot:     'cw-badge-copilot',
+    claude:      'cw-badge-claude',
+    antigravity: 'cw-badge-antigravity',
+    cursor:      'cw-badge-cursor',
+    cline:       'cw-badge-cline',
+    roocode:     'cw-badge-roocode',
+    windsurf:    'cw-badge-windsurf',
+    aider:       'cw-badge-aider',
+};
+
+/** Returns the CSS badge class for a source, falling back to cw-badge-claude for unknowns. */
+export function sourceBadgeClass(source: string): string {
+    return SOURCE_BADGE_CLASS[source] ?? 'cw-badge-claude';
+}

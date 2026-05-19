@@ -74,6 +74,13 @@ jobs:
             npm test
           fi
 
+      - name: TypeScript typecheck (scripts)
+        run: npx tsc --noEmit -p tsconfig.scripts.json
+
+      - name: Smoke tests (MCP)
+        shell: bash
+        run: npx tsx scripts/smoke-test-mcp-server.ts && npx tsx scripts/smoke-test-phase4.ts
+
       - name: Build extension bundle
         run: npm run bundle
 

@@ -5,7 +5,7 @@ import { SessionIndex } from '../index/sessionIndex';
 import { SessionSummary, SessionSource } from '../types/index';
 import { ISemanticIndexer, SEMANTIC_MIN_SCORE, SemanticScope } from './semanticContracts';
 import { SemanticSearchResult } from './types';
-import { sourceCodiconId } from '../ui/sourceUi';
+import { sourceCodiconId, friendlySourceName } from '../ui/sourceUi';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -16,31 +16,31 @@ export interface SemanticResultItem extends vscode.QuickPickItem {
     score: number;
 }
 
-type SourceFilterState = 'all' | 'copilot' | 'claude' | 'antigravity';
+type SourceFilterState = 'all' | SessionSource;
 
 // ---------------------------------------------------------------------------
 // Source filter helpers (exported for unit tests)
 // ---------------------------------------------------------------------------
 
+const SOURCE_CYCLE_ORDER: SourceFilterState[] = [
+    'all', 'copilot', 'claude', 'antigravity', 'cursor', 'cline', 'roocode', 'windsurf', 'aider',
+];
+
 export function nextSourceState(current: SourceFilterState): SourceFilterState {
-    if (current === 'all')       { return 'copilot'; }
-    if (current === 'copilot')   { return 'claude'; }
-    if (current === 'claude')    { return 'antigravity'; }
-    return 'all';
+    const idx = SOURCE_CYCLE_ORDER.indexOf(current);
+    return SOURCE_CYCLE_ORDER[(idx + 1) % SOURCE_CYCLE_ORDER.length];
 }
 
 export function sourceButtonTooltip(state: SourceFilterState): string {
-    if (state === 'all')        { return 'Source: All — click for Copilot only'; }
-    if (state === 'copilot')    { return 'Source: Copilot — click for Claude only'; }
-    if (state === 'claude')     { return 'Source: Claude — click for Antigravity only'; }
-    return 'Source: Antigravity — click for All';
+    const next = nextSourceState(state);
+    const nextName = next === 'all' ? 'All' : friendlySourceName(next as SessionSource);
+    if (state === 'all') { return `Source: All — click to filter by ${nextName}`; }
+    return `Source: ${friendlySourceName(state as SessionSource)} — click to cycle to ${nextName}`;
 }
 
 function sourceButtonIcon(state: SourceFilterState): vscode.ThemeIcon {
-    if (state === 'copilot')    { return new vscode.ThemeIcon('github'); }
-    if (state === 'claude')     { return new vscode.ThemeIcon('hubot'); }
-    if (state === 'antigravity') { return new vscode.ThemeIcon('rocket'); }
-    return new vscode.ThemeIcon('list-filter');
+    if (state === 'all') { return new vscode.ThemeIcon('list-filter'); }
+    return new vscode.ThemeIcon(sourceCodiconId(state as SessionSource));
 }
 
 // ---------------------------------------------------------------------------

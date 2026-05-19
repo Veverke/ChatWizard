@@ -9,6 +9,7 @@ import {
     discoverCopilotWorkspacesAsync,
     listSessionFiles,
     listSessionFilesAsync,
+    getWorkspaceStorageRoots,
 } from '../readers/copilotWorkspace';
 import { Session, SessionSource } from '../types/index';
 import { resolveClaudeProjectsPath, resolveClineStoragePath, resolveRooCodeStoragePath, resolveCursorStoragePath, resolveWindsurfStoragePath, resolveAntigravityBrainPath } from './configPaths';
@@ -22,7 +23,11 @@ import { parseWindsurfWorkspace } from '../parsers/windsurf';
 import { discoverAiderHistoryFilesAsync } from '../readers/aiderWorkspace';
 import { parseAiderHistory } from '../parsers/aider';
 import { discoverAntigravityConversationsAsync } from '../readers/antigravityWorkspace';
-import { parseAntigravityConversation } from '../parsers/antigravity';
+import { parseAntigravityConversation, parseAntigravityJsonConversation } from '../parsers/antigravity';
+import { discoverAntigravityJsonConversationsAsync, getAntigravityConversationsRoot } from '../readers/antigravityWorkspace';
+import { discoverChronicleDbsAsync } from '../readers/chronicleWorkspace';
+import { readChronicleCheckpoints } from '../parsers/chronicle';
+import { ChronicleData } from '../types/index';
 
 export class ChatWizardWatcher implements vscode.Disposable {
     private disposables: vscode.Disposable[] = [];
@@ -66,7 +71,8 @@ export class ChatWizardWatcher implements vscode.Disposable {
         // SEC-10: per-source enable/disable settings
         const enabled       = cfg.get<boolean>('enabled', true);
         const indexClaude   = cfg.get<boolean>('indexClaude', true);
-        const indexCopilot  = cfg.get<boolean>('indexCopilot', true);
+        const indexCopilot   = cfg.get<boolean>('indexCopilot', true);
+        const indexChronicle = cfg.get<boolean>('indexChronicle', true);
         const indexCline    = cfg.get<boolean>('indexCline', true);
         const indexRooCode  = cfg.get<boolean>('indexRooCode', true);
         const indexCursor   = cfg.get<boolean>('indexCursor', true);
@@ -81,7 +87,7 @@ export class ChatWizardWatcher implements vscode.Disposable {
             return;
         }
 
-        await this.buildInitialIndex(indexClaude, indexCopilot, indexCline, indexRooCode, indexCursor, indexWindsurf, indexAider, indexAntigravity);
+        await this.buildInitialIndex(indexClaude, indexCopilot, indexCline, indexRooCode, indexCursor, indexWindsurf, indexAider, indexAntigravity, indexChronicle);
 
         if (indexClaude) {
             // Watch Claude sessions
@@ -258,6 +264,45 @@ this.index.remove(taskId);
 
             this.disposables.push(antigravityWatcher);
         }
+
+        if (indexAntigravity) {
+            // Watch Antigravity conversations/*.json files
+            const conversationsRoot = getAntigravityConversationsRoot();
+            let conversationsRootExists = false;
+            try { conversationsRootExists = fs.statSync(conversationsRoot).isDirectory(); } catch { /* not found */ }
+            if (conversationsRootExists) {
+                const jsonPattern = new vscode.RelativePattern(
+                    vscode.Uri.file(conversationsRoot),
+                    '*.json'
+                );
+                const jsonWatcher = vscode.workspace.createFileSystemWatcher(jsonPattern);
+                jsonWatcher.onDidCreate((uri) => this.onAntigravityJsonFileChanged(uri));
+                jsonWatcher.onDidChange((uri) => this.onAntigravityJsonFileChanged(uri));
+                jsonWatcher.onDidDelete((uri) => {
+                    const sessionId = path.basename(uri.fsPath, '.json');
+                    this.index.remove(sessionId);
+                    this.channel.appendLine(`[live] removed antigravity-json session ${sessionId}`);
+                });
+                this.disposables.push(jsonWatcher);
+            }
+        }
+
+        // Watch Chronicle session-store.db files for changes (Copilot Chronicle feature).
+        // Chronicle DBs live in workspaceStorage/<hash>/GitHub.copilot-chat/debug-logs/session-store.db
+        // We watch all workspaceStorage roots since the roots are known at startup.
+        if (indexCopilot && indexChronicle) {
+            for (const root of getWorkspaceStorageRoots()) {
+                const chroniclePattern = new vscode.RelativePattern(
+                    vscode.Uri.file(root),
+                    '**/GitHub.copilot-chat/debug-logs/session-store.db'
+                );
+                const chronicleWatcher = vscode.workspace.createFileSystemWatcher(chroniclePattern);
+                const onChronicleChange = () => { void this.mergeChronicleDataAsync(); };
+                chronicleWatcher.onDidCreate(onChronicleChange);
+                chronicleWatcher.onDidChange(onChronicleChange);
+                this.disposables.push(chronicleWatcher);
+            }
+        }
     }
 
     /**
@@ -278,7 +323,7 @@ this.index.remove(taskId);
         this.disposables = [];
     }
 
-    private async buildInitialIndex(indexClaude: boolean, indexCopilot: boolean, indexCline: boolean, indexRooCode: boolean = true, indexCursor: boolean = true, indexWindsurf: boolean = true, indexAider: boolean = true, indexAntigravity: boolean = true): Promise<void> {
+    private async buildInitialIndex(indexClaude: boolean, indexCopilot: boolean, indexCline: boolean, indexRooCode: boolean = true, indexCursor: boolean = true, indexWindsurf: boolean = true, indexAider: boolean = true, indexAntigravity: boolean = true, indexChronicle: boolean = true): Promise<void> {
         this.channel.appendLine('[Chat Wizard] buildInitialIndex() started');
         await vscode.window.withProgress(
             {
@@ -318,7 +363,7 @@ this.index.remove(taskId);
                 } else {
                     this.channel.appendLine(`[Chat Wizard] Building index with scope filter: [${selectedIds.join(', ')}]`);
                 }
-                const [claudeSessions, copilotSessions, clineSessions, rooCodeSessions, cursorSessions, windsurfSessions, aiderSessions, antigravitySessions] = await Promise.all([
+                const [claudeSessions, copilotSessions, clineSessions, rooCodeSessions, cursorSessions, windsurfSessions, aiderSessions, antigravitySessions, antigravityJsonSessions] = await Promise.all([
                     // Always pass selectedIds (even empty array) — empty = index nothing, no fallback to all.
                     indexClaude       ? this.collectClaudeSessionsAsync(makeProgress('claude'),      selectedIds)  : Promise.resolve([]),
                     indexCopilot      ? this.collectCopilotSessionsAsync(makeProgress('copilot'),    selectedIds)  : Promise.resolve([]),
@@ -328,12 +373,22 @@ this.index.remove(taskId);
                     indexWindsurf     ? this.collectWindsurfSessionsAsync(makeProgress('windsurf'))                : Promise.resolve([]),
                     indexAider        ? this.collectAiderSessionsAsync(makeProgress('aider'))                      : Promise.resolve([]),
                     indexAntigravity  ? this.collectAntigravitySessionsAsync(makeProgress('antigravity'))          : Promise.resolve([]),
+                    indexAntigravity  ? this.collectAntigravityJsonSessionsAsync()                                 : Promise.resolve([]),
                 ]);
 
+                // Deduplicate: if a conversation UUID was already indexed from brain/, skip JSON version.
+                const brainIds = new Set(antigravitySessions.map(s => s.id));
+                const deduplicatedJsonSessions = antigravityJsonSessions.filter(s => !brainIds.has(s.id));
+
                 const cfg = vscode.workspace.getConfiguration('chatwizard');
-                const all = applySessionFilters([...claudeSessions, ...copilotSessions, ...clineSessions, ...rooCodeSessions, ...cursorSessions, ...windsurfSessions, ...aiderSessions, ...antigravitySessions], cfg, this.channel);
+                const all = applySessionFilters([...claudeSessions, ...copilotSessions, ...clineSessions, ...rooCodeSessions, ...cursorSessions, ...windsurfSessions, ...aiderSessions, ...antigravitySessions, ...deduplicatedJsonSessions], cfg, this.channel);
                 this.index.batchUpsert(all);
                 this.channel.appendLine(`[init] Batch indexed ${all.length} sessions`);
+
+                // Merge Chronicle checkpoint data for Copilot sessions (best-effort, non-blocking).
+                if (indexCopilot && indexChronicle) {
+                    void this.mergeChronicleDataAsync();
+                }
             }
         );
     }
@@ -741,6 +796,65 @@ this.index.remove(taskId);
         }
     }
 
+    /**
+     * Async: parse all Antigravity JSON conversations from conversations/ directory.
+     * Deduplication against brain/ sessions is handled at the call site.
+     */
+    async collectAntigravityJsonSessionsAsync(): Promise<Session[]> {
+        try {
+            const infos = await discoverAntigravityJsonConversationsAsync();
+            const results = await Promise.all(infos.map(async info => {
+                const result = parseAntigravityJsonConversation(info);
+                if (result.errors.length > 0) {
+                    this.channel.appendLine(`[antigravity-json] Parse errors for ${info.jsonFile}: ${result.errors.join('; ')}`);
+                }
+                return result.session;
+            }));
+            return results;
+        } catch (err) {
+            this.channel.appendLine(`[error] Failed to collect Antigravity JSON sessions: ${err}`);
+            return [];
+        }
+    }
+
+    /**
+     * Discovers all Chronicle session-store.db files, reads their checkpoints,
+     * and calls `mergeChronicleData` on the session index.
+     * Best-effort: any individual DB that fails is silently skipped.
+     */
+    async mergeChronicleDataAsync(): Promise<void> {
+        try {
+            const dbs = await discoverChronicleDbsAsync();
+            if (dbs.length === 0) {
+                this.channel.appendLine('[chronicle] No session-store.db found — Copilot Chronicle not active for this workspace');
+                return;
+            }
+
+            const entries: Array<{ sessionId: string; data: ChronicleData }> = [];
+            for (const { dbPath } of dbs) {
+                const checkpoints = readChronicleCheckpoints(dbPath);
+                for (const cp of checkpoints) {
+                    entries.push({
+                        sessionId: cp.sessionId,
+                        data: {
+                            overview:         cp.overview,
+                            workDone:         cp.workDone,
+                            technicalDetails: cp.technicalDetails,
+                            nextSteps:        cp.nextSteps,
+                            createdAt:        cp.createdAt,
+                        },
+                    });
+                }
+            }
+            if (entries.length > 0) {
+                this.index.mergeChronicleData(entries);
+                this.channel.appendLine(`[chronicle] Merged ${entries.length} checkpoint(s)`);
+            }
+        } catch (err) {
+            this.channel.appendLine(`[chronicle] Error merging Chronicle data: ${err}`);
+        }
+    }
+
     /** Synchronous collectors kept for internal use by live-update code paths. */
     private collectClaudeSessions(): Session[] {
         const sessions: Session[] = [];
@@ -1095,6 +1209,30 @@ if (composerIdToWsInfo.has(result.session.id)) {
         this.index.upsert(result.session);
         const verb = this.index.size > before ? 'added' : 'updated';
         this.channel.appendLine(`[live] ${verb} antigravity session ${conversationId}`);
+    }
+
+    private async onAntigravityJsonFileChanged(uri: vscode.Uri): Promise<void> {
+        const conversationsRoot = getAntigravityConversationsRoot();
+        const resolvedBase = await fs.promises.realpath(conversationsRoot).catch(() => conversationsRoot);
+        const jsonFile = await fs.promises.realpath(uri.fsPath).catch(() => uri.fsPath);
+        if (!(await ChatWizardWatcher._isSafeFilePathAsync(resolvedBase, jsonFile))) {
+            this.channel.appendLine(`[warn] Unsafe file path (antigravity-json): ${jsonFile}`);
+            return;
+        }
+        const conversationId = path.basename(jsonFile, '.json');
+        // Deduplication: skip if already indexed from brain/
+        const existing = this.index.get(conversationId);
+        if (existing && existing.subSource !== 'conversations') {
+            return; // brain/ version wins
+        }
+        const result = parseAntigravityJsonConversation({ conversationId, jsonFile });
+        if (result.errors.length > 0) {
+            this.channel.appendLine(`[warn] Antigravity JSON parse errors in ${jsonFile}: ${result.errors.join('; ')}`);
+        }
+        const before = this.index.size;
+        this.index.upsert(result.session);
+        const verb = this.index.size > before ? 'added' : 'updated';
+        this.channel.appendLine(`[live] ${verb} antigravity-json session ${conversationId}`);
     }
 
     private onFileChanged(

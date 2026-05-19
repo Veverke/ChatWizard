@@ -11,6 +11,7 @@ import { friendlySourceName, sourceCodiconId } from './ui/sourceUi';
 import {
     SessionTreeProvider,
     SessionTreeItem,
+    DateGroupTreeItem,
     LoadMoreTreeItem,
     SortMode,
     SortKey,
@@ -20,6 +21,7 @@ import {
     SessionFilter,
     SessionParseWarningDecorationProvider,
     GroupMode,
+    getDateBucket,
 } from './views/sessionTreeProvider';
 import { CodeBlockTreeProvider, CodeBlockFilter, CbSortMode, CodeBlockSessionRef, CbGroupMode } from './views/codeBlockTreeProvider';
 import { SessionWebviewPanel } from './views/sessionWebviewPanel';
@@ -52,10 +54,11 @@ import { ListRecentTool } from './mcp/tools/listRecentTool';
 import { GetContextTool } from './mcp/tools/getContextTool';
 import { ListSourcesTool } from './mcp/tools/listSourcesTool';
 import { ServerInfoTool } from './mcp/tools/serverInfoTool';
-import { QueryHistoryPrompt, ContinueFromHistoryPrompt } from './mcp/prompts/contextPrompts';
+import { QueryHistoryPrompt, ContinueFromHistoryPrompt, GetPromptsPrompt } from './mcp/prompts/contextPrompts';
 import { isNewerVersion } from './utils/semver';
 import { registerChatParticipant } from './mcp/chatParticipant';
 import { NullSemanticIndexer, ISemanticIndexer } from './search/semanticContracts';
+import { SidecarMetadataStore } from './index/sidecarMetadataStore';
 
 let watcher: ChatWizardWatcher | undefined;
 
@@ -72,6 +75,37 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     void checkForExtensionUpdate(context, channel);
 
     const index = new SessionIndex();
+
+    // Sidecar metadata store — persists pins, custom titles, tags etc. outside source files.
+    const sidecarStore = new SidecarMetadataStore(context.globalStorageUri.fsPath);
+    // Best-effort load so the store's in-memory cache is warm before tree renders.
+    void sidecarStore.load().then(cache => {
+        index.setSidecarStore(sidecarStore, cache);
+    });
+
+    // Migrate legacy pin state from globalState → sidecarStore (run once, version-gated).
+    if (context.globalState.get<string>('chatwizard.sidecarMigrationVersion') !== '1') {
+        void (async () => {
+            try {
+                const pinnedJson = context.globalState.get<string>('pinnedIds');
+                if (pinnedJson) {
+                    const ids = JSON.parse(pinnedJson) as string[];
+                    if (Array.isArray(ids)) {
+                        for (const id of ids) {
+                            await sidecarStore.setPin(id, true);
+                        }
+                        // Note: 'pinnedIds' is intentionally kept in globalState until
+                        // pinning is fully migrated to the sidecar store in the tree provider.
+                        channel.appendLine(`[sidecar] Migrated ${ids.length} pinned session(s) to sidecar store.`);
+                    }
+                }
+            } catch (err) {
+                channel.appendLine(`[sidecar] Migration failed: ${err}`);
+            } finally {
+                await context.globalState.update('chatwizard.sidecarMigrationVersion', '1');
+            }
+        })();
+    }
 
     // Register sidebar WebviewView providers BEFORE the slow file-indexing await so
     // VS Code can call resolveWebviewView() immediately with fresh shell HTML instead
@@ -948,6 +982,149 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
 
     context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.focusSessionTree', () => {
+            void vscode.commands.executeCommand('chatwizardSessions.focus');
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand(
+            'chatwizard.regenerateTitle',
+            // VS Code passes (primaryItem, allSelected) when canSelectMany is true.
+            async (treeItemOrSessionId?: unknown, allSelected?: unknown) => {
+                const { resolveSessionTitle } = await import('./utils/titleNormalizer.js');
+
+                // ── Multi-select path ────────────────────────────────────────
+                const selectedItems = Array.isArray(allSelected) && allSelected.length > 1 ? allSelected : null;
+                if (selectedItems) {
+                    const sessions = (selectedItems as unknown[])
+                        .map(item => {
+                            if (item && 'summary' in (item as object)) {
+                                return index.get((item as { summary: { id: string } }).summary.id);
+                            }
+                            return null;
+                        })
+                        .filter((s): s is Session => s !== null && s !== undefined);
+
+                    if (sessions.length === 0) { return; }
+                    await vscode.window.withProgress(
+                        { location: vscode.ProgressLocation.Notification, title: `Regenerating titles for ${sessions.length} sessions…`, cancellable: false },
+                        async (progress) => {
+                            let done = 0;
+                            for (const session of sessions) {
+                                const title = await resolveSessionTitle(session, { useLmApi: true });
+                                if (sidecarStore) { await sidecarStore.setTitle(session.id, title); }
+                                done++;
+                                progress.report({ message: `${done}/${sessions.length}`, increment: 100 / sessions.length });
+                            }
+                            if (sidecarStore) {
+                                const cache = await sidecarStore.load();
+                                index.setSidecarStore(sidecarStore, cache);
+                            }
+                        }
+                    );
+                    void vscode.window.showInformationMessage(`Updated ${sessions.length} session titles.`);
+                    return;
+                }
+
+                // ── Single-session path ──────────────────────────────────────
+                let sessionId: string | undefined;
+                if (typeof treeItemOrSessionId === 'string') {
+                    sessionId = treeItemOrSessionId;
+                } else if (treeItemOrSessionId && 'summary' in (treeItemOrSessionId as object)) {
+                    sessionId = (treeItemOrSessionId as { summary: { id: string } }).summary.id;
+                } else if (treeItemOrSessionId && typeof (treeItemOrSessionId as { sessionId?: string }).sessionId === 'string') {
+                    sessionId = (treeItemOrSessionId as { sessionId: string }).sessionId;
+                }
+                if (!sessionId) {
+                    const picked = await vscode.window.showInputBox({ prompt: 'Enter session ID to regenerate title for' });
+                    sessionId = picked?.trim();
+                }
+                if (!sessionId) { return; }
+                const session = index.get(sessionId);
+                if (!session) {
+                    void vscode.window.showWarningMessage(`Session "${sessionId}" not found in index.`);
+                    return;
+                }
+                const title = await resolveSessionTitle(session, { useLmApi: true });
+                if (sidecarStore) {
+                    await sidecarStore.setTitle(sessionId, title);
+                    const cache = await sidecarStore.load();
+                    index.setSidecarStore(sidecarStore, cache);
+                }
+                void vscode.window.showInformationMessage(`Title updated: "${title}"`);
+            }
+        )
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.regenerateAllTitles', async () => {
+            const { resolveSessionTitle } = await import('./utils/titleNormalizer.js');
+            // Use the tree view's sorted/filtered list so that active filters are respected.
+            const summaries = provider.getSortedSummaries();
+            const total = summaries.length;
+            if (total === 0) {
+                void vscode.window.showInformationMessage('No sessions to update.');
+                return;
+            }
+            await vscode.window.withProgress(
+                { location: vscode.ProgressLocation.Notification, title: `Regenerating titles for ${total} sessions…`, cancellable: false },
+                async (progress) => {
+                    let done = 0;
+                    for (const summary of summaries) {
+                        const session = index.get(summary.id);
+                        if (!session) { done++; continue; }
+                        const title = await resolveSessionTitle(session, { useLmApi: false });
+                        if (sidecarStore) {
+                            await sidecarStore.setTitle(summary.id, title);
+                        }
+                        done++;
+                        progress.report({ message: `${done}/${total}`, increment: 100 / total });
+                    }
+                    if (sidecarStore) {
+                        const cache = await sidecarStore.load();
+                        index.setSidecarStore(sidecarStore, cache);
+                    }
+                }
+            );
+            void vscode.window.showInformationMessage(`Updated ${total} session titles.`);
+        })
+    );
+
+    // Regenerate titles for all sessions under a date-group header (e.g. "This Week").
+    context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.regenerateTitlesInGroup', async (groupItem: DateGroupTreeItem) => {
+            if (!groupItem?.bucketLabel) { return; }
+            const { resolveSessionTitle } = await import('./utils/titleNormalizer.js');
+            const summaries = provider.getSortedSummaries()
+                .filter(s => getDateBucket(s.updatedAt) === groupItem.bucketLabel);
+            if (summaries.length === 0) {
+                void vscode.window.showInformationMessage('No sessions found in this group.');
+                return;
+            }
+            await vscode.window.withProgress(
+                { location: vscode.ProgressLocation.Notification, title: `Regenerating titles for "${groupItem.bucketLabel}" (${summaries.length} sessions)…`, cancellable: false },
+                async (progress) => {
+                    let done = 0;
+                    for (const summary of summaries) {
+                        const session = index.get(summary.id);
+                        if (!session) { done++; continue; }
+                        const title = await resolveSessionTitle(session, { useLmApi: true });
+                        if (sidecarStore) { await sidecarStore.setTitle(summary.id, title); }
+                        done++;
+                        progress.report({ message: `${done}/${summaries.length}`, increment: 100 / summaries.length });
+                    }
+                    if (sidecarStore) {
+                        const cache = await sidecarStore.load();
+                        index.setSidecarStore(sidecarStore, cache);
+                    }
+                }
+            );
+            void vscode.window.showInformationMessage(`Updated ${summaries.length} session titles in "${groupItem.bucketLabel}".`);
+        })
+    );
+
+    context.subscriptions.push(
         vscode.commands.registerCommand('chatwizard.rescan', () => {
             void vscode.window.showInformationMessage(
                 'Chat Wizard indexes sessions automatically via file system events. ' +
@@ -1068,7 +1245,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         const getSessionFullTool = new GetSessionFullTool(index);
         const prompts = [
             new QueryHistoryPrompt(getContextTool, getSessionFullTool),
-            new ContinueFromHistoryPrompt(listRecentTool, getContextTool),
+            new ContinueFromHistoryPrompt(listRecentTool, getContextTool, index),
+            new GetPromptsPrompt(getContextTool, listRecentTool, getSessionFullTool),
         ];
 
         return { tools, prompts };

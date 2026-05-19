@@ -281,42 +281,145 @@ Ctrl+Shift+P → Chat Wizard: Export… → Export Session Excerpt…
 
 ## 12. MCP Server & AI Integrations
 
-The MCP server lets any MCP-compatible AI tool (Claude Desktop, Cursor, Continue, Copilot agent mode) query your full chat archive as a tool.
+The MCP server exposes your entire local chat history to any MCP-compatible AI tool — GitHub Copilot, Claude Desktop, Cursor, Continue, and others — so they can retrieve relevant past conversations before answering your questions. Everything runs **100% locally**; no data leaves your machine. The server is **read-only** and **opt-in**.
 
 ### Enabling the Server
 
-1. Set `"chatwizard.mcpServer.enabled": true` in settings
+1. Open VS Code Settings (`Ctrl+,`) and set `chatwizard.mcpServer.enabled` to `true`
 2. VS Code will show a **first-run consent dialog** — review and confirm
-3. The server starts on `http://127.0.0.1:6789` (port is configurable)
-4. A status bar indicator shows the server state
+3. The server starts on `http://127.0.0.1:6789` (port configurable via `chatwizard.mcpServer.port`)
+4. A `$(broadcast) MCP` item appears in the status bar — click it to start or stop the server
 
-### Connecting an AI Tool
+### Quick Start
 
-```
-Ctrl+Shift+P → Chat Wizard: Copy MCP Config to Clipboard
-```
-
-Select your tool (Copilot, Claude Desktop, Cursor, Continue), then paste the config into that tool's MCP config file and restart it.
+1. Enable the server as above
+2. Open the Command Palette and run **Chat Wizard: Copy MCP Config to Clipboard**
+3. Select your AI tool from the quick-pick menu
+4. The config snippet (with your bearer token already embedded) is copied to clipboard and setup instructions open automatically
+5. Paste into your tool's config file (see per-tool sections below) and restart the tool
 
 ### Available MCP Tools
 
 | Tool | What it does | Key parameters |
 |------|-------------|----------------|
 | `chatwizard_get_context` | Best single tool — combines semantic + keyword search, returns ranked passages | `topic`, `limit` |
-| `chatwizard_search` | Keyword search across all sessions | `query`, `source`, `limit` |
-| `chatwizard_find_similar` | Semantic similarity search | `query`, `minScore`, `limit` |
-| `chatwizard_get_session` | Fetch a session by ID (truncated) | `sessionId`, `maxChars` |
+| `chatwizard_search` | Keyword/full-text search across all sessions | `query`, `source`, `limit` |
+| `chatwizard_find_similar` | Semantic similarity search (requires semantic search enabled) | `query`, `minScore`, `limit` |
+| `chatwizard_get_session` | Fetch a session by ID (truncated to 4 000 chars) | `sessionId`, `maxChars` |
 | `chatwizard_get_session_full` | Fetch complete untruncated session | `sessionId` |
 | `chatwizard_list_recent` | List most-recently-updated sessions | `limit`, `source`, `since` |
 | `chatwizard_list_sources` | Which tools are indexed and session counts | _(none)_ |
-| `chatwizard_server_info` | Server health, version, session count | _(none)_ |
+| `chatwizard_server_info` | Server health, version, session count, uptime | _(none)_ |
 
 **Example — ask Claude Desktop about a past decision:**
 > The AI calls `chatwizard_get_context` with topic `"authentication strategy"` → retrieves your past sessions on that topic → answers based on your actual history.
 
+### Per-Tool Setup
+
+#### GitHub Copilot (VS Code)
+
+Config file: **`settings.json`** — open via `Preferences: Open User Settings (JSON)` from the Command Palette.
+
+Locations: **Windows** `%APPDATA%\Code\User\settings.json` · **macOS** `~/Library/Application Support/Code/User/settings.json` · **Linux** `~/.config/Code/User/settings.json`
+
+```json
+{
+  "github.copilot.chat.mcpServers": {
+    "chatwizard": {
+      "type": "sse",
+      "url": "http://localhost:6789/sse",
+      "headers": {
+        "Authorization": "Bearer <your-token>"
+      }
+    }
+  }
+}
+```
+
+If `"github.copilot.chat.mcpServers"` already exists, add the `"chatwizard"` entry to the existing object. VS Code picks up changes automatically — no restart needed. Verify with: _"Call chatwizard_server_info and show me the result."_
+
+#### Claude Desktop
+
+Config file: **`claude_desktop_config.json`** — **Windows** `%APPDATA%\Claude\claude_desktop_config.json` · **macOS** `~/Library/Application Support/Claude/claude_desktop_config.json`
+
+```json
+{
+  "mcpServers": {
+    "chatwizard": {
+      "url": "http://localhost:6789/sse",
+      "headers": {
+        "Authorization": "Bearer <your-token>"
+      }
+    }
+  }
+}
+```
+
+**Fully restart Claude Desktop** after saving (quit and relaunch — a window reload is not sufficient). Verify with: _"Please call chatwizard_server_info and show me the result."_
+
+#### Cursor
+
+Config file: **`.cursor/mcp.json`** (global, not project-specific) — **Windows** `%USERPROFILE%\.cursor\mcp.json` · **macOS/Linux** `~/.cursor/mcp.json`
+
+```json
+{
+  "mcpServers": {
+    "chatwizard": {
+      "url": "http://localhost:6789/sse",
+      "headers": {
+        "Authorization": "Bearer <your-token>"
+      }
+    }
+  }
+}
+```
+
+Restart Cursor or run `Developer: Reload Window`. Verify: `@chatwizard chatwizard_server_info`
+
+#### Continue
+
+Continue supports project-scoped and global MCP server files:
+- **Project-scoped (recommended):** `.continue/mcpServers/chatwizard.json` in your workspace root
+- **Global:** `~/.continue/mcpServers/chatwizard.json`
+
+Save the following as `chatwizard.json` inside the `mcpServers/` directory:
+
+```json
+{
+  "mcpServers": [
+    {
+      "name": "chatwizard",
+      "transport": {
+        "type": "sse",
+        "url": "http://localhost:6789/sse",
+        "requestOptions": {
+          "headers": {
+            "Authorization": "Bearer <your-token>"
+          }
+        }
+      }
+    }
+  ]
+}
+```
+
+Continue picks up new files in `mcpServers/` automatically. Switch Continue to **Agent mode** — MCP tools are only available in agent mode, not standard chat mode.
+
+#### Generic / Any MCP-Compatible Client
+
+| Property | Value |
+|----------|-------|
+| **SSE endpoint** | `http://localhost:6789/sse` |
+| **Messages endpoint** | `http://localhost:6789/messages` |
+| **Health endpoint** | `http://localhost:6789/health` _(no auth required)_ |
+| **Auth header** | `Authorization: Bearer <your-token>` |
+| **Transport** | HTTP + SSE |
+
+Run **Chat Wizard: Copy MCP Config → Generic** to get a snippet with your actual token.
+
 ### `@chatwizard` Copilot Chat Participant
 
-No MCP server needed. Invoke directly from the Copilot Chat panel:
+A lightweight alternative — **no MCP server required**. Invoke directly from the Copilot Chat panel in VS Code:
 
 ```
 @chatwizard /queryHistory WAL mode SQLite deadlock
@@ -328,12 +431,42 @@ No MCP server needed. Invoke directly from the Copilot Chat panel:
 ```
 → Lists your 5 most recent sessions on that topic and proposes the 3 most valuable next actions.
 
+Run **Chat Wizard: Connect GitHub Copilot** to configure the participant. For global context instructions across all workspaces, run **Chat Wizard: Set Up Global Copilot Instructions**.
+
+| | `@chatwizard` participant | MCP server |
+|-|--------------------------|------------|
+| Requires MCP server | No | Yes |
+| Works in Copilot Chat | Yes | Yes (via MCP tools) |
+| Works in Claude, Cursor, Continue | No | Yes |
+
 ### Token Security
 
 The server uses a 64-character bearer token stored in VS Code's secret storage — never logged. To rotate the token after accidentally sharing it:
 
-1. Enable `"chatwizard.mcpServer.allowTokenRotation": true`
-2. `Ctrl+Shift+P` → **Chat Wizard: Rotate MCP Token**
+1. Enable `"chatwizard.mcpServer.allowTokenRotation": true` in settings
+2. Run **Chat Wizard: Rotate MCP Token** from the Command Palette
+3. Confirm the rotation — the MCP server restarts automatically with the new token
+4. Run **Chat Wizard: Copy MCP Config** again and update every AI tool's config with the new token
+
+**Manual fallback:** Delete `mcp-token.txt` from VS Code's extension global storage, restart the MCP server, then run **Chat Wizard: Copy MCP Config** to get the new token.
+
+### Troubleshooting
+
+**"Connection refused" or client can't connect**
+- Confirm the server is running: status bar should show `$(broadcast) MCP`
+- If not running, run **Chat Wizard: Start MCP Server** from the Command Palette
+- Verify the port matches (`chatwizard.mcpServer.port`, default `6789`)
+- Check that VS Code is not blocked by a local firewall rule on `127.0.0.1:6789`
+
+**"401 Unauthorized"**
+- Run **Chat Wizard: Copy MCP Config** again to get a fresh snippet with the current token, paste it into your tool's config, and restart the tool
+
+**"Port already in use"**
+- Change `chatwizard.mcpServer.port` to an unused port (e.g. `6790`) and update the URL in your tool's config
+
+**Semantic search tools return "not available"**
+- `chatwizard_find_similar` and the semantic path of `chatwizard_get_context` require `chatwizard.enableSemanticSearch: true`
+- `chatwizard_search` (keyword) is always available regardless of semantic search status
 
 ---
 

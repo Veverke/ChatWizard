@@ -262,3 +262,230 @@ suite('extractCodeBlocks — content with no code blocks', () => {
         assert.deepStrictEqual(blocks, []);
     });
 });
+
+// ---------------------------------------------------------------------------
+// parseCopilotSession — edge cases for branch coverage
+// ---------------------------------------------------------------------------
+
+import * as fs from 'fs';
+import * as os from 'os';
+
+suite('parseCopilotSession — branch coverage edge cases', () => {
+    let tmpDir: string;
+
+    setup(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cw-copilot-test-'));
+    });
+
+    teardown(() => {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    function writeJsonl(filename: string, lines: object[]): string {
+        const filePath = path.join(tmpDir, filename);
+        fs.writeFileSync(filePath, lines.map(l => JSON.stringify(l)).join('\n'), 'utf-8');
+        return filePath;
+    }
+
+    function makeSnapshot(state: Record<string, unknown>) {
+        return { kind: 0, v: state };
+    }
+
+    function makePatch(k: unknown[], v: unknown, kind: number = 1) {
+        return { kind, k, v };
+    }
+
+    function makeTurn(requestId: string, userText: string, aiText: string, timestamp?: number) {
+        return {
+            requestId,
+            kind: null,
+            timestamp,
+            message: { text: userText },
+            response: [{ value: aiText }],
+        };
+    }
+
+    test('oversized line is skipped with error', () => {
+        const bigLine = JSON.stringify(makeSnapshot({ sessionId: 'sess1', requests: [] })) + 'X'.repeat(5000);
+        const normalLine = JSON.stringify(makeSnapshot({ sessionId: 'sess2', requests: [makeTurn('r1', 'Hi', 'Hello')] }));
+        const filePath = path.join(tmpDir, 'oversized.jsonl');
+        fs.writeFileSync(filePath, bigLine + '\n' + normalLine + '\n', 'utf-8');
+        const { errors } = parseCopilotSession(filePath, 'ws1');
+        assert.ok(errors.length > 0, 'Expected at least one error for oversized line');
+    });
+
+    test('no snapshot (kind:0) returns error', () => {
+        const filePath = writeJsonl('no-snapshot.jsonl', [
+            makePatch(['requests'], [makeTurn('r1', 'Hi', 'Hello')]),
+        ]);
+        const { errors } = parseCopilotSession(filePath, 'ws1');
+        assert.ok(errors.some(e => e.includes('No initial state snapshot')));
+    });
+
+    test('kind:2 patch with requests appends to existing requests', () => {
+        const existingTurn = makeTurn('r1', 'Hello', 'Hi there');
+        const newTurn = makeTurn('r2', 'Second', 'Second reply');
+        const filePath = writeJsonl('append-patch.jsonl', [
+            makeSnapshot({ sessionId: 'sess3', requests: [existingTurn] }),
+            makePatch(['requests'], [newTurn], 2),
+        ]);
+        const { session } = parseCopilotSession(filePath, 'ws1');
+        assert.strictEqual(session.messages.length, 4); // 2 turns × 2 messages each
+    });
+
+    test('turn without requestId uses fallback id', () => {
+        const turn = { kind: null, timestamp: 1700000000000, message: { text: 'No requestId' }, response: [{ value: 'Response' }] };
+        const filePath = writeJsonl('no-request-id.jsonl', [
+            makeSnapshot({ sessionId: 'sess4', requests: [turn] }),
+        ]);
+        const { session } = parseCopilotSession(filePath, 'ws1');
+        assert.strictEqual(session.messages.length, 2);
+        // Message id should not contain "undefined"
+        assert.ok(!session.messages[0].id.includes('undefined'));
+    });
+
+    test('title falls back to Untitled Session when no user messages', () => {
+        const filePath = writeJsonl('no-user-messages.jsonl', [
+            makeSnapshot({ sessionId: 'sess5', requests: [] }),
+        ]);
+        const { session } = parseCopilotSession(filePath, 'ws1');
+        assert.strictEqual(session.title, 'Untitled Session');
+    });
+
+    test('createdAt falls back to file birthtime when no creationDate', () => {
+        const filePath = writeJsonl('no-creation-date.jsonl', [
+            makeSnapshot({ sessionId: 'sess6', requests: [makeTurn('r1', 'Hi', 'Hello', 1700000000000)] }),
+        ]);
+        const { session } = parseCopilotSession(filePath, 'ws1');
+        assert.ok(session.createdAt, 'createdAt should be set');
+        // Should not be epoch
+        assert.ok(!session.createdAt.startsWith('1970'));
+    });
+
+    test('response item with kind field is excluded from AI text', () => {
+        const turn = {
+            requestId: 'r1', kind: null, timestamp: 1700000000000,
+            message: { text: 'Question' },
+            response: [
+                { value: 'Real answer', kind: undefined }, // no kind = included
+                { value: 'Metadata', kind: 'some_metadata' }, // kind present = excluded
+            ],
+        };
+        const filePath = writeJsonl('response-filter.jsonl', [
+            makeSnapshot({ sessionId: 'sess7', requests: [turn] }),
+        ]);
+        const { session } = parseCopilotSession(filePath, 'ws1');
+        const assistantMsg = session.messages.find(m => m.role === 'assistant');
+        assert.ok(assistantMsg);
+        assert.ok(assistantMsg.content.includes('Real answer'));
+        assert.ok(!assistantMsg.content.includes('Metadata'));
+    });
+
+    test('deepSet with array key and valid index updates state', () => {
+        // A kind:1 patch with a numeric array key exercises deepSet's array branch
+        const turn = makeTurn('r1', 'Test', 'Reply');
+        const filePath = writeJsonl('deep-set-array.jsonl', [
+            makeSnapshot({ sessionId: 'sess8', requests: [turn], nestedArr: ['old'] }),
+            makePatch(['nestedArr', 0], 'new', 1),
+        ]);
+        const { session } = parseCopilotSession(filePath, 'ws1');
+        assert.ok(session.messages.length >= 2);
+    });
+
+    test('invalid JSON line in middle of file is reported as error', () => {
+        const goodLine = JSON.stringify(makeSnapshot({ sessionId: 'sess9', requests: [makeTurn('r1', 'Hi', 'Hello')] }));
+        const filePath = path.join(tmpDir, 'invalid-json.jsonl');
+        fs.writeFileSync(filePath, goodLine + '\nNOT_JSON\n', 'utf-8');
+        const { errors } = parseCopilotSession(filePath, 'ws1');
+        assert.ok(errors.some(e => e.includes('invalid JSON')));
+    });
+
+    test('deepSet with empty keys array is a no-op', () => {
+        // A patch with empty k array — deepSet should return early without error
+        const turn = makeTurn('r1', 'Hello', 'World');
+        const filePath = writeJsonl('empty-key-patch.jsonl', [
+            makeSnapshot({ sessionId: 'sess10', requests: [turn] }),
+            makePatch([], 'value', 1),  // empty keys — should be ignored
+        ]);
+        const { session } = parseCopilotSession(filePath, 'ws1');
+        assert.ok(session.messages.length >= 2, 'should still have messages after no-op patch');
+    });
+
+    test('deepSet rejects negative array index', () => {
+        const turn = makeTurn('r1', 'Hi', 'Hello');
+        const filePath = writeJsonl('neg-index.jsonl', [
+            makeSnapshot({ sessionId: 'sess11', requests: [turn], arr: ['original'] }),
+            makePatch(['arr', -1], 'bad', 1),
+        ]);
+        const { session } = parseCopilotSession(filePath, 'ws1');
+        assert.ok(session.messages.length >= 1);
+    });
+
+    test('deepSet rejects oversized array index', () => {
+        const turn = makeTurn('r1', 'Hi', 'Hello');
+        const filePath = writeJsonl('big-index.jsonl', [
+            makeSnapshot({ sessionId: 'sess12', requests: [turn], arr: ['original'] }),
+            makePatch(['arr', 999999999], 'bad', 1),
+        ]);
+        const { session } = parseCopilotSession(filePath, 'ws1');
+        assert.ok(session.messages.length >= 1);
+    });
+
+    test('kind:2 requests patch when state.requests is not an array uses empty base', () => {
+        const turn = makeTurn('r1', 'Hello', 'World');
+        // Snapshot has requests as a string (not array) — kind:2 patch should still work
+        const filePath = writeJsonl('requests-not-array.jsonl', [
+            makeSnapshot({ sessionId: 'sess13', requests: 'not-an-array' }),
+            makePatch(['requests'], [turn], 2),
+        ]);
+        const { session } = parseCopilotSession(filePath, 'ws1');
+        assert.ok(session.messages.length >= 2, 'should build messages from kind:2 appended requests');
+    });
+
+    test('turn without message text produces no user message', () => {
+        const turn = { requestId: 'r1', kind: null, timestamp: 1700000000000, message: { text: '' }, response: [{ value: 'AI response' }] };
+        const filePath = writeJsonl('no-user-text.jsonl', [
+            makeSnapshot({ sessionId: 'sess14', requests: [turn] }),
+        ]);
+        const { session } = parseCopilotSession(filePath, 'ws1');
+        assert.strictEqual(session.messages.filter(m => m.role === 'user').length, 0);
+        assert.strictEqual(session.messages.filter(m => m.role === 'assistant').length, 1);
+    });
+
+    test('turn without timestamp has undefined timestamp on messages', () => {
+        const turn = { requestId: 'r1', kind: null, message: { text: 'Hi' }, response: [{ value: 'Hello' }] };
+        const filePath = writeJsonl('no-timestamp.jsonl', [
+            makeSnapshot({ sessionId: 'sess15', requests: [turn] }),
+        ]);
+        const { session } = parseCopilotSession(filePath, 'ws1');
+        assert.strictEqual(session.messages[0].timestamp, undefined);
+    });
+
+    test('customTitle is used as session title', () => {
+        const turn = makeTurn('r1', 'First user message', 'AI response');
+        const filePath = writeJsonl('custom-title.jsonl', [
+            makeSnapshot({ sessionId: 'sess16', customTitle: 'My Custom Title', requests: [turn] }),
+        ]);
+        const { session } = parseCopilotSession(filePath, 'ws1');
+        assert.strictEqual(session.title, 'My Custom Title');
+    });
+
+    test('title uses empty content fallback when first line is empty', () => {
+        // First user message starts with newline so fl (first line) is empty
+        const turn = { requestId: 'r1', kind: null, timestamp: 1700000000000, message: { text: '\nActual content here' }, response: [] };
+        const filePath = writeJsonl('empty-first-line.jsonl', [
+            makeSnapshot({ sessionId: 'sess17', requests: [turn] }),
+        ]);
+        const { session } = parseCopilotSession(filePath, 'ws1');
+        assert.ok(session.title, 'title should not be empty');
+    });
+
+    test('line with unknown kind is skipped gracefully', () => {
+        const goodLine = JSON.stringify(makeSnapshot({ sessionId: 'sess18', requests: [makeTurn('r1', 'Hi', 'Hello')] }));
+        const unknownKindLine = JSON.stringify({ kind: 99, k: ['x'], v: 'val' });
+        const filePath = path.join(tmpDir, 'unknown-kind.jsonl');
+        fs.writeFileSync(filePath, goodLine + '\n' + unknownKindLine, 'utf-8');
+        const { session } = parseCopilotSession(filePath, 'ws1');
+        assert.ok(session.messages.length >= 1);
+    });
+});

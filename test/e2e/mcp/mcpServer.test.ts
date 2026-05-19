@@ -432,6 +432,70 @@ suite('McpServer — unknown paths', () => {
     });
 });
 
+// ── POST /messages endpoint ───────────────────────────────────────────────────
+
+suite('McpServer — POST /messages endpoint', () => {
+    const TOKEN = 'messages-test-token';
+    let port: number;
+    let server: McpServer;
+
+    suiteSetup(async () => { port = await getFreePort(); });
+
+    setup(async () => {
+        const tokenPath = writeTempToken(TOKEN);
+        server = new McpServer(makeConfig(port, tokenPath), []);
+        await server.start();
+    });
+
+    teardown(async () => {
+        await server.stop();
+    });
+
+    function httpPost(url: string, body: string, headers: Record<string, string> = {}): Promise<{ status: number; body: string }> {
+        return new Promise((resolve, reject) => {
+            const urlObj = new URL(url);
+            const req = http.request({
+                hostname: urlObj.hostname,
+                port: urlObj.port,
+                path: urlObj.pathname + urlObj.search,
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body), ...headers },
+            }, (res) => {
+                let data = '';
+                res.on('data', (c: Buffer) => { data += c; });
+                res.on('end', () => resolve({ status: res.statusCode ?? 0, body: data }));
+                res.on('error', reject);
+            });
+            req.on('error', reject);
+            req.write(body);
+            req.end();
+        });
+    }
+
+    test('POST /messages returns 401 without auth token', async () => {
+        const { status } = await httpPost(`http://localhost:${port}/messages?sessionId=unknown`, '{}');
+        assert.strictEqual(status, 401);
+    });
+
+    test('POST /messages with unknown sessionId returns 404', async () => {
+        const { status } = await httpPost(
+            `http://localhost:${port}/messages?sessionId=non-existent-session-id`,
+            '{}',
+            { Authorization: `Bearer ${TOKEN}` }
+        );
+        assert.strictEqual(status, 404);
+    });
+
+    test('POST /messages with no sessionId returns 404', async () => {
+        const { status } = await httpPost(
+            `http://localhost:${port}/messages`,
+            '{}',
+            { Authorization: `Bearer ${TOKEN}` }
+        );
+        assert.strictEqual(status, 404);
+    });
+});
+
 suiteTeardown(() => {
     for (const p of _tempFiles) {
         fs.rmSync(p, { force: true });
