@@ -92,6 +92,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     const index = new SessionIndex();
 
+    // Branding status-bar item — created early so all listeners below can call brandingBar.notify()
+    const version = String(context.extension.packageJSON.version ?? '0.0.0');
+    const brandingBar = new BrandingStatusBarItem(version);
+    context.subscriptions.push(brandingBar);
+
     // Sidecar metadata store — persists pins, custom titles, tags etc. outside source files.
     const sidecarStore = new SidecarMetadataStore(context.globalStorageUri.fsPath);
     // Best-effort load so the store's in-memory cache is warm before tree renders.
@@ -175,6 +180,29 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         }
     });
     context.subscriptions.push(searchIndexListener);
+
+    // Branding status-bar: notify on session batch load and live upserts
+    const _cap = (s: string) => s ? s[0].toUpperCase() + s.slice(1) : s;
+    let _brandingUpsertDebounce: ReturnType<typeof setTimeout> | undefined;
+    let _brandingUpsertSources: string[] = [];
+    const brandingSessionListener = index.addTypedChangeListener((event) => {
+        if (event.type === 'batch' && event.sessions.length > 0) {
+            const bySource = new Map<string, number>();
+            for (const s of event.sessions) { bySource.set(s.source, (bySource.get(s.source) ?? 0) + 1); }
+            const detail = [...bySource.entries()].map(([src, n]) => `${_cap(src)}: ${n}`).join(', ');
+            brandingBar.notify(`${event.sessions.length} sessions loaded (${detail})`);
+        } else if (event.type === 'upsert') {
+            _brandingUpsertSources.push(event.session.source ?? 'unknown');
+            if (_brandingUpsertDebounce) { clearTimeout(_brandingUpsertDebounce); }
+            _brandingUpsertDebounce = setTimeout(() => {
+                const src = _cap(_brandingUpsertSources[0] ?? 'unknown');
+                const n = _brandingUpsertSources.length;
+                _brandingUpsertSources = [];
+                brandingBar.notify(n === 1 ? `New ${src} session indexed` : `${n} sessions updated`);
+            }, 3_000);
+        }
+    });
+    context.subscriptions.push(brandingSessionListener);
 
     // ── Semantic search ──────────────────────────────────────────────────────────
     // Instantiated only when chatwizard.enableSemanticSearch is true.
@@ -1478,6 +1506,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 // Ensure global Copilot instructions are present for plain-language prompts.
                 void setupGlobalCopilotInstructions(context, channel, /* silent */ true);
                 const port = mcpServer.port;
+                brandingBar.notify(`MCP server running on :${port}`, 'chatwizard.startMcpServer');
                 void vscode.window.showInformationMessage(
                     `Chat Wizard MCP server started on port ${port}. ` +
                     `Use 'Chat Wizard: Copy MCP Config to Clipboard' to set up your AI tool.`
@@ -1925,6 +1954,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                         );
                         const withFiles = Array.from(bySessionId.values()).filter(d => d.importantFiles && d.importantFiles.length > 0).length;
                         channel.appendLine(`[Chronicle] Merged ${bySessionId.size} session(s) from Chronicle (${withFiles} with importantFiles)`);
+                        brandingBar.notify(`Branch context merged for ${bySessionId.size} session${bySessionId.size === 1 ? '' : 's'}`);
                     } else {
                         channel.appendLine('[Chronicle] Connected to Chronicle DB — no checkpoints yet');
                     }

@@ -21,8 +21,9 @@ const TILT_FRAMES = [
     `${ICON_NORMAL}${SP}`,   // frame 3 – expand right
 ] as const;
 
-const FRAME_MS       = 80;      // ms per frame  (4 × 80 = 320 ms total)
-const RESET_AFTER_MS = 60_000;  // auto-reset tooltip if user doesn't click
+const FRAME_MS       = 80;       // ms per frame  (4 × 80 = 320 ms total)
+const PERIODIC_MS    = 20_000;   // idle heartbeat: pulse every 20 s
+const RESET_AFTER_MS = 60_000;   // auto-reset tooltip if user doesn't click
 
 const DEFAULT_CMD  = 'workbench.view.extension.chatwizard';
 const INTERNAL_CMD = 'chatwizard._brandingClick';
@@ -32,7 +33,8 @@ export class BrandingStatusBarItem implements vscode.Disposable {
     private readonly _version: string;
     private _pendingCommand = DEFAULT_CMD;
     private _frameTimers: ReturnType<typeof setTimeout>[] = [];
-    private _resetTimer:  ReturnType<typeof setTimeout> | undefined;
+    private _resetTimer:   ReturnType<typeof setTimeout>  | undefined;
+    private _periodicTimer: ReturnType<typeof setInterval> | undefined;
     private readonly _cmdDisposable: vscode.Disposable;
 
     constructor(version: string) {
@@ -51,6 +53,8 @@ export class BrandingStatusBarItem implements vscode.Disposable {
         });
         this._applyDefault();
         this.item.show();
+        // Periodic idle heartbeat — pulses every 20 s so the user notices the icon.
+        this._periodicTimer = setInterval(() => this._pulse(), PERIODIC_MS);
     }
 
     /**
@@ -84,10 +88,15 @@ export class BrandingStatusBarItem implements vscode.Disposable {
                 setTimeout(() => { this.item.text = frame; }, i * FRAME_MS),
             );
         });
+        // Reset to normal after all frames so no trailing space lingers.
+        this._frameTimers.push(
+            setTimeout(() => { this.item.text = ICON_NORMAL; }, TILT_FRAMES.length * FRAME_MS),
+        );
     }
 
     dispose(): void {
-        if (this._resetTimer) { clearTimeout(this._resetTimer); }
+        if (this._periodicTimer) { clearInterval(this._periodicTimer); }
+        if (this._resetTimer)    { clearTimeout(this._resetTimer); }
         for (const t of this._frameTimers) { clearTimeout(t); }
         this._cmdDisposable.dispose();
         this.item.dispose();
