@@ -91,6 +91,15 @@ Surface "N chat sessions touched this file" directly in the editor — status ba
   - Handles: Windows drive letters (`C:\` → `c:/`), mixed slash styles, trailing slashes, symlinks (best-effort `fs.realpathSync`).
   - Shared by 10-A, 10-B, and future file-matching code.
 
+- [ ] **10-H** — VS Code native Timeline integration (`CwTimelineProvider`)
+  - New file `src/timeline/cwTimelineProvider.ts`, implements `vscode.TimelineProvider`.
+  - Registers via `vscode.window.registerTimelineProvider('*', provider)` so CW chat-session entries appear in VS Code's built-in **Timeline** panel (bottom of Explorer) alongside git commits.
+  - `provideTimeline(uri, options, token)` — queries the `SessionIndex` for sessions that touch `uri.fsPath` using the same `sessionTouchesFile` / `sessionMentionsFile` logic as `FileHistoryPanel`.
+  - Returns `vscode.TimelineItem[]`: `label` = session title, `timestamp` = `updatedAt`, `description` = friendly source name, `command` = `chatwizard.openSession`.
+  - Items sorted newest-first. Empty array (not an error) when no sessions match.
+  - Exposes a `refresh()` method; wired to `index.addChangeListener` so the Timeline panel updates automatically when new sessions are indexed.
+  - Provider ID: `'chatWizard'`; label: `'ChatWizard Sessions'`.
+
 ### Unit Tests
 
 - [ ] `chronicleStore.sessionsForFile` — exact match, case-insensitive match on Windows paths, relative path resolution, unknown file returns `[]`.
@@ -98,6 +107,7 @@ Surface "N chat sessions touched this file" directly in the editor — status ba
 - [ ] `FileHistoryStatusBarItem` — shows count when data present, hides when no data, disposes subscriptions on deactivate.
 - [ ] `sessionsForFileTool` — workspace-relative input resolved correctly, absolute path passthrough, empty Chronicle returns empty array not error.
 - [ ] `FileHistoryCodeLensProvider` — returns one CodeLens at line 0, returns `[]` when no Chronicle sessions, respects `chatwizard.codeLens.enabled: false`.
+- [ ] `CwTimelineProvider.provideTimeline` — returns correct items for a file with matching sessions, returns empty array for unknown file, items are sorted newest-first, `refresh()` fires `onDidChange`.
 
 ### E2E Tests
 
@@ -106,6 +116,7 @@ Surface "N chat sessions touched this file" directly in the editor — status ba
 - [ ] **Scenario: MCP tool called with relative path** — resolves correctly and returns same sessions as absolute path.
 - [ ] **Scenario: Chronicle DB absent** — all surfaces degrade silently (no errors, no empty counts shown).
 - [ ] **Scenario: file history panel `[Open session]` button** — opens the session webview for the correct session.
+- [ ] **Scenario: VS Code Timeline panel shows CW sessions** — open a file with Chronicle history, open Timeline panel (Explorer → Timeline), verify ChatWizard Sessions section lists matching sessions; clicking an entry opens the session webview.
 
 ### Manual Tests
 
@@ -118,10 +129,11 @@ Surface "N chat sessions touched this file" directly in the editor — status ba
 7. Call `chatwizard_sessions_for_file` from an MCP client with a relative path (e.g. `"src/auth.ts"`). Verify correct sessions are returned.
 8. _(Potential bug surface)_ Open a file on a network share / UNC path. Verify no crash and path normalisation does not produce an empty result set when sessions exist for that file.
 9. _(Potential bug surface)_ Rapidly switch between files. Verify the status bar does not flicker or show a count from the previous file.
+10. Open the VS Code Timeline panel (Explorer → Timeline section at the bottom). Switch between files — verify the **ChatWizard Sessions** source appears when sessions exist and disappears (or shows empty) when there are none. Click a timeline entry and verify the session webview opens correctly.
 
 ### Completion Checklist
 
-- [ ] All atomic tasks (10-A through 10-G) implemented and code-reviewed
+- [ ] All atomic tasks (10-A through 10-H) implemented and code-reviewed
 - [ ] All unit tests green (`npm test`)
 - [ ] All e2e tests green
 - [ ] Manual tests performed and all issues fixed
@@ -138,7 +150,7 @@ Surface "N chat sessions touched this file" directly in the editor — status ba
 
 ### Overview
 
-A new **"By Context"** tab in the ChatWizard sidebar groups sessions by git branch and by configurable work item pattern (e.g. `PREFIX-\d+`, matching tickets like `prefix-12345`). Two new MCP tools expose this grouping programmatically.
+The Sessions tab's existing **group mode** toggle now includes **By Branch** and **By Work Item** modes alongside the default date grouping. Sessions are grouped directly inside the Sessions view using a toolbar action; no separate sidebar tab is needed. Two new MCP tools expose this grouping programmatically.
 
 ### Atomic Tasks
 
@@ -173,11 +185,10 @@ A new **"By Context"** tab in the ChatWizard sidebar groups sessions by git bran
   - If `chatwizard.workItemPattern` is not set: return a structured error `{ error: "NO_PATTERN", message: "Set chatwizard.workItemPattern to enable work item lookup. Examples: PREFIX-\\d+, [A-Z]+-\\d+" }`.
   - Output: sessions where any commit/branch matches the pattern and the extracted ID equals `workItemId`.
 
-- [ ] **11-F** — Register "By Context" view in `package.json`
-  - Add a new view container entry or reuse the existing ChatWizard activity bar container.
-  - View ID: `chatwizard.byContextView`.
-  - Title: `"By Context"`.
-  - Icon: a branching-path icon (reuse `$(git-branch)` codicon).
+- [ ] **11-F** ~~— Register "By Context" view in `package.json`~~ — **Removed.** Branch and work item grouping are exposed as group modes on the Sessions tab toolbar, not as a separate view container.
+  ~~View ID: `chatwizard.byContextView`.~~
+  ~~Title: `"By Context"`.~~
+  ~~Icon: a branching-path icon (reuse `$(git-branch)` codicon).~~
 
 ### Unit Tests
 
@@ -189,7 +200,7 @@ A new **"By Context"** tab in the ChatWizard sidebar groups sessions by git bran
 
 ### E2E Tests
 
-- [ ] **Scenario: switch to "By Context" tab with branches** — sessions appear grouped under correct branch names.
+- [ ] **Scenario: switch Sessions tab to branch grouping mode** — sessions appear grouped under correct branch names.
 - [ ] **Scenario: toggle to "By Work Item" mode with pattern set** — sessions grouped correctly; a session whose branch name contains a matching work item ID appears under that ID.
 - [ ] **Scenario: work item grouping with pattern not configured** — placeholder node shown, not an empty view.
 - [ ] **Scenario: MCP `chatwizard_sessions_for_branch`** — returns sessions for the queried branch.
@@ -197,7 +208,7 @@ A new **"By Context"** tab in the ChatWizard sidebar groups sessions by git bran
 
 ### Manual Tests
 
-1. Verify the "By Context" tab appears in the ChatWizard sidebar and the branch grouping shows your recent git branches with correct session counts.
+1. Verify branch grouping mode in the Sessions tab shows your recent git branches with correct session counts.
 2. Set `chatwizard.workItemPattern` to `[A-Z]+-\d+`. Switch to "By Work Item" mode. Verify sessions from feature branches (e.g. `feature/AUTH-123`) appear under `AUTH-123`.
 3. Set an invalid regex (e.g. `[unclosed`). Verify a warning notification appears and the extension does not crash; the previous valid grouping is shown or a graceful placeholder.
 4. Open a terminal and query `chatwizard_sessions_for_branch` with a branch you have sessions on. Verify the result includes the correct sessions.

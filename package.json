@@ -576,6 +576,19 @@
       }
     ],
     "menus": {
+      "explorer/context": [
+        {
+          "command": "chatwizard.showFileHistory",
+          "when": "!explorerResourceIsFolder",
+          "group": "chatWizard@1"
+        }
+      ],
+      "editor/title/context": [
+        {
+          "command": "chatwizard.showFileHistory",
+          "group": "chatWizard@1"
+        }
+      ],
       "view/title": [
         {
           "command": "chatwizard.filterSessions",

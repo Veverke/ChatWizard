@@ -155,6 +155,8 @@ export class SessionWebviewPanel {
                 } else if (msg.command === 'copy' && msg.text) {
                     void vscode.env.clipboard.writeText(msg.text);
                     void vscode.window.showInformationMessage('Chat copied to clipboard.');
+                } else if (msg.type === 'revealInTree') {
+                    void vscode.commands.executeCommand('chatwizard.revealInSessionsTree', session.id);
                 }
             },
             undefined,
@@ -195,6 +197,7 @@ export class SessionWebviewPanel {
         void panel.webview.postMessage({
             type: 'render',
             title:            session.title,
+            sessionId:        session.id,
             source:           session.source,
             assistantLabel,
             userColor,
@@ -332,6 +335,11 @@ export class SessionWebviewPanel {
       padding-bottom: 8px;
       border-bottom: none;
     }
+    h1#session-title {
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    h1#session-title:hover { opacity: 0.65; }
     .session-meta {
       display: none;
       font-size: 0.82em;
@@ -618,6 +626,14 @@ ${cwInteractiveJs()}
     backTopBtn.classList.toggle('visible', window.scrollY > 300);
   });
   backTopBtn.addEventListener('click', function() { window.scrollTo({ top: 0, behavior: 'smooth' }); });
+
+  // ── Session title — click to reveal in Sessions tree ─────────────────────
+  var titleEl = document.getElementById('session-title');
+  titleEl.title = 'Click to reveal in Sessions panel';
+  titleEl.addEventListener('click', function() {
+    var sid = titleEl.dataset.cwSessionId;
+    if (sid) { vscode.postMessage({ type: 'revealInTree', sessionId: sid }); }
+  });
 
   // ── Export excerpt ─────────────────────────────────────────────────────────
   document.getElementById('export-excerpt-btn').addEventListener('click', function() {
@@ -1033,7 +1049,9 @@ ${cwInteractiveJs()}
     var data = event.data;
 
     if (data.type === 'render') {
-      document.getElementById('session-title').textContent = data.title;
+      var titleNode = document.getElementById('session-title');
+      titleNode.textContent = data.title;
+      titleNode.dataset.cwSessionId = data.sessionId;
       document.documentElement.style.setProperty('--cw-user-color', data.userColor || '#007acc');
       if (data.source) {
         var srcLabel = data.assistantLabel || data.source;

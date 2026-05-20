@@ -25,8 +25,9 @@ export class SessionTreeItem extends vscode.TreeItem {
     constructor(summary: SessionSummary, pinned = false, extensionUri?: vscode.Uri) {
         super(summary.title || 'Untitled Session', vscode.TreeItemCollapsibleState.None);
 
+        this.id      = summary.id;   // stable identity → enables treeView.reveal()
         this.summary = summary;
-        this.pinned = pinned;
+        this.pinned  = pinned;
 
         const workspaceName = path.basename(summary.workspacePath ?? summary.workspaceId);
         const date = summary.updatedAt.slice(0, 10);

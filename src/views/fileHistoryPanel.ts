@@ -6,6 +6,7 @@
 
 import * as vscode from 'vscode';
 import { SessionIndex } from '../index/sessionIndex';
+import { Session } from '../types/index';
 import { normalisePath, sessionTouchesFile, sessionMentionsFile } from '../utils/pathNormaliser';
 import { friendlySourceName } from '../ui/sourceUi';
 
@@ -23,7 +24,7 @@ export class FileHistoryPanel implements vscode.Disposable {
             'ChatWizard: File History',
             vscode.ViewColumn.Beside,
             {
-                enableScripts: false,
+                enableScripts: true,
                 retainContextWhenHidden: true,
                 localResourceRoots: [extensionUri],
             },
@@ -31,6 +32,20 @@ export class FileHistoryPanel implements vscode.Disposable {
 
         this.disposables.push(
             this.panel.onDidDispose(() => this.dispose()),
+        );
+
+        // Handle messages sent from the webview rows (open session click)
+        this.disposables.push(
+            this.panel.webview.onDidReceiveMessage((msg: { type: string; sessionId: string; searchTerm: string }) => {
+                if (msg.type !== 'openSession') { return; }
+                const session = this.sessionIndex.get(msg.sessionId);
+                if (!session) { return; }
+                void vscode.commands.executeCommand(
+                    'chatwizard.openSession',
+                    { id: msg.sessionId },
+                    msg.searchTerm,
+                );
+            }),
         );
     }
 
@@ -55,7 +70,8 @@ export class FileHistoryPanel implements vscode.Disposable {
 
     private render(filePath: string): void {
         const normPath = normalisePath(filePath);
-        const sessions: Array<{ id: string; title: string; source: string; date: string }> = [];
+        const basename = normPath.split('/').pop() ?? '';
+        const sessions: Array<{ id: string; title: string; source: string; date: string; refs: number }> = [];
 
         for (const summary of this.sessionIndex.getAllSummaries()) {
             const session = this.sessionIndex.get(summary.id);
@@ -71,28 +87,48 @@ export class FileHistoryPanel implements vscode.Disposable {
                     title: summary.title,
                     source: friendlySourceName(session.source),
                     date: session.updatedAt.slice(0, 10),
+                    refs: this.countRefs(session, basename),
                 });
             }
         }
 
-        sessions.sort((a, b) => b.date.localeCompare(a.date));
+        // Primary sort: refs descending; tiebreaker: date descending
+        sessions.sort((a, b) => b.refs - a.refs || b.date.localeCompare(a.date));
 
         const shortPath = filePath.length > 60 ? '...' + filePath.slice(-57) : filePath;
         this.panel.title = `File History: ${shortPath}`;
-        this.panel.webview.html = this.buildHtml(filePath, sessions);
+        this.panel.webview.html = this.buildHtml(filePath, basename, sessions);
+    }
+
+    /** Counts total occurrences of `basename` (case-insensitive) across all messages of a session. */
+    private countRefs(session: Session, basename: string): number {
+        if (!basename) { return 0; }
+        const needle = basename.toLowerCase();
+        let total = 0;
+        for (const msg of session.messages) {
+            if (!msg.content) { continue; }
+            const hay = msg.content.toLowerCase();
+            let pos = 0;
+            while ((pos = hay.indexOf(needle, pos)) !== -1) { total++; pos += needle.length; }
+        }
+        return Math.min(total, 9_999);
     }
 
     private buildHtml(
         filePath: string,
-        sessions: Array<{ id: string; title: string; source: string; date: string }>,
+        searchTerm: string,
+        sessions: Array<{ id: string; title: string; source: string; date: string; refs: number }>,
     ): string {
         const escHtml = (s: string): string =>
             s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
+        const nonce = Math.random().toString(36).slice(2);
+
         const rows = sessions.length === 0
-            ? '<tr><td colspan="3" style="color:var(--vscode-disabledForeground)">No sessions found for this file.</td></tr>'
+            ? '<tr><td colspan="4" style="color:var(--vscode-disabledForeground)">No sessions found for this file.</td></tr>'
             : sessions.map(s => `
-                <tr>
+                <tr class="session-row" data-session-id="${escHtml(s.id)}" data-search-term="${escHtml(searchTerm)}" title="Open session">
+                    <td class="refs">${s.refs}</td>
                     <td>${escHtml(s.date)}</td>
                     <td>${escHtml(s.title)}</td>
                     <td>${escHtml(s.source)}</td>
@@ -102,7 +138,7 @@ export class FileHistoryPanel implements vscode.Disposable {
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
 <style>
   body { font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); color: var(--vscode-foreground); padding: 16px; }
   h2 { font-size: 1.1em; margin-bottom: 4px; }
@@ -110,16 +146,27 @@ export class FileHistoryPanel implements vscode.Disposable {
   table { width: 100%; border-collapse: collapse; }
   th { text-align: left; border-bottom: 1px solid var(--vscode-panel-border); padding: 6px 8px; font-weight: 600; }
   td { padding: 5px 8px; border-bottom: 1px solid var(--vscode-panel-border); }
-  tr:hover td { background: var(--vscode-list-hoverBackground); }
+  .refs { font-weight: 600; color: var(--vscode-charts-blue); text-align: right; width: 3em; }
+  .session-row { cursor: pointer; }
+  .session-row:hover td { background: var(--vscode-list-hoverBackground); }
+  .session-row:active td { background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); }
 </style>
 </head>
 <body>
 <h2>Sessions referencing this file</h2>
 <p class="subtitle">${escHtml(filePath)}</p>
 <table>
-  <thead><tr><th>Date</th><th>Session</th><th>Source</th></tr></thead>
+  <thead><tr><th title="References — total occurrences of the filename in the session">Refs</th><th>Date</th><th>Session</th><th>Source</th></tr></thead>
   <tbody>${rows}</tbody>
 </table>
+<script nonce="${nonce}">
+  const vscode = acquireVsCodeApi();
+  document.querySelectorAll('.session-row').forEach(row => {
+    row.addEventListener('click', () => {
+      vscode.postMessage({ type: 'openSession', sessionId: row.dataset.sessionId, searchTerm: row.dataset.searchTerm });
+    });
+  });
+</script>
 </body>
 </html>`;
     }

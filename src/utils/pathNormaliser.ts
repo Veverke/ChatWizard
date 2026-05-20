@@ -56,25 +56,30 @@ export function sessionTouchesFile(
  * Checks whether any entry in `filePaths` (typically entity-extracted, possibly
  * relative) refers to the same file as `normalisedQueryPath`.
  *
- * Uses suffix matching so that a short extracted path like `docs/intent.md`
- * matches an absolute query like `c:/_/chatwizard/docs/intent.md`.
- * The candidate path is normalised and then tested as an exact match first,
- * falling back to checking whether the query path ends with `/<candidate>`.
- *
- * Minimum segment requirement: the candidate must contain at least one path
- * separator to avoid spurious matches on bare filenames like `index.ts`.
+ * Three tiers of matching (in order):
+ *  1. Exact match after full normalisation (handles absolute Chronicle paths).
+ *  2. Suffix match for multi-segment relative paths (e.g. `docs/intent.md`
+ *     matches the end of `c:/_/chatwizard/docs/intent.md`).
+ *  3. Basename match for bare filenames (e.g. `intent.md` matches the filename
+ *     of `c:/_/chatwizard/docs/intent.md`). This tier is intentionally fuzzy
+ *     and may produce false positives for generic names like `index.ts`.
  */
 export function sessionMentionsFile(
     filePaths: string[] | undefined,
     normalisedQueryPath: string,
 ): boolean {
     if (!filePaths || filePaths.length === 0) { return false; }
+    const queryBasename = normalisedQueryPath.split('/').pop() ?? '';
     return filePaths.some(f => {
-        const norm = normalisePath(f);
-        if (!norm) { return false; }
-        if (norm === normalisedQueryPath) { return true; }
-        // Suffix match: only for paths containing a separator (avoid bare `index.ts`)
-        if (!norm.includes('/')) { return false; }
-        return normalisedQueryPath.endsWith('/' + norm);
+        if (!f) { return false; }
+        // Normalise separators without calling full realpathSync on relative paths
+        const candidate = f.replace(/\\/g, '/').toLowerCase();
+        // 1. Exact match
+        if (normalisePath(f) === normalisedQueryPath) { return true; }
+        // 2. Suffix match for multi-segment paths like 'docs/intent.md'
+        if (candidate.includes('/') && normalisedQueryPath.endsWith('/' + candidate)) { return true; }
+        // 3. Basename match for bare filenames like 'intent.md'
+        const candidateBasename = candidate.split('/').pop() ?? '';
+        return candidateBasename === queryBasename.toLowerCase();
     });
 }

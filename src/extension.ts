@@ -37,6 +37,7 @@ import { AnalyticsPanel } from './analytics/analyticsPanel';
 import { AnalyticsViewProvider } from './analytics/analyticsViewProvider';
 import { ModelUsageViewProvider } from './analytics/modelUsageViewProvider';
 import { TimelineViewProvider } from './timeline/timelineViewProvider';
+import { CwTimelineProvider } from './timeline/cwTimelineProvider';
 import { TelemetryRecorder } from './telemetry/telemetryRecorder';
 import { registerManageWorkspacesCommand } from './commands/manageWorkspaces';
 import { registerPaletteCommands } from './commands/paletteCommands';
@@ -69,6 +70,7 @@ import { SessionsForFileTool } from './mcp/tools/sessionsForFileTool';
 import { SessionsForBranchTool } from './mcp/tools/sessionsForBranchTool';
 import { SessionsForWorkItemTool } from './mcp/tools/sessionsForWorkItemTool';
 import { FileHistoryStatusBarItem } from './ui/fileHistoryStatusBar';
+import { BrandingStatusBarItem } from './ui/brandingStatusBar';
 import { FileHistoryCodeLensProvider } from './ui/fileHistoryCodeLens';
 import { FileHistoryPanel } from './views/fileHistoryPanel';
 import { discoverChronicleDbsAsync } from './readers/chronicleWorkspace';
@@ -310,13 +312,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         );
     }
 
-    const codeBlockListener = index.addChangeListener(() => {
-        codeBlockEngine.index(index.getAllCodeBlocks());
-        CodeBlocksPanel.refresh(index, codeBlockEngine);
-        codeBlockTreeView.description = codeBlockProvider.getDescription();
-        codeBlockTreeView.message = index.getAllCodeBlocks().length === 0 ? makeEmptyStateMsg('code blocks') : undefined;
-    });
-    context.subscriptions.push(codeBlockListener);
+    // NOTE: codeBlockListener is registered AFTER codeBlockTreeView is declared (below)
+    // to avoid a temporal dead zone ReferenceError when the listener fires during init.
 
     // Refresh Prompt Library panel (editor tab) and sidebar view when index changes
     const promptLibraryListener = index.addChangeListener(() => {
@@ -336,6 +333,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         timelineViewProvider.refresh();
     });
     context.subscriptions.push(timelineListener);
+
+    // Register CW sessions as a source in VS Code's built-in Timeline panel
+    // (Explorer → Timeline) so chat history appears alongside git commits.
+    const cwTimelineProvider = new CwTimelineProvider(index);
+    context.subscriptions.push(cwTimelineProvider);
+    // registerTimelineProvider was removed from vscode.window in VS Code 1.121-insider.
+    const _registerTimeline = (vscode.window as any).registerTimelineProvider as
+        ((glob: string, p: unknown) => vscode.Disposable) | undefined;
+    if (typeof _registerTimeline === 'function') {
+        context.subscriptions.push(_registerTimeline.call(vscode.window, 'file', cwTimelineProvider));
+    }
+    const cwTimelineListener = index.addChangeListener(() => {
+        cwTimelineProvider.refresh();
+    });
+    context.subscriptions.push(cwTimelineListener);
 
     const provider = new SessionTreeProvider(index, context.extensionUri);
 
@@ -442,6 +454,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // Show rich empty-state message initially (no data yet); cleared once code blocks are indexed.
     codeBlockTreeView.message = makeEmptyStateMsg('code blocks');
     context.subscriptions.push(codeBlockTreeView);
+
+    // Register codeBlockListener here (after codeBlockTreeView is initialised)
+    // to avoid accessing the const before its declaration (TDZ ReferenceError).
+    let _prevCodeBlockCount = 0;
+    const codeBlockListener = index.addChangeListener(() => {
+        const allBlocks = index.getAllCodeBlocks();
+        codeBlockEngine.index(allBlocks);
+        CodeBlocksPanel.refresh(index, codeBlockEngine);
+        codeBlockTreeView.description = codeBlockProvider.getDescription();
+        codeBlockTreeView.message = allBlocks.length === 0 ? makeEmptyStateMsg('code blocks') : undefined;
+        if (allBlocks.length > _prevCodeBlockCount) {
+            const added = allBlocks.length - _prevCodeBlockCount;
+            brandingBar.notify(`${added} new code block${added === 1 ? '' : 's'} extracted`, 'chatwizard.showCodeBlocks');
+        }
+        _prevCodeBlockCount = allBlocks.length;
+    });
+    context.subscriptions.push(codeBlockListener);
 
     /** Apply a single-key primary sort (toolbar buttons). */
     function applySort(mode: SortMode): void {
@@ -1046,6 +1075,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     context.subscriptions.push(
         vscode.commands.registerCommand('chatwizard.focusSessionTree', () => {
             void vscode.commands.executeCommand('chatwizardSessions.focus');
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.revealInSessionsTree', async (sessionId: string) => {
+            const summary = index.getAllSummaries().find(s => s.id === sessionId);
+            if (!summary) { return; }
+            const item = new SessionTreeItem(summary, provider.isPinned(sessionId), context.extensionUri);
+            await vscode.commands.executeCommand('chatwizardSessions.focus');
+            // focus:false keeps the webview focused; select:true highlights the row
+            await treeView.reveal(item, { select: true, focus: false });
         })
     );
 
@@ -1794,8 +1834,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             channel,
         );
 
+        // ── Branding status-bar item ────────────────────────────────────────────
         // ── Feature 10: File history UI ────────────────────────────────────────
-        const fileHistoryStatusBar = new FileHistoryStatusBarItem(index);
+        const fileHistoryStatusBar = new FileHistoryStatusBarItem(index, (count, normPath) => {
+            const fileName = normPath.split(/[\\/]/).pop() ?? normPath;
+            brandingBar.notify(
+                `${count} session${count === 1 ? '' : 's'} touched ${fileName}`,
+                'chatwizard.showFileHistory',
+            );
+        });
         context.subscriptions.push(fileHistoryStatusBar);
 
         const fileHistoryCodeLens = new FileHistoryCodeLensProvider(index);
@@ -1805,7 +1852,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         );
 
         context.subscriptions.push(
-            vscode.commands.registerCommand('chatwizard.showFileHistory', (filePath?: string) => {
+            vscode.commands.registerCommand('chatwizard.showFileHistory', (arg?: vscode.Uri | string) => {
+                const filePath = arg instanceof vscode.Uri ? arg.fsPath : arg;
                 FileHistoryPanel.show(context.extensionUri, index, filePath);
             }),
         );
@@ -1827,6 +1875,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         // 2. Read Chronicle DBs and merge branch + checkpoint data into the index.
         const globalStorageDir = require('path').dirname(context.globalStorageUri.fsPath) as string;
         const globalChronicleDbPath = require('path').join(globalStorageDir, 'GitHub.copilot-chat', 'session-store.db') as string;
+
+        let chronicleMergeActive = false; // prevents the debounce from firing during our own merge
 
         async function loadChronicleData(): Promise<void> {
             try {
@@ -1867,16 +1917,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                     }
                 }
 
-                if (bySessionId.size > 0) {
-                    index.mergeChronicleData(
-                        Array.from(bySessionId.entries()).map(([sessionId, data]) => ({ sessionId, data })),
-                    );
-                    const withFiles = Array.from(bySessionId.values()).filter(d => d.importantFiles && d.importantFiles.length > 0).length;
-                    channel.appendLine(`[Chronicle] Merged ${bySessionId.size} session(s) from Chronicle (${withFiles} with importantFiles)`);
-                } else {
-                    channel.appendLine('[Chronicle] Connected to Chronicle DB — no checkpoints yet');
+                chronicleMergeActive = true;
+                try {
+                    if (bySessionId.size > 0) {
+                        index.mergeChronicleData(
+                            Array.from(bySessionId.entries()).map(([sessionId, data]) => ({ sessionId, data })),
+                        );
+                        const withFiles = Array.from(bySessionId.values()).filter(d => d.importantFiles && d.importantFiles.length > 0).length;
+                        channel.appendLine(`[Chronicle] Merged ${bySessionId.size} session(s) from Chronicle (${withFiles} with importantFiles)`);
+                    } else {
+                        channel.appendLine('[Chronicle] Connected to Chronicle DB — no checkpoints yet');
+                    }
+                } finally {
+                    chronicleMergeActive = false;
                 }
             } catch (err) {
+                chronicleMergeActive = false;
                 channel.appendLine(`[Chronicle] Failed to load: ${err}`);
             }
         }
@@ -1884,9 +1940,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         // Load on activation
         void loadChronicleData();
 
-        // Re-read after new sessions appear (debounced 4 s to let Copilot finish writing)
+        // Re-read after genuinely new sessions appear (debounced 4 s).
+        // Guarded by chronicleMergeActive so Chronicle's own mergeChronicleData()
+        // notification doesn't trigger a redundant re-read.
         let chronicleDebounce: ReturnType<typeof setTimeout> | undefined;
         context.subscriptions.push(index.addChangeListener(() => {
+            if (chronicleMergeActive) { return; }
             if (chronicleDebounce) { clearTimeout(chronicleDebounce); }
             chronicleDebounce = setTimeout(() => { void loadChronicleData(); }, 4000);
         }));

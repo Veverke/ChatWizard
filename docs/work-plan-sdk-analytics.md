@@ -44,6 +44,14 @@ There is no turnkey, opinionated solution that combines auto-capture, code trans
 4. **Typed and minimal API surface** — small, stable, easy to upgrade
 5. **No vendor lock-in** — PostHog is the recommended backend but the transport layer is pluggable
 6. **Dev-time transformation, not runtime injection** — the CLI modifies source code; no sandbox violations, no fragile monkey-patching
+7. **SOLID, modular, and secure by design** — applies to all phases and all three layers:
+   - *Single Responsibility*: each module/class has one reason to change (e.g. `Storage` knows nothing about transport; `Transport` knows nothing about event schema)
+   - *Open/Closed*: new transports, new capture sources, and new CLI transformers are added by extension, not by modifying existing code
+   - *Liskov Substitution*: `AnalyticsTransport` implementations are interchangeable; mock transports in tests behave identically to real ones
+   - *Interface Segregation*: consumers depend only on what they use — a host extension using only `track()` never imports transport or CLI types
+   - *Dependency Inversion*: high-level modules (`ExtensionAnalytics`) depend on abstractions (`Storage`, `Transport`) not concrete classes
+   - *Scalability*: storage model uses bounded structures (ring buffer, sparse daily map); transport layer batches to avoid per-event network overhead
+   - *Security*: inputs validated at boundaries; no dynamic code evaluation; no secrets logged or stored; transport sends only over HTTPS
 
 ---
 
@@ -104,6 +112,36 @@ The CLI transformer reads source files at dev-time to perform AST transformation
 - Target: `node18+` (VS Code's embedded Node)
 - Peer dependency: `vscode` (not bundled)
 - Zero runtime dependencies (or minimal: `uuid` only if `vscode.env.machineId` is insufficient)
+
+#### Repo folder structure
+
+```
+vsce-analytics/
+├── src/
+│   ├── core/            # ExtensionAnalytics class — public entry point and lifecycle orchestration
+│   ├── capture/         # Auto-capture modules (one file per concern: env, platform, identity, lifecycle)
+│   ├── storage/         # Storage abstraction + globalState adapter, ring buffer, aggregates, dailyActivity
+│   ├── tracking/        # track() implementation, wrapCommand() helper, event schema types
+│   ├── transport/       # AnalyticsTransport interface; PostHogTransport (Phase 3) as a separate file
+│   ├── debug/           # Output channel logger — only used when debug: true
+│   ├── types/           # Shared TypeScript interfaces and enums (no runtime code)
+│   └── utils/           # Pure utilities (e.g. telemetry guard, bounded-map helpers)
+├── test/
+│   ├── unit/            # Pure unit tests — no VS Code runtime; mock vscode and os
+│   ├── e2e/             # Automated E2E tests (see phase deliverables)
+│   └── fixtures/        # Reusable mock contexts, fake globalState, stub transports
+├── scripts/             # Build and release helpers
+├── tsconfig.json
+├── tsconfig.test.json
+├── package.json
+└── README.md
+```
+
+Guidelines:
+- Nothing in `core/` imports from `transport/` directly — it depends on the `AnalyticsTransport` interface only
+- `types/` has zero imports from other `src/` directories (no circular risk)
+- `capture/` modules are independently testable with no dependency on `storage/` or `transport/`
+- Each `capture/` module exports a single pure function: `captureEnv(vscodeEnv) → EnvContext`; this makes unit testing trivial and future capture sources easy to add
 
 ---
 
