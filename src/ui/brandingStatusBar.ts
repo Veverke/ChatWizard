@@ -32,6 +32,7 @@ export class BrandingStatusBarItem implements vscode.Disposable {
     private readonly item: vscode.StatusBarItem;
     private readonly _version: string;
     private _pendingCommand = DEFAULT_CMD;
+    private _lastMessage    = '';
     private _frameTimers: ReturnType<typeof setTimeout>[] = [];
     private _resetTimer:   ReturnType<typeof setTimeout>  | undefined;
     private _periodicTimer: ReturnType<typeof setInterval> | undefined;
@@ -63,6 +64,10 @@ export class BrandingStatusBarItem implements vscode.Disposable {
      * The tooltip auto-resets after 60 s if the user doesn't click.
      */
     notify(message: string, command: string = DEFAULT_CMD): void {
+        // Suppress duplicate events: skip if this is the same message as last time.
+        // The dedupe clears when the tooltip auto-resets or the user clicks.
+        if (message === this._lastMessage) { return; }
+        this._lastMessage    = message;
         this._pendingCommand = command;
         this.item.tooltip = `${message} — click to open`;
         this._pulse();
@@ -73,6 +78,7 @@ export class BrandingStatusBarItem implements vscode.Disposable {
     private _reset(): void {
         if (this._resetTimer) { clearTimeout(this._resetTimer); this._resetTimer = undefined; }
         this._pendingCommand = DEFAULT_CMD;
+        this._lastMessage    = '';
         this._applyDefault();
     }
 
