@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { SessionIndex } from '../index/sessionIndex';
-import { SessionSummary, SessionSource } from '../types/index';
+import { Session, SessionSummary, SessionSource } from '../types/index';
+import { extractWorkItemsFromSession } from '../utils/workItemExtractor';
 import { friendlySourceName, sourceCodiconId } from '../ui/sourceUi';
 import { sourceBrandIconUris } from '../ui/sourceBrandIcons';
 
@@ -122,7 +123,7 @@ export class LoadingTreeItem extends vscode.TreeItem {
 // Date grouping
 // ---------------------------------------------------------------------------
 
-export type GroupMode = 'none' | 'date';
+export type GroupMode = 'none' | 'date' | 'branch' | 'workItem';
 
 /**
  * Returns a bucket label for a given ISO date string.
@@ -189,6 +190,20 @@ export class DateGroupTreeItem extends vscode.TreeItem {
         this.description = `${count} session${count === 1 ? '' : 's'}`;
         this.iconPath = new vscode.ThemeIcon('calendar');
         this.contextValue = 'dateGroup';
+    }
+}
+
+export class ContextGroupTreeItem extends vscode.TreeItem {
+    readonly groupKey: string;
+    readonly groupMode: 'branch' | 'workItem';
+
+    constructor(label: string, count: number, mode: 'branch' | 'workItem') {
+        super(label, vscode.TreeItemCollapsibleState.Expanded);
+        this.groupKey = label;
+        this.groupMode = mode;
+        this.description = `${count} session${count === 1 ? '' : 's'}`;
+        this.iconPath = new vscode.ThemeIcon(mode === 'branch' ? 'git-branch' : 'tag');
+        this.contextValue = 'contextGroup';
     }
 }
 
@@ -317,7 +332,7 @@ export class SessionParseWarningDecorationProvider implements vscode.FileDecorat
 // Provider
 // ---------------------------------------------------------------------------
 
-export type SessionTreeNode = SessionTreeItem | DateGroupTreeItem | LoadMoreTreeItem | LoadingTreeItem;
+export type SessionTreeNode = SessionTreeItem | DateGroupTreeItem | ContextGroupTreeItem | LoadMoreTreeItem | LoadingTreeItem;
 
 export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeNode> {
     private _onDidChangeTreeData = new vscode.EventEmitter<SessionTreeNode | undefined | void>();
@@ -540,15 +555,27 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
     getTreeItem(element: SessionTreeNode): vscode.TreeItem { return element; }
 
     // Required by VS Code for treeView.reveal() to work.
-    getParent(element: SessionTreeNode): DateGroupTreeItem | undefined {
-        // When grouping is active, SessionTreeItems are nested under a DateGroupTreeItem.
-        // DateGroupTreeItems and loading/load-more items are at root level.
-        if (this._groupMode === 'date' && element instanceof SessionTreeItem) {
-            const bucket = getDateBucket(element.summary.updatedAt);
-            const all = this._buildOrderedSummaries();
-            const bucketed = this._buildBuckets(all);
-            const grp = bucketed.find(b => b.label === bucket);
-            if (grp) { return new DateGroupTreeItem(grp.label, grp.items.length); }
+    getParent(element: SessionTreeNode): DateGroupTreeItem | ContextGroupTreeItem | undefined {
+        // When grouping is active, SessionTreeItems are nested under a group header.
+        if (element instanceof SessionTreeItem) {
+            if (this._groupMode === 'date') {
+                const bucket = getDateBucket(element.summary.updatedAt);
+                const all = this._buildOrderedSummaries();
+                const bucketed = this._buildBuckets(all);
+                const grp = bucketed.find(b => b.label === bucket);
+                if (grp) { return new DateGroupTreeItem(grp.label, grp.items.length); }
+            } else if (this._groupMode === 'branch') {
+                const session = this.index.get(element.summary.id);
+                const key = session?.chronicleData?.branch ?? '[no branch recorded]';
+                return new ContextGroupTreeItem(key, 0, 'branch');
+            } else if (this._groupMode === 'workItem') {
+                const session = this.index.get(element.summary.id);
+                if (!session) { return undefined; }
+                const pattern = vscode.workspace.getConfiguration('chatwizard').get<string>('workItemPattern', '');
+                const keys = extractWorkItemsFromSession(session.title, session.messages, pattern || undefined);
+                const key = keys.length > 0 ? keys[0] : '(no work item)';
+                return new ContextGroupTreeItem(key, 0, 'workItem');
+            }
         }
         return undefined;
     }
@@ -608,6 +635,68 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
             .sort((a, b) => dateBucketOrder(a.label) - dateBucketOrder(b.label));
     }
 
+    /** Groups summaries by Chronicle branch. */
+    private _buildBranchGroups(summaries: SessionSummary[]): ContextGroupTreeItem[] {
+        const groupMap = new Map<string, number>();
+        for (const s of summaries) {
+            const session = this.index.get(s.id);
+            const key = session?.chronicleData?.branch ?? '[no branch recorded]';
+            groupMap.set(key, (groupMap.get(key) ?? 0) + 1);
+        }
+        return Array.from(groupMap.entries())
+            .sort((a, b) => {
+                // '[no branch recorded]' sorts last
+                if (a[0] === '[no branch recorded]') { return 1; }
+                if (b[0] === '[no branch recorded]') { return -1; }
+                return b[1] - a[1]; // descending by count
+            })
+            .map(([key, count]) => new ContextGroupTreeItem(key, count, 'branch'));
+    }
+
+    /** Groups summaries by extracted work-item IDs. */
+    private _buildWorkItemGroups(summaries: SessionSummary[]): ContextGroupTreeItem[] {
+        const pattern = vscode.workspace.getConfiguration('chatwizard').get<string>('workItemPattern', '');
+        const groupMap = new Map<string, number>();
+        for (const s of summaries) {
+            const session = this.index.get(s.id);
+            if (!session) { continue; }
+            const keys = extractWorkItemsFromSession(session.title, session.messages, pattern || undefined);
+            if (keys.length === 0) {
+                groupMap.set('(no work item)', (groupMap.get('(no work item)') ?? 0) + 1);
+            } else {
+                for (const key of keys) {
+                    groupMap.set(key, (groupMap.get(key) ?? 0) + 1);
+                }
+            }
+        }
+        return Array.from(groupMap.entries())
+            .sort((a, b) => {
+                if (a[0] === '(no work item)') { return 1; }
+                if (b[0] === '(no work item)') { return -1; }
+                return b[1] - a[1];
+            })
+            .map(([key, count]) => new ContextGroupTreeItem(key, count, 'workItem'));
+    }
+
+    /** True if at least one session has Chronicle branch data. */
+    hasBranchData(): boolean {
+        for (const s of this.index.getAllSummaries()) {
+            if (this.index.get(s.id)?.chronicleData?.branch) { return true; }
+        }
+        return false;
+    }
+
+    /** True if at least one session has extractable work-item IDs. */
+    hasWorkItems(): boolean {
+        const pattern = vscode.workspace.getConfiguration('chatwizard').get<string>('workItemPattern', '');
+        for (const s of this.index.getAllSummaries()) {
+            const session = this.index.get(s.id);
+            if (!session) { continue; }
+            if (extractWorkItemsFromSession(session.title, session.messages, pattern || undefined).length > 0) { return true; }
+        }
+        return false;
+    }
+
     getChildren(element?: SessionTreeNode): SessionTreeNode[] {
         if (this._loading) {
             return [new LoadingTreeItem()];
@@ -624,6 +713,27 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
                 .map(s => new SessionTreeItem(s, pinnedSet.has(s.id), this.extensionUri));
         }
 
+        // When a ContextGroupTreeItem is expanded, return matching session children
+        if (element instanceof ContextGroupTreeItem) {
+            const all = this._buildOrderedSummaries();
+            const pinnedSet = new Set(this._pinnedIds);
+            const pattern = vscode.workspace.getConfiguration('chatwizard').get<string>('workItemPattern', '');
+            const matched = all.filter(s => {
+                const session = this.index.get(s.id);
+                if (!session) { return false; }
+                if (element.groupMode === 'branch') {
+                    const branch = session.chronicleData?.branch ?? '[no branch recorded]';
+                    return branch === element.groupKey;
+                } else {
+                    const keys = extractWorkItemsFromSession(session.title, session.messages, pattern || undefined);
+                    return keys.length === 0
+                        ? element.groupKey === '(no work item)'
+                        : keys.includes(element.groupKey);
+                }
+            });
+            return matched.map(s => new SessionTreeItem(s, pinnedSet.has(s.id), this.extensionUri));
+        }
+
         if (element) { return []; }
 
         const pinnedSet = new Set(this._pinnedIds);
@@ -633,6 +743,12 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
         if (this._groupMode === 'date') {
             const buckets = this._buildBuckets(all);
             return buckets.map(b => new DateGroupTreeItem(b.label, b.items.length));
+        }
+        if (this._groupMode === 'branch') {
+            return this._buildBranchGroups(all);
+        }
+        if (this._groupMode === 'workItem') {
+            return this._buildWorkItemGroups(all);
         }
 
         // Flat view (original behaviour with pagination)
@@ -650,8 +766,8 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
         return this._buildOrderedSummaries();
     }
 
-    /** Returns true when grouping is active in the date mode. */
+    /** Returns true when any non-flat grouping is active. */
     isGrouped(): boolean {
-        return this._groupMode === 'date';
+        return this._groupMode !== 'none';
     }
 }

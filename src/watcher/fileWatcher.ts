@@ -28,12 +28,24 @@ import { discoverAntigravityJsonConversationsAsync, getAntigravityConversationsR
 import { discoverChronicleDbsAsync } from '../readers/chronicleWorkspace';
 import { readChronicleCheckpoints } from '../parsers/chronicle';
 import { ChronicleData } from '../types/index';
+import { discoverContinueSessionFilesAsync } from '../readers/continueWorkspace';
+import { parseContinueSession } from '../parsers/continueDev';
+import { discoverAmazonQSessionFilesAsync } from '../readers/amazonQWorkspace';
+import { parseAmazonQSession } from '../parsers/amazonQ';
+import { discoverGeminiCodeAssistSessionFilesAsync } from '../readers/geminiCodeAssistWorkspace';
+import { parseGeminiCodeAssistSession } from '../parsers/geminiCodeAssist';
 
 export class ChatWizardWatcher implements vscode.Disposable {
     private disposables: vscode.Disposable[] = [];
     private index: SessionIndex;
     private channel: vscode.OutputChannel;
     private scopeManager: WorkspaceScopeManager;
+    /** Native Node.js fs.watch handles — faster than VS Code's external-path watcher. */
+    private _nodeWatchers: fs.FSWatcher[] = [];
+    /** Per-file debounce timers for native watcher events. */
+    private _nodeDebounceMap = new Map<string, ReturnType<typeof setTimeout>>();
+    /** Fingerprints of already-logged parse warnings — suppresses duplicate noise from live updates. */
+    private _loggedParseWarnings = new Set<string>();
 
     constructor(index: SessionIndex, channel: vscode.OutputChannel, scopeManager: WorkspaceScopeManager) {
         this.index = index;
@@ -79,6 +91,9 @@ export class ChatWizardWatcher implements vscode.Disposable {
         const indexWindsurf = cfg.get<boolean>('indexWindsurf', true);
         const indexAider    = cfg.get<boolean>('indexAider', true);
         const indexAntigravity = cfg.get<boolean>('indexAntigravity', true);
+        const indexContinue  = cfg.get<boolean>('indexContinue', true);
+        const indexAmazonQ   = cfg.get<boolean>('indexAmazonQ', true);
+        const indexGemini    = cfg.get<boolean>('indexGeminiCodeAssist', true);
 
         if (!enabled) {
             this.channel.appendLine('[Chat Wizard] Extension disabled via chatwizard.enabled setting — skipping indexing and file watching.');
@@ -87,7 +102,7 @@ export class ChatWizardWatcher implements vscode.Disposable {
             return;
         }
 
-        await this.buildInitialIndex(indexClaude, indexCopilot, indexCline, indexRooCode, indexCursor, indexWindsurf, indexAider, indexAntigravity, indexChronicle);
+        await this.buildInitialIndex(indexClaude, indexCopilot, indexCline, indexRooCode, indexCursor, indexWindsurf, indexAider, indexAntigravity, indexChronicle, indexContinue, indexAmazonQ, indexGemini);
 
         if (indexClaude) {
             // Watch Claude sessions
@@ -107,6 +122,29 @@ export class ChatWizardWatcher implements vscode.Disposable {
             });
 
             this.disposables.push(claudeWatcher);
+
+            // Supplemental native watcher: fires within ~300 ms (VS Code watcher can poll at 5-10 s)
+            // Claude sessions are two levels deep: <projects>/<hash>/*.jsonl — watch each subdirectory.
+            // Cap at 50 most-recently-modified project directories to avoid excessive file handles.
+            try {
+                const entries = fs.readdirSync(claudeBaseDir, { withFileTypes: true })
+                    .filter(e => e.isDirectory());
+                const capped = entries.length > 50
+                    ? entries
+                        .map(e => ({ e, mtime: (() => { try { return fs.statSync(path.join(claudeBaseDir, e.name)).mtimeMs; } catch { return 0; } })() }))
+                        .sort((a, b) => b.mtime - a.mtime)
+                        .slice(0, 50)
+                        .map(x => x.e)
+                    : entries;
+                for (const entry of capped) {
+                    const projDir = path.join(claudeBaseDir, entry.name);
+                    this._watchDirFast(projDir, '.jsonl', (fullPath) => {
+                        if (!fs.existsSync(fullPath)) { return; }
+                        if (!ChatWizardWatcher._isSafeFilePath(claudeBaseDir, fullPath)) { return; }
+                        this.indexFile(fullPath, 'claude');
+                    });
+                }
+            } catch { /* directory unreadable — skip */ }
         }
 
         if (indexCopilot) {
@@ -142,6 +180,15 @@ export class ChatWizardWatcher implements vscode.Disposable {
                 });
 
                 this.disposables.push(copilotWatcher);
+
+                // Supplemental native watcher: fires within ~300 ms (VS Code watcher can poll at 5-10 s
+                // for workspaceStorage paths outside workspace folders on Windows).
+                const wsId = workspace.workspaceId;
+                const wsPath = workspace.workspacePath;
+                this._watchDirFast(chatSessionsDir, '.jsonl', (fullPath) => {
+                    if (!fs.existsSync(fullPath)) { return; }
+                    this.indexFile(fullPath, 'copilot', wsId, wsPath);
+                });
             }
         }
 
@@ -303,6 +350,22 @@ this.index.remove(taskId);
                 this.disposables.push(chronicleWatcher);
             }
         }
+
+        // Watch Continue.dev session files
+        if (indexContinue) {
+            const continueRoot = require('os').homedir() + '/.continue/sessions';
+            if (fs.existsSync(continueRoot)) {
+                const continuePattern = new vscode.RelativePattern(vscode.Uri.file(continueRoot), '**/*.{json,jsonl}');
+                const continueWatcher = vscode.workspace.createFileSystemWatcher(continuePattern);
+                continueWatcher.onDidCreate((uri) => this.onContinueFileChanged(uri));
+                continueWatcher.onDidChange((uri) => this.onContinueFileChanged(uri));
+                continueWatcher.onDidDelete((uri) => {
+                    const sessionId = path.basename(uri.fsPath).replace(/\.[^.]+$/, '');
+                    this.index.remove(sessionId);
+                });
+                this.disposables.push(continueWatcher);
+            }
+        }
     }
 
     /**
@@ -321,9 +384,43 @@ this.index.remove(taskId);
             disposable.dispose();
         }
         this.disposables = [];
+        for (const w of this._nodeWatchers) { try { w.close(); } catch { /* ignore */ } }
+        this._nodeWatchers = [];
+        for (const t of this._nodeDebounceMap.values()) { clearTimeout(t); }
+        this._nodeDebounceMap.clear();
     }
 
-    private async buildInitialIndex(indexClaude: boolean, indexCopilot: boolean, indexCline: boolean, indexRooCode: boolean = true, indexCursor: boolean = true, indexWindsurf: boolean = true, indexAider: boolean = true, indexAntigravity: boolean = true, indexChronicle: boolean = true): Promise<void> {
+    /**
+     * Watch a flat directory using Node.js native fs.watch (fires within ~300 ms via OS events).
+     * Supplements the VS Code FileSystemWatcher which can poll at 5–10 s intervals for paths
+     * outside workspace folders on Windows.
+     * Only handles files directly in `dir` (non-recursive).
+     */
+    private _watchDirFast(
+        dir: string,
+        ext: string,
+        handler: (fullPath: string) => void
+    ): void {
+        if (!fs.existsSync(dir)) { return; }
+        try {
+            const w = fs.watch(dir, { persistent: false }, (_event, filename) => {
+                if (!filename || !filename.endsWith(ext)) { return; }
+                const fullPath = path.join(dir, filename);
+                const prev = this._nodeDebounceMap.get(fullPath);
+                if (prev) { clearTimeout(prev); }
+                this._nodeDebounceMap.set(fullPath, setTimeout(() => {
+                    this._nodeDebounceMap.delete(fullPath);
+                    handler(fullPath);
+                }, 300));
+            });
+            w.on('error', () => { /* swallow — e.g. remote/network filesystem */ });
+            this._nodeWatchers.push(w);
+        } catch {
+            // fs.watch not supported on this filesystem — fall back to VS Code watcher only
+        }
+    }
+
+    private async buildInitialIndex(indexClaude: boolean, indexCopilot: boolean, indexCline: boolean, indexRooCode: boolean = true, indexCursor: boolean = true, indexWindsurf: boolean = true, indexAider: boolean = true, indexAntigravity: boolean = true, indexChronicle: boolean = true, indexContinue: boolean = true, indexAmazonQ: boolean = true, indexGemini: boolean = true): Promise<void> {
         this.channel.appendLine('[Chat Wizard] buildInitialIndex() started');
         await vscode.window.withProgress(
             {
@@ -363,7 +460,7 @@ this.index.remove(taskId);
                 } else {
                     this.channel.appendLine(`[Chat Wizard] Building index with scope filter: [${selectedIds.join(', ')}]`);
                 }
-                const [claudeSessions, copilotSessions, clineSessions, rooCodeSessions, cursorSessions, windsurfSessions, aiderSessions, antigravitySessions, antigravityJsonSessions] = await Promise.all([
+                const [claudeSessions, copilotSessions, clineSessions, rooCodeSessions, cursorSessions, windsurfSessions, aiderSessions, antigravitySessions, antigravityJsonSessions, continueSessions, amazonQSessions, geminiSessions] = await Promise.all([
                     // Always pass selectedIds (even empty array) — empty = index nothing, no fallback to all.
                     indexClaude       ? this.collectClaudeSessionsAsync(makeProgress('claude'),      selectedIds)  : Promise.resolve([]),
                     indexCopilot      ? this.collectCopilotSessionsAsync(makeProgress('copilot'),    selectedIds)  : Promise.resolve([]),
@@ -374,6 +471,9 @@ this.index.remove(taskId);
                     indexAider        ? this.collectAiderSessionsAsync(makeProgress('aider'))                      : Promise.resolve([]),
                     indexAntigravity  ? this.collectAntigravitySessionsAsync(makeProgress('antigravity'))          : Promise.resolve([]),
                     indexAntigravity  ? this.collectAntigravityJsonSessionsAsync()                                 : Promise.resolve([]),
+                    indexContinue     ? this.collectContinueSessionsAsync()                                        : Promise.resolve([]),
+                    indexAmazonQ      ? this.collectAmazonQSessionsAsync()                                         : Promise.resolve([]),
+                    indexGemini       ? this.collectGeminiSessionsAsync()                                          : Promise.resolve([]),
                 ]);
 
                 // Deduplicate: if a conversation UUID was already indexed from brain/, skip JSON version.
@@ -381,7 +481,7 @@ this.index.remove(taskId);
                 const deduplicatedJsonSessions = antigravityJsonSessions.filter(s => !brainIds.has(s.id));
 
                 const cfg = vscode.workspace.getConfiguration('chatwizard');
-                const all = applySessionFilters([...claudeSessions, ...copilotSessions, ...clineSessions, ...rooCodeSessions, ...cursorSessions, ...windsurfSessions, ...aiderSessions, ...antigravitySessions, ...deduplicatedJsonSessions], cfg, this.channel);
+                const all = applySessionFilters([...claudeSessions, ...copilotSessions, ...clineSessions, ...rooCodeSessions, ...cursorSessions, ...windsurfSessions, ...aiderSessions, ...antigravitySessions, ...deduplicatedJsonSessions, ...continueSessions, ...amazonQSessions, ...geminiSessions], cfg, this.channel);
                 this.index.batchUpsert(all);
                 this.channel.appendLine(`[init] Batch indexed ${all.length} sessions`);
 
@@ -817,6 +917,75 @@ this.index.remove(taskId);
         }
     }
 
+    async collectContinueSessionsAsync(): Promise<Session[]> {
+        try {
+            const files = await discoverContinueSessionFilesAsync();
+            const sessions: Session[] = [];
+            for (const filePath of files) {
+                try {
+                    const result = parseContinueSession(filePath);
+                    if (result.errors.length > 0) {
+                        this.channel.appendLine(`[continue] Parse errors for ${filePath}: ${result.errors.join('; ')}`);
+                    }
+                    if (result.session.messages.length > 0) { sessions.push(result.session); }
+                } catch (err) {
+                    this.channel.appendLine(`[continue] Failed to parse ${filePath}: ${err}`);
+                }
+            }
+            this.channel.appendLine(`[continue] Indexed ${sessions.length} session(s)`);
+            return sessions;
+        } catch (err) {
+            this.channel.appendLine(`[error] Failed to collect Continue.dev sessions: ${err}`);
+            return [];
+        }
+    }
+
+    async collectAmazonQSessionsAsync(): Promise<Session[]> {
+        try {
+            const files = await discoverAmazonQSessionFilesAsync();
+            const sessions: Session[] = [];
+            for (const filePath of files) {
+                try {
+                    const result = parseAmazonQSession(filePath);
+                    if (result.errors.length > 0) {
+                        this.channel.appendLine(`[amazonq] Parse errors for ${filePath}: ${result.errors.join('; ')}`);
+                    }
+                    if (result.session.messages.length > 0) { sessions.push(result.session); }
+                } catch (err) {
+                    this.channel.appendLine(`[amazonq] Failed to parse ${filePath}: ${err}`);
+                }
+            }
+            this.channel.appendLine(`[amazonq] Indexed ${sessions.length} session(s)`);
+            return sessions;
+        } catch (err) {
+            this.channel.appendLine(`[error] Failed to collect Amazon Q sessions: ${err}`);
+            return [];
+        }
+    }
+
+    async collectGeminiSessionsAsync(): Promise<Session[]> {
+        try {
+            const files = await discoverGeminiCodeAssistSessionFilesAsync();
+            const sessions: Session[] = [];
+            for (const filePath of files) {
+                try {
+                    const result = parseGeminiCodeAssistSession(filePath);
+                    if (result.errors.length > 0) {
+                        this.channel.appendLine(`[gemini] Parse errors for ${filePath}: ${result.errors.join('; ')}`);
+                    }
+                    if (result.session.messages.length > 0) { sessions.push(result.session); }
+                } catch (err) {
+                    this.channel.appendLine(`[gemini] Failed to parse ${filePath}: ${err}`);
+                }
+            }
+            this.channel.appendLine(`[gemini] Indexed ${sessions.length} session(s)`);
+            return sessions;
+        } catch (err) {
+            this.channel.appendLine(`[error] Failed to collect Gemini Code Assist sessions: ${err}`);
+            return [];
+        }
+    }
+
     /**
      * Discovers all Chronicle session-store.db files, reads their checkpoints,
      * and calls `mergeChronicleData` on the session index.
@@ -842,6 +1011,7 @@ this.index.remove(taskId);
                             technicalDetails: cp.technicalDetails,
                             nextSteps:        cp.nextSteps,
                             createdAt:        cp.createdAt,
+                            importantFiles:   cp.importantFiles,
                         },
                     });
                 }
@@ -948,7 +1118,11 @@ this.index.remove(taskId);
                     .get<number>('maxLineLengthChars', DEFAULT_MAX_LINE_CHARS);
                 const result = parseClaudeSession(filePath, maxLineChars);
                 if (result.errors.length > 0) {
-                    this.channel.appendLine(`[warn] Parse errors in ${filePath}: ${result.errors.join('; ')}`);
+                    const key = `${filePath}:${result.errors.join(';')}`;
+                    if (!this._loggedParseWarnings.has(key)) {
+                        this._loggedParseWarnings.add(key);
+                        this.channel.appendLine(`[warn] Parse errors in ${filePath}: ${result.errors.join('; ')}`);
+                    }
                 }
                 // Build session.parseErrors:
                 //   - Actual JSON/read errors → listed verbatim in the banner.
@@ -974,7 +1148,11 @@ this.index.remove(taskId);
             } else if (source === 'copilot') {
                 const result = parseCopilotSession(filePath, workspaceId!, workspacePath);
                 if (result.errors.length > 0) {
-                    this.channel.appendLine(`[warn] Parse errors in ${filePath}: ${result.errors.join('; ')}`);
+                    const key = `${filePath}:${result.errors.join(';')}`;
+                    if (!this._loggedParseWarnings.has(key)) {
+                        this._loggedParseWarnings.add(key);
+                        this.channel.appendLine(`[warn] Parse errors in ${filePath}: ${result.errors.join('; ')}`);
+                    }
                 }
                 if (result.session.messages.length === 0) {
                     return null;
@@ -1233,6 +1411,18 @@ if (composerIdToWsInfo.has(result.session.id)) {
         this.index.upsert(result.session);
         const verb = this.index.size > before ? 'added' : 'updated';
         this.channel.appendLine(`[live] ${verb} antigravity-json session ${conversationId}`);
+    }
+
+    private async onContinueFileChanged(uri: vscode.Uri): Promise<void> {
+        try {
+            const result = parseContinueSession(uri.fsPath);
+            if (result.session.messages.length > 0) {
+                this.index.upsert(result.session);
+                this.channel.appendLine(`[live] updated continue session ${result.session.id}`);
+            }
+        } catch (err) {
+            this.channel.appendLine(`[live] Failed to parse continue file ${uri.fsPath}: ${err}`);
+        }
     }
 
     private onFileChanged(

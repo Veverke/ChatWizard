@@ -1,0 +1,29 @@
+{
+  "id": "gemini-monorepo-build-001",
+  "title": "Speeding up TypeScript monorepo build times",
+  "model": "gemini-2.0-flash-001",
+  "messages": [
+    {
+      "role": "user",
+      "parts": [{"text": "My TypeScript monorepo uses Nx with 24 packages. Full build takes 11 minutes on CI. Local incremental builds are fine but CI always does a cold build. How do I fix this?"}],
+      "timestamp": "2025-05-19T09:00:00.000Z"
+    },
+    {
+      "role": "model",
+      "parts": [{"text": "11 minutes on cold CI build with 24 packages is typical without caching. Here's the fix stack:\n\n**1. Enable Nx remote cache (fastest win):**\n```yaml\n# nx.json\n{\n  \"tasksRunnerOptions\": {\n    \"default\": {\n      \"runner\": \"@nx/cloud\",\n      \"options\": {\n        \"cacheableOperations\": [\"build\", \"test\", \"lint\"],\n        \"accessToken\": \"$NX_CLOUD_ACCESS_TOKEN\"\n      }\n    }\n  }\n}\n```\nNx Cloud is free for open-source. After the first run, CI fetches build artifacts from cache — most packages rebuild in 0ms.\n\n**2. Use TypeScript project references (`--build` mode):**\n```json\n// tsconfig.json at root\n{\n  \"files\": [],\n  \"references\": [\n    { \"path\": \"packages/core\" },\n    { \"path\": \"packages/api\" },\n    { \"path\": \"packages/ui\" }\n  ]\n}\n```\nEach package emits `.d.ts` declaration files. Downstream packages compile against `.d.ts`, not source — eliminates redundant re-checks.\n\n**3. Set `skipLibCheck: true` in tsconfig:**\n```json\n{ \"compilerOptions\": { \"skipLibCheck\": true } }\n```\nCuts 15-25% of check time by skipping node_modules type checks."}],
+      "timestamp": "2025-05-19T09:00:08.000Z"
+    },
+    {
+      "role": "user",
+      "parts": [{"text": "We already use project references. The bottleneck seems to be the `@internal/ui` package — it re-compiles everything even when only `@internal/api` changes. Our tsconfig.json paths might be wrong."}],
+      "timestamp": "2025-05-19T09:01:30.000Z"
+    },
+    {
+      "role": "model",
+      "parts": [{"text": "If `@internal/ui` recompiles when only `@internal/api` changes, your `references` in `packages/ui/tsconfig.json` likely includes `@internal/api` unnecessarily. Check:\n\n```bash\n# Show what ui actually imports from api\ngrep -r 'from.*@internal/api' packages/ui/src --include='*.ts' | head -20\n```\n\nIf there are no imports, remove the reference:\n```json\n// packages/ui/tsconfig.json — BEFORE (wrong)\n{\n  \"references\": [\n    { \"path\": \"../core\" },\n    { \"path\": \"../api\" }   // <-- remove if ui doesn't import from api\n  ]\n}\n```\n\nAlso verify each package's `tsconfig.json` has `composite: true` and `declarationMap: true`:\n```json\n{\n  \"compilerOptions\": {\n    \"composite\": true,\n    \"declaration\": true,\n    \"declarationMap\": true,\n    \"incremental\": true,\n    \"tsBuildInfoFile\": \".tsbuildinfo\"\n  }\n}\n```\nThe `.tsbuildinfo` file is what enables incremental builds — make sure CI caches it alongside build artifacts."}],
+      "timestamp": "2025-05-19T09:02:15.000Z"
+    }
+  ],
+  "createdAt": "2025-05-19T09:00:00.000Z",
+  "updatedAt": "2025-05-19T09:02:15.000Z"
+}

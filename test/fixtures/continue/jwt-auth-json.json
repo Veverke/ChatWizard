@@ -1,0 +1,33 @@
+{
+  "sessionId": "continue-jwt-001",
+  "title": "Implementing JWT authentication in Express",
+  "model": "claude-3-5-sonnet-20241022",
+  "history": [
+    {
+      "role": "user",
+      "content": "How do I add JWT authentication middleware to my Express API? I need to protect /api/users and /api/orders routes.",
+      "id": "msg-001",
+      "timestamp": 1716000000000
+    },
+    {
+      "role": "assistant",
+      "content": "Here's a JWT middleware for Express:\n\n```javascript\nconst jwt = require('jsonwebtoken');\n\nfunction verifyToken(req, res, next) {\n  const authHeader = req.headers['authorization'];\n  const token = authHeader && authHeader.split(' ')[1];\n  if (!token) return res.status(401).json({ error: 'Missing token' });\n\n  try {\n    req.user = jwt.verify(token, process.env.JWT_SECRET);\n    next();\n  } catch (err) {\n    return res.status(403).json({ error: 'Invalid token' });\n  }\n}\n\nmodule.exports = verifyToken;\n```\n\nApply it to your routes:\n```javascript\napp.use('/api/users', verifyToken, usersRouter);\napp.use('/api/orders', verifyToken, ordersRouter);\n```",
+      "id": "msg-002",
+      "model": "claude-3-5-sonnet-20241022"
+    },
+    {
+      "role": "user",
+      "content": "Great. Now how do I generate the token on login? The user table has id, email, role columns.",
+      "id": "msg-003",
+      "timestamp": 1716000120000
+    },
+    {
+      "role": "assistant",
+      "content": "In your login route:\n\n```javascript\napp.post('/api/auth/login', async (req, res) => {\n  const { email, password } = req.body;\n  const user = await db.users.findOne({ email });\n  if (!user || !await bcrypt.compare(password, user.passwordHash)) {\n    return res.status(401).json({ error: 'Invalid credentials' });\n  }\n  const token = jwt.sign(\n    { userId: user.id, email: user.email, role: user.role },\n    process.env.JWT_SECRET,\n    { expiresIn: '24h' }\n  );\n  res.json({ token });\n});\n```\n\nSet `JWT_SECRET` to a random 256-bit string in your `.env` file. Never commit it.",
+      "id": "msg-004",
+      "model": "claude-3-5-sonnet-20241022"
+    }
+  ],
+  "createdAt": 1716000000000,
+  "updatedAt": 1716000240000
+}

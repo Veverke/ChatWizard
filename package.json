@@ -2,7 +2,7 @@
   "name": "chatwizard",
   "displayName": "Chat Wizard",
   "description": "Browse, search, and analyze AI coding-assistant conversation history from GitHub Copilot, Claude Code, Cline, Roo Code, Cursor, Windsurf, Aider, and Google Antigravity (prompts only). Chat history viewer, prompt library, code block browser, token analytics, and timeline — all in one extension.",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "publisher": "Veverke",
   "icon": "images/icon.png",
   "license": "SEE LICENSE IN LICENSE",
@@ -266,6 +266,12 @@
         "icon": "$(list-flat)"
       },
       {
+        "command": "chatwizard.groupSessions",
+        "title": "Group Sessions\u2026",
+        "category": "Chat Wizard",
+        "icon": "$(list-tree)"
+      },
+      {
         "command": "chatwizard.enableCbGrouping",
         "title": "Group Code Blocks by Language",
         "category": "Chat Wizard",
@@ -527,6 +533,46 @@
         "command": "chatwizard.setupGlobalInstructions",
         "title": "Chat Wizard: Set Up Global Copilot Instructions",
         "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.addTag",
+        "title": "Chat Wizard: Add Tag to Session",
+        "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.removeTag",
+        "title": "Chat Wizard: Remove Tag from Session",
+        "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.filterByTag",
+        "title": "Chat Wizard: Filter Sessions by Tag",
+        "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.showFileHistory",
+        "title": "Chat Wizard: Show File Session History",
+        "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.showArchiveStats",
+        "title": "Chat Wizard: Show Archive Statistics",
+        "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.exportToObsidian",
+        "title": "Chat Wizard: Export Sessions to Obsidian",
+        "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.exportToNotion",
+        "title": "Chat Wizard: Export Sessions to Notion",
+        "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.forgetNotionApiKey",
+        "title": "Chat Wizard: Forget Notion API Key",
+        "category": "Chat Wizard"
       }
     ],
     "menus": {
@@ -542,13 +588,8 @@
           "group": "navigation@0"
         },
         {
-          "command": "chatwizard.enableSessionGrouping",
-          "when": "view == chatwizardSessions && chatwizard.sessionGrouped == false",
-          "group": "navigation@0"
-        },
-        {
-          "command": "chatwizard.disableSessionGrouping",
-          "when": "view == chatwizardSessions && chatwizard.sessionGrouped != false",
+          "command": "chatwizard.groupSessions",
+          "when": "view == chatwizardSessions",
           "group": "navigation@0"
         },
         {
@@ -889,6 +930,10 @@
           "when": "false"
         },
         {
+          "command": "chatwizard.toggleSessionGrouping",
+          "when": "false"
+        },
+        {
           "command": "chatwizard.enableCbGrouping",
           "when": "false"
         },
@@ -1102,6 +1147,11 @@
           "default": true,
           "description": "Enrich sessions with Copilot Chronicle checkpoint summaries (overview, work done, technical details, next steps). Only active when indexCopilot is also true."
         },
+        "chatwizard.chronicle.enableLocalIndex": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically enable Copilot's local session index (chat.localIndex.enabled) on startup. Required for git branch data to populate when grouping sessions by Branch in the Sessions view."
+        },
         "chatwizard.oldestSessionDate": {
           "type": "string",
           "default": "",
@@ -1190,6 +1240,63 @@
           "type": "string",
           "default": "",
           "description": "Override the Google Antigravity brain directory path. Leave empty to use the default OS location (~/.gemini/antigravity/brain)."
+        },
+        "chatwizard.indexContinue": {
+          "type": "boolean",
+          "default": true,
+          "description": "Index Continue.dev AI assistant sessions from ~/.continue/sessions."
+        },
+        "chatwizard.continueStoragePath": {
+          "type": "string",
+          "default": "",
+          "description": "Override the Continue.dev sessions directory path. Leave empty to use the default OS location (~/.continue/sessions)."
+        },
+        "chatwizard.indexAmazonQ": {
+          "type": "boolean",
+          "default": true,
+          "description": "Index Amazon Q Developer conversation sessions from VS Code extension storage."
+        },
+        "chatwizard.amazonQStoragePath": {
+          "type": "string",
+          "default": "",
+          "description": "Override the Amazon Q Developer storage directory path. Leave empty to auto-detect."
+        },
+        "chatwizard.indexGeminiCodeAssist": {
+          "type": "boolean",
+          "default": true,
+          "description": "Index Gemini Code Assist conversation sessions from VS Code extension storage."
+        },
+        "chatwizard.geminiCodeAssistStoragePath": {
+          "type": "string",
+          "default": "",
+          "description": "Override the Gemini Code Assist storage directory path. Leave empty to auto-detect."
+        },
+        "chatwizard.archive.maxAgeDays": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "description": "Maximum age (days) for archived sessions. Sessions older than this will be pruned. 0 = no age limit."
+        },
+        "chatwizard.archive.maxSizeMB": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "description": "Maximum total archive size (MB). Oldest sessions are pruned first when the limit is exceeded. 0 = no size limit."
+        },
+        "chatwizard.codeLens.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a CodeLens at the top of files that were referenced in ChatWizard sessions (Feature 10: File History)."
+        },
+        "chatwizard.workItemPattern": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Regular expression for extracting work-item IDs from session titles and messages. Used when grouping sessions by **Work Item** in the Sessions view (Group Sessions\u2026 button).\n\nExample: `PREFIX-\\d+` matches tickets like `prefix-12345`.\n\nLeave empty to use the built-in pattern covering JIRA (`ABC-123`), GitHub (`#123`), and Azure DevOps (`AB#1234`)."
+        },
+        "chatwizard.mcp.reranker.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable TF-IDF reranking of MCP context results after initial retrieval (Feature 21). Improves relevance at a small CPU cost."
         },
         "chatwizard.enableSemanticSearch": {
           "type": "boolean",

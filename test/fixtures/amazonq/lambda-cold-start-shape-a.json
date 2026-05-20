@@ -1,0 +1,32 @@
+{
+  "conversationId": "amzq-lambda-cold-start-001",
+  "title": "Debugging Lambda cold start latency",
+  "messages": [
+    {
+      "id": "amzq-msg-001",
+      "type": "prompt",
+      "body": "My Lambda functions are taking 3-4 seconds on cold starts. The function uses the AWS SDK v3 and connects to RDS Proxy. How do I reduce cold start time?",
+      "time": 1716200000000
+    },
+    {
+      "id": "amzq-msg-002",
+      "type": "answer",
+      "body": "Cold starts with RDS Proxy + SDK v3 are a known challenge. Here are the main levers:\n\n1. **Reduce bundle size** — AWS SDK v3 is modular. Import only what you need:\n```javascript\n// BAD — imports everything\nimport AWS from 'aws-sdk';\n\n// GOOD — only what you use\nimport { SecretsManagerClient, GetSecretValueCommand } from '@aws-sdk/client-secrets-manager';\n```\n\n2. **Move SDK clients outside the handler** (module-level initialization):\n```javascript\nconst rdsProxy = new RDSDataClient({ region: 'us-east-1' });\n\nexports.handler = async (event) => {\n  // rdsProxy is reused across warm invocations\n};\n```\n\n3. **Enable Lambda SnapStart** (Java runtime) or use Provisioned Concurrency for critical paths.\n\n4. **Check your VPC configuration** — Lambda in a VPC adds ~1s cold start. Use VPC Lattice or interface endpoints instead of putting Lambda in the VPC.",
+      "time": 1716200010000
+    },
+    {
+      "id": "amzq-msg-003",
+      "type": "prompt",
+      "body": "We're on Node.js 20. The bundle is 18MB zipped — is that causing it?",
+      "time": 1716200060000
+    },
+    {
+      "id": "amzq-msg-004",
+      "type": "answer",
+      "body": "18MB zipped is very large for a Node Lambda — that's almost certainly contributing. Target under 1MB for fast cold starts.\n\nCheck what's bloating it:\n```bash\nnpx esbuild src/handler.ts --bundle --platform=node --analyze 2>&1 | head -50\n```\n\nCommon culprits:\n- `@aws-sdk/client-*` — switch to `@aws-sdk/client-rds-data` only\n- `moment.js` — replace with `date-fns` or native `Intl`\n- `lodash` — use native ES2020 equivalents\n- Dev dependencies accidentally bundled\n\nAfter tree-shaking a typical handler drops from 15-20MB to 300-800KB.",
+      "time": 1716200075000
+    }
+  ],
+  "createdAt": 1716200000000,
+  "updatedAt": 1716200075000
+}

@@ -17,6 +17,7 @@ import type { IMcpPrompt } from './mcpContracts';
 import { PROMPT_DEFS } from './prompts/contextPrompts';
 import { SessionIndex } from '../index/sessionIndex';
 import { tokenizeQuery } from '../search/fullTextEngine';
+import { resolveAnchorPaths } from '../utils/fileAnchorResolver';
 
 interface SessionRef { id: string; title: string; source: string; date: string; passage?: string; }
 
@@ -333,6 +334,23 @@ export function createParticipantHandler(
                 stream.progress(`Assembling answer from ${enrichedRefs.length} confirmed match${enrichedRefs.length === 1 ? '' : 'es'}…`);
                 if (enrichedRefs.length > 0) {
                     stream.markdown(buildSourcesMarkdown(enrichedRefs, queryTokens));
+
+                    // Feature 14: emit clickable file anchors for importantFiles
+                    const allFiles = enrichedRefs.flatMap(ref => {
+                        const s = sessionIndex.get(ref.id);
+                        return [
+                            ...(s?.importantFiles ?? []),
+                            ...(s?.chronicleData?.importantFiles ?? []),
+                        ];
+                    });
+                    const uniqueFiles = [...new Set(allFiles)];
+                    if (uniqueFiles.length > 0) {
+                        const resolved = await resolveAnchorPaths(uniqueFiles);
+                        for (const { absPath } of resolved.slice(0, 5)) {
+                            stream.anchor(vscode.Uri.file(absPath));
+                        }
+                    }
+
                     const refIds = enrichedRefs.map(r => r.id).join(',');
                     stream.button({ title: '✅ Yes — use history', command: 'chatwizard.query.continued', arguments: [userText, refIds] });
                     stream.button({ title: '❌ No — get general guidance', command: 'chatwizard.query.general', arguments: [userText] });
