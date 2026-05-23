@@ -267,7 +267,7 @@
       },
       {
         "command": "chatwizard.groupSessions",
-        "title": "Group Sessions\u2026",
+        "title": "Group Sessions…",
         "category": "Chat Wizard",
         "icon": "$(list-tree)"
       },
@@ -1095,6 +1095,10 @@
           {
             "name": "getPrompts",
             "description": "Find reusable prompts from your chat history"
+          },
+          {
+            "name": "referMessage",
+            "description": "Quote a specific turn from this chat thread (e.g. P3, R2)"
           }
         ]
       }
@@ -1304,7 +1308,7 @@
         "chatwizard.workItemPattern": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Regular expression for extracting work-item IDs from session titles and messages. Used when grouping sessions by **Work Item** in the Sessions view (Group Sessions\u2026 button).\n\nExample: `PREFIX-\\d+` matches tickets like `prefix-12345`.\n\nLeave empty to use the built-in pattern covering JIRA (`ABC-123`), GitHub (`#123`), and Azure DevOps (`AB#1234`)."
+          "markdownDescription": "Regular expression for extracting work-item IDs from session titles and messages. Used when grouping sessions by **Work Item** in the Sessions view (Group Sessions… button).\n\nExample: `PREFIX-\\d+` matches tickets like `prefix-12345`.\n\nLeave empty to use the built-in pattern covering JIRA (`ABC-123`), GitHub (`#123`), and Azure DevOps (`AB#1234`)."
         },
         "chatwizard.mcp.reranker.enabled": {
           "type": "boolean",
@@ -1345,7 +1349,8 @@
   },
   "scripts": {
     "prepare": "husky",
-    "vscode:prepublish": "npm run rebuild:native && npm run bundle",
+    "validate:release": "node scripts/validate-release.mjs",
+    "vscode:prepublish": "npm run rebuild:native && npm run bundle && npm run validate:release",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile && npm run lint",
@@ -1360,9 +1365,12 @@
     "test:flaky": "node scripts/detect-flaky.mjs",
     "smoke": "tsx scripts/smoke-test-mcp-server.ts && tsx scripts/smoke-test-phase4.ts",
     "e2e:mcp": "tsx scripts/e2e-mcp-scenarios.ts",
-    "package:vsix:win32-x64": "npm run rebuild:native && npm run bundle && npx @vscode/vsce package --target win32-x64 --out chatwizard-win32-x64.vsix",
-    "package:vsix:linux-x64": "npm run rebuild:native && npm run bundle && npx @vscode/vsce package --target linux-x64 --out chatwizard-linux-x64.vsix",
-    "package:vsix:darwin-arm64": "npm run rebuild:native && npm run bundle && npx @vscode/vsce package --target darwin-arm64 --out chatwizard-darwin-arm64.vsix"
+    "package:vsix:win32-x64": "npm run rebuild:native && npm run bundle && node scripts/package-vsix.mjs win32-x64",
+    "package:vsix:linux-x64": "npm run rebuild:native && npm run bundle && node scripts/package-vsix.mjs linux-x64",
+    "package:vsix:darwin-x64": "npm run rebuild:native && npm run bundle && node scripts/package-vsix.mjs darwin-x64",
+    "package:vsix:darwin-arm64": "npm run rebuild:native && npm run bundle && node scripts/package-vsix.mjs darwin-arm64",
+    "install:stable": "code --install-extension chatwizard-win32-x64.vsix --force",
+    "install:insiders": "code-insiders --install-extension chatwizard-win32-x64.vsix --force"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
@@ -1385,5 +1393,9 @@
     "husky": "^9.1.7",
     "tsx": "^4.22.1",
     "typescript": "^5.3.3"
+  },
+  "optionalDependencies": {
+    "onnxruntime-web": "^1.14.0",
+    "sharp": "^0.32.6"
   }
 }

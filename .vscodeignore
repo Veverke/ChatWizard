@@ -10,6 +10,7 @@ docs/**
 .gitignore
 .eslintrc.json
 tsconfig.json
+coverage/**
 **/*.map
 **/*.ts
 
@@ -38,3 +39,10 @@ node_modules/**
 
 # scripts dir: not needed in the extension package
 scripts/**
+
+# --- onnxruntime-node (added by package-vsix.mjs, reverted after packaging) ---
+# onnxruntime-node: native ONNX Runtime required by @xenova/transformers.
+# Only the current platform's binary is included (9-23 MB per VSIX).
+!node_modules/onnxruntime-node/dist/**
+!node_modules/onnxruntime-node/package.json
+!node_modules/onnxruntime-node/bin/napi-v3/win32/x64/**

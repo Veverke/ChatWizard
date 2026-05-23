@@ -366,11 +366,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // (Explorer → Timeline) so chat history appears alongside git commits.
     const cwTimelineProvider = new CwTimelineProvider(index);
     context.subscriptions.push(cwTimelineProvider);
-    // registerTimelineProvider was removed from vscode.window in VS Code 1.121-insider.
-    const _registerTimeline = (vscode.window as any).registerTimelineProvider as
-        ((glob: string, p: unknown) => vscode.Disposable) | undefined;
+    // registerTimelineProvider moved from vscode.window to vscode.workspace in VS Code 1.121-insider.
+    // Use defensive runtime check to support both old and new API locations.
+    const _registerTimeline = (
+        (vscode.workspace as any).registerTimelineProvider ??
+        (vscode.window as any).registerTimelineProvider
+    ) as ((scheme: string | string[], p: unknown) => vscode.Disposable) | undefined;
+    const _timelineThis = (vscode.workspace as any).registerTimelineProvider
+        ? vscode.workspace
+        : vscode.window;
     if (typeof _registerTimeline === 'function') {
-        context.subscriptions.push(_registerTimeline.call(vscode.window, 'file', cwTimelineProvider));
+        try {
+            context.subscriptions.push(_registerTimeline.call(_timelineThis, 'file', cwTimelineProvider));
+        } catch {
+            // Swallow proposed-API rejection (e.g. 'timeline' not in enabledApiProposals).
+        }
     }
     const cwTimelineListener = index.addChangeListener(() => {
         cwTimelineProvider.refresh();
