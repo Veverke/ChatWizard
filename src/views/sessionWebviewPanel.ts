@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { Session } from '../types/index';
+import { Session, ExtractedEntities } from '../types/index';
 import { cwThemeCss, syntaxHighlighterCss, cwInteractiveJs } from '../webview/cwTheme';
 import { friendlyModelName } from '../analytics/modelNames';
 import { friendlySourceName } from '../ui/sourceUi';
@@ -32,6 +32,7 @@ interface PanelMsgState {
     streamVersion:    number;            // bumped to abort stale streams
     assistantLabel:   string;
     tags?:            string[];
+    entities?:        ExtractedEntities;
     panel:            vscode.WebviewPanel;
 }
 
@@ -58,7 +59,8 @@ export class SessionWebviewPanel {
         _targetBlockContent?: string,  // deprecated — kept for call-site compat, unused
         targetBlockIdx?: number,
         highlightContainer?: boolean,
-        tags?: string[]
+        tags?: string[],
+        entities?: ExtractedEntities
     ): void {
         const config = vscode.workspace.getConfiguration('chatwizard');
         const userColor = config.get<string>('userMessageColor', '#007acc') || '#007acc';
@@ -119,7 +121,7 @@ export class SessionWebviewPanel {
                 session, visibleMessages, renderedMessages,
                 windowStart, windowEnd: initialWindowEnd,
                 streamVersion: newVersion,
-                assistantLabel, tags, panel: existing,
+                assistantLabel, tags, entities, panel: existing,
             });
             void SessionWebviewPanel._startStream(
                 session.id, newVersion, userColor, searchTerm, scrollInit, highlightContainer
@@ -140,7 +142,7 @@ export class SessionWebviewPanel {
             session, visibleMessages, renderedMessages,
             windowStart, windowEnd: initialWindowEnd,
             streamVersion: 0,
-            assistantLabel, tags, panel,
+            assistantLabel, tags, entities, panel,
         });
         SessionWebviewPanel._panels.set(session.id, panel);
 
@@ -245,6 +247,7 @@ export class SessionWebviewPanel {
             sourceNotes:      session.sourceNotes ?? [],
             filePath:         session.filePath,
             tags:             state.tags ?? [],
+            entities:         state.entities ?? null,
         });
 
         // ── Stream remaining initial window via setImmediate ──────────────────
@@ -390,6 +393,23 @@ export class SessionWebviewPanel {
       border-radius: 2em; padding: 1px 9px;
       font-size: 0.75em; font-weight: 500;
       margin: 0 4px 0 0; border: 1px solid currentColor; opacity: 0.88;
+    }
+    details#session-entities {
+      font-size: 0.82em;
+      margin-bottom: 8px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--vscode-textBlockQuote-background, #444);
+    }
+    .cw-entities-summary { cursor: pointer; opacity: 0.65; user-select: none; }
+    .cw-entities-summary:hover { opacity: 1; }
+    #session-entities-body { padding-top: 5px; display: flex; flex-direction: column; gap: 4px; }
+    .cw-entity-row { display: flex; flex-wrap: wrap; gap: 3px; align-items: baseline; }
+    .cw-entity-row-label { font-weight: 600; opacity: 0.65; margin-right: 3px; white-space: nowrap; }
+    .cw-entity-chip {
+      display: inline-block; border-radius: 3px; padding: 0 5px;
+      font-size: 0.92em; font-family: var(--vscode-editor-font-family, monospace);
+      background: var(--vscode-textBlockQuote-background, rgba(128,128,128,0.15));
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 28em;
     }
     .toolbar {
       position: sticky;
@@ -635,6 +655,10 @@ export class SessionWebviewPanel {
     <span class="meta-sep" id="session-meta-sep" style="display:none"> &nbsp;·&nbsp; </span>
     <span id="session-req-field" style="display:none">User Requests: <span id="session-user-req"></span></span>
   </div>
+  <details id="session-entities" style="display:none">
+    <summary class="cw-entities-summary">&#128269; Entities</summary>
+    <div id="session-entities-body"></div>
+  </details>
   <div class="toolbar">
     <div class="search-group">
       <input id="search-input" type="text" placeholder="Search in messages&#8230;" autocomplete="off" aria-label="Search within session messages" />
@@ -1184,6 +1208,41 @@ ${cwInteractiveJs()}
         } else {
           tagsEl.innerHTML = '';
           tagsEl.style.display = 'none';
+        }
+      }
+      // Entities collapsible section
+      var entitiesEl = document.getElementById('session-entities');
+      var entitiesBody = document.getElementById('session-entities-body');
+      if (entitiesEl && entitiesBody) {
+        var ent = data.entities || {};
+        var entGroups = [
+          { label: '\uD83D\uDCC4 Files',        items: ent.filePaths },
+          { label: '\u2699\uFE0F Functions',     items: ent.functionNames },
+          { label: '\u26A0\uFE0F Errors',        items: ent.errors },
+          { label: '\uD83D\uDCA1 Decisions',     items: ent.decisions }
+        ];
+        var nonEmpty = entGroups.filter(function(g) { return g.items && g.items.length > 0; });
+        if (nonEmpty.length > 0) {
+          entitiesBody.innerHTML = '';
+          nonEmpty.forEach(function(g) {
+            var row = document.createElement('div');
+            row.className = 'cw-entity-row';
+            var lbl = document.createElement('span');
+            lbl.className = 'cw-entity-row-label';
+            lbl.textContent = g.label + ': ';
+            row.appendChild(lbl);
+            g.items.forEach(function(item) {
+              var chip = document.createElement('span');
+              chip.className = 'cw-entity-chip';
+              chip.textContent = item;
+              chip.title = item;
+              row.appendChild(chip);
+            });
+            entitiesBody.appendChild(row);
+          });
+          entitiesEl.style.display = 'block';
+        } else {
+          entitiesEl.style.display = 'none';
         }
       }
       container.innerHTML = data.messagesHtml;

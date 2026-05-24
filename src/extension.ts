@@ -158,6 +158,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // Build full-text search engine — populated lazily via the typed change listener.
     // The batch event fired by batchUpsert() (inside startWatcher) will index all sessions.
     const engine = new FullTextSearchEngine();
+    engine.setMetadataGetter(id => index.getSidecarMeta(id));
     // Incremental updates: only re-index the changed session instead of full rebuild
     const searchIndexListener = index.addTypedChangeListener((event) => {
         if (event.type === 'upsert') {
@@ -1187,7 +1188,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 return;
             }
             telemetry.record('session.opened', { source: session.source });
-            SessionWebviewPanel.show(context, session, searchTerm, false, undefined, undefined, undefined, highlightContainer, index.getSidecarMeta(session.id)?.tags);
+            SessionWebviewPanel.show(context, session, searchTerm, false, undefined, undefined, undefined, highlightContainer, index.getSidecarMeta(session.id)?.tags, index.getSidecarMeta(session.id)?.entities);
         })
     );
 
@@ -1204,7 +1205,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             const isLeaf = ref.blocks.length === 1;
             const targetMsgIdx = isLeaf ? ref.blocks[0].messageIndex : undefined;
             const targetBlockIdx = isLeaf ? (ref.blocks[0].blockIndexInMessage ?? 0) : undefined;
-            SessionWebviewPanel.show(context, session, undefined, isLeaf, targetMsgIdx, undefined, targetBlockIdx, undefined, index.getSidecarMeta(session.id)?.tags);
+            SessionWebviewPanel.show(context, session, undefined, isLeaf, targetMsgIdx, undefined, targetBlockIdx, undefined, index.getSidecarMeta(session.id)?.tags, index.getSidecarMeta(session.id)?.entities);
         })
     );
 
