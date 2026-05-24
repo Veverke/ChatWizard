@@ -194,6 +194,21 @@ for (const ext of externals) {
 
 section('Checking dependency gaps against VSIX contents');
 
+// ── KNOWN_SAFE_OMISSIONS ───────────────────────────────────────────────────────
+//
+// Packages listed as `dependencies` of an external but intentionally absent
+// from the VSIX because they are never called at extension runtime.
+//
+//   prebuild-install   — runs only at `npm install` time to download pre-built
+//                        native binaries; irrelevant at extension runtime.
+//   @huggingface/jinja — @xenova/transformers uses this for chat-model Jinja
+//                        template parsing; ChatWizard uses transformers for
+//                        text embeddings only, so this code path is never hit.
+const KNOWN_SAFE_OMISSIONS = new Set([
+    'prebuild-install',
+    '@huggingface/jinja',
+]);
+
 /**
  * @param {string} pkgName
  * @param {Set<string>} vsixPkgs
@@ -214,6 +229,7 @@ function checkDeps(pkgName, vsixPkgs, eagerDeps, root, parentLabel = pkgName, vi
     const optional = Object.keys(meta.optionalDependencies ?? {});
 
     for (const dep of required) {
+        if (KNOWN_SAFE_OMISSIONS.has(dep)) { continue; } // intentionally omitted from VSIX
         const inVsix  = vsixPkgs.has(dep);
         const nested  = existsSync(join(root, 'node_modules', pkgName, 'node_modules', dep));
         const chain   = `${parentLabel} → ${dep}`;
