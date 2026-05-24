@@ -20,6 +20,8 @@ import { SessionIndex } from '../index/sessionIndex';
 import type { ChatWizardWatcher } from '../watcher/fileWatcher';
 import { tokenizeQuery } from '../search/fullTextEngine';
 import { resolveAnchorPaths } from '../utils/fileAnchorResolver';
+import type { SidecarMetadataStore } from '../index/sidecarMetadataStore';
+import type { LiveSessionTracker } from '../utils/liveSessionTracker';
 
 interface SessionRef { id: string; title: string; source: string; date: string; passage?: string; }
 
@@ -250,6 +252,8 @@ export function createParticipantHandler(
     sessionIndex: SessionIndex,
     makeUserMessage: UserMessageFactory = (text) => vscode.LanguageModelChatMessage.User(text),
     watcherRef?: { current: ChatWizardWatcher | undefined },
+    sidecarStore?: SidecarMetadataStore,
+    liveTracker?: LiveSessionTracker,
 ) {
     return async (
         request: vscode.ChatRequest,
@@ -361,6 +365,70 @@ export function createParticipantHandler(
                 for await (const chunk of modelResponse.text) {
                     stream.markdown(chunk);
                 }
+                return;
+            }
+
+            // ── /tag — tag the active chat session ───────────────────────────────
+            if (command === 'tag') {
+                if (!sidecarStore || !liveTracker) {
+                    stream.markdown('Tag functionality is not available in this context.');
+                    return;
+                }
+                const rawTags = userText.split(',').map(t => t.trim()).filter(Boolean);
+                if (rawTags.length === 0) {
+                    stream.markdown(
+                        'Usage: `@chatwizard /tag #bugfix, topic:auth`\n\n' +
+                        'Provide one or more comma-separated tags to apply to the active session.'
+                    );
+                    return;
+                }
+                const windowMs = (
+                    vscode.workspace.getConfiguration('chatwizard').get<number>('activeSessionWindowMinutes') ?? 120
+                ) * 60_000;
+                const active = liveTracker.getActive(windowMs);
+                const entry = active[0] ?? liveTracker.getMostRecent();
+                if (!entry) {
+                    stream.markdown('No active session found. Start a chat in a supported AI tool and try again.');
+                    return;
+                }
+                for (const t of rawTags) { await sidecarStore.addTag(entry.sessionId, t); }
+                const sess = sessionIndex.get(entry.sessionId);
+                const title = sess?.title ?? entry.sessionId;
+                stream.markdown(
+                    `Tagged session **"${title}"** with: ${rawTags.map(t => `\`${t}\``).join(', ')}`
+                );
+                return;
+            }
+
+            // ── /removeTags — remove tags from the active chat session ────────────
+            if (command === 'removeTags') {
+                if (!sidecarStore || !liveTracker) {
+                    stream.markdown('Tag functionality is not available in this context.');
+                    return;
+                }
+                const rawTags = userText.split(',').map(t => t.trim()).filter(Boolean);
+                if (rawTags.length === 0) {
+                    stream.markdown(
+                        'Usage: `@chatwizard /removeTags #bugfix, topic:auth`\n\n' +
+                        'Provide one or more comma-separated tags to remove from the active session.'
+                    );
+                    return;
+                }
+                const windowMs = (
+                    vscode.workspace.getConfiguration('chatwizard').get<number>('activeSessionWindowMinutes') ?? 120
+                ) * 60_000;
+                const active = liveTracker.getActive(windowMs);
+                const entry = active[0] ?? liveTracker.getMostRecent();
+                if (!entry) {
+                    stream.markdown('No active session found. Start a chat in a supported AI tool and try again.');
+                    return;
+                }
+                for (const t of rawTags) { await sidecarStore.removeTag(entry.sessionId, t); }
+                const sess = sessionIndex.get(entry.sessionId);
+                const title = sess?.title ?? entry.sessionId;
+                stream.markdown(
+                    `Removed tag${rawTags.length > 1 ? 's' : ''} from **"${title}"**: ${rawTags.map(t => `\`${t}\``).join(', ')}`
+                );
                 return;
             }
 
@@ -530,12 +598,16 @@ const PARTICIPANT_ID = 'Veverke.chatwizard';
  * @param sessionIndex  Live session index used to validate source refs.
  * @param watcherRef    Optional ref to the live ChatWizardWatcher, set after watcher starts.
  *                      Used by /referMessage to flush the session index before turn lookup.
+ * @param sidecarStore  Sidecar metadata store used by /tag to persist tags.
+ * @param liveTracker   Live session tracker used by /tag to identify the active session.
  */
 export function registerChatParticipant(
     context: vscode.ExtensionContext,
     prompts: IMcpPrompt[],
     sessionIndex: SessionIndex,
     watcherRef?: { current: ChatWizardWatcher | undefined },
+    sidecarStore?: SidecarMetadataStore,
+    liveTracker?: LiveSessionTracker,
 ): void {
     // Guard: chat participants require VS Code ≥ 1.90.
     if (typeof vscode.chat?.createChatParticipant !== 'function') {
@@ -543,7 +615,7 @@ export function registerChatParticipant(
     }
 
     const promptMap = new Map(prompts.map(p => [p.name, p]));
-    const handler = createParticipantHandler(promptMap, sessionIndex, undefined, watcherRef);
+    const handler = createParticipantHandler(promptMap, sessionIndex, undefined, watcherRef, sidecarStore, liveTracker);
 
     // Commands used by Phase 1 stream.button() calls.
     context.subscriptions.push(

@@ -31,6 +31,7 @@ interface PanelMsgState {
     windowEnd:        number;            // exclusive end currently in webview
     streamVersion:    number;            // bumped to abort stale streams
     assistantLabel:   string;
+    tags?:            string[];
     panel:            vscode.WebviewPanel;
 }
 
@@ -56,7 +57,8 @@ export class SessionWebviewPanel {
         targetBlockMessageIndex?: number,
         _targetBlockContent?: string,  // deprecated — kept for call-site compat, unused
         targetBlockIdx?: number,
-        highlightContainer?: boolean
+        highlightContainer?: boolean,
+        tags?: string[]
     ): void {
         const config = vscode.workspace.getConfiguration('chatwizard');
         const userColor = config.get<string>('userMessageColor', '#007acc') || '#007acc';
@@ -117,7 +119,7 @@ export class SessionWebviewPanel {
                 session, visibleMessages, renderedMessages,
                 windowStart, windowEnd: initialWindowEnd,
                 streamVersion: newVersion,
-                assistantLabel, panel: existing,
+                assistantLabel, tags, panel: existing,
             });
             void SessionWebviewPanel._startStream(
                 session.id, newVersion, userColor, searchTerm, scrollInit, highlightContainer
@@ -138,7 +140,7 @@ export class SessionWebviewPanel {
             session, visibleMessages, renderedMessages,
             windowStart, windowEnd: initialWindowEnd,
             streamVersion: 0,
-            assistantLabel, panel,
+            assistantLabel, tags, panel,
         });
         SessionWebviewPanel._panels.set(session.id, panel);
 
@@ -242,6 +244,7 @@ export class SessionWebviewPanel {
             parseErrors:      session.parseErrors ?? [],
             sourceNotes:      session.sourceNotes ?? [],
             filePath:         session.filePath,
+            tags:             state.tags ?? [],
         });
 
         // ── Stream remaining initial window via setImmediate ──────────────────
@@ -380,6 +383,13 @@ export class SessionWebviewPanel {
     .session-meta span {
       font-weight: 600;
       opacity: 1;
+    }
+    #session-tags { min-height: 0; margin-bottom: 6px; padding-bottom: 6px; border-bottom: 1px solid var(--vscode-textBlockQuote-background, #444); }
+    .cw-tag-chip {
+      display: inline-flex; align-items: center;
+      border-radius: 2em; padding: 1px 9px;
+      font-size: 0.75em; font-weight: 500;
+      margin: 0 4px 0 0; border: 1px solid currentColor; opacity: 0.88;
     }
     .toolbar {
       position: sticky;
@@ -619,6 +629,7 @@ export class SessionWebviewPanel {
 </head>
 <body>
   <h1 id="session-title"><span class="cw-skeleton" style="display:inline-block;height:1.1em;width:50%;vertical-align:middle"></span></h1>
+  <div id="session-tags" style="display:none"></div>
   <div class="session-meta" id="session-meta">
     <span id="session-model-field" style="display:none">Model: <span id="session-model"></span></span>
     <span class="meta-sep" id="session-meta-sep" style="display:none"> &nbsp;·&nbsp; </span>
@@ -673,6 +684,14 @@ ${cwInteractiveJs()}
   // ── State ──────────────────────────────────────────────────────────────────
   var _hasMore     = false;
   var _loadingMore = false;
+
+  // ── Tag color palette (matches tree view emoji palette) ───────────────────
+  var _CW_TAG_PALETTE = ['#f47067','#f0883e','#e3b341','#56d364','#58a6ff','#bc8cff','#c29070'];
+  function cwTagColor(tag) {
+    var h = 0;
+    for (var i = 0; i < tag.length; i++) { h = (h * 31 + tag.charCodeAt(i)) & 0xffff; }
+    return _CW_TAG_PALETTE[h % _CW_TAG_PALETTE.length];
+  }
 
   // ── Back to top ────────────────────────────────────────────────────────────
   var backTopBtn = document.getElementById('backToTop');
@@ -1152,6 +1171,20 @@ ${cwInteractiveJs()}
         }
         if (showModel && showReq && sepEl) { sepEl.style.display = 'inline'; }
         metaEl.style.display = 'block';
+      }
+      // Tags chips
+      var tagsEl = document.getElementById('session-tags');
+      if (tagsEl) {
+        if (data.tags && data.tags.length > 0) {
+          tagsEl.innerHTML = data.tags.map(function(t) {
+            var c = cwTagColor(t);
+            return '<span class="cw-tag-chip" style="color:' + c + '">#' + escH(t) + '</span>';
+          }).join('');
+          tagsEl.style.display = 'block';
+        } else {
+          tagsEl.innerHTML = '';
+          tagsEl.style.display = 'none';
+        }
       }
       container.innerHTML = data.messagesHtml;
 

@@ -31,6 +31,7 @@ import { ChronicleData } from '../types/index';
 import { discoverContinueSessionFilesAsync } from '../readers/continueWorkspace';
 import { parseContinueSession } from '../parsers/continueDev';
 import { discoverAmazonQSessionFilesAsync } from '../readers/amazonQWorkspace';
+import { LiveSessionTracker } from '../utils/liveSessionTracker';
 import { parseAmazonQSession } from '../parsers/amazonQ';
 import { discoverGeminiCodeAssistSessionFilesAsync } from '../readers/geminiCodeAssistWorkspace';
 import { parseGeminiCodeAssistSession } from '../parsers/geminiCodeAssist';
@@ -46,6 +47,8 @@ export class ChatWizardWatcher implements vscode.Disposable {
     private _nodeDebounceMap = new Map<string, ReturnType<typeof setTimeout>>();
     /** Fingerprints of already-logged parse warnings — suppresses duplicate noise from live updates. */
     private _loggedParseWarnings = new Set<string>();
+    /** Optional live session tracker — fed by every live (non-batch) upsert. */
+    private _liveTracker: LiveSessionTracker | undefined;
 
     constructor(index: SessionIndex, channel: vscode.OutputChannel, scopeManager: WorkspaceScopeManager) {
         this.index = index;
@@ -1165,6 +1168,11 @@ this.index.remove(taskId);
         return null;
     }
 
+    /** Wires in a live session tracker that gets notified on every non-batch upsert. */
+    public setLiveTracker(tracker: LiveSessionTracker): void {
+        this._liveTracker = tracker;
+    }
+
     /**
      * Re-read and re-index a session by its ID.
      * Called by `/referMessage` to guarantee the index is up-to-date before a turn lookup.
@@ -1181,12 +1189,14 @@ this.index.remove(taskId);
         source: SessionSource,
         workspaceId?: string,
         workspacePath?: string
-    ): void {
+    ): Session | undefined {
         const session = this.parseFile(filePath, source, workspaceId, workspacePath);
         if (session) {
             this.index.upsert(session);
+            return session;
         } else {
             this.channel.appendLine(`[skip] empty/epoch session ${filePath}`);
+            return undefined;
         }
     }
 
@@ -1205,6 +1215,7 @@ this.index.remove(taskId);
         }
         const before = this.index.size;
         this.index.upsert(result.session);
+        this._liveTracker?.record(result.session.source, result.session.id);
         const verb = this.index.size > before ? 'added' : 'updated';
         this.channel.appendLine(`[live] ${verb} cline session ${taskId}`);
     }
@@ -1223,6 +1234,7 @@ this.index.remove(taskId);
         }
         const before = this.index.size;
         this.index.upsert(result.session);
+        this._liveTracker?.record(result.session.source, result.session.id);
         const verb = this.index.size > before ? 'added' : 'updated';
         this.channel.appendLine(`[live] ${verb} roocode session ${taskId}`);
     }
@@ -1291,6 +1303,7 @@ if (composerIdToWsInfo.has(result.session.id)) {
         for (const session of globalById.values()) {
             keepIds.add(session.id);
             this.index.upsert(session);
+            this._liveTracker?.record(session.source, session.id);
             upsertCount++;
         }
 
@@ -1301,6 +1314,7 @@ if (composerIdToWsInfo.has(result.session.id)) {
                     session.createdAt === new Date(0).toISOString()) { continue; }
                 keepIds.add(session.id);
                 this.index.upsert(session);
+                this._liveTracker?.record(session.source, session.id);
                 upsertCount++;
             }
         }
@@ -1345,6 +1359,7 @@ if (composerIdToWsInfo.has(result.session.id)) {
             }
             keepIds.add(result.session.id);
             this.index.upsert(result.session);
+            this._liveTracker?.record(result.session.source, result.session.id);
             upsertCount++;
         }
         this.index.removeSessionsForStateFileNotIn(vscdbPath, 'windsurf', keepIds);
@@ -1369,6 +1384,7 @@ if (composerIdToWsInfo.has(result.session.id)) {
         }
         const before = this.index.size;
         this.index.upsert(result.session);
+        this._liveTracker?.record(result.session.source, result.session.id);
         const verb = this.index.size > before ? 'added' : 'updated';
         this.channel.appendLine(`[live] ${verb} aider session ${historyFile}`);
     }
@@ -1395,6 +1411,7 @@ if (composerIdToWsInfo.has(result.session.id)) {
         }
         const before = this.index.size;
         this.index.upsert(result.session);
+        this._liveTracker?.record(result.session.source, result.session.id);
         const verb = this.index.size > before ? 'added' : 'updated';
         this.channel.appendLine(`[live] ${verb} antigravity session ${conversationId}`);
     }
@@ -1419,6 +1436,7 @@ if (composerIdToWsInfo.has(result.session.id)) {
         }
         const before = this.index.size;
         this.index.upsert(result.session);
+        this._liveTracker?.record(result.session.source, result.session.id);
         const verb = this.index.size > before ? 'added' : 'updated';
         this.channel.appendLine(`[live] ${verb} antigravity-json session ${conversationId}`);
     }
@@ -1428,6 +1446,7 @@ if (composerIdToWsInfo.has(result.session.id)) {
             const result = parseContinueSession(uri.fsPath);
             if (result.session.messages.length > 0) {
                 this.index.upsert(result.session);
+                this._liveTracker?.record(result.session.source, result.session.id);
                 this.channel.appendLine(`[live] updated continue session ${result.session.id}`);
             }
         } catch (err) {
@@ -1442,7 +1461,8 @@ if (composerIdToWsInfo.has(result.session.id)) {
         workspacePath?: string
     ): void {
         const before = this.index.size;
-        this.indexFile(uri.fsPath, source, workspaceId, workspacePath);
+        const session = this.indexFile(uri.fsPath, source, workspaceId, workspacePath);
+        if (session) { this._liveTracker?.record(session.source, session.id); }
         const sessionId = path.basename(uri.fsPath, '.jsonl');
         const verb = this.index.size > before ? 'added' : 'updated';
         this.channel.appendLine(`[live] ${verb} session ${sessionId} (${source})`);

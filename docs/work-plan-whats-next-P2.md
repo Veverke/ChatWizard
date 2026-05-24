@@ -342,30 +342,43 @@ Users can attach freeform labels (`#bugfix`, `topic:auth`, `kind:decision`) to s
   - Session reader header shows tag chips alongside source badge and date.
   - Tags are read-only in the webview (editing is done from the tree or command palette).
 
-- [ ] **13-G** — "Tag Active Session" — command palette + status bar entry point
+- [x] **13-G** — `LiveSessionTracker` — in-memory active session registry
+  - **Why not `updatedAt` heuristics or VS Code Chat API:**  
+    The VS Code Chat API (`ChatRequest` / `ChatContext`) exposes **no thread or conversation ID** to third-party extensions. `ChatContext.history` only contains turns where `@chatwizard` was explicitly addressed — the user's 20 prior Copilot messages are invisible to CW. The `updatedAt` timestamp heuristic is unreliable when multiple AI tools are running, or when the extension starts cold (no baseline to compare against).  
+    The correct source of truth is already in the watcher: every live update handler (`onClineFileChanged`, `onCursorFileChanged`, `mergeChronicleDataAsync`, etc.) already knows the exact session ID that just changed.
+  - New class `LiveSessionTracker` in `src/utils/liveSessionTracker.ts`:
+    - Stores `Map<SessionSource, { sessionId: string; updatedAt: Date }>` — one slot per source, updated on every live event.
+    - `record(source: SessionSource, sessionId: string): void` — called by the watcher on every live upsert.
+    - `getActive(windowMs?: number): Array<{ sessionId: string; source: SessionSource; updatedAt: Date }>` — returns entries updated within `windowMs` (default: `chatwizard.activeSessionWindowMinutes * 60_000`, fallback `120 * 60_000`), sorted by `updatedAt DESC`.
+    - `getMostRecent(): { sessionId: string; source: SessionSource; updatedAt: Date } | undefined` — top entry regardless of window (used as a last resort when the window has expired).
+    - Pure in-memory; no persistence needed — the watcher repopulates it on the first live event after a restart (typically within seconds of any new message).
+  - Wire into the watcher: every path that calls `this.index.upsert(session)` for a live event (not the initial batch) also calls `this.liveTracker.record(session.source, session.id)`.
+  - Pass the tracker reference down to the chat participant handler and the status bar button.
+
+- [x] **13-H** — "Tag Active Session" — command palette + status bar entry point
   - **Problem this solves:** the primary real-world use case is tagging a session *while it is still in progress*, not after the fact from the history tree. All existing 13-D / 13-E entry points require navigating to a completed session in the tree.
   - `chatwizard.tagActiveSession` command:
-    - Resolves the "active" session as the session with the highest `updatedAt` across the entire index, filtered to sessions updated within the last **2 hours** (configurable via `chatwizard.activeSessionWindowMinutes`, default `120`).
-    - If exactly one session qualifies: proceeds directly to the tag `InputBox` (same UX as 13-D `chatwizard.addTag`).
-    - If multiple sessions qualify (e.g. user is running Copilot and Cursor simultaneously): shows a `QuickPick` pre-filtered to those recent sessions sorted by `updatedAt DESC`, so the current one is always first.
-    - If no session qualifies (no activity in the window): falls back to the full `pickSessionId` picker with a hint message: `"No recent session detected — select from all sessions"`.
+    - Calls `liveTracker.getActive()`.
+    - If exactly one entry: proceeds directly to the tag `InputBox` for that session (same UX as 13-D `chatwizard.addTag`).
+    - If multiple entries (e.g. user has Copilot and Cursor both running): shows a `QuickPick` limited to those active entries, sorted most-recent first.
+    - If no entries within the window: falls back to `liveTracker.getMostRecent()` with a hint `"Last active session was X minutes ago"`, then falls back further to the full `pickSessionId` picker if `getMostRecent()` is also undefined.
   - Status bar item `ActiveSessionTagButton` (`src/ui/activeSessionTagButton.ts`):
-    - Subscribes to `index.addTypedChangeListener`; on every `upsert` or `batch` event, checks if any session was updated within `activeSessionWindowMinutes`.
-    - When a live session is detected: shows `$(tag) Tag session` in the status bar (right-aligned, low priority). Tooltip: `"Tag the active chat session"`. Click fires `chatwizard.tagActiveSession`.
-    - When no recent session: item is hidden (not showing a stale button between sessions).
+    - Receives the `LiveSessionTracker` reference.
+    - On `liveTracker.onDidUpdate` event: checks `getActive()` — shows `$(tag) Tag session` when at least one entry qualifies, hides otherwise.
+    - Tooltip: `"Tag the active chat session"`. Click fires `chatwizard.tagActiveSession`.
     - Disposes cleanly on extension deactivate.
-  - Register `chatwizard.tagActiveSession` in `package.json` under `contributes.commands` with title `"ChatWizard: Tag Active Session"` and in the Command Palette (`commandPalette` contribution with no `when` guard so it is always reachable).
+  - Register `chatwizard.tagActiveSession` in `package.json` under `contributes.commands` with title `"ChatWizard: Tag Active Session"` and in the Command Palette (no `when` guard).
 
-- [ ] **13-H** — `/tag` chat participant command (inline tagging from Copilot chat)
+- [x] **13-I** — `/tag` chat participant command (inline tagging from Copilot chat)
   - **Problem this solves:** Copilot users are already in the chat panel. Requiring them to leave the chat, find the tree item, and right-click breaks flow. `/tag` meets them where they are.
-  - New command handler `handleTagCommand` in `src/mcp/chatParticipant.ts` (or the VS Code chat participant registration file), invoked when the user types `/tag` in the `@chatwizard` participant.
+  - New command handler `handleTagCommand` in `src/mcp/chatParticipant.ts`, invoked when the user types `/tag` in the `@chatwizard` participant.
   - Input parsing: everything after `/tag` is treated as a comma-separated tag list (same normalisation as 13-D — lowercase, trim, strip leading `#` for storage).
     - Example: `/tag #bugfix, topic:auth` → stores `['bugfix', 'topic:auth']`.
     - Empty input (bare `/tag` with no arguments): responds with `"Usage: /tag label1, label2  — e.g. /tag #bugfix, topic:auth"`.
-  - Session resolution: calls the same "active session" logic from 13-G (`resolveActiveSession(index, windowMinutes)`), extracted into `src/utils/activeSessionResolver.ts` so both 13-G and 13-H share it.
+  - Session resolution: calls `liveTracker.getActive()` (from 13-G). Because `@chatwizard /tag` itself triggers a watcher update (Copilot writes the `/tag` message to Chronicle within seconds), the tracker will have the current session ID by the time the async handler runs. If needed, the handler can `await` a short `refreshSessionById` call first to flush the watcher.
   - On success: responds with a confirmation Markdown message in the chat stream, e.g.:
     > Tagged **"Fix auth middleware regression"** with `#bugfix`, `topic:auth`.
-  - On ambiguity (multiple recent sessions): responds with a message listing the candidates and asking the user to use `chatwizard.tagActiveSession` from the command palette to disambiguate.
+  - On ambiguity: responds listing the candidates and asking the user to use `chatwizard.tagActiveSession` from the command palette to disambiguate.
   - No side effects on the chat session itself — tag is written only to `chatwizard-metadata.json` via `MetadataStore`.
 
 ### Unit Tests
@@ -379,9 +392,10 @@ Users can attach freeform labels (`#bugfix`, `topic:auth`, `kind:decision`) to s
 - [ ] `SessionTreeProvider` tag chip rendering — 3 tags shown as chips, 4th tag causes `+1 more` overflow.
 - [ ] Tag filter — tree shows only tagged sessions when filter active, all sessions when filter cleared.
 - [ ] Tag normalization — `"  #Auth "` → stored as `"auth"`, displayed as `#auth`.
-- [ ] `resolveActiveSession` — returns single session when one updated within window, returns multiple when several qualify, returns empty array when all sessions are older than the window, uses configurable window value.
-- [ ] `ActiveSessionTagButton` — visible after an index upsert event within the window, hidden when no recent sessions, disposes without error.
-- [ ] `/tag` command — single tag stored correctly, comma-separated list stored correctly, empty input returns usage hint, ambiguous session returns disambiguation message.
+- [ ] `LiveSessionTracker.record` + `getActive` — single source returns one entry, two sources return two entries sorted by recency, entries older than window are excluded, window default applied.
+- [ ] `LiveSessionTracker.getMostRecent` — returns most recently recorded entry regardless of window; returns `undefined` when tracker is empty.
+- [ ] `ActiveSessionTagButton` — visible after a `liveTracker.onDidUpdate` event within the window, hidden when no entries qualify, disposes without error.
+- [ ] `/tag` command — single tag stored correctly, comma-separated list stored correctly, empty input returns usage hint, ambiguous session (multiple active sources) returns disambiguation message.
 
 ### E2E Tests
 
@@ -413,7 +427,7 @@ Users can attach freeform labels (`#bugfix`, `topic:auth`, `kind:decision`) to s
 
 ### Completion Checklist
 
-- [ ] All atomic tasks (13-A through 13-H) implemented and code-reviewed
+- [ ] All atomic tasks (13-A through 13-I) implemented and code-reviewed
 - [ ] All unit tests green
 - [ ] All e2e tests green
 - [ ] Manual tests performed and all issues fixed

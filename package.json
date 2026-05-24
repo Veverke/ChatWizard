@@ -233,7 +233,7 @@
       },
       {
         "command": "chatwizard.pinSession",
-        "title": "Pin Session",
+        "title": "📌 Pin Session",
         "category": "Chat Wizard",
         "icon": "$(pin)"
       },
@@ -245,19 +245,19 @@
       },
       {
         "command": "chatwizard.revealSessionInExplorer",
-        "title": "Reveal in Explorer",
+        "title": "📂 Reveal in Explorer",
         "category": "Chat Wizard",
         "icon": "$(folder-opened)"
       },
       {
         "command": "chatwizard.archiveSession",
-        "title": "Archive Session",
+        "title": "🗂️ Archive Session",
         "category": "Chat Wizard",
         "icon": "$(archive)"
       },
       {
         "command": "chatwizard.deleteArchivedSession",
-        "title": "Delete Archived Session",
+        "title": "🗑️ Delete Archived Session",
         "category": "Chat Wizard",
         "icon": "$(trash)"
       },
@@ -303,7 +303,7 @@
       },
       {
         "command": "chatwizard.exportSession",
-        "title": "Export Session to Markdown",
+        "title": "📝 Export Session to Markdown",
         "category": "Chat Wizard",
         "icon": "$(export)"
       },
@@ -326,13 +326,13 @@
       },
       {
         "command": "chatwizard.exportFromTreeSelection",
-        "title": "Export Selected…",
+        "title": "📤 Export Selected…",
         "category": "Chat Wizard",
         "icon": "$(export)"
       },
       {
         "command": "chatwizard.injectAsContext",
-        "title": "Inject as Context…",
+        "title": "💬 Inject as Context…",
         "category": "Chat Wizard",
         "icon": "$(comment-discussion)"
       },
@@ -368,7 +368,7 @@
       },
       {
         "command": "chatwizard.regenerateTitle",
-        "title": "Regenerate Title",
+        "title": "✏️ Regenerate Title",
         "category": "Chat Wizard",
         "icon": "$(edit)"
       },
@@ -563,8 +563,18 @@
         "category": "Chat Wizard"
       },
       {
-        "command": "chatwizard.filterByTag",
-        "title": "Chat Wizard: Filter Sessions by Tag",
+        "command": "chatwizard.addTagFromTree",
+        "title": "🏷️ Add Tag…",
+        "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.removeTagFromTree",
+        "title": "🏷️ Remove Tag…",
+        "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.tagActiveSession",
+        "title": "Chat Wizard: Tag Active Session",
         "category": "Chat Wizard"
       },
       {
@@ -856,6 +866,16 @@
           "group": "4_archive@1"
         },
         {
+          "command": "chatwizard.addTagFromTree",
+          "when": "viewItem == session || viewItem == session.pinned || viewItem == session.archived",
+          "group": "5_tags@1"
+        },
+        {
+          "command": "chatwizard.removeTagFromTree",
+          "when": "viewItem == session || viewItem == session.pinned || viewItem == session.archived",
+          "group": "5_tags@2"
+        },
+        {
           "command": "chatwizard.regenerateTitle",
           "when": "viewItem == session || viewItem == session.pinned",
           "group": "session@3"
@@ -867,6 +887,14 @@
         }
       ],
       "commandPalette": [
+        {
+          "command": "chatwizard.addTagFromTree",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.removeTagFromTree",
+          "when": "false"
+        },
         {
           "command": "chatwizard.openSession",
           "when": "false"
@@ -1132,6 +1160,14 @@
           {
             "name": "referMessage",
             "description": "Quote a specific turn from this chat thread (e.g. P3, R2)"
+          },
+          {
+            "name": "tag",
+            "description": "Tag the active chat session with labels (e.g. /tag #bugfix, topic:auth)"
+          },
+          {
+            "name": "removeTags",
+            "description": "Remove tags from the active chat session (e.g. /removeTags #bugfix, topic:auth)"
           }
         ]
       }
@@ -1149,6 +1185,12 @@
             "type": "boolean",
             "default": false,
             "description": "Enable local usage telemetry. Events are recorded to a local JSONL file in the extension's global storage directory. No data ever leaves your machine."
+          },
+          "chatwizard.activeSessionWindowMinutes": {
+            "type": "integer",
+            "default": 120,
+            "minimum": 1,
+            "description": "How many minutes back ChatWizard looks when detecting an 'active' session for the Tag Active Session command and status bar button. Sessions updated within this window are considered active."
           },
           "chatwizard.oldestSessionDate": {
             "type": "string",

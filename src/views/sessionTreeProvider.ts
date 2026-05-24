@@ -18,11 +18,19 @@ function sourceBrandIcon(
     return brand ?? new vscode.ThemeIcon(sourceCodiconId(source));
 }
 
+/** Deterministic colored-circle emoji for a tag name — consistent across sessions. */
+const _TAG_COLOR_PALETTE = ['🔴', '🟠', '🟡', '🟢', '🔵', '🟣', '🟤'];
+function tagColorEmoji(tag: string): string {
+    let hash = 0;
+    for (let i = 0; i < tag.length; i++) { hash = (hash * 31 + tag.charCodeAt(i)) & 0xffff; }
+    return _TAG_COLOR_PALETTE[hash % _TAG_COLOR_PALETTE.length];
+}
+
 export class SessionTreeItem extends vscode.TreeItem {
     readonly summary: SessionSummary;
     readonly pinned: boolean;
 
-    constructor(summary: SessionSummary, pinned = false, extensionUri?: vscode.Uri) {
+    constructor(summary: SessionSummary, pinned = false, extensionUri?: vscode.Uri, tags?: string[]) {
         super(summary.title || 'Untitled Session', vscode.TreeItemCollapsibleState.None);
 
         this.id      = summary.id;   // stable identity → enables treeView.reveal()
@@ -36,15 +44,18 @@ export class SessionTreeItem extends vscode.TreeItem {
             ? `${(summary.fileSizeBytes / 1024).toFixed(1)} KB`
             : undefined;
 
-        const archivedSuffix = summary.archived ? ' · archived' : '';
+        const archivedPrefix = summary.archived ? '🗂️ archived  ·  ' : '';
+        const tagsSuffix = tags && tags.length > 0 ? `  ·  ${tags.map(t => `${tagColorEmoji(t)} #${t}`).join(' ')}` : '';
         this.description = sizeKb
-            ? `${workspaceName} · ${date} · ${msgCount} msgs · ${sizeKb}${archivedSuffix}`
-            : `${workspaceName} · ${date} · ${msgCount} msgs${archivedSuffix}`;
+            ? `${archivedPrefix}${workspaceName} · ${date} · ${msgCount} msgs · ${sizeKb}${tagsSuffix}`
+            : `${archivedPrefix}${workspaceName} · ${date} · ${msgCount} msgs${tagsSuffix}`;
 
         const sourceName = friendlySourceName(summary.source);
         const modelLine = summary.model ? `\n\n**Model:** ${summary.model}` : '';
         const sizeLine = sizeKb ? `\n\n**Size:** ${msgCount} messages · ${sizeKb}` : `\n\n**Size:** ${msgCount} messages`;
         const pinnedLine = pinned ? `\n\n📌 *Pinned*` : '';
+        const archivedLine = summary.archived ? `\n\n🗂️ *Archived — original source file deleted*` : '';
+        const tagsLine = tags && tags.length > 0 ? `\n\n**Tags:** ${tags.map(t => `\`#${t}\``).join(' ')}` : '';
         const interruptedLine = summary.interrupted ? `\n\n⚠ *Response not available — cancelled or incomplete*` : '';
         const parseErrorsLine = summary.hasParseErrors ? `\n\n⚠ *This session has parse errors — some lines could not be read*` : '';
 
@@ -63,7 +74,7 @@ export class SessionTreeItem extends vscode.TreeItem {
                 `\n\n${lbl('Updated:')} ${summary.updatedAt.slice(0, 16).replace('T', ' ')}` +
                 `\n\n${lbl('Size:')} ${sizeText}` +
                 `\n\n${summary.userMessageCount} prompts · ${summary.assistantMessageCount} responses` +
-                pinnedLine + interruptedLine + parseErrorsLine
+                pinnedLine + archivedLine + tagsLine + interruptedLine + parseErrorsLine
             );
             tooltip.isTrusted = true;
             tooltip.supportHtml = true;
@@ -75,7 +86,7 @@ export class SessionTreeItem extends vscode.TreeItem {
                 `**Updated:** ${summary.updatedAt.slice(0, 16).replace('T', ' ')}` +
                 sizeLine + `\n\n` +
                 `${summary.userMessageCount} prompts · ${summary.assistantMessageCount} responses` +
-                pinnedLine + interruptedLine + parseErrorsLine
+                pinnedLine + archivedLine + tagsLine + interruptedLine + parseErrorsLine
             );
         }
         this.tooltip = tooltip;
@@ -279,6 +290,7 @@ export interface SessionFilter {
     maxMessages?: number;
     hideInterrupted?: boolean;   // when true, hide sessions whose last message has no assistant reply
     onlyWithWarnings?: boolean;  // when true, show only sessions that have parse errors / skipped turns
+    tags?: string[];             // when set, show only sessions tagged with any of these tags (OR)
 }
 
 // ---------------------------------------------------------------------------
@@ -474,7 +486,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
         const f = this._filter;
         return !!(f.title || f.dateFrom || f.dateTo || f.model || f.source ||
                   f.minMessages !== undefined || f.maxMessages !== undefined ||
-                  f.hideInterrupted || f.onlyWithWarnings);
+                  f.hideInterrupted || f.onlyWithWarnings || (f.tags && f.tags.length > 0));
     }
 
     private _matchesFilter(s: SessionSummary): boolean {
@@ -491,6 +503,10 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
         if (f.maxMessages !== undefined && s.messageCount > f.maxMessages) { return false; }
         if (f.hideInterrupted && s.interrupted) { return false; }
         if (f.onlyWithWarnings && !s.hasParseErrors) { return false; }
+        if (f.tags && f.tags.length > 0) {
+            const sessionTags = this.index.getSidecarMeta(s.id)?.tags ?? [];
+            if (!f.tags.some(t => sessionTags.includes(t))) { return false; }
+        }
         return true;
     }
 
@@ -506,6 +522,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
         }
         if (f.hideInterrupted) { parts.push('hide:interrupted'); }
         if (f.onlyWithWarnings) { parts.push('warnings only'); }
+        if (f.tags && f.tags.length > 0) { parts.push(`tags:${f.tags.map(t => `#${t}`).join(',')}`); }
         return parts.length > 0 ? `⊘ ${parts.join(' · ')}` : '';
     }
 
@@ -712,7 +729,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
             const pinnedInBucket   = bucketItems.filter(s =>  pinnedSet.has(s.id));
             const unpinnedInBucket = bucketItems.filter(s => !pinnedSet.has(s.id));
             return [...pinnedInBucket, ...unpinnedInBucket]
-                .map(s => new SessionTreeItem(s, pinnedSet.has(s.id), this.extensionUri));
+                .map(s => new SessionTreeItem(s, pinnedSet.has(s.id), this.extensionUri, this.index.getSidecarMeta(s.id)?.tags));
         }
 
         // When a ContextGroupTreeItem is expanded, return matching session children
@@ -733,7 +750,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
                         : keys.includes(element.groupKey);
                 }
             });
-            return matched.map(s => new SessionTreeItem(s, pinnedSet.has(s.id), this.extensionUri));
+            return matched.map(s => new SessionTreeItem(s, pinnedSet.has(s.id), this.extensionUri, this.index.getSidecarMeta(s.id)?.tags));
         }
 
         if (element) { return []; }
@@ -755,7 +772,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
 
         // Flat view (original behaviour with pagination)
         const visible = all.slice(0, this._visibleCount);
-        const items: SessionTreeNode[] = visible.map(s => new SessionTreeItem(s, pinnedSet.has(s.id), this.extensionUri));
+        const items: SessionTreeNode[] = visible.map(s => new SessionTreeItem(s, pinnedSet.has(s.id), this.extensionUri, this.index.getSidecarMeta(s.id)?.tags));
         const remaining = all.length - visible.length;
         if (remaining > 0) {
             items.push(new LoadMoreTreeItem(remaining));

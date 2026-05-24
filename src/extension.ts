@@ -726,6 +726,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                     description: current.onlyWithWarnings ? 'currently active' : undefined,
                 },
                 {
+                    id: 'tags',
+                    label: '$(tag)  Tags…',
+                    description: current.tags && current.tags.length > 0
+                        ? `current: ${current.tags.map(t => `#${t}`).join(', ')}`
+                        : undefined,
+                },
+                {
                     id: '_clear',
                     label: '$(close)  Clear all filters',
                     alwaysShow: true,
@@ -828,6 +835,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
             } else if (pick.id === 'onlyWithWarnings') {
                 newFilter.onlyWithWarnings = !current.onlyWithWarnings || undefined;
+
+            } else if (pick.id === 'tags') {
+                const allTags = await sidecarStore.getAllTags();
+                if (allTags.length === 0) { void vscode.window.showInformationMessage('No tags defined yet.'); return; }
+                const tagItems = allTags.map(t => ({
+                    label: `#${t.tag}`,
+                    description: `${t.count} session${t.count === 1 ? '' : 's'}`,
+                    picked: current.tags?.includes(t.tag) ?? false,
+                }));
+                const chosen = await vscode.window.showQuickPick(tagItems, {
+                    title: 'Filter by tags — sessions matching any selected tag',
+                    canPickMany: true,
+                });
+                if (chosen === undefined) { return; }
+                newFilter.tags = chosen.length > 0 ? chosen.map(c => c.label.slice(1)) : undefined;
             }
 
             provider.setFilter(newFilter);
@@ -958,8 +980,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         })
     );
     context.subscriptions.push(
-        vscode.commands.registerCommand('chatwizard.revealSessionInExplorer', (item: SessionTreeItem) => {
-            vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(item.summary.filePath));
+        vscode.commands.registerCommand('chatwizard.revealSessionInExplorer', async (item: SessionTreeItem) => {
+            if (item.summary.archived) {
+                // Original source file has been deleted — reveal the JSON copy in the ChatWizard archive.
+                const entry = await archive.findAnySource(item.summary.id);
+                if (!entry) {
+                    vscode.window.showErrorMessage('Archived file not found in the ChatWizard archive.');
+                    return;
+                }
+                vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(entry.filePath));
+            } else {
+                vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(item.summary.filePath));
+            }
         })
     );
     context.subscriptions.push(
@@ -1155,7 +1187,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 return;
             }
             telemetry.record('session.opened', { source: session.source });
-            SessionWebviewPanel.show(context, session, searchTerm, false, undefined, undefined, undefined, highlightContainer);
+            SessionWebviewPanel.show(context, session, searchTerm, false, undefined, undefined, undefined, highlightContainer, index.getSidecarMeta(session.id)?.tags);
         })
     );
 
@@ -1172,7 +1204,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             const isLeaf = ref.blocks.length === 1;
             const targetMsgIdx = isLeaf ? ref.blocks[0].messageIndex : undefined;
             const targetBlockIdx = isLeaf ? (ref.blocks[0].blockIndexInMessage ?? 0) : undefined;
-            SessionWebviewPanel.show(context, session, undefined, isLeaf, targetMsgIdx, undefined, targetBlockIdx);
+            SessionWebviewPanel.show(context, session, undefined, isLeaf, targetMsgIdx, undefined, targetBlockIdx, undefined, index.getSidecarMeta(session.id)?.tags);
         })
     );
 
@@ -2108,11 +2140,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             vscode.commands.registerCommand('chatwizard.addTag', async (sessionId?: string) => {
                 const id = sessionId ?? await pickSessionId(index);
                 if (!id) { return; }
-                const tag = await vscode.window.showInputBox({ prompt: 'Enter tag', placeHolder: 'e.g. refactor' });
-                if (tag?.trim()) {
-                    await sidecarStore.addTag(id, tag.trim());
-                    void vscode.window.showInformationMessage(`Tag "${tag.trim()}" added.`);
-                }
+                const input = await vscode.window.showInputBox({ prompt: 'Enter tag(s), comma-separated', placeHolder: 'e.g. refactor, auth, bugfix' });
+                const tags = input?.split(',').map(t => t.trim()).filter(Boolean) ?? [];
+                if (tags.length === 0) { return; }
+                for (const t of tags) { await sidecarStore.addTag(id, t); }
+                const reloadedCache = await sidecarStore.load();
+                index.setSidecarStore(sidecarStore, reloadedCache);
+                void vscode.window.showInformationMessage(`Added: ${tags.map(t => `"${t}"`).join(', ')}`);
             }),
             vscode.commands.registerCommand('chatwizard.removeTag', async (sessionId?: string) => {
                 const id = sessionId ?? await pickSessionId(index);
@@ -2122,14 +2156,34 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 const tag = await vscode.window.showQuickPick(existing, { placeHolder: 'Select tag to remove' });
                 if (tag) {
                     await sidecarStore.removeTag(id, tag);
+                    const reloadedCache = await sidecarStore.load();
+                    index.setSidecarStore(sidecarStore, reloadedCache);
                     void vscode.window.showInformationMessage(`Tag "${tag}" removed.`);
                 }
             }),
-            vscode.commands.registerCommand('chatwizard.filterByTag', async () => {
-                const allTags = await sidecarStore.getAllTags();
-                if (allTags.length === 0) { void vscode.window.showInformationMessage('No tags defined yet.'); return; }
-                const picks = allTags.map(t => ({ label: t.tag, description: `${t.count} session${t.count === 1 ? '' : 's'}` }));
-                await vscode.window.showQuickPick(picks, { placeHolder: 'Filter sessions by tag', canPickMany: true });
+            vscode.commands.registerCommand('chatwizard.addTagFromTree', async (item: SessionTreeItem) => {
+                const input = await vscode.window.showInputBox({ prompt: 'Enter tag(s), comma-separated', placeHolder: 'e.g. refactor, auth, bugfix' });
+                const tags = input?.split(',').map(t => t.trim()).filter(Boolean) ?? [];
+                if (tags.length === 0) { return; }
+                for (const t of tags) { await sidecarStore.addTag(item.summary.id, t); }
+                const reloadedCache = await sidecarStore.load();
+                index.setSidecarStore(sidecarStore, reloadedCache);
+                void vscode.window.showInformationMessage(`Added: ${tags.map(t => `"${t}"`).join(', ')}`);
+            }),
+            vscode.commands.registerCommand('chatwizard.removeTagFromTree', async (item: SessionTreeItem) => {
+                const existing = (await sidecarStore.get(item.summary.id))?.tags ?? [];
+                if (existing.length === 0) {
+                    void vscode.window.showInformationMessage('This session has no tags.');
+                    return;
+                }
+                const picks = await vscode.window.showQuickPick(
+                    existing.map(t => ({ label: t })),
+                    { placeHolder: 'Select tags to remove', canPickMany: true }
+                );
+                if (!picks || picks.length === 0) { return; }
+                for (const pick of picks) { await sidecarStore.removeTag(item.summary.id, pick.label); }
+                const reloadedCache = await sidecarStore.load();
+                index.setSidecarStore(sidecarStore, reloadedCache);
             }),
         );
 
