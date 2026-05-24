@@ -35,6 +35,7 @@ export function toSummary(session: Session): SessionSummary {
         updatedAt: session.updatedAt,
         interrupted,
         hasParseErrors: (session.parseErrors?.length ?? 0) > 0 || undefined,
+        archived: session.archived || undefined,
     };
 }
 

@@ -98,10 +98,15 @@ export class SessionArchive {
 
     // ── Public API ─────────────────────────────────────────────────────────────
 
+    /** Loads the manifest into memory. Call once before using has() for batch lookups. */
+    async init(): Promise<void> {
+        await this.ensureManifest();
+    }
+
     /**
      * Returns true synchronously if the session is already in the in-memory manifest.
-     * Requires `ensureManifest()` to have been called at least once beforehand.
-     * Safe to call before awaiting `ensureManifest()` — returns false if manifest not yet loaded.
+     * Requires `init()` (or any other async method) to have been called at least once beforehand.
+     * Safe to call before awaiting `init()` — returns false if manifest not yet loaded.
      */
     has(sessionId: string, source: string): boolean {
         return this.manifest?.has(this._key(sessionId, source)) ?? false;
@@ -196,6 +201,26 @@ export class SessionArchive {
     }
 
     /**
+     * Returns the ArchivedSession metadata for a given sessionId, searching across all sources.
+     * Returns undefined if the session is not in the archive.
+     */
+    async findAnySource(sessionId: string): Promise<ArchivedSession | undefined> {
+        const manifest = await this.ensureManifest();
+        for (const entry of manifest.values()) {
+            if (entry.sessionId === sessionId) {
+                return {
+                    sessionId: entry.sessionId,
+                    source: entry.source,
+                    filePath: path.join(this.archiveRoot, entry.relPath),
+                    archivedAt: entry.archivedAt,
+                    sizeBytes: entry.sizeBytes,
+                };
+            }
+        }
+        return undefined;
+    }
+
+    /**
      * Returns summary statistics about the archive.
      */
     async stats(): Promise<ArchiveStats> {
@@ -259,5 +284,22 @@ export class SessionArchive {
         }
 
         return removed;
+    }
+
+    /**
+     * Permanently deletes a single archived session from disk and the manifest.
+     * Returns true if the entry existed and was removed, false if it was not found.
+     */
+    async delete(sessionId: string, source: string): Promise<boolean> {
+        const manifest = await this.ensureManifest();
+        const key = this._key(sessionId, source);
+        const entry = manifest.get(key);
+        if (!entry) { return false; }
+        try {
+            await fs.promises.unlink(path.join(this.archiveRoot, entry.relPath));
+        } catch { /* file may already be gone */ }
+        manifest.delete(key);
+        await this.saveManifest();
+        return true;
     }
 }

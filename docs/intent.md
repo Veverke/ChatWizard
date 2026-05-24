@@ -190,5 +190,3 @@ The following were considered and ruled out:
 - Copilot JSONL files are append-only operation logs (not snapshots) and require log replay to reconstruct conversation state
 - Token counting uses the tokenizer vocab files already present on disk from the Copilot Chat extension installation
  - Token counting uses the tokenizer vocab files already present on disk from the Copilot Chat extension installation
-
-I was here

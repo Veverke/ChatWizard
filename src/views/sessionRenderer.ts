@@ -141,13 +141,22 @@ export function renderMessage(
         : '';
     const fadeStyle = (fadeIdx !== undefined && fadeIdx < 16) ? ` style="--cw-i:${fadeIdx}"` : '';
 
+    // Compute independent P/R turn index for this message.
+    // Count all prior visible messages of the same role (1-based).
+    let pCount = 0, rCount = 0;
+    for (let i = 0; i <= visibleIdx; i++) {
+        if (visibleMessages[i].msg.role === 'user') { pCount++; }
+        else { rCount++; }
+    }
+    const turnLabel = msg.role === 'user' ? `P${pCount}` : `R${rCount}`;
+
     // Skipped-line placeholder: show a notice instead of normal message content.
     if (msg.skipped) {
         const sizeKb  = msg.skippedLineLength !== undefined ? Math.round(msg.skippedLineLength / 1024) : '?';
         const limitKb = msg.skippedLineLimit  !== undefined ? Math.round(msg.skippedLineLimit  / 1024) : '?';
-        return `<div class="message ${roleClass} cw-fade-item"${fadeStyle} data-msg-idx="${origIdx}">
+        return `<div class="message ${roleClass} cw-fade-item"${fadeStyle} data-msg-idx="${origIdx}" id="cw-msg-${turnLabel}">
   <div class="message-header">
-    <span class="role-label">${label}</span>${timestamp}
+    <span class="role-label">${label}</span><span class="cw-turn-label">${turnLabel}</span>${timestamp}
   </div>
   <div class="message-body skipped-notice">&#9888; Message not shown &mdash; source line is ${sizeKb}&nbsp;KB, exceeding the ${limitKb}&nbsp;KB limit. Raise <code>chatwizard.maxLineLengthChars</code> in settings to include it.</div>
 </div>`;
@@ -155,9 +164,9 @@ export function renderMessage(
 
     const renderedContent = markdownToHtml(msg.content);
 
-    let html = `<div class="message ${roleClass} cw-fade-item"${fadeStyle} data-msg-idx="${origIdx}">
+    let html = `<div class="message ${roleClass} cw-fade-item"${fadeStyle} data-msg-idx="${origIdx}" id="cw-msg-${turnLabel}">
   <div class="message-header">
-    <span class="role-label">${label}</span>${timestamp}
+    <span class="role-label">${label}</span><span class="cw-turn-label">${turnLabel}</span>${timestamp}<button class="cw-copy-ref-btn" data-turn="${turnLabel}" title="Copy as reference (${turnLabel})">&#10697;</button>
   </div>
   <div class="message-body" data-raw="${escapeHtml(msg.content)}">${renderedContent}</div>
 </div>`;
@@ -171,9 +180,12 @@ export function renderMessage(
     const hasAssistant = visibleMessages.some(vm => vm.msg.role === 'assistant');
     if (msg.role === 'user' && (!nextEntry || nextEntry.msg.role === 'user')) {
         if (hasAssistant) {
+            const noticeText = msg.interrupted
+                ? '&#9888; Superseded &mdash; a new prompt arrived while AI was processing this one'
+                : '&#9888; Response not available &mdash; cancelled or incomplete';
             html += `\n<div class="message assistant cw-role-response aborted">
   <div class="message-header"><span class="role-label">${assistantLabel}</span></div>
-  <div class="message-body aborted-notice">&#9888; Response not available &mdash; cancelled or incomplete</div>
+  <div class="message-body aborted-notice">${noticeText}</div>
 </div>`;
         } else {
             html += `\n<div class="message assistant cw-role-response aborted">

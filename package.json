@@ -56,9 +56,6 @@
   "engines": {
     "vscode": "^1.85.0"
   },
-  "enabledApiProposals": [
-    "timeline"
-  ],
   "categories": [
     "Machine Learning",
     "Visualization"
@@ -245,6 +242,24 @@
         "title": "Unpin Session",
         "category": "Chat Wizard",
         "icon": "$(pinned)"
+      },
+      {
+        "command": "chatwizard.revealSessionInExplorer",
+        "title": "Reveal in Explorer",
+        "category": "Chat Wizard",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "chatwizard.archiveSession",
+        "title": "Archive Session",
+        "category": "Chat Wizard",
+        "icon": "$(archive)"
+      },
+      {
+        "command": "chatwizard.deleteArchivedSession",
+        "title": "Delete Archived Session",
+        "category": "Chat Wizard",
+        "icon": "$(trash)"
       },
       {
         "command": "chatwizard.loadMoreSessions",
@@ -826,6 +841,21 @@
           "group": "inline@2"
         },
         {
+          "command": "chatwizard.revealSessionInExplorer",
+          "when": "viewItem == session || viewItem == session.pinned || viewItem == session.archived",
+          "group": "3_reveal@1"
+        },
+        {
+          "command": "chatwizard.archiveSession",
+          "when": "viewItem == session || viewItem == session.pinned",
+          "group": "4_archive@1"
+        },
+        {
+          "command": "chatwizard.deleteArchivedSession",
+          "when": "viewItem == session.archived",
+          "group": "4_archive@1"
+        },
+        {
           "command": "chatwizard.regenerateTitle",
           "when": "viewItem == session || viewItem == session.pinned",
           "group": "session@3"
@@ -1106,249 +1136,276 @@
         ]
       }
     ],
-    "configuration": {
-      "title": "Chat Wizard",
-      "properties": {
-        "chatwizard.userMessageColor": {
-          "type": "string",
-          "default": "#007acc",
-          "description": "Accent color for user message border and label (hex, e.g. #ff6600, or CSS color name).",
-          "format": "color-hex"
-        },
-        "chatwizard.tooltipLabelColor": {
-          "type": "string",
-          "default": "",
-          "description": "Color for field label text in session hover tooltips (hex or CSS name). Leave blank for default theme color.",
-          "format": "color-hex"
-        },
-        "chatwizard.codeBlockHighlightColor": {
-          "type": "string",
-          "default": "#EA5C00",
-          "description": "Box-shadow color applied to code blocks when opening a session from the Code Blocks view. Leave blank to disable highlighting.",
-          "format": "color-hex"
-        },
-        "chatwizard.scrollToFirstCodeBlock": {
-          "type": "boolean",
-          "default": true,
-          "description": "When opening a session from the Code Blocks view, automatically scroll to the first code block."
-        },
-        "chatwizard.claudeProjectsPath": {
-          "type": "string",
-          "default": "",
-          "description": "Custom path to the Claude Code projects directory (where .jsonl session files are stored). Leave empty to use the default: ~/.claude/projects"
-        },
-        "chatwizard.copilotStoragePath": {
-          "type": "string",
-          "default": "",
-          "description": "Custom path to the GitHub Copilot Chat workspace storage directory. Leave empty to use the platform default (%APPDATA%/Code/User/workspaceStorage on Windows)."
-        },
-        "chatwizard.enableTelemetry": {
-          "type": "boolean",
-          "default": false,
-          "description": "Enable local usage telemetry. Events are recorded to a local JSONL file in the extension's global storage directory. No data ever leaves your machine."
-        },
-        "chatwizard.enabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "Enable or disable the Chat Wizard extension. When false, no sessions are indexed and all file watching is skipped."
-        },
-        "chatwizard.indexClaude": {
-          "type": "boolean",
-          "default": true,
-          "description": "Index Claude Code chat sessions from ~/.claude/projects/ (or the configured custom path)."
-        },
-        "chatwizard.indexCopilot": {
-          "type": "boolean",
-          "default": true,
-          "description": "Index GitHub Copilot Chat sessions from VS Code workspace storage."
-        },
-        "chatwizard.indexChronicle": {
-          "type": "boolean",
-          "default": true,
-          "description": "Enrich sessions with Copilot Chronicle checkpoint summaries (overview, work done, technical details, next steps). Only active when indexCopilot is also true."
-        },
-        "chatwizard.chronicle.enableLocalIndex": {
-          "type": "boolean",
-          "default": true,
-          "description": "Automatically enable Copilot's local session index (chat.localIndex.enabled) on startup. Required for git branch data to populate when grouping sessions by Branch in the Sessions view."
-        },
-        "chatwizard.oldestSessionDate": {
-          "type": "string",
-          "default": "",
-          "pattern": "^(\\d{4}-\\d{2}-\\d{2})?$",
-          "patternErrorMessage": "Use YYYY-MM-DD format, e.g. 2025-01-01, or leave empty for no date limit.",
-          "description": "Only load sessions created on or after this date (YYYY-MM-DD). Leave empty to load all sessions regardless of date."
-        },
-        "chatwizard.maxSessions": {
-          "type": "integer",
-          "default": 0,
-          "minimum": 0,
-          "description": "Maximum number of sessions to load. When set to a value greater than 0, only the N most recently updated sessions are kept after all other filters are applied. Set to 0 for no limit."
-        },
-        "chatwizard.maxLineLengthChars": {
-          "type": "integer",
-          "default": 1000000,
-          "minimum": 10000,
-          "description": "Maximum character length of a single JSONL line when parsing Claude sessions. Lines exceeding this limit are shown as a notice placeholder in the session viewer instead of being silently dropped. Increase this if large messages are being truncated; lower it to reduce memory usage when indexing."
-        },
-        "chatwizard.indexCline": {
-          "type": "boolean",
-          "default": true,
-          "description": "Index Cline (saoudrizwan.claude-dev) task history."
-        },
-        "chatwizard.clineStoragePath": {
-          "type": "string",
-          "default": "",
-          "description": "Override the Cline globalStorage path. Leave empty to use the default OS location (%APPDATA%/Code/User/globalStorage/saoudrizwan.claude-dev/tasks on Windows)."
-        },
-        "chatwizard.indexRooCode": {
-          "type": "boolean",
-          "default": true,
-          "description": "Index Roo Code (rooveterinaryinc.roo-cline) task history."
-        },
-        "chatwizard.rooCodeStoragePath": {
-          "type": "string",
-          "default": "",
-          "description": "Override the Roo Code globalStorage path. Leave empty to use the default OS location (%APPDATA%/Code/User/globalStorage/rooveterinaryinc.roo-cline/tasks on Windows)."
-        },
-        "chatwizard.indexCursor": {
-          "type": "boolean",
-          "default": true,
-          "description": "Index Cursor chat sessions from the Cursor workspaceStorage directory."
-        },
-        "chatwizard.cursorStoragePath": {
-          "type": "string",
-          "default": "",
-          "description": "Override the Cursor workspaceStorage path. Leave empty to use the default OS location (%APPDATA%/Cursor/User/workspaceStorage on Windows)."
-        },
-        "chatwizard.indexWindsurf": {
-          "type": "boolean",
-          "default": true,
-          "description": "Index Windsurf (Codeium) Cascade chat sessions from the Windsurf workspaceStorage directory."
-        },
-        "chatwizard.windsurfStoragePath": {
-          "type": "string",
-          "default": "",
-          "description": "Override the Windsurf workspaceStorage path. Leave empty to use the default OS location (%APPDATA%/Windsurf/User/workspaceStorage on Windows)."
-        },
-        "chatwizard.indexAider": {
-          "type": "boolean",
-          "default": true,
-          "description": "Index Aider chat history files (.aider.chat.history.md) found in VS Code workspace folders and any configured aiderSearchRoots."
-        },
-        "chatwizard.aiderSearchRoots": {
-          "type": "array",
-          "items": {
-            "type": "string"
+    "configuration": [
+      {
+        "title": "Chat Wizard: General",
+        "properties": {
+          "chatwizard.enabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Enable or disable the Chat Wizard extension. When false, no sessions are indexed and all file watching is skipped."
           },
-          "default": [],
-          "description": "Additional root directories to search for .aider.chat.history.md files (up to aiderSearchDepth levels deep)."
-        },
-        "chatwizard.aiderSearchDepth": {
-          "type": "integer",
-          "default": 3,
-          "minimum": 1,
-          "maximum": 5,
-          "description": "Maximum directory depth to recurse when searching for .aider.chat.history.md files (default: 3, max: 5)."
-        },
-        "chatwizard.indexAntigravity": {
-          "type": "boolean",
-          "default": true,
-          "description": "Index Google Antigravity agent conversation sessions from the ~/.gemini/antigravity/brain directory."
-        },
-        "chatwizard.antigravityBrainPath": {
-          "type": "string",
-          "default": "",
-          "description": "Override the Google Antigravity brain directory path. Leave empty to use the default OS location (~/.gemini/antigravity/brain)."
-        },
-        "chatwizard.indexContinue": {
-          "type": "boolean",
-          "default": true,
-          "description": "Index Continue.dev AI assistant sessions from ~/.continue/sessions."
-        },
-        "chatwizard.continueStoragePath": {
-          "type": "string",
-          "default": "",
-          "description": "Override the Continue.dev sessions directory path. Leave empty to use the default OS location (~/.continue/sessions)."
-        },
-        "chatwizard.indexAmazonQ": {
-          "type": "boolean",
-          "default": true,
-          "description": "Index Amazon Q Developer conversation sessions from VS Code extension storage."
-        },
-        "chatwizard.amazonQStoragePath": {
-          "type": "string",
-          "default": "",
-          "description": "Override the Amazon Q Developer storage directory path. Leave empty to auto-detect."
-        },
-        "chatwizard.indexGeminiCodeAssist": {
-          "type": "boolean",
-          "default": true,
-          "description": "Index Gemini Code Assist conversation sessions from VS Code extension storage."
-        },
-        "chatwizard.geminiCodeAssistStoragePath": {
-          "type": "string",
-          "default": "",
-          "description": "Override the Gemini Code Assist storage directory path. Leave empty to auto-detect."
-        },
-        "chatwizard.archive.maxAgeDays": {
-          "type": "number",
-          "default": 0,
-          "minimum": 0,
-          "description": "Maximum age (days) for archived sessions. Sessions older than this will be pruned. 0 = no age limit."
-        },
-        "chatwizard.archive.maxSizeMB": {
-          "type": "number",
-          "default": 0,
-          "minimum": 0,
-          "description": "Maximum total archive size (MB). Oldest sessions are pruned first when the limit is exceeded. 0 = no size limit."
-        },
-        "chatwizard.codeLens.enabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "Show a CodeLens at the top of files that were referenced in ChatWizard sessions (Feature 10: File History)."
-        },
-        "chatwizard.workItemPattern": {
-          "type": "string",
-          "default": "",
-          "markdownDescription": "Regular expression for extracting work-item IDs from session titles and messages. Used when grouping sessions by **Work Item** in the Sessions view (Group Sessions… button).\n\nExample: `PREFIX-\\d+` matches tickets like `prefix-12345`.\n\nLeave empty to use the built-in pattern covering JIRA (`ABC-123`), GitHub (`#123`), and Azure DevOps (`AB#1234`)."
-        },
-        "chatwizard.mcp.reranker.enabled": {
-          "type": "boolean",
-          "default": false,
-          "description": "Enable TF-IDF reranking of MCP context results after initial retrieval (Feature 21). Improves relevance at a small CPU cost."
-        },
-        "chatwizard.enableSemanticSearch": {
-          "type": "boolean",
-          "default": false,
-          "description": "Enable topic-similarity search powered by a local AI model. Finds past sessions by topic — not keywords. Downloads a ~22 MB model on first use."
-        },
-        "chatwizard.semanticMinScore": {
-          "type": "number",
-          "default": 0.35,
-          "minimum": 0,
-          "maximum": 1,
-          "description": "Minimum similarity score (0–1) for a session to appear in topic similarity search results. Lower values show more (but less relevant) results. Recommended range: 0.30–0.45."
-        },
-        "chatwizard.mcpServer.enabled": {
-          "type": "boolean",
-          "default": false,
-          "description": "Start a local MCP server so AI tools can query your chat history as context."
-        },
-        "chatwizard.mcpServer.port": {
-          "type": "number",
-          "default": 6789,
-          "minimum": 1024,
-          "maximum": 65535,
-          "description": "Port for the local MCP server. Restart VS Code after changing."
-        },
-        "chatwizard.mcpServer.allowTokenRotation": {
-          "type": "boolean",
-          "default": false,
-          "markdownDescription": "When `true`, the **Chat Wizard: Rotate MCP Token** command (`chatwizard.rotateMcpToken`) is permitted to generate a new MCP bearer token, immediately invalidating the previous one. All AI tools configured with the old token must be reconfigured after rotation."
+          "chatwizard.enableTelemetry": {
+            "type": "boolean",
+            "default": false,
+            "description": "Enable local usage telemetry. Events are recorded to a local JSONL file in the extension's global storage directory. No data ever leaves your machine."
+          },
+          "chatwizard.oldestSessionDate": {
+            "type": "string",
+            "default": "",
+            "pattern": "^(\\d{4}-\\d{2}-\\d{2})?$",
+            "patternErrorMessage": "Use YYYY-MM-DD format, e.g. 2025-01-01, or leave empty for no date limit.",
+            "description": "Only load sessions created on or after this date (YYYY-MM-DD). Leave empty to load all sessions regardless of date."
+          },
+          "chatwizard.maxSessions": {
+            "type": "integer",
+            "default": 0,
+            "minimum": 0,
+            "description": "Maximum number of sessions to load. When set to a value greater than 0, only the N most recently updated sessions are kept after all other filters are applied. Set to 0 for no limit."
+          },
+          "chatwizard.maxLineLengthChars": {
+            "type": "integer",
+            "default": 1000000,
+            "minimum": 10000,
+            "description": "Maximum character length of a single JSONL line when parsing Claude sessions. Lines exceeding this limit are shown as a notice placeholder in the session viewer instead of being silently dropped. Increase this if large messages are being truncated; lower it to reduce memory usage when indexing."
+          }
+        }
+      },
+      {
+        "title": "Chat Wizard: Sources",
+        "properties": {
+          "chatwizard.indexClaude": {
+            "type": "boolean",
+            "default": true,
+            "description": "Index Claude Code chat sessions from ~/.claude/projects/ (or the configured custom path)."
+          },
+          "chatwizard.claudeProjectsPath": {
+            "type": "string",
+            "default": "",
+            "description": "Custom path to the Claude Code projects directory (where .jsonl session files are stored). Leave empty to use the default: ~/.claude/projects"
+          },
+          "chatwizard.indexCopilot": {
+            "type": "boolean",
+            "default": true,
+            "description": "Index GitHub Copilot Chat sessions from VS Code workspace storage."
+          },
+          "chatwizard.copilotStoragePath": {
+            "type": "string",
+            "default": "",
+            "description": "Custom path to the GitHub Copilot Chat workspace storage directory. Leave empty to use the platform default (%APPDATA%/Code/User/workspaceStorage on Windows)."
+          },
+          "chatwizard.indexChronicle": {
+            "type": "boolean",
+            "default": true,
+            "description": "Enrich sessions with Copilot Chronicle checkpoint summaries (overview, work done, technical details, next steps). Only active when indexCopilot is also true."
+          },
+          "chatwizard.chronicle.enableLocalIndex": {
+            "type": "boolean",
+            "default": true,
+            "description": "Automatically enable Copilot's local session index (chat.localIndex.enabled) on startup. Required for git branch data to populate when grouping sessions by Branch in the Sessions view."
+          },
+          "chatwizard.indexCline": {
+            "type": "boolean",
+            "default": true,
+            "description": "Index Cline (saoudrizwan.claude-dev) task history."
+          },
+          "chatwizard.clineStoragePath": {
+            "type": "string",
+            "default": "",
+            "description": "Override the Cline globalStorage path. Leave empty to use the default OS location (%APPDATA%/Code/User/globalStorage/saoudrizwan.claude-dev/tasks on Windows)."
+          },
+          "chatwizard.indexRooCode": {
+            "type": "boolean",
+            "default": true,
+            "description": "Index Roo Code (rooveterinaryinc.roo-cline) task history."
+          },
+          "chatwizard.rooCodeStoragePath": {
+            "type": "string",
+            "default": "",
+            "description": "Override the Roo Code globalStorage path. Leave empty to use the default OS location (%APPDATA%/Code/User/globalStorage/rooveterinaryinc.roo-cline/tasks on Windows)."
+          },
+          "chatwizard.indexCursor": {
+            "type": "boolean",
+            "default": true,
+            "description": "Index Cursor chat sessions from the Cursor workspaceStorage directory."
+          },
+          "chatwizard.cursorStoragePath": {
+            "type": "string",
+            "default": "",
+            "description": "Override the Cursor workspaceStorage path. Leave empty to use the default OS location (%APPDATA%/Cursor/User/workspaceStorage on Windows)."
+          },
+          "chatwizard.indexWindsurf": {
+            "type": "boolean",
+            "default": true,
+            "description": "Index Windsurf (Codeium) Cascade chat sessions from the Windsurf workspaceStorage directory."
+          },
+          "chatwizard.windsurfStoragePath": {
+            "type": "string",
+            "default": "",
+            "description": "Override the Windsurf workspaceStorage path. Leave empty to use the default OS location (%APPDATA%/Windsurf/User/workspaceStorage on Windows)."
+          },
+          "chatwizard.indexAider": {
+            "type": "boolean",
+            "default": true,
+            "description": "Index Aider chat history files (.aider.chat.history.md) found in VS Code workspace folders and any configured aiderSearchRoots."
+          },
+          "chatwizard.aiderSearchRoots": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": [],
+            "description": "Additional root directories to search for .aider.chat.history.md files (up to aiderSearchDepth levels deep)."
+          },
+          "chatwizard.aiderSearchDepth": {
+            "type": "integer",
+            "default": 3,
+            "minimum": 1,
+            "maximum": 5,
+            "description": "Maximum directory depth to recurse when searching for .aider.chat.history.md files (default: 3, max: 5)."
+          },
+          "chatwizard.indexAntigravity": {
+            "type": "boolean",
+            "default": true,
+            "description": "Index Google Antigravity agent conversation sessions from the ~/.gemini/antigravity/brain directory."
+          },
+          "chatwizard.antigravityBrainPath": {
+            "type": "string",
+            "default": "",
+            "description": "Override the Google Antigravity brain directory path. Leave empty to use the default OS location (~/.gemini/antigravity/brain)."
+          },
+          "chatwizard.indexContinue": {
+            "type": "boolean",
+            "default": true,
+            "description": "Index Continue.dev AI assistant sessions from ~/.continue/sessions."
+          },
+          "chatwizard.continueStoragePath": {
+            "type": "string",
+            "default": "",
+            "description": "Override the Continue.dev sessions directory path. Leave empty to use the default OS location (~/.continue/sessions)."
+          },
+          "chatwizard.indexAmazonQ": {
+            "type": "boolean",
+            "default": true,
+            "description": "Index Amazon Q Developer conversation sessions from VS Code extension storage."
+          },
+          "chatwizard.amazonQStoragePath": {
+            "type": "string",
+            "default": "",
+            "description": "Override the Amazon Q Developer storage directory path. Leave empty to auto-detect."
+          },
+          "chatwizard.indexGeminiCodeAssist": {
+            "type": "boolean",
+            "default": true,
+            "description": "Index Gemini Code Assist conversation sessions from VS Code extension storage."
+          },
+          "chatwizard.geminiCodeAssistStoragePath": {
+            "type": "string",
+            "default": "",
+            "description": "Override the Gemini Code Assist storage directory path. Leave empty to auto-detect."
+          }
+        }
+      },
+      {
+        "title": "Chat Wizard: Search",
+        "properties": {
+          "chatwizard.enableSemanticSearch": {
+            "type": "boolean",
+            "default": true,
+            "description": "Enable topic-similarity search powered by a local AI model. Finds past sessions by topic — not keywords. Downloads a ~22 MB model on first use."
+          },
+          "chatwizard.semanticMinScore": {
+            "type": "number",
+            "default": 0.35,
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Minimum similarity score (0–1) for a session to appear in topic similarity search results. Lower values show more (but less relevant) results. Recommended range: 0.30–0.45."
+          },
+          "chatwizard.mcp.reranker.enabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Enable TF-IDF reranking of MCP context results after initial retrieval (Feature 21). Improves relevance at a small CPU cost."
+          },
+          "chatwizard.workItemPattern": {
+            "type": "string",
+            "default": "",
+            "markdownDescription": "Regular expression for extracting work-item IDs from session titles and messages. Used when grouping sessions by **Work Item** in the Sessions view (Group Sessions… button).\n\nExample: `PREFIX-\\d+` matches tickets like `prefix-12345`.\n\nLeave empty to disable work item grouping — no Work Item group will appear in the Sessions view."
+          }
+        }
+      },
+      {
+        "title": "Chat Wizard: MCP Server",
+        "properties": {
+          "chatwizard.mcpServer.enabled": {
+            "type": "boolean",
+            "default": false,
+            "description": "Start a local MCP server so AI tools can query your chat history as context."
+          },
+          "chatwizard.mcpServer.port": {
+            "type": "number",
+            "default": 6789,
+            "minimum": 1024,
+            "maximum": 65535,
+            "description": "Port for the local MCP server. Restart VS Code after changing."
+          },
+          "chatwizard.mcpServer.allowTokenRotation": {
+            "type": "boolean",
+            "default": false,
+            "markdownDescription": "When `true`, the **Chat Wizard: Rotate MCP Token** command (`chatwizard.rotateMcpToken`) is permitted to generate a new MCP bearer token, immediately invalidating the previous one. All AI tools configured with the old token must be reconfigured after rotation."
+          }
+        }
+      },
+      {
+        "title": "Chat Wizard: Archive",
+        "properties": {
+          "chatwizard.archive.maxAgeDays": {
+            "type": "number",
+            "default": 0,
+            "minimum": 0,
+            "description": "Maximum age (days) for archived sessions. Sessions older than this will be pruned. 0 = no age limit."
+          },
+          "chatwizard.archive.maxSizeMB": {
+            "type": "number",
+            "default": 0,
+            "minimum": 0,
+            "description": "Maximum total archive size (MB). Oldest sessions are pruned first when the limit is exceeded. 0 = no size limit."
+          }
+        }
+      },
+      {
+        "title": "Chat Wizard: Appearance",
+        "properties": {
+          "chatwizard.userMessageColor": {
+            "type": "string",
+            "default": "#007acc",
+            "description": "Accent color for user message border and label (hex, e.g. #ff6600, or CSS color name).",
+            "format": "color-hex"
+          },
+          "chatwizard.tooltipLabelColor": {
+            "type": "string",
+            "default": "",
+            "description": "Color for field label text in session hover tooltips (hex or CSS name). Leave blank for default theme color.",
+            "format": "color-hex"
+          },
+          "chatwizard.codeBlockHighlightColor": {
+            "type": "string",
+            "default": "#EA5C00",
+            "description": "Box-shadow color applied to code blocks when opening a session from the Code Blocks view. Leave blank to disable highlighting.",
+            "format": "color-hex"
+          },
+          "chatwizard.scrollToFirstCodeBlock": {
+            "type": "boolean",
+            "default": true,
+            "description": "When opening a session from the Code Blocks view, automatically scroll to the first code block."
+          },
+          "chatwizard.codeLens.enabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Show a CodeLens at the top of files that were referenced in ChatWizard sessions (Feature 10: File History)."
+          }
         }
       }
-    }
+    ]
   },
   "scripts": {
     "prepare": "husky",

@@ -36,9 +36,10 @@ export class SessionTreeItem extends vscode.TreeItem {
             ? `${(summary.fileSizeBytes / 1024).toFixed(1)} KB`
             : undefined;
 
+        const archivedSuffix = summary.archived ? ' · archived' : '';
         this.description = sizeKb
-            ? `${workspaceName} · ${date} · ${msgCount} msgs · ${sizeKb}`
-            : `${workspaceName} · ${date} · ${msgCount} msgs`;
+            ? `${workspaceName} · ${date} · ${msgCount} msgs · ${sizeKb}${archivedSuffix}`
+            : `${workspaceName} · ${date} · ${msgCount} msgs${archivedSuffix}`;
 
         const sourceName = friendlySourceName(summary.source);
         const modelLine = summary.model ? `\n\n**Model:** ${summary.model}` : '';
@@ -102,7 +103,7 @@ export class SessionTreeItem extends vscode.TreeItem {
             this.resourceUri = vscode.Uri.from({ scheme: 'chatwizard-warn', path: '/' + summary.id });
         }
 
-        this.contextValue = pinned ? 'session.pinned' : 'session';
+        this.contextValue = pinned ? 'session.pinned' : summary.archived ? 'session.archived' : 'session';
 
         this.command = {
             command: 'chatwizard.openSession',

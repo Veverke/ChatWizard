@@ -222,3 +222,181 @@ suite('SessionArchive — prune()', () => {
     });
 
 });
+
+// ---------------------------------------------------------------------------
+// SessionArchive — findAnySource()
+// ---------------------------------------------------------------------------
+
+suite('SessionArchive — findAnySource()', () => {
+
+    let tmpDir: string;
+    let archive: SessionArchive;
+
+    setup(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cw-archive-find-'));
+        archive = new SessionArchive(tmpDir);
+    });
+
+    teardown(() => {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    test('returns undefined for a sessionId that has never been saved', async () => {
+        const result = await archive.findAnySource('no-such-session');
+        assert.strictEqual(result, undefined);
+    });
+
+    test('returns ArchivedSession metadata for a saved session', async () => {
+        await archive.save('find-001', 'copilot', makeCopilotSessionJson('find-001', 'Findable session'));
+        const result = await archive.findAnySource('find-001');
+        assert.ok(result !== undefined, 'should find the session');
+        assert.strictEqual(result!.sessionId, 'find-001');
+        assert.strictEqual(result!.source, 'copilot');
+        assert.ok(result!.filePath.endsWith('.json'), 'filePath should be a .json file');
+        assert.ok(result!.sizeBytes > 0, 'sizeBytes should be positive');
+    });
+
+    test('finds session regardless of which source it was saved under', async () => {
+        // Archive under 'claude' — caller doesn't need to know the source ahead of time
+        await archive.save('find-claude', 'claude', '{"id":"find-claude","source":"claude","messages":[]}');
+        const result = await archive.findAnySource('find-claude');
+        assert.ok(result !== undefined, 'should find session saved under claude source');
+        assert.strictEqual(result!.source, 'claude');
+    });
+
+    test('returns first match when same sessionId exists under multiple sources', async () => {
+        await archive.save('multi-src', 'copilot', makeCopilotSessionJson('multi-src', 'Copilot version'));
+        await archive.save('multi-src', 'claude', '{"id":"multi-src","source":"claude","messages":[]}');
+        const result = await archive.findAnySource('multi-src');
+        assert.ok(result !== undefined, 'should find at least one entry');
+        assert.strictEqual(result!.sessionId, 'multi-src');
+    });
+
+    test('returns undefined after delete()', async () => {
+        await archive.save('find-del', 'copilot', makeCopilotSessionJson('find-del', 'To be deleted'));
+        assert.ok(await archive.findAnySource('find-del'), 'should exist before delete');
+        await archive.delete('find-del', 'copilot');
+        const result = await archive.findAnySource('find-del');
+        assert.strictEqual(result, undefined, 'should be gone after delete');
+    });
+
+    test('new instance finds previously saved session (manifest persists)', async () => {
+        await archive.save('find-persist', 'copilot', makeCopilotSessionJson('find-persist', 'Persistent'));
+
+        const archive2 = new SessionArchive(tmpDir);
+        const result = await archive2.findAnySource('find-persist');
+        assert.ok(result !== undefined, 'new instance should find the session from disk');
+        assert.strictEqual(result!.sessionId, 'find-persist');
+    });
+
+    test('archivedAt is a valid ISO-8601 date string', async () => {
+        await archive.save('ts-check', 'copilot', makeCopilotSessionJson('ts-check', 'Timestamp check'));
+        const result = await archive.findAnySource('ts-check');
+        assert.ok(result !== undefined);
+        const ts = Date.parse(result!.archivedAt);
+        assert.ok(!Number.isNaN(ts), 'archivedAt should parse as a valid date');
+        assert.ok(ts <= Date.now(), 'archivedAt should not be in the future');
+    });
+
+});
+
+// ---------------------------------------------------------------------------
+// SessionArchive — delete()
+// ---------------------------------------------------------------------------
+
+suite('SessionArchive — delete()', () => {
+
+    let tmpDir: string;
+    let archive: SessionArchive;
+
+    setup(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cw-archive-delete-'));
+        archive = new SessionArchive(tmpDir);
+    });
+
+    teardown(() => {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    test('returns false when session does not exist', async () => {
+        const result = await archive.delete('ghost-session', 'copilot');
+        assert.strictEqual(result, false);
+    });
+
+    test('returns true when session exists and is successfully deleted', async () => {
+        await archive.save('del-001', 'copilot', makeCopilotSessionJson('del-001', 'Delete me'));
+        const result = await archive.delete('del-001', 'copilot');
+        assert.strictEqual(result, true);
+    });
+
+    test('has() returns false after delete()', async () => {
+        await archive.save('del-002', 'copilot', makeCopilotSessionJson('del-002', 'Will be deleted'));
+        await archive.delete('del-002', 'copilot');
+        assert.strictEqual(archive.has('del-002', 'copilot'), false);
+    });
+
+    test('loadRaw() returns undefined after delete()', async () => {
+        await archive.save('del-003', 'copilot', makeCopilotSessionJson('del-003', 'Content check'));
+        await archive.delete('del-003', 'copilot');
+        const raw = await archive.loadRaw('del-003', 'copilot');
+        assert.strictEqual(raw, undefined);
+    });
+
+    test('stats().totalSessions decrements by 1 after delete()', async () => {
+        await archive.save('del-s1', 'copilot', makeCopilotSessionJson('del-s1', 'S1'));
+        await archive.save('del-s2', 'copilot', makeCopilotSessionJson('del-s2', 'S2'));
+        const before = await archive.stats();
+        assert.strictEqual(before.totalSessions, 2);
+
+        await archive.delete('del-s1', 'copilot');
+
+        const after = await archive.stats();
+        assert.strictEqual(after.totalSessions, 1, 'totalSessions should decrement by 1');
+    });
+
+    test('physical .json file is removed from disk after delete()', async () => {
+        const content = makeCopilotSessionJson('del-disk', 'Disk test');
+        await archive.save('del-disk', 'copilot', content);
+
+        // Locate the file before deletion
+        const entry = await archive.findAnySource('del-disk');
+        assert.ok(entry !== undefined);
+        const filePath = entry!.filePath;
+        assert.ok(fs.existsSync(filePath), 'file should exist before delete');
+
+        await archive.delete('del-disk', 'copilot');
+        assert.strictEqual(fs.existsSync(filePath), false, 'file should be gone after delete');
+    });
+
+    test('manifest persists removal across process restart', async () => {
+        await archive.save('del-restart', 'copilot', makeCopilotSessionJson('del-restart', 'Restart test'));
+        await archive.delete('del-restart', 'copilot');
+
+        const archive2 = new SessionArchive(tmpDir);
+        const result = await archive2.findAnySource('del-restart');
+        assert.strictEqual(result, undefined, 'new instance should not find deleted session');
+    });
+
+    test('deleting one session does not affect another session in the same source', async () => {
+        await archive.save('keep-me', 'copilot', makeCopilotSessionJson('keep-me', 'Keep me'));
+        await archive.save('del-me', 'copilot', makeCopilotSessionJson('del-me', 'Delete me'));
+
+        await archive.delete('del-me', 'copilot');
+
+        assert.strictEqual(archive.has('keep-me', 'copilot'), true, '"keep-me" should still exist');
+        assert.strictEqual(archive.has('del-me', 'copilot'), false, '"del-me" should be gone');
+        const raw = await archive.loadRaw('keep-me', 'copilot');
+        assert.ok(raw, '"keep-me" content should still be readable');
+    });
+
+    test('deleting one source entry does not remove the same sessionId under a different source', async () => {
+        await archive.save('shared-id', 'copilot', makeCopilotSessionJson('shared-id', 'Copilot entry'));
+        await archive.save('shared-id', 'claude', '{"id":"shared-id","source":"claude","messages":[]}');
+
+        await archive.delete('shared-id', 'copilot');
+
+        assert.strictEqual(archive.has('shared-id', 'copilot'), false, 'copilot entry should be deleted');
+        assert.strictEqual(archive.has('shared-id', 'claude'), true, 'claude entry should survive');
+    });
+
+});

@@ -38,6 +38,8 @@ export interface Message {
     skippedLineLength?: number;
     /** The limit that was in effect when the line was skipped (only set when skipped = true) */
     skippedLineLimit?: number;
+    /** True when this user message arrived while AI was still processing tool calls for a prior response */
+    interrupted?: boolean;
 }
 
 /** A complete chat session (one conversation thread) */
@@ -163,6 +165,8 @@ export interface SessionSummary {
     interrupted?: boolean;
     /** True when the session has one or more non-fatal parse errors */
     hasParseErrors?: boolean;
+    /** True when the session is being served from the ChatWizard archive (source file deleted) */
+    archived?: boolean;
 }
 
 /** Per-assistant request count within a WorkspaceUsage */

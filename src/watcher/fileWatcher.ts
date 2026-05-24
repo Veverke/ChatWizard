@@ -1165,6 +1165,16 @@ this.index.remove(taskId);
         return null;
     }
 
+    /**
+     * Re-read and re-index a session by its ID.
+     * Called by `/referMessage` to guarantee the index is up-to-date before a turn lookup.
+     */
+    public refreshSessionById(sessionId: string): void {
+        const session = this.index.get(sessionId);
+        if (!session?.filePath) { return; }
+        this.indexFile(session.filePath, session.source, session.workspaceId, session.workspacePath);
+    }
+
     /** Parse and immediately upsert a single file into the index (used for live file-change events). */
     private indexFile(
         filePath: string,

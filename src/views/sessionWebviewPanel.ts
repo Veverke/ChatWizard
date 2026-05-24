@@ -43,6 +43,9 @@ export class SessionWebviewPanel {
     /** Per-panel window / streaming state */
     static readonly _panelState = new Map<string, PanelMsgState>();
 
+    /** Output channel for surfacing silent errors */
+    static _channel: vscode.OutputChannel | undefined;
+
     // ── Public entry point ────────────────────────────────────────────────────
 
     static show(
@@ -155,6 +158,13 @@ export class SessionWebviewPanel {
                 } else if (msg.command === 'copy' && msg.text) {
                     void vscode.env.clipboard.writeText(msg.text);
                     void vscode.window.showInformationMessage('Chat copied to clipboard.');
+                } else if (msg.command === 'copyTurnRef' && msg.text) {
+                    void vscode.env.clipboard.writeText(msg.text);
+                    void vscode.window.showInformationMessage('Reference copied to clipboard.');
+                } else if ((msg as any).type === 'iife-error') {
+                    const errMsg = `[ChatWizard] Webview IIFE error for session ${session.id}: ${(msg as any).message}`;
+                    SessionWebviewPanel._channel?.appendLine(errMsg);
+                    console.error(errMsg);
                 } else if (msg.type === 'revealInTree') {
                     void vscode.commands.executeCommand('chatwizard.revealInSessionsTree', session.id);
                 }
@@ -172,6 +182,25 @@ export class SessionWebviewPanel {
     // ── Streaming pipeline ────────────────────────────────────────────────────
 
     static async _startStream(
+        panelId:          string,
+        myVersion:        number,
+        userColor:        string,
+        searchTerm:       string | undefined,
+        scrollInit:       ScrollInit,
+        highlightContainer?: boolean
+    ): Promise<void> {
+        try {
+        return await SessionWebviewPanel.__startStreamInner(
+            panelId, myVersion, userColor, searchTerm, scrollInit, highlightContainer
+        );
+        } catch (err) {
+            const msg = `[ChatWizard] _startStream error for panel ${panelId}: ${err instanceof Error ? err.stack ?? err.message : String(err)}`;
+            SessionWebviewPanel._channel?.appendLine(msg);
+            console.error(msg);
+        }
+    }
+
+    private static async __startStreamInner(
         panelId:          string,
         myVersion:        number,
         userColor:        string,
@@ -412,6 +441,30 @@ export class SessionWebviewPanel {
       opacity: 0.75;
     }
     .message.user .role-label { color: var(--cw-user-color); }
+    .cw-turn-label {
+      font-size: 0.72em;
+      font-family: var(--vscode-editor-font-family, monospace);
+      opacity: 0.45;
+      padding: 0 3px;
+      border: 1px solid currentColor;
+      border-radius: 3px;
+      user-select: none;
+    }
+    .cw-copy-ref-btn {
+      margin-left: auto;
+      background: none;
+      border: none;
+      cursor: pointer;
+      opacity: 0;
+      padding: 1px 4px;
+      font-size: 0.85em;
+      color: inherit;
+      transition: opacity 0.15s;
+      border-radius: 3px;
+      line-height: 1;
+    }
+    .message:hover .cw-copy-ref-btn { opacity: 0.4; }
+    .cw-copy-ref-btn:hover { opacity: 1 !important; background: var(--cw-surface-subtle); }
     .timestamp { font-size: 0.78em; opacity: 0.5; }
     .message-body { word-wrap: break-word; }
     .message-body p { margin: 0.4em 0; }
@@ -615,6 +668,7 @@ export class SessionWebviewPanel {
 ${cwInteractiveJs()}
 (function() {
   var vscode = acquireVsCodeApi();
+  try {
 
   // ── State ──────────────────────────────────────────────────────────────────
   var _hasMore     = false;
@@ -722,6 +776,27 @@ ${cwInteractiveJs()}
     vscode.postMessage({ command: 'exportSelection', text: savedSelText });
     savedSelText = '';
     hideMenu();
+  });
+
+  // ── Turn reference copy button ──────────────────────────────────────────
+  document.addEventListener('click', function(e) {
+    var btn = e.target && e.target.closest ? e.target.closest('.cw-copy-ref-btn') : null;
+    if (!btn) { return; }
+    e.stopPropagation();
+    var turnLabel = btn.dataset.turn || '';
+    var msgEl = btn.closest('.message');
+    if (!msgEl) { return; }
+    var bodyEl = msgEl.querySelector('.message-body[data-raw]');
+    var raw = bodyEl ? (bodyEl.dataset.raw || '') : '';
+    var lines = raw.split('\\n').map(function(l) { return l.trim(); }).filter(Boolean);
+    var firstLine = lines[0] || '';
+    var lastLine  = lines.length > 1 ? lines[lines.length - 1] : '';
+    var titleEl = document.getElementById('session-title');
+    var sessionTitle = titleEl ? (titleEl.textContent || '').trim() : '';
+    var ref = (lastLine && lastLine !== firstLine)
+      ? '[Session: ' + sessionTitle + '] ' + turnLabel + '\\n\u21b3 "' + firstLine + '"\\n   "' + lastLine + '"'
+      : '[Session: ' + sessionTitle + '] ' + turnLabel + '\\n\u21b3 "' + firstLine + '"';
+    vscode.postMessage({ command: 'copyTurnRef', text: ref });
   });
 
   // ── Syntax highlighter ─────────────────────────────────────────────────────
@@ -1160,6 +1235,9 @@ ${cwInteractiveJs()}
 
   // Signal ready — extension host will send the 'render' payload
   vscode.postMessage({ type: 'ready' });
+  } catch(err) {
+    vscode.postMessage({ type: 'iife-error', message: String(err) });
+  }
 })();
 </script>
 </body>

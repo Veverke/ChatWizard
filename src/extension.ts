@@ -37,7 +37,6 @@ import { AnalyticsPanel } from './analytics/analyticsPanel';
 import { AnalyticsViewProvider } from './analytics/analyticsViewProvider';
 import { ModelUsageViewProvider } from './analytics/modelUsageViewProvider';
 import { TimelineViewProvider } from './timeline/timelineViewProvider';
-import { CwTimelineProvider } from './timeline/cwTimelineProvider';
 import { TelemetryRecorder } from './telemetry/telemetryRecorder';
 import { registerManageWorkspacesCommand } from './commands/manageWorkspaces';
 import { registerPaletteCommands } from './commands/paletteCommands';
@@ -362,30 +361,73 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     });
     context.subscriptions.push(timelineListener);
 
-    // Register CW sessions as a source in VS Code's built-in Timeline panel
-    // (Explorer → Timeline) so chat history appears alongside git commits.
-    const cwTimelineProvider = new CwTimelineProvider(index);
-    context.subscriptions.push(cwTimelineProvider);
-    // registerTimelineProvider moved from vscode.window to vscode.workspace in VS Code 1.121-insider.
-    // Use defensive runtime check to support both old and new API locations.
-    const _registerTimeline = (
-        (vscode.workspace as any).registerTimelineProvider ??
-        (vscode.window as any).registerTimelineProvider
-    ) as ((scheme: string | string[], p: unknown) => vscode.Disposable) | undefined;
-    const _timelineThis = (vscode.workspace as any).registerTimelineProvider
-        ? vscode.workspace
-        : vscode.window;
-    if (typeof _registerTimeline === 'function') {
-        try {
-            context.subscriptions.push(_registerTimeline.call(_timelineThis, 'file', cwTimelineProvider));
-        } catch {
-            // Swallow proposed-API rejection (e.g. 'timeline' not in enabledApiProposals).
+    // ── Feature 12: Session archive ──────────────────────────────────────────
+    // Registered here (before startWatcher) so it receives the initial batch event.
+    const archive = new SessionArchive(context.globalStorageUri.fsPath);
+    const archiveListener = index.addTypedChangeListener((event) => {
+        const cfg = vscode.workspace.getConfiguration('chatwizard');
+        const maxAgeDays = cfg.get<number>('archive.maxAgeDays', 0);
+        const maxSizeMB  = cfg.get<number>('archive.maxSizeMB',  0);
+
+        const archiveSession = async (session: import('./types').Session) => {
+            if (archive.has(session.id, session.source)) { return; }
+            await archive.save(session.id, session.source, JSON.stringify(session));
+        };
+
+        if (event.type === 'batch') {
+            // Skip restoring archive-only sessions on the second (archive-restore) batch
+            // to avoid an infinite loop: only act when the batch contains non-archived sessions.
+            if (event.sessions.some(s => !s.archived)) {
+                void (async () => {
+                    await archive.init();
+                    await Promise.all(event.sessions.filter(s => !s.archived).map(archiveSession));
+                    const pruned = await archive.prune({ maxAgeDays, maxSizeMB });
+
+                    // 12-D: restore sessions that exist in the archive but not in the live index
+                    const allArchived = await archive.loadAllSources();
+                    const archivedOnly: import('./types').Session[] = [];
+                    for (const entry of allArchived) {
+                        if (!index.get(entry.sessionId)) {
+                            const raw = await archive.loadRaw(entry.sessionId, entry.source);
+                            if (raw) {
+                                try {
+                                    const session = { ...JSON.parse(raw) as import('./types').Session, archived: true as const };
+                                    archivedOnly.push(session);
+                                } catch { /* ignore corrupt archive entries */ }
+                            }
+                        }
+                    }
+
+                    const stats = await archive.stats();
+                    channel.appendLine(
+                        `[Archive] ${stats.totalSessions} session(s) archived ` +
+                        `(${(stats.totalBytes / 1024).toFixed(1)} KB)` +
+                        (pruned > 0 ? `, pruned ${pruned}` : '') +
+                        (archivedOnly.length > 0 ? `, restored ${archivedOnly.length} from archive` : '')
+                    );
+
+                    if (archivedOnly.length > 0) {
+                        index.batchUpsert(archivedOnly);
+                    }
+                })();
+            }
+        } else if (event.type === 'upsert') {
+            void archiveSession(event.session);
+        } else if (event.type === 'remove') {
+            // Source file was deleted — re-surface the archived copy in the live index
+            void (async () => {
+                const entry = await archive.findAnySource(event.sessionId);
+                if (!entry) { return; }
+                const raw = await archive.loadRaw(entry.sessionId, entry.source);
+                if (!raw) { return; }
+                try {
+                    const restored = { ...JSON.parse(raw) as import('./types').Session, archived: true as const };
+                    index.upsert(restored);
+                } catch { /* ignore corrupt archive entry */ }
+            })();
         }
-    }
-    const cwTimelineListener = index.addChangeListener(() => {
-        cwTimelineProvider.refresh();
     });
-    context.subscriptions.push(cwTimelineListener);
+    context.subscriptions.push(archiveListener);
 
     const provider = new SessionTreeProvider(index, context.extensionUri);
 
@@ -915,6 +957,80 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             savePins();
         })
     );
+    context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.revealSessionInExplorer', (item: SessionTreeItem) => {
+            vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(item.summary.filePath));
+        })
+    );
+    context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.archiveSession', async (item: SessionTreeItem) => {
+            const summary = item.summary;
+            if (summary.archived) { return; }
+
+            // Cursor (and similar) use a shared .vscdb SQLite file — deleting it would
+            // remove all sessions stored in that database, not just this one.
+            if (summary.filePath.endsWith('.vscdb') || summary.filePath.endsWith('.db')) {
+                vscode.window.showErrorMessage(
+                    `Cannot archive ${friendlySourceName(summary.source)} sessions: ` +
+                    `the source file is a shared database and cannot be safely deleted.`
+                );
+                return;
+            }
+
+            const confirm = await vscode.window.showWarningMessage(
+                `Archive "${summary.title}"?\n\n` +
+                `The original source file will be permanently deleted — only the ChatWizard copy will remain.`,
+                { modal: true },
+                'Archive'
+            );
+            if (confirm !== 'Archive') { return; }
+
+            // Ensure the session is saved to the archive before the source is removed
+            const session = index.get(summary.id);
+            if (!session) {
+                vscode.window.showErrorMessage('Session not found in index — cannot archive.');
+                return;
+            }
+            try {
+                await archive.save(session.id, session.source, JSON.stringify(session));
+            } catch (err) {
+                vscode.window.showErrorMessage(`Failed to write to archive: ${err}`);
+                return;
+            }
+
+            // Delete the source file. The file watcher fires onDidDelete → index.remove
+            // → archive listener re-surfaces the session with archived: true.
+            try {
+                const { promises: fsPromises } = await import('fs');
+                await fsPromises.unlink(summary.filePath);
+            } catch (err) {
+                vscode.window.showErrorMessage(`Failed to delete source file: ${err}`);
+            }
+        })
+    );
+    context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.deleteArchivedSession', async (item: SessionTreeItem) => {
+            const summary = item.summary;
+            if (!summary.archived) { return; }
+
+            const confirm = await vscode.window.showWarningMessage(
+                `Permanently delete "${summary.title}"?\n\n` +
+                `The ChatWizard archive copy will be deleted. This cannot be undone.`,
+                { modal: true },
+                'Delete'
+            );
+            if (confirm !== 'Delete') { return; }
+
+            // Remove from archive on disk
+            const session = index.get(summary.id);
+            const source = session?.source ?? summary.source;
+            await archive.delete(summary.id, source);
+
+            // Remove from the live index — no restore will happen because the archive
+            // entry is now gone
+            index.remove(summary.id);
+        })
+    );
 
     // ------------------------------------------------------------------
     // Load more commands (pagination)
@@ -934,20 +1050,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             const hasBranch = provider.hasBranchData();
             const hasWorkItems = provider.hasWorkItems();
             const current = provider.getGroupMode();
+            const workItemPattern = vscode.workspace.getConfiguration('chatwizard').get<string>('workItemPattern', '');
 
             const items: Array<{ label: string; description?: string; mode: GroupMode }> = [
                 { label: '$(list-flat) No grouping',    mode: 'none' },
                 { label: '$(calendar) Group by Date',   mode: 'date' },
                 { label: `$(git-branch) Group by Branch${!hasBranch ? '  \u2014 open chats to populate' : ''}`, mode: 'branch' },
-                { label: '$(tag) Group by Work Item',   mode: 'workItem',
-                  description: hasWorkItems ? undefined : 'No work items found in sessions' },
+                ...(workItemPattern ? [{ label: '$(tag) Group by Work Item', mode: 'workItem' as GroupMode,
+                  description: hasWorkItems ? undefined : 'No work items found in sessions' }] : []),
             ];
 
             const activeLabel = {
                 none: '$(list-flat) No grouping',
                 date: '$(calendar) Group by Date',
                 branch: `$(git-branch) Group by Branch${!hasBranch ? '  \u2014 open chats to populate' : ''}`,
-                workItem: '$(tag) Group by Work Item',
+                workItem: workItemPattern ? '$(tag) Group by Work Item' : undefined,
             }[current];
 
             const picked = await vscode.window.showQuickPick(
@@ -1851,10 +1968,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             `Chat Wizard activated — ${index.size} sessions indexed (${copilotCount} Copilot, ${claudeCount} Claude)`
         );
         telemetry.record('extension.activated', { sessionCount: index.size });
-
-        // ── Feature 12: Session archive ──────────────────────────────────────
-        const archive = new SessionArchive(context.globalStorageUri.fsPath);
-        context.subscriptions.push({ dispose: () => { /* no-op, archive is passive */ } });
 
         // ── Feature 18: AI summaries background job ───────────────────────────
         void runSummaryBackgroundJob(

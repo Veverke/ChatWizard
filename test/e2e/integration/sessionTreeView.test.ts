@@ -343,4 +343,94 @@ suite('Sessions Tree View', function () {
         provider.clearFilter();
         assert.strictEqual(provider.hasActiveFilter(), false);
     });
+
+    // ── Archived session display ─────────────────────────────────────────
+
+    test('20a — archived session shows "· archived" suffix in description', async () => {
+        const index = new SessionIndex();
+        index.upsert(makeSession({ id: 'arch-tree-1', archived: true, title: 'Archived Session' }));
+
+        const provider = new SessionTreeProvider(index);
+        provider.setGroupMode('none');
+        const items = await collectSessionItems(provider);
+        const item = items.find(i => i.summary.id === 'arch-tree-1');
+        assert.ok(item !== undefined, 'archived session should appear in the tree');
+        assert.ok(
+            typeof item!.description === 'string' && item!.description.includes('· archived'),
+            `Expected description to contain "· archived", got: "${item!.description}"`
+        );
+    });
+
+    test('20b — non-archived session does NOT show "· archived" in description', async () => {
+        const index = new SessionIndex();
+        index.upsert(makeSession({ id: 'live-tree-1', title: 'Live Session' }));
+
+        const provider = new SessionTreeProvider(index);
+        provider.setGroupMode('none');
+        const items = await collectSessionItems(provider);
+        const item = items.find(i => i.summary.id === 'live-tree-1');
+        assert.ok(item !== undefined, 'live session should appear in the tree');
+        assert.ok(
+            typeof item!.description !== 'string' || !item!.description.includes('· archived'),
+            `Expected description NOT to contain "· archived", got: "${item!.description}"`
+        );
+    });
+
+    test('20c — archived session has contextValue "session.archived"', async () => {
+        const index = new SessionIndex();
+        index.upsert(makeSession({ id: 'arch-ctx-1', archived: true }));
+
+        const provider = new SessionTreeProvider(index);
+        provider.setGroupMode('none');
+        const items = await collectSessionItems(provider);
+        const item = items.find(i => i.summary.id === 'arch-ctx-1');
+        assert.ok(item !== undefined);
+        assert.strictEqual(item!.contextValue, 'session.archived');
+    });
+
+    test('20d — non-archived session has contextValue "session"', async () => {
+        const index = new SessionIndex();
+        index.upsert(makeSession({ id: 'live-ctx-1' }));
+
+        const provider = new SessionTreeProvider(index);
+        provider.setGroupMode('none');
+        const items = await collectSessionItems(provider);
+        const item = items.find(i => i.summary.id === 'live-ctx-1');
+        assert.ok(item !== undefined);
+        assert.strictEqual(item!.contextValue, 'session');
+    });
+
+    test('20e — pinned session retains contextValue "session.pinned" even when archived=true', async () => {
+        // Pinned takes precedence over archived in the contextValue logic
+        const index = new SessionIndex();
+        const session = makeSession({ id: 'pinned-arch-1', archived: true });
+        index.upsert(session);
+
+        const provider = new SessionTreeProvider(index);
+        provider.setGroupMode('none');
+        provider.setPinnedIds(['pinned-arch-1']);
+        const items = await collectSessionItems(provider);
+        const item = items.find(i => i.summary.id === 'pinned-arch-1');
+        assert.ok(item !== undefined);
+        assert.strictEqual(item!.contextValue, 'session.pinned',
+            'pinned takes precedence over archived in contextValue');
+    });
+
+    test('20f — archived and non-archived sessions coexist in same flat list', async () => {
+        const index = new SessionIndex();
+        index.upsert(makeSession({ id: 'mixed-live', title: 'Live' }));
+        index.upsert(makeSession({ id: 'mixed-arch', title: 'Archived', archived: true }));
+
+        const provider = new SessionTreeProvider(index);
+        provider.setGroupMode('none');
+        const items = await collectSessionItems(provider);
+
+        assert.strictEqual(items.length, 2, 'both sessions should appear');
+        const liveItem = items.find(i => i.summary.id === 'mixed-live');
+        const archItem = items.find(i => i.summary.id === 'mixed-arch');
+
+        assert.strictEqual(liveItem!.contextValue, 'session');
+        assert.strictEqual(archItem!.contextValue, 'session.archived');
+    });
+
 });

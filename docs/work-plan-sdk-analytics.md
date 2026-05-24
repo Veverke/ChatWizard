@@ -204,6 +204,8 @@ All captured once per `ExtensionAnalytics.init()` call and stored as session con
 
 SDK users can suppress any auto-event via config.
 
+> **`extension.deactivated` caveat**: VS Code calls `deactivate()` on every shutdown, window reload, and extension host restart — not only on uninstall. No reason code is passed. This event cannot be used to detect uninstall. See Known Platform Limitations.
+
 ---
 
 ### 1.4 Manual tracking API
@@ -272,12 +274,21 @@ All data stored in `context.globalState` under a namespaced key (`__vsce_analyti
     { ts, event, properties }
   ],
   aggregates: {
-    // per-event-name counters
+    // per-event-name counters (lifetime totals)
     "feature_used": { count: 42, lastAt: "..." },
     "myext.doSearch": { count: 18, lastAt: "...", errorCount: 2 }
   },
   dailyActivity: {
-    // "YYYY-MM-DD": activationCount  (sparse map, bounded to last 90 days)
+    // sparse map, bounded to last 90 days
+    // per-day breakdown: total activations + per-event counts
+    "YYYY-MM-DD": {
+      activations: 2,
+      events: {
+        "chatwizard.search": 5,
+        "chatwizard.archive": 2,
+        "chatwizard.modelUsage": 8
+      }
+    }
   }
 }
 ```
@@ -286,6 +297,10 @@ Derived metrics computed on read from this structure:
 - `daysActive` — count of distinct days in `dailyActivity`
 - `currentStreak` — consecutive days with at least one activation
 - `weeklyActive` — active in last 7 days
+- `featureUsageByDay(commandId)` — time-series of daily invocation counts for a specific feature
+- `topFeaturesByDay(date)` — ranked feature usage for a given day
+
+> **Why per-feature daily counts matter**: without them, local storage can only answer "was the user active on this day?" but not "which features did they use and how often?" PostHog answers this natively from the event stream; the local model needs the per-event daily map to provide the same breakdown offline.
 
 ---
 
@@ -651,3 +666,31 @@ CW currently has a `src/telemetry/` module. Integration path:
 - Tracking across multiple extensions (each extension has its own SDK instance)
 - Runtime injection into installed/running extensions (VS Code sandbox prevents this)
 - PII collection of any kind (enforced by the "never collect" list in Privacy Requirements)
+
+---
+
+## Known Platform Limitations
+
+These are hard constraints imposed by the VS Code runtime and extension model. They are not engineering gaps — they cannot be worked around. SDK consumers should set dashboard expectations accordingly.
+
+### Uninstall detection — impossible
+
+VS Code provides **no uninstall lifecycle hook**. When a user uninstalls an extension:
+- The extension is marked for removal and deleted after the next reload
+- `deactivate()` fires on the reload — but fires identically on every normal shutdown; no reason code is passed
+- There is no `onWillUninstall`, no manifest uninstall script, no `vscode.extensions` event in the uninstalled extension itself
+
+**Consequence**: the SDK cannot record an uninstall event. Install *duration* cannot be measured directly.
+
+**Best approximation** (via PostHog backend):
+- Install date: `firstActivatedAt` (reliable proxy)
+- Uninstall date: last event timestamp for a `machineId` in PostHog (inference only — conflates uninstall with inactivity)
+- Estimated active lifetime: `lastEventDate − firstActivatedAt` (labelled as "estimated" in any dashboard)
+
+### Per-feature daily breakdown — local only limitation
+
+The raw event ring buffer is capped (default 500 events). For high-frequency extensions, events older than a few days may be evicted before being queried locally. Per-feature daily breakdown over long periods is only reliable via the PostHog backend, where the full event stream is retained. The `dailyActivity` per-event map (bounded to 90 days) mitigates this for moderate usage.
+
+### Marketplace install counts — impossible
+
+The VS Code Marketplace and Open VSX expose only total install/download counts with no breakdown by OS, IDE variant, or geography. There is no API to retrieve these from inside the extension.

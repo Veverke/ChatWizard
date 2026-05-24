@@ -213,6 +213,11 @@ export function parseCopilotSession(
     const turns = allRequests.filter(r => r.kind === null || r.kind === undefined);
 
     const messages: Message[] = [];
+    // Copilot agent stores tool callback notifications as turns with messages like:
+    // "[Terminal {uuid} notification: command completed…]"
+    // These are internal housekeeping, NOT real user prompts. Suppress their user-message
+    // but retain their AI response so it correctly follows the preceding real user turn.
+    const RE_TERMINAL_NOTIFICATION = /^\[Terminal [0-9a-f-]+ notification:/i;
 
     for (const turn of turns) {
         const userText = turn.message?.text ?? '';
@@ -220,7 +225,7 @@ export function parseCopilotSession(
         const timestampIso = timestampMs !== undefined ? msToIso(timestampMs) : undefined;
         const requestId = turn.requestId;
 
-        if (userText) {
+        if (userText && !RE_TERMINAL_NOTIFICATION.test(userText)) {
             const userMsgIndex = messages.length;
             messages.push({
                 id: requestId ?? `${sessionId}-${userMsgIndex}`,
@@ -231,12 +236,95 @@ export function parseCopilotSession(
             });
         }
 
-        // AI response: items with a `value` string and no `kind` field (kind present = metadata)
+        // AI response: items with a `value` string and no `kind` field (kind present = metadata).
+        // Special case: textEditGroup items hold the actual code for inline code-edit placeholders.
+        // The pattern is: (null)" ``` " → undoStop → codeblockUri → textEditGroup → (null)" ``` "
+        // We detect textEditGroup and splice in the real code, replacing the empty fence pair.
         const responseItems = turn.response ?? [];
-        const aiTextParts = responseItems
-            .filter(item => typeof item.value === 'string' && !item.kind)
-            .map(item => item.value as string);
+        const aiTextParts: string[] = [];
+        for (let ri = 0; ri < responseItems.length; ri++) {
+            const item = responseItems[ri];
+            if (typeof item.value === 'string' && !item.kind) {
+                aiTextParts.push(item.value as string);
+                continue;
+            }
+            if (item.kind === 'textEditGroup') {
+                // Extract code content from edits.
+                // edits is Array<Array<Edit>> — each group is itself an array of edit objects.
+                const tegItem = item as Record<string, unknown>;
+                const editsRaw = (tegItem.edits as Array<unknown> | undefined) ?? [];
+                const edits = editsRaw.flatMap(g => Array.isArray(g) ? g : [g]) as Array<Record<string, unknown>>;
+                const content = edits
+                    .map(e => (typeof e.text === 'string' ? e.text : ''))
+                    .join('')
+                    .trim();
+                if (content) {
+                    // Determine language from the textEditGroup's uri (file extension).
+                    const uriObj = tegItem.uri as Record<string, unknown> | undefined;
+                    const fsPath = (uriObj?.fsPath as string | undefined) ?? (uriObj?.path as string | undefined) ?? '';
+                    const ext = fsPath.split('.').pop()?.toLowerCase() ?? '';
+                    const LANG: Record<string, string> = {
+                        ts: 'typescript', js: 'javascript', tsx: 'typescript',
+                        jsx: 'javascript', py: 'python', rs: 'rust', go: 'go',
+                        java: 'java', cs: 'csharp', cpp: 'cpp', c: 'c',
+                        md: 'markdown', json: 'json', yaml: 'yaml', yml: 'yaml',
+                        html: 'html', css: 'css', sh: 'bash', ps1: 'powershell',
+                        mjs: 'javascript', cjs: 'javascript',
+                    };
+                    const lang = LANG[ext] ?? ext;
+                    // Pop the preceding empty fence placeholder (if present).
+                    if (aiTextParts.length > 0 && /^\s*```\s*$/.test(aiTextParts[aiTextParts.length - 1])) {
+                        aiTextParts.pop();
+                    }
+                    aiTextParts.push(`\`\`\`${lang}\n${content}\n\`\`\``);
+                    // Skip the following closing fence placeholder.
+                    if (ri + 1 < responseItems.length) {
+                        const next = responseItems[ri + 1];
+                        if (!next.kind && typeof next.value === 'string' && /^\s*```\s*$/.test(next.value as string)) {
+                            ri++;
+                        }
+                    }
+                }
+                continue;
+            }
+            if (item.kind === 'inlineReference') {
+                // File or symbol reference inserted inline by Copilot.
+                // Replace with the display name so surrounding punctuation remains meaningful.
+                const refItem = item as Record<string, unknown>;
+                // Type B (file): top-level `name` field, e.g. "src/mcp/chatParticipant.ts"
+                let displayName = refItem.name as string | undefined;
+                if (!displayName) {
+                    // Type A (symbol): `inlineReference.name`, e.g. "chatContext.history"
+                    const inner = refItem.inlineReference as Record<string, unknown> | undefined;
+                    displayName = inner?.name as string | undefined;
+                    if (!displayName) {
+                        // Fallback: basename of the URI path (fsPath is a runtime getter, not in JSON)
+                        const loc = (inner?.location as Record<string, unknown> | undefined) ?? inner;
+                        const uriObj = (loc?.uri as Record<string, unknown> | undefined) ?? loc;
+                        const fsPath = (uriObj?.fsPath as string | undefined) ?? (uriObj?.path as string | undefined);
+                        if (fsPath) {
+                            displayName = fsPath.split(/[\\/]/).pop();
+                        }
+                    }
+                }
+                if (displayName) {
+                    aiTextParts.push(`\`${displayName}\``);
+                }
+                continue;
+            }
+            // All other non-text items (thinking, toolInvocationSerialized, etc.) are skipped.
+        }
         const aiText = aiTextParts.join('\n').trim();
+
+        // If AI produced no text but was using tools, the user likely sent this prompt while
+        // the AI was still processing a prior request.  Flag the preceding user message so
+        // the renderer can show a more accurate notice than the generic "cancelled" label.
+        if (!aiText && responseItems.some(r => (r as Record<string, unknown>).kind === 'toolInvocationSerialized')) {
+            const lastMsg = messages[messages.length - 1];
+            if (lastMsg?.role === 'user') {
+                lastMsg.interrupted = true;
+            }
+        }
 
         if (aiText) {
             const asstMsgIndex = messages.length;

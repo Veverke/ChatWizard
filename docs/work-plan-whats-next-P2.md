@@ -35,6 +35,7 @@ _Created: May 2026_
 | [20](#feature-20--prompt-cost-analysis) | Prompt cost analysis | M | ⬜ |
 | [21](#feature-21--mcp-phase-ii-reranker-for-chatwizard_get_context) | MCP Phase II: reranker for `chatwizard_get_context` | M | ⬜ |
 | [22](#feature-22--obsidian--notion-native-export) | Obsidian / Notion native export | S | ⬜ |
+| [23](#feature-23--message-turn-labels--in-thread-references) | Message turn labels & in-thread references | S | ⬜ |
 
 ---
 
@@ -91,15 +92,6 @@ Surface "N chat sessions touched this file" directly in the editor — status ba
   - Handles: Windows drive letters (`C:\` → `c:/`), mixed slash styles, trailing slashes, symlinks (best-effort `fs.realpathSync`).
   - Shared by 10-A, 10-B, and future file-matching code.
 
-- [ ] **10-H** — VS Code native Timeline integration (`CwTimelineProvider`)
-  - New file `src/timeline/cwTimelineProvider.ts`, implements `vscode.TimelineProvider`.
-  - Registers via `vscode.window.registerTimelineProvider('*', provider)` so CW chat-session entries appear in VS Code's built-in **Timeline** panel (bottom of Explorer) alongside git commits.
-  - `provideTimeline(uri, options, token)` — queries the `SessionIndex` for sessions that touch `uri.fsPath` using the same `sessionTouchesFile` / `sessionMentionsFile` logic as `FileHistoryPanel`.
-  - Returns `vscode.TimelineItem[]`: `label` = session title, `timestamp` = `updatedAt`, `description` = friendly source name, `command` = `chatwizard.openSession`.
-  - Items sorted newest-first. Empty array (not an error) when no sessions match.
-  - Exposes a `refresh()` method; wired to `index.addChangeListener` so the Timeline panel updates automatically when new sessions are indexed.
-  - Provider ID: `'chatWizard'`; label: `'ChatWizard Sessions'`.
-
 ### Unit Tests
 
 - [ ] `chronicleStore.sessionsForFile` — exact match, case-insensitive match on Windows paths, relative path resolution, unknown file returns `[]`.
@@ -107,8 +99,6 @@ Surface "N chat sessions touched this file" directly in the editor — status ba
 - [ ] `FileHistoryStatusBarItem` — shows count when data present, hides when no data, disposes subscriptions on deactivate.
 - [ ] `sessionsForFileTool` — workspace-relative input resolved correctly, absolute path passthrough, empty Chronicle returns empty array not error.
 - [ ] `FileHistoryCodeLensProvider` — returns one CodeLens at line 0, returns `[]` when no Chronicle sessions, respects `chatwizard.codeLens.enabled: false`.
-- [ ] `CwTimelineProvider.provideTimeline` — returns correct items for a file with matching sessions, returns empty array for unknown file, items are sorted newest-first, `refresh()` fires `onDidChange`.
-
 ### E2E Tests
 
 - [ ] **Scenario: open a file that was touched in a Chronicle session** — status bar shows correct count, clicking opens `FileHistoryPanel` listing matching sessions.
@@ -116,8 +106,6 @@ Surface "N chat sessions touched this file" directly in the editor — status ba
 - [ ] **Scenario: MCP tool called with relative path** — resolves correctly and returns same sessions as absolute path.
 - [ ] **Scenario: Chronicle DB absent** — all surfaces degrade silently (no errors, no empty counts shown).
 - [ ] **Scenario: file history panel `[Open session]` button** — opens the session webview for the correct session.
-- [ ] **Scenario: VS Code Timeline panel shows CW sessions** — open a file with Chronicle history, open Timeline panel (Explorer → Timeline), verify ChatWizard Sessions section lists matching sessions; clicking an entry opens the session webview.
-
 ### Manual Tests
 
 1. Open a file you have worked on in a Copilot session recently. Verify the status bar shows a non-zero count and the CodeLens appears at line 1.
@@ -129,11 +117,9 @@ Surface "N chat sessions touched this file" directly in the editor — status ba
 7. Call `chatwizard_sessions_for_file` from an MCP client with a relative path (e.g. `"src/auth.ts"`). Verify correct sessions are returned.
 8. _(Potential bug surface)_ Open a file on a network share / UNC path. Verify no crash and path normalisation does not produce an empty result set when sessions exist for that file.
 9. _(Potential bug surface)_ Rapidly switch between files. Verify the status bar does not flicker or show a count from the previous file.
-10. Open the VS Code Timeline panel (Explorer → Timeline section at the bottom). Switch between files — verify the **ChatWizard Sessions** source appears when sessions exist and disappears (or shows empty) when there are none. Click a timeline entry and verify the session webview opens correctly.
-
 ### Completion Checklist
 
-- [ ] All atomic tasks (10-A through 10-H) implemented and code-reviewed
+- [ ] All atomic tasks (10-A through 10-G) implemented and code-reviewed
 - [ ] All unit tests green (`npm test`)
 - [ ] All e2e tests green
 - [ ] Manual tests performed and all issues fixed
@@ -356,6 +342,32 @@ Users can attach freeform labels (`#bugfix`, `topic:auth`, `kind:decision`) to s
   - Session reader header shows tag chips alongside source badge and date.
   - Tags are read-only in the webview (editing is done from the tree or command palette).
 
+- [ ] **13-G** — "Tag Active Session" — command palette + status bar entry point
+  - **Problem this solves:** the primary real-world use case is tagging a session *while it is still in progress*, not after the fact from the history tree. All existing 13-D / 13-E entry points require navigating to a completed session in the tree.
+  - `chatwizard.tagActiveSession` command:
+    - Resolves the "active" session as the session with the highest `updatedAt` across the entire index, filtered to sessions updated within the last **2 hours** (configurable via `chatwizard.activeSessionWindowMinutes`, default `120`).
+    - If exactly one session qualifies: proceeds directly to the tag `InputBox` (same UX as 13-D `chatwizard.addTag`).
+    - If multiple sessions qualify (e.g. user is running Copilot and Cursor simultaneously): shows a `QuickPick` pre-filtered to those recent sessions sorted by `updatedAt DESC`, so the current one is always first.
+    - If no session qualifies (no activity in the window): falls back to the full `pickSessionId` picker with a hint message: `"No recent session detected — select from all sessions"`.
+  - Status bar item `ActiveSessionTagButton` (`src/ui/activeSessionTagButton.ts`):
+    - Subscribes to `index.addTypedChangeListener`; on every `upsert` or `batch` event, checks if any session was updated within `activeSessionWindowMinutes`.
+    - When a live session is detected: shows `$(tag) Tag session` in the status bar (right-aligned, low priority). Tooltip: `"Tag the active chat session"`. Click fires `chatwizard.tagActiveSession`.
+    - When no recent session: item is hidden (not showing a stale button between sessions).
+    - Disposes cleanly on extension deactivate.
+  - Register `chatwizard.tagActiveSession` in `package.json` under `contributes.commands` with title `"ChatWizard: Tag Active Session"` and in the Command Palette (`commandPalette` contribution with no `when` guard so it is always reachable).
+
+- [ ] **13-H** — `/tag` chat participant command (inline tagging from Copilot chat)
+  - **Problem this solves:** Copilot users are already in the chat panel. Requiring them to leave the chat, find the tree item, and right-click breaks flow. `/tag` meets them where they are.
+  - New command handler `handleTagCommand` in `src/mcp/chatParticipant.ts` (or the VS Code chat participant registration file), invoked when the user types `/tag` in the `@chatwizard` participant.
+  - Input parsing: everything after `/tag` is treated as a comma-separated tag list (same normalisation as 13-D — lowercase, trim, strip leading `#` for storage).
+    - Example: `/tag #bugfix, topic:auth` → stores `['bugfix', 'topic:auth']`.
+    - Empty input (bare `/tag` with no arguments): responds with `"Usage: /tag label1, label2  — e.g. /tag #bugfix, topic:auth"`.
+  - Session resolution: calls the same "active session" logic from 13-G (`resolveActiveSession(index, windowMinutes)`), extracted into `src/utils/activeSessionResolver.ts` so both 13-G and 13-H share it.
+  - On success: responds with a confirmation Markdown message in the chat stream, e.g.:
+    > Tagged **"Fix auth middleware regression"** with `#bugfix`, `topic:auth`.
+  - On ambiguity (multiple recent sessions): responds with a message listing the candidates and asking the user to use `chatwizard.tagActiveSession` from the command palette to disambiguate.
+  - No side effects on the chat session itself — tag is written only to `chatwizard-metadata.json` via `MetadataStore`.
+
 ### Unit Tests
 
 - [ ] `MetadataStore.load` — returns empty schema for missing file, correctly parses existing file.
@@ -367,6 +379,9 @@ Users can attach freeform labels (`#bugfix`, `topic:auth`, `kind:decision`) to s
 - [ ] `SessionTreeProvider` tag chip rendering — 3 tags shown as chips, 4th tag causes `+1 more` overflow.
 - [ ] Tag filter — tree shows only tagged sessions when filter active, all sessions when filter cleared.
 - [ ] Tag normalization — `"  #Auth "` → stored as `"auth"`, displayed as `#auth`.
+- [ ] `resolveActiveSession` — returns single session when one updated within window, returns multiple when several qualify, returns empty array when all sessions are older than the window, uses configurable window value.
+- [ ] `ActiveSessionTagButton` — visible after an index upsert event within the window, hidden when no recent sessions, disposes without error.
+- [ ] `/tag` command — single tag stored correctly, comma-separated list stored correctly, empty input returns usage hint, ambiguous session returns disambiguation message.
 
 ### E2E Tests
 
@@ -375,6 +390,10 @@ Users can attach freeform labels (`#bugfix`, `topic:auth`, `kind:decision`) to s
 - [ ] **Scenario: filter by tag** — tree shows only sessions with the selected tag; view title shows filter indicator.
 - [ ] **Scenario: tag persists across restart** — after adding a tag and restarting VS Code, the tag is still visible.
 - [ ] **Scenario: pin migration** — after first upgrade, existing pinned sessions still show as pinned in the tree.
+- [ ] **Scenario: tag active session via command palette** — while a chat is open and updating, `chatwizard.tagActiveSession` pre-selects the current session; tag is stored and visible in the tree within seconds.
+- [ ] **Scenario: tag active session via status bar** — `$(tag) Tag session` button appears in the status bar while a session is live; clicking it opens the tag input; button disappears after the session has been idle longer than the window.
+- [ ] **Scenario: `/tag` in Copilot chat** — typing `@chatwizard /tag #bugfix` in the chat panel tags the current Copilot session and returns a confirmation message in the chat response.
+- [ ] **Scenario: `/tag` with no active session** — when no session has been updated within the window, the participant responds with a disambiguation message rather than silently failing.
 
 ### Manual Tests
 
@@ -387,10 +406,14 @@ Users can attach freeform labels (`#bugfix`, `topic:auth`, `kind:decision`) to s
 7. _(Potential bug surface)_ Add a tag that is just whitespace or an empty string. Verify it is silently ignored (not stored as an empty tag).
 8. _(Potential bug surface)_ Two VS Code windows open simultaneously with the same workspace. Add a tag in window A. Verify window B reflects the change within a few seconds (file-watcher on metadata JSON).
 9. _(Potential bug surface)_ Tag with emoji (`🔥fix`). Verify it round-trips without corruption and displays correctly in tree and webview.
+10. While actively using Copilot chat, run "ChatWizard: Tag Active Session" from the command palette. Verify the input pre-selects (or auto-identifies) the current session without requiring manual selection from a full list.
+11. Open the status bar while a chat is running. Verify `$(tag) Tag session` is visible. Wait until the session has been idle for longer than `chatwizard.activeSessionWindowMinutes`. Verify the button disappears.
+12. In the Copilot chat panel, type `@chatwizard /tag topic:refactor`. Verify the chat response confirms the tag and the session tree shows `#topic:refactor` on the current session within seconds.
+13. Type `@chatwizard /tag` with no labels. Verify the response is a usage hint, not an error.
 
 ### Completion Checklist
 
-- [ ] All atomic tasks (13-A through 13-F) implemented and code-reviewed
+- [ ] All atomic tasks (13-A through 13-H) implemented and code-reviewed
 - [ ] All unit tests green
 - [ ] All e2e tests green
 - [ ] Manual tests performed and all issues fixed
@@ -1098,7 +1121,7 @@ Track A (new sources)      Track B (Chronicle data)   Track C (intelligence)
 Track D (infrastructure)   Track E (UX)
 ────────────────────────   ────────────
 12 Session archive         13 Session tagging
-22 Obsidian/Notion export
+22 Obsidian/Notion export  23 Turn labels & /referMessage
 ```
 
 Track B (10 and 11) must proceed in order (11 builds on 10's `ChronicleStore` extensions).
@@ -1115,3 +1138,94 @@ A feature is complete when **all** of the following are true:
 5. README updated for user-facing changes.
 6. Feature row in `whats-next.md` updated to ✅.
 7. This document's completion checklist fully checked.
+
+---
+
+## Feature 23 — Message Turn Labels & In-Thread References
+
+**Effort:** S  
+**Prerequisite:** None — fully self-contained.
+
+### Overview
+
+Two complementary capabilities that make individual messages in a chat session referenceable by a compact, stable identifier:
+
+1. **Session reader turn labels** — every message in the ChatWizard session reader displays a small `P1` / `R1` badge (`P` = user prompt, `R` = assistant response, numbered independently from 1). A hover-revealed copy button writes a structured reference string to the clipboard.
+
+2. **`@chatwizard /referMessage`** — a new slash command that resolves `P{N}` or `R{N}` from the **current live chat thread** by reading `ChatContext.history`, then streams the referenced message back as a blockquote so the model has it as explicit context.
+
+### Why
+
+Long chat threads produce "refer to what you said earlier" friction. There is no built-in Copilot Chat mechanism for labelling or quoting prior turns. CW's session reader already has `data-msg-idx` on every bubble and `visibleIdx` in the renderer — the turn label is a one-line extension of that tracking. The `history` API gives the chat participant full access to the live thread.
+
+### Atomic Tasks
+
+- [x] **23-A** — Turn label computation in `sessionRenderer.renderMessage`
+  - Count prior messages up to `visibleIdx` to derive independent `pCount`/`rCount`.
+  - Render `<span class="cw-turn-label">P{N}</span>` in the message header, between the role label and the timestamp.
+  - Add `id="cw-msg-P{N}"` / `id="cw-msg-R{N}"` to the outer message div (enables in-page `#` links).
+  - Skipped messages get the label but no copy button (no meaningful content to quote).
+
+- [x] **23-B** — Copy-as-reference button in the session reader
+  - `<button class="cw-copy-ref-btn" data-turn="P3" title="Copy as reference (P3)">⧉</button>` in each message header; hidden by default, revealed on `.message:hover`.
+  - Click handler (webview JS, event delegation): extracts first and last non-empty lines from `data-raw`, composes:
+    ```
+    [Session: <title>] P3
+    ↳ "First line of the message..."
+       "...last line."
+    ```
+    Single-line messages omit the last-line entry. Posts `{ command: 'copy', text }` to the extension (reuses the existing copy-to-clipboard handler).
+  - CSS: `.cw-turn-label` — monospace, tiny border-box; `.cw-copy-ref-btn` — `margin-left: auto`, opacity 0 → 0.4 on parent hover → 1 on button hover.
+
+- [x] **23-C** — `@chatwizard /referMessage` slash command
+  - New `ReferMessagePrompt` class in `src/mcp/prompts/contextPrompts.ts`.
+  - Argument: `ref` — the P/R reference string (case-insensitive).
+  - Handled as a **special early-return path** in `createParticipantHandler` (before the LLM dispatch): reads `chatContext.history`, counts turns of the requested role, streams the matching turn's content as a Markdown blockquote.
+  - Usage string emitted on parse failure: `` `@chatwizard /referMessage P3` or `@chatwizard /referMessage R2` ``.
+  - Out-of-range message: friendly error with actual count, e.g. `"No R5 found. This thread has 3 responses so far."`.
+  - Added to `PROMPT_DEFS` and `package.json` `contributes.chatParticipants.commands`.
+
+### Unit Tests
+
+- [ ] `sessionRenderer.renderMessage` — user message at `visibleIdx` 2 with 2 prior user messages yields label `P3`; assistant message at `visibleIdx` 3 with 1 prior assistant yields `R2`; first message in session yields `P1`/`R1`; `id` attribute is `cw-msg-P3`.
+- [ ] `sessionRenderer.renderMessage` — skipped message includes turn label, does not include `.cw-copy-ref-btn`.
+- [ ] `/referMessage` handler — `P2` with 3 request turns in history returns blockquote of the 2nd request; `R1` with 2 response turns returns blockquote of the 1st response.
+- [ ] `/referMessage` handler — case-insensitive: `p3` and `P3` resolve identically.
+- [ ] `/referMessage` handler — `P0` and `P99` (out of range) return error string, do not throw.
+- [ ] `/referMessage` handler — malformed input (`X3`, `P`, `3P`, empty string) returns usage string, does not throw.
+- [ ] `/referMessage` handler — empty history returns `"No P1 found. This thread has 0 prompts so far."`.
+
+### E2E Tests
+
+- [ ] **Scenario: session reader turn labels** — open any session; verify `P1`, `R1`, `P2`, `R2`… labels appear in message headers in correct order; `id` attributes match the labels.
+- [ ] **Scenario: copy-as-reference** — hover a message bubble; verify the ⧉ button appears; click it; verify clipboard contains the `[Session: …] P3 ↳ "…"` format with correct session title.
+- [ ] **Scenario: `/referMessage P2` in a live thread** — send two prompts, then `@chatwizard /referMessage P1`; verify the response streams back the first prompt as a blockquote.
+- [ ] **Scenario: `/referMessage R1` in a live thread** — verify first assistant response is quoted correctly.
+- [ ] **Scenario: `/referMessage P99` out of range** — verify friendly error, not an exception.
+
+### Manual Tests
+
+1. Open any session in the ChatWizard reader. Verify `P1`, `R1`, `P2`… labels appear in each message header — monospace, small, with a subtle border box. Verify they do not obscure the role label or timestamp.
+2. Hover a user message. Verify the ⧉ button fades in at the right edge of the header. Click it. Paste into an editor; verify the format:
+   ```
+   [Session: <title>] P3
+   ↳ "First line of the message..."
+      "...last line."
+   ```
+3. Click ⧉ on a single-line message. Verify only the `↳ "line"` entry appears (no empty last-line).
+4. In a Copilot Chat thread with at least 3 user turns, type `@chatwizard /referMessage P2`. Verify the second user prompt appears as a blockquote in the response.
+5. Type `@chatwizard /referMessage R1`. Verify the first assistant response is quoted.
+6. Type `@chatwizard /referMessage P99`. Verify an informative "No P99 found" message, no stack trace, no extension error.
+7. Type `@chatwizard /referMessage abc`. Verify the usage hint is shown.
+8. _(Potential bug surface)_ Session with only user messages (no assistant responses — e.g. Cursor aiService source). Verify `R` labels are absent and `/referMessage R1` returns the out-of-range message, not a crash.
+9. _(Potential bug surface)_ Session reader opened on a very long session (200+ messages). Verify turn labels are correct for messages beyond the initial window (loaded via "Load more messages…") — labels must reflect global position, not chunk-local position.
+
+### Completion Checklist
+
+- [x] Task 23-A implemented (`sessionRenderer.ts`)
+- [x] Task 23-B implemented (`sessionWebviewPanel.ts` CSS + JS)
+- [x] Task 23-C implemented (`contextPrompts.ts` + `chatParticipant.ts` + `package.json`)
+- [ ] Unit tests written and green
+- [ ] E2E tests written and green
+- [ ] Manual tests performed and issues fixed
+- [ ] ⬜ → ✅ in this document and `whats-next.md`
