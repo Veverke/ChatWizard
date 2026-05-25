@@ -43,6 +43,8 @@ function makeVsCodeApiStub(opts: {
             await task(() => { /* no-op */ });
         },
         showIndexingComplete(_count: number): void { /* no-op in tests */ },
+        markModelDownloaded(_storagePath: string): void { /* no-op in tests */ },
+        showModelReady(): void { /* no-op in tests */ },
     };
 }
 
@@ -223,6 +225,8 @@ suite('SemanticIndexer.initialize', () => {
             async loadModelWithProgress(task) { await task(() => {}); },
             async runIndexingProgress(task) { await task(() => {}); },
             showIndexingComplete(_count: number): void { /* no-op */ },
+            markModelDownloaded(_storagePath: string): void { /* no-op */ },
+            showModelReady(): void { /* no-op */ },
         };
         const indexer = new SemanticIndexer('/storage', () => engine, () => index, api);
         await indexer.initialize();
@@ -240,6 +244,8 @@ suite('SemanticIndexer.initialize', () => {
             async loadModelWithProgress(task) { await task(() => {}); },
             async runIndexingProgress(task) { await task(() => {}); },
             showIndexingComplete(_count: number): void { /* no-op */ },
+            markModelDownloaded(_storagePath: string): void { /* no-op */ },
+            showModelReady(): void { /* no-op */ },
         };
         const indexer = new SemanticIndexer('/storage', () => engine, () => index, api);
         await indexer.initialize();

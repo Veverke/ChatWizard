@@ -61,7 +61,10 @@ const vsixName = `chatwizard-${platform}.vsix`;
 // Node.js module resolution, so these stubs shadow the (absent) real packages
 // without touching the root node_modules.
 
-const STUBS = ['onnxruntime-web', 'sharp'];
+// onnxruntime-web, sharp  — statically imported but never called in the Node.js extension host.
+// @huggingface/jinja       — statically imported by tokenizers.js; only used for apply_chat_template
+//                            which ChatWizard never invokes (text embeddings only).
+const STUBS = ['onnxruntime-web', 'sharp', '@huggingface/jinja'];
 const XENOVA_NM = join(ROOT, 'node_modules', '@xenova', 'transformers', 'node_modules');
 
 function createStubs() {
@@ -90,6 +93,12 @@ function createStubs() {
 function removeStubs() {
     for (const name of STUBS) {
         rmSync(join(XENOVA_NM, name), { recursive: true, force: true });
+        // For scoped packages (e.g. @huggingface/jinja) also try to remove the
+        // now-empty scope directory (@huggingface/) so the tree stays clean.
+        if (name.startsWith('@')) {
+            const scopeDir = join(XENOVA_NM, name.split('/')[0]);
+            try { rmdirSync(scopeDir); } catch { /* not empty or doesn't exist — leave it */ }
+        }
     }
     // Remove the node_modules dir only if it is now empty
     try { rmdirSync(XENOVA_NM); } catch { /* not empty — leave it */ }

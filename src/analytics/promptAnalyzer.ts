@@ -22,6 +22,18 @@ export interface SimilarSession {
     date?: string;
 }
 
+/** Result returned by the LLM analysis provider. */
+export interface LlmPromptAnalysis {
+    verbosityFlags: VerbosityFlag[];
+    modelSuggestion: ModelId;
+    rewriteSuggestion?: string;
+}
+
+/** Injectable LLM analysis provider — implement to swap the Copilot model. */
+export interface ILlmAnalysisProvider {
+    analyze(prompt: string, tokenCount: number, token?: unknown): Promise<LlmPromptAnalysis | null>;
+}
+
 export interface PromptAnalysis {
     /** Number of estimated input tokens */
     tokenCount: number;
@@ -35,6 +47,10 @@ export interface PromptAnalysis {
     similarSessions: SimilarSession[];
     /** Summary sentence */
     summary: string;
+    /** LLM-suggested concise rewrite of the prompt, if provided */
+    rewriteSuggestion?: string;
+    /** Which analysis path ran: 'llm' when the Copilot model was used, 'heuristic' otherwise */
+    analysisSource: 'llm' | 'heuristic';
 }
 
 // Open-ended phrases that indicate the user hasn't constrained the output
@@ -71,30 +87,56 @@ const DEFAULT_MODELS: ModelId[] = [
 const SMALL_MODEL_TOKEN_LIMIT = 100_000;
 
 export class PromptAnalyzer {
-    constructor(private readonly searchProvider?: ISearchProvider) {}
+    constructor(
+        private readonly searchProvider?: ISearchProvider,
+        private readonly llmProvider?: ILlmAnalysisProvider,
+    ) {}
 
     /**
      * Analyses a draft prompt text.
+     * Primary path: LLM (injected provider). Fallback: local heuristics.
      * @param draftPrompt    The prompt text to analyse
      * @param contextWindow  Optional: additional system/context tokens already consumed
+     * @param token          Optional cancellation token forwarded to the LLM provider
      */
-    async analyze(draftPrompt: string, contextWindow = 0): Promise<PromptAnalysis> {
+    async analyze(draftPrompt: string, contextWindow = 0, token?: unknown): Promise<PromptAnalysis> {
         const tokenCount = countTokens(draftPrompt) + contextWindow;
 
-        // Cost estimates for several models
+        // Cost estimates (always computed locally — fast and deterministic)
         const costEstimates = DEFAULT_MODELS.map(model => ({
             model,
             estimate: estimateCost(tokenCount, model),
         }));
 
-        // Verbosity flags
-        const verbosityFlags = detectVerbosityFlags(draftPrompt, tokenCount);
-
-        // Model suggestion — cheapest that fits within context window
-        const suggestedModel = suggestModel(tokenCount, verbosityFlags);
-
         // Similarity — best-effort, fails silently if searcher unavailable
         const similarSessions = await this.findSimilar(draftPrompt);
+
+        // ── Primary: LLM analysis ───────────────────────────────────────────
+        let verbosityFlags: VerbosityFlag[];
+        let suggestedModel: ModelId;
+        let rewriteSuggestion: string | undefined;
+        let analysisSource: 'llm' | 'heuristic';
+
+        let llmResult: LlmPromptAnalysis | null = null;
+        if (this.llmProvider) {
+            try {
+                llmResult = await this.llmProvider.analyze(draftPrompt, tokenCount, token);
+            } catch {
+                llmResult = null;
+            }
+        }
+
+        if (llmResult) {
+            verbosityFlags = llmResult.verbosityFlags;
+            suggestedModel = llmResult.modelSuggestion;
+            rewriteSuggestion = llmResult.rewriteSuggestion;
+            analysisSource = 'llm';
+        } else {
+            // ── Fallback: heuristics ──────────────────────────────────────────
+            verbosityFlags = detectVerbosityFlags(draftPrompt, tokenCount);
+            suggestedModel = suggestModel(tokenCount, verbosityFlags);
+            analysisSource = 'heuristic';
+        }
 
         // Summary
         const cheapest = costEstimates[0];
@@ -110,7 +152,10 @@ export class PromptAnalyzer {
         }
         const summary = summaryParts.join(' • ');
 
-        return { tokenCount, costEstimates, suggestedModel, verbosityFlags, similarSessions, summary };
+        return {
+            tokenCount, costEstimates, suggestedModel, verbosityFlags, similarSessions,
+            summary, rewriteSuggestion, analysisSource,
+        };
     }
 
     private async findSimilar(prompt: string): Promise<SimilarSession[]> {

@@ -23,6 +23,7 @@ import { resolveAnchorPaths } from '../utils/fileAnchorResolver';
 import type { SidecarMetadataStore } from '../index/sidecarMetadataStore';
 import type { LiveSessionTracker } from '../utils/liveSessionTracker';
 import { PromptAnalyzer } from '../analytics/promptAnalyzer';
+import { CopilotPromptAnalysisProvider } from '../analytics/copilotPromptAnalysisProvider';
 
 interface SessionRef { id: string; title: string; source: string; date: string; passage?: string; }
 
@@ -443,8 +444,9 @@ export function createParticipantHandler(
                     return;
                 }
                 stream.progress('Analyzing prompt…');
-                const analyzer = new PromptAnalyzer();
-                const analysis = await analyzer.analyze(userText);
+                const llmProvider = new CopilotPromptAnalysisProvider();
+                const analyzer = new PromptAnalyzer(undefined, llmProvider);
+                const analysis = await analyzer.analyze(userText, 0, token);
                 const lines: string[] = [
                     '**Prompt Analysis**\n',
                     `- **Tokens:** ~${analysis.tokenCount.toLocaleString()}`,
@@ -455,6 +457,10 @@ export function createParticipantHandler(
                     for (const c of analysis.costEstimates) {
                         lines.push(`  - ${c.model}: $${c.estimate.totalUsd.toFixed(4)}`);
                     }
+                }
+                if (analysis.rewriteSuggestion) {
+                    lines.push('\n**💡 Suggested rewrite:**');
+                    lines.push(`> ${analysis.rewriteSuggestion}`);
                 }
                 if (analysis.verbosityFlags.length > 0) {
                     lines.push('\n**⚠ Verbosity flags:**');
@@ -469,6 +475,11 @@ export function createParticipantHandler(
                 if (analysis.verbosityFlags.length === 0 && analysis.similarSessions.length === 0) {
                     lines.push('\n✅ Looks good — well-scoped prompt.');
                 }
+                // Footer shows which analysis path ran so the user knows the quality of the advice
+                const footer = analysis.analysisSource === 'llm'
+                    ? '_(analysis by Copilot AI)_'
+                    : '_(heuristic analysis — Copilot model unavailable)_';
+                lines.push(`\n---\n${footer}`);
                 stream.markdown(lines.join('\n'));
                 return;
             }

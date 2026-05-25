@@ -37,9 +37,28 @@ export interface SemanticIndexerVsCodeApi {
     runIndexingProgress(task: (report: (completed: number, total: number) => void) => Promise<void>): Promise<void>;
     /** Notify the user that background indexing finished. */
     showIndexingComplete(count: number): void;
+    /**
+     * Called after the model has been successfully downloaded for the first time.
+     * Implementations should persist a marker so `isFirstUse` returns `false` on
+     * subsequent activations, independent of where Xenova stores its model files.
+     */
+    markModelDownloaded(storagePath: string): void;
+    /** Notify the user that the model downloaded successfully and is ready. */
+    showModelReady(): void;
 }
 
-function defaultVsCodeApi(): SemanticIndexerVsCodeApi {
+/**
+ * Minimal subset of vscode.Memento needed for cross-window consent persistence.
+ * Structurally compatible with `vscode.ExtensionContext.globalState`.
+ */
+export interface SemanticGlobalState {
+    get<T>(key: string): T | undefined;
+    update(key: string, value: unknown): Thenable<void>;
+}
+
+const CONSENT_KEY = 'chatwizard.semanticConsentGiven';
+
+export function defaultVsCodeApi(globalState?: SemanticGlobalState): SemanticIndexerVsCodeApi {
     return {
         async showConsentDialog(): Promise<boolean> {
             const choice = await vscode.window.showInformationMessage(
@@ -50,7 +69,16 @@ function defaultVsCodeApi(): SemanticIndexerVsCodeApi {
             return choice === 'Download';
         },
         isFirstUse(storagePath: string): boolean {
-            return !fs.existsSync(path.join(storagePath, MODEL_CACHE_SUBDIR));
+            if (globalState) {
+                // globalState is shared across all VS Code windows — reliable even when
+                // multiple windows are open simultaneously.
+                return !(globalState.get<boolean>(CONSENT_KEY) ?? false);
+            }
+            // Fallback (tests / no globalState): check the sentinel file written by
+            // markModelDownloaded(). Checking only the directory is unreliable:
+            // @xenova/transformers may load the model from its own OS-level cache
+            // without creating this directory.
+            return !fs.existsSync(path.join(storagePath, MODEL_CACHE_SUBDIR, '.chatwizard-ready'));
         },
         async loadModelWithProgress(task: (report: (msg: string) => void) => Promise<void>): Promise<void> {
             await vscode.window.withProgress(
@@ -73,6 +101,28 @@ function defaultVsCodeApi(): SemanticIndexerVsCodeApi {
         showIndexingComplete(count: number): void {
             void vscode.window.showInformationMessage(
                 `Chat Wizard: Semantic index ready — ${count} session${count === 1 ? '' : 's'} indexed.`
+            );
+        },
+        markModelDownloaded(storagePath: string): void {
+            if (globalState) {
+                // Persist consent in globalState — survives across windows and reloads.
+                void globalState.update(CONSENT_KEY, true);
+                return;
+            }
+            // Fallback: write sentinel file.
+            const dir = path.join(storagePath, MODEL_CACHE_SUBDIR);
+            if (!fs.existsSync(dir)) {
+                fs.mkdirSync(dir, { recursive: true });
+            }
+            try {
+                fs.writeFileSync(path.join(dir, '.chatwizard-ready'), '');
+            } catch {
+                // Non-critical: if writing fails the consent dialog may reappear on next reload.
+            }
+        },
+        showModelReady(): void {
+            void vscode.window.showInformationMessage(
+                'Chat Wizard: AI model downloaded successfully — semantic search is ready.'
             );
         },
     };
@@ -158,7 +208,8 @@ export class SemanticIndexer implements ISemanticIndexer {
         }
 
         // First-use consent
-        if (this.vsCodeApi.isFirstUse(this.storagePath)) {
+        const isFirstDownload = this.vsCodeApi.isFirstUse(this.storagePath);
+        if (isFirstDownload) {
             const consented = await this.vsCodeApi.showConsentDialog();
             if (!consented) {
                 this._declined = true;
@@ -170,6 +221,13 @@ export class SemanticIndexer implements ISemanticIndexer {
         await this.vsCodeApi.loadModelWithProgress(async (report) => {
             await this.engine.load(report);
         });
+
+        // Persist the marker only after a successful download so that the popup
+        // reappears if the download fails and the user opens VS Code again.
+        if (isFirstDownload) {
+            this.vsCodeApi.markModelDownloaded(this.storagePath);
+            this.vsCodeApi.showModelReady();
+        }
 
         // Restore persisted index
         await this.index.load(path.join(this.storagePath, EMBEDDINGS_FILENAME));

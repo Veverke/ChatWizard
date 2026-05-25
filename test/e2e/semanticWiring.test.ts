@@ -40,6 +40,8 @@ function makeVsCodeApiStub(): SemanticIndexerVsCodeApi {
         async loadModelWithProgress(task) { await task(() => {}); },
         async runIndexingProgress(task) { await task(() => {}); },
         showIndexingComplete() {},
+        markModelDownloaded(_storagePath: string) {},
+        showModelReady() {},
     };
 }
 

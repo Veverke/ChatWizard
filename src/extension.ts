@@ -40,7 +40,7 @@ import { TimelineViewProvider } from './timeline/timelineViewProvider';
 import { TelemetryRecorder } from './telemetry/telemetryRecorder';
 import { registerManageWorkspacesCommand } from './commands/manageWorkspaces';
 import { registerPaletteCommands } from './commands/paletteCommands';
-import { SemanticIndexer } from './search/semanticIndexer';
+import { SemanticIndexer, defaultVsCodeApi } from './search/semanticIndexer';
 import { EmbeddingEngine } from './search/embeddingEngine';
 import { SemanticIndex } from './search/semanticIndex';
 import { SemanticSearchPanel } from './search/semanticSearchPanel';
@@ -74,6 +74,7 @@ import { FileHistoryCodeLensProvider } from './ui/fileHistoryCodeLens';
 import { FileHistoryPanel } from './views/fileHistoryPanel';
 import { discoverChronicleDbsAsync } from './readers/chronicleWorkspace';
 import { ActiveSessionTagButton } from './ui/activeSessionTagButton';
+import { SessionCostAdvisorNotifier } from './ui/sessionCostAdvisorNotifier';
 import { LiveSessionTracker } from './utils/liveSessionTracker';
 import { PromptAnalyzer } from './analytics/promptAnalyzer';
 import { readChronicleCheckpoints, readChronicleSessions } from './parsers/chronicle';
@@ -219,6 +220,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             context.globalStorageUri.fsPath,
             (cacheDir) => new EmbeddingEngine(cacheDir),
             () => new SemanticIndex(),
+            defaultVsCodeApi(context.globalState),
         );
         semanticIndexer = indexer;
         void indexer.initialize().then(() => {
@@ -229,6 +231,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                     indexer.scheduleSession(session);
                 }
             }
+        }).catch((err: unknown) => {
+            void vscode.window.showErrorMessage(
+                `Chat Wizard: Failed to initialize semantic search — ${String(err)}. Reload VS Code to retry.`
+            );
         });
     }
 
@@ -876,7 +882,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             const items: FilterItem[] = [
                 {
                     id: 'language',
-                    label: '$(symbol-event)  Language contains…',
+                    label: '$(symbol-event)  Language',
                     description: current.language ? `current: "${current.language}"` : undefined,
                 },
                 {
@@ -917,13 +923,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             const newFilter: CodeBlockFilter = { ...current };
 
             if (pick.id === 'language') {
-                const val = await vscode.window.showInputBox({
-                    title: 'Filter by language (case-insensitive substring)',
-                    value: current.language ?? '',
-                    placeHolder: 'e.g. typescript, python, javascript',
+                const langs = codeBlockProvider.getLanguages();
+                type LangItem = vscode.QuickPickItem & { lang: string | undefined };
+                const langItems: LangItem[] = [
+                    ...langs.map(l => ({
+                        label: l || '[No Language]',
+                        lang: l,
+                        description: current.language === l ? 'current' : undefined,
+                    })),
+                    { label: '$(close)  Clear filter', lang: undefined },
+                ];
+                const langPick = await vscode.window.showQuickPick(langItems, {
+                    title: 'Filter by language',
+                    placeHolder: 'Select a language',
                 });
-                if (val === undefined) { return; }
-                newFilter.language = val.trim() || undefined;
+                if (!langPick) { return; }
+                newFilter.language = langPick.lang;
 
             } else if (pick.id === 'content') {
                 const val = await vscode.window.showInputBox({
@@ -2000,6 +2015,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         w.setLiveTracker(liveTracker);
         const activeSessionTagBtn = new ActiveSessionTagButton(liveTracker);
         context.subscriptions.push(activeSessionTagBtn);
+
+        // ── Feature 20-J: Session Cost Advisor ───────────────────────────────
+        const costAdvisorNotifier = new SessionCostAdvisorNotifier(liveTracker, index);
+        context.subscriptions.push(costAdvisorNotifier);
 
         context.subscriptions.push(
             vscode.commands.registerCommand('chatwizard.tagActiveSession', async () => {

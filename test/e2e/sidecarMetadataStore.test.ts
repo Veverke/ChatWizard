@@ -111,4 +111,60 @@ suite('SidecarMetadataStore', () => {
         await nestedStore.set('sess-nested', { sessionId: 'sess-nested' });
         assert.ok(fs.existsSync(nestedDir));
     });
+
+    test('addTag adds a lowercase normalised tag', async () => {
+        await store.addTag('sess-t1', '  TypeScript  ');
+        const meta = await store.get('sess-t1');
+        assert.deepStrictEqual(meta?.tags, ['typescript']);
+    });
+
+    test('addTag ignores duplicate tags', async () => {
+        await store.addTag('sess-t2', 'react');
+        await store.addTag('sess-t2', 'React');
+        const meta = await store.get('sess-t2');
+        assert.deepStrictEqual(meta?.tags, ['react']);
+    });
+
+    test('addTag ignores empty/whitespace tags', async () => {
+        await store.addTag('sess-t3', '   ');
+        const meta = await store.get('sess-t3');
+        assert.strictEqual(meta, undefined);
+    });
+
+    test('removeTag removes an existing tag', async () => {
+        await store.addTag('sess-t4', 'ts');
+        await store.addTag('sess-t4', 'react');
+        await store.removeTag('sess-t4', 'ts');
+        const meta = await store.get('sess-t4');
+        assert.deepStrictEqual(meta?.tags, ['react']);
+    });
+
+    test('removeTag is a no-op when tag does not exist', async () => {
+        await store.addTag('sess-t5', 'ts');
+        await store.removeTag('sess-t5', 'nonexistent');
+        const meta = await store.get('sess-t5');
+        assert.deepStrictEqual(meta?.tags, ['ts']);
+    });
+
+    test('getAllTags returns tags sorted by count descending', async () => {
+        await store.addTag('s1', 'ts');
+        await store.addTag('s2', 'ts');
+        await store.addTag('s3', 'react');
+        const tags = await store.getAllTags();
+        assert.strictEqual(tags[0].tag, 'ts');
+        assert.strictEqual(tags[0].count, 2);
+        assert.strictEqual(tags[1].tag, 'react');
+        assert.strictEqual(tags[1].count, 1);
+    });
+
+    test('getAllTags returns empty array when no sessions have tags', async () => {
+        const tags = await store.getAllTags();
+        assert.deepStrictEqual(tags, []);
+    });
+
+    test('setSummary stores summary on the session', async () => {
+        await store.setSummary('sess-sum', 'This is a summary.');
+        const meta = await store.get('sess-sum');
+        assert.strictEqual(meta?.summary, 'This is a summary.');
+    });
 });

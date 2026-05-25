@@ -47,3 +47,4 @@ suite('entityExtractor', () => {
     });
 
 });
+

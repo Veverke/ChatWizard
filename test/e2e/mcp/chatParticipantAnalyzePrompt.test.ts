@@ -303,4 +303,45 @@ suite('createParticipantHandler — /analyzePrompt', () => {
         const hasSuggestedModel = KNOWN_MODELS.some(m => out.toLowerCase().includes(m));
         assert.ok(hasSuggestedModel, `expected a known model in suggested model line, got: ${out}`);
     });
+
+    // ── Analysis source footer ───────────────────────────────────────────────
+    //
+    // When VS Code is not available (test environment), CopilotPromptAnalysisProvider
+    // fails to acquire a model, so the heuristic path is taken. The output must include
+    // the heuristic footer line so users know the quality of the analysis.
+
+    test('output includes the heuristic footer when Copilot LLM is unavailable (test env)', async () => {
+        const index   = new SessionIndex();
+        const handler = createParticipantHandler(new Map(), index, fakeMessageFactory);
+        const stream  = makeStream();
+        const request = makeRequest('analyzePrompt', 'Explain how to use Redis as a session store in Express.');
+
+        await handler(request as never, FAKE_CTX, stream as never, FAKE_TOKEN);
+
+        const out = stream.text();
+        // In the test environment there is no vscode.lm available, so the analysis
+        // must fall back to heuristics and show the heuristic footer.
+        assert.ok(
+            out.includes('heuristic analysis') || out.includes('analysis by Copilot'),
+            `expected analysis source footer in output, got: ${out}`,
+        );
+    });
+
+    test('rewriteSuggestion section is not present in heuristic-only output (no rewrite from heuristics)', async () => {
+        const index   = new SessionIndex();
+        const handler = createParticipantHandler(new Map(), index, fakeMessageFactory);
+        const stream  = makeStream();
+        // A normal prompt — no LLM available in test env → no rewriteSuggestion
+        const request = makeRequest('analyzePrompt', 'What is the purpose of TypeScript generics?');
+
+        await handler(request as never, FAKE_CTX, stream as never, FAKE_TOKEN);
+
+        const out = stream.text();
+        // Heuristics never produce a rewriteSuggestion so this section must be absent
+        assert.ok(
+            !out.includes('**💡 Suggested rewrite:**'),
+            `rewriteSuggestion section should not appear in heuristic output, got: ${out}`,
+        );
+    });
+
 });

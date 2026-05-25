@@ -870,7 +870,7 @@ Extract and index structured entities from session content post-indexing: file p
 
 ### Overview
 
-Local, zero-LLM prompt analysis: token count estimate, similarity check against session history, verbosity heuristics, multi-question detection, model selection suggestion. Exposed as `@chatwizard /analyzePrompt` and `ChatWizard: Analyze Selected Prompt` command.
+Prompt analysis: token count estimate, similarity check against session history, verbosity detection, multi-question detection, model selection suggestion. **Primary path uses a free Copilot-tier LLM** (`o4-mini` → `gpt-4o-mini`) for richer, contextually-aware feedback; heuristic rules (regex + token counting) serve as the fallback when no model is available. Exposed as `@chatwizard /analyzePrompt` and `ChatWizard: Analyze Selected Prompt` command.
 
 ### Atomic Tasks
 
@@ -883,12 +883,13 @@ Local, zero-LLM prompt analysis: token count estimate, similarity check against 
 - [x] **20-B** — `PromptAnalyzer` orchestrator
   - New file `src/analytics/promptAnalyzer.ts`.
   - `analyze(draftPrompt: string): PromptAnalysis`:
-    - Token count via 20-A.
+    - Token count via 20-A (always computed locally — fast and deterministic).
     - Similarity check: call `SemanticIndexer.findSimilar(draftPrompt, 3)` — returns top-3 historical sessions with similarity score.
-    - Verbosity flags: large code block pasted (`/```[\s\S]{500,}```/`), open-ended scope phrases (`/list all|explain everything|write a complete/i`), multiple questions (`/\?[^?]*\?/`).
-    - Model suggestion: if token count < 500 and no code block → suggest `gpt-4o-mini` or `claude-haiku`.
-  - Returns `PromptAnalysis: { tokenCount, estimatedCostUsd, similarSessions, flags, modelSuggestion }`.
-  - Synchronous for the heuristic parts; async for similarity check.
+    - **LLM-primary analysis path** — calls `{ vendor: 'copilot', family: 'o4-mini' }` (falling back to `gpt-4o-mini`) with a compact system prompt asking for: detected verbosity issues, a concise rewrite suggestion, and an optimal model recommendation for this prompt. Zero premium-request cost.
+    - **Heuristic fallback path** (used when no Copilot model is available or the LLM call fails): large code block pasted (`/```[\s\S]{500,}```/`), open-ended scope phrases (`/list all|explain everything|write a complete/i`), multiple questions (`/\?[^?]*\?/`), token-count-based model suggestion.
+    - Both paths return the same `PromptAnalysis` shape so callers are path-agnostic.
+  - Returns `PromptAnalysis: { tokenCount, estimatedCostUsd, similarSessions, flags, modelSuggestion, analysisSource: 'llm' | 'heuristic' }`.
+  - Async throughout (LLM call is async; heuristic path wraps synchronous ops in `Promise.resolve`).
 
 - [x] **20-C** — `@chatwizard /analyzePrompt` chat participant command
   - Registered in `chatParticipant.ts` as a new command handler for `/analyzePrompt`.
@@ -896,9 +897,10 @@ Local, zero-LLM prompt analysis: token count estimate, similarity check against 
   - Output via `stream.markdown()`:
     - Token count and estimated cost: `"~1,240 tokens · est. $0.04 at Sonnet rates"`.
     - If similar sessions found: `"You asked something very similar on [date] — review before sending?"` with session links.
-    - Verbosity flags: one actionable tip per flag detected.
+    - Verbosity flags / rewrite suggestions: sourced from the LLM when available, heuristic rules otherwise.
     - Model suggestion if a cheaper model is appropriate.
-  - Does **not** send the prompt anywhere; zero LLM calls.
+    - When the LLM path was used, a subtle footer: `"_(analysis by Copilot o4-mini)_"`; when heuristic: `"_(heuristic analysis — Copilot model unavailable)_"` so the user knows which path ran.
+  - Uses `request.model` **only** for the analysis call; does not forward the user's draft prompt to any external endpoint beyond the local Copilot LM API.
 
 - [x] **20-D** — `ChatWizard: Analyze Selected Prompt` editor command
   - Registered in `package.json` as an editor context menu command when text is selected.
@@ -910,6 +912,73 @@ Local, zero-LLM prompt analysis: token count estimate, similarity check against 
   - Price table is the single source of truth — used by both 20-A and future post-session cost tips (Feature 37/P3).
   - Include a comment: `// Last updated: <date>` to make staleness obvious.
 
+- [ ] **20-F** — Session Turn Cost Accumulator
+  - New file `src/analytics/sessionCostAccumulator.ts`.
+  - `TurnRecord = { userTokens: number; assistantTokens: number; modelId: ModelId }`.
+  - `class SessionCostAccumulator`:
+    - `addTurn(userText: string, assistantText: string, modelId: ModelId): void` — tokenizes both sides and records a `TurnRecord`.
+    - `addTurnTokens(userTokens: number, assistantTokens: number, modelId: ModelId): void` — accepts pre-counted tokens directly (e.g. from source metadata).
+    - `getCumulativeCost(): CumulativeCost` — recomputes on every call; model per-turn may vary so cost is summed turn-by-turn using `PRICE_TABLE`.
+    - `getTurns(): readonly TurnRecord[]`.
+  - `CumulativeCost = { totalInputTokens: number; totalOutputTokens: number; totalCostUsd: number; turnCount: number; modelDisplayName: string }`.
+  - No VS Code dependency — fully unit-testable.
+
+- [ ] **20-G** — Prompt Intent Consolidator (heuristic, zero-LLM)
+  - New file `src/analytics/promptConsolidator.ts`.
+  - `consolidate(userMessages: string[]): ConsolidationResult | null`:
+    - Returns `null` when `userMessages.length < 2` (no savings possible).
+    - Strips conversational filler from each message: leading openers ("can you", "could you please", "also", "follow up", "one more thing", "thanks"), trailing politeness ("thank you", "thanks"), and duplicate whitespace.
+    - Deduplicates near-identical stripped intents: two messages are considered duplicate if Jaccard similarity on their word sets exceeds 0.75.
+    - Composes a single multi-part prompt: `"Please accomplish all of the following:\n1. [intent1]\n2. [intent2]\n..."`.
+    - Returns `{ consolidatedPrompt: string; consolidatedTokenCount: number; intentCount: number }`.
+  - Fully synchronous, no external dependencies, no LLM calls.
+  - Exported `FILLER_PATTERNS` constant so tests and the LLM variant can reuse it.
+
+- [ ] **20-H** — LLM-Enhanced Consolidator (optional, free model)
+  - New file `src/analytics/promptConsolidatorLlm.ts`.
+  - `consolidateLlm(userMessages: string[], token: vscode.CancellationToken): Promise<ConsolidationResult | null>`:
+    - Selects a model via the VS Code LM API using the chain: `{ vendor: 'copilot', family: 'o4-mini' }` → `{ vendor: 'copilot', family: 'gpt-4o-mini' }` → heuristic fallback (calls 20-G and returns its result).
+    - System prompt: _"You are a prompt optimizer. The user sent the following messages across a multi-turn AI chat session. Write a single, minimal, focused prompt that achieves the same outcome using the fewest tokens. Return only the optimized prompt with no commentary."_
+    - User message: the numbered list of original user messages.
+    - On any error (model unavailable, request cancelled, non-200 response), silently falls back to heuristic consolidator.
+    - Returns the same `ConsolidationResult` shape as 20-G.
+  - Gated at call-site by `chatwizard.sessionCostAdvisor.useLlm` setting (default: `true` — on by default; heuristic 20-G is the fallback, not the primary path).
+  - **Rationale for defaulting on:** even a less capable free model synthesises a tighter, more natural consolidated prompt than regex stripping. Models selected via `{ vendor: 'copilot' }` consume zero premium requests, so there is no cost reason to withhold this quality. The heuristic fallback guarantees the feature still works when Copilot is offline or the model is unavailable.
+
+- [ ] **20-I** — Session Cost Advisor orchestrator
+  - New file `src/analytics/sessionCostAdvisor.ts`.
+  - `AdviseTurn = { userText: string; assistantText: string; modelId: ModelId }`.
+  - `CostAdvice = { cumulativeCostUsd: number; consolidatedPrompt: string; consolidatedCostUsd: number; savingsUsd: number; savingsPct: number; turnCount: number; modelDisplayName: string }`.
+  - `class SessionCostAdvisor`:
+    - `advise(turns: AdviseTurn[], useLlm = false, token?: vscode.CancellationToken): Promise<CostAdvice | null>`:
+      1. Returns `null` when `turns.length < 2`.
+      2. Builds `SessionCostAccumulator` from all turns; gets `CumulativeCost`.
+      3. Invokes `consolidateLlm()` if `useLlm === true`, otherwise `consolidate()`.
+      4. Estimates consolidated session cost: `consolidatedInputTokens × inputRate + avgAssistantTokens × outputRate`, where `avgAssistantTokens` is the mean of `turn.assistantTokens` across all turns (proxy for how long a single on-target response would be).
+      5. Returns `null` if `savingsUsd < 0.001` (noise floor — no tip shown for tiny saves).
+      6. Returns `CostAdvice` otherwise.
+  - No VS Code dependency except in the `useLlm` branch (delegates to 20-H).
+
+- [ ] **20-J** — On-Turn Session Cost Advice hook
+  - New file `src/ui/sessionCostAdvisorNotifier.ts`.
+  - `class SessionCostAdvisorNotifier` — subscribes to `LiveSessionTracker.onDidUpdate()`.
+  - On each update event:
+    1. Reads `chatwizard.sessionCostAdvisor.enabled` (default: `true`). Exits early if disabled.
+    2. Resolves the most-recent active session from `SessionIndex`.
+    3. Builds `AdviseTurn[]` from the session's `messages` array: pairs consecutive `user` + `assistant` turns; infers `modelId` from `session.model` using a best-effort regex normalizer (maps raw strings like `"claude-sonnet-4-6"` or `"gpt-4o-2024-05-13"` to a `ModelId`; falls back to `'claude-3-5-sonnet'` if unknown).
+    4. Calls `SessionCostAdvisor.advise()` (passing `useLlm` from `chatwizard.sessionCostAdvisor.useLlm`).
+    5. If advice is returned, shows a VS Code information message in this format:
+       ```
+       💰 Session spend so far: ~$0.12 · 5 turns · Claude 3.5 Sonnet
+       💡 Had you started with: "Refactor auth module: extract UserService, add tests, update README"
+       → Estimated cost: ~$0.03  ·  saving ~$0.09 (75%)
+       ```
+       with a **"View Details"** button that opens a lightweight webview panel (`SessionCostAdvicePanel`) displaying the full consolidated prompt in a copyable `<textarea>` alongside the cost breakdown table.
+  - Minimum turn threshold before any hint fires: 2 complete turns (1 user + 1 assistant each).
+  - Minimum savings threshold before any hint fires: `$0.001`.
+  - Debounced: if multiple watcher updates arrive within 2 s (e.g. streaming appends), only the last one triggers an advice computation.
+  - Disposes cleanly on extension deactivate.
+
 ### Unit Tests
 
 - [ ] `tokenizer.countTokens` — known strings return expected counts (cross-check against published tiktoken results), empty string returns 0.
@@ -917,15 +986,32 @@ Local, zero-LLM prompt analysis: token count estimate, similarity check against 
 - [ ] `PromptAnalyzer.analyze` — verbosity flag detected for pasted code block, multi-question detected, model suggestion triggered for short prompts.
 - [ ] `PromptAnalyzer.analyze` — similar sessions detected when semantic index contains a matching session.
 - [ ] `PromptAnalyzer.analyze` — no flags, no model suggestion for a clean focused prompt.
-- [ ] `/analyzePrompt` handler — streams correct markdown output, does not call any LLM.
+- [ ] `/analyzePrompt` handler — when LLM is available, streams LLM-sourced analysis with `_(analysis by Copilot o4-mini)_` footer; when no model is available, streams heuristic output with `_(heuristic analysis — Copilot model unavailable)_` footer.
+- [ ] `PromptAnalyzer.analyze` — `analysisSource` is `'llm'` when model mock returns a result; `'heuristic'` when model mock throws.
 - [ ] Price table — all expected models present; no model has zero cost (would indicate a stale entry).
+- [ ] `SessionCostAccumulator.addTurn` — cumulative cost is sum of per-turn costs; mixed models across turns each use correct rate.
+- [ ] `SessionCostAccumulator.addTurnTokens` — pre-counted tokens bypass tokenizer; cost matches manual calculation.
+- [ ] `SessionCostAccumulator` — single turn returns cost > 0; zero-token turn returns cost 0.
+- [ ] `PromptConsolidator.consolidate` — returns `null` for fewer than 2 messages.
+- [ ] `PromptConsolidator.consolidate` — strips filler openers and duplicates two near-identical messages into one intent.
+- [ ] `PromptConsolidator.consolidate` — three distinct messages produce a three-item numbered list.
+- [ ] `PromptConsolidator.consolidate` — consolidated token count is less than sum of original token counts for a realistic multi-turn input.
+- [ ] `SessionCostAdvisor.advise` — returns `null` for a single-turn session.
+- [ ] `SessionCostAdvisor.advise` — returns `null` when projected savings < $0.001.
+- [ ] `SessionCostAdvisor.advise` — `savingsPct` is computed correctly relative to `cumulativeCostUsd`.
+- [ ] `SessionCostAdvisor.advise` — `consolidatedCostUsd` uses average assistant token count from all turns.
 
 ### E2E Tests
 
-- [ ] **Scenario: `/analyzePrompt` with a verbose prompt** — verbosity flags and model suggestion appear in the chat response.
+- [ ] **Scenario: `/analyzePrompt` with a verbose prompt** — verbosity flags and model suggestion appear in the chat response; footer shows `_(analysis by Copilot o4-mini)_`.
+- [ ] **Scenario: `/analyzePrompt` offline (no Copilot model)** — heuristic flags are shown and footer reads `_(heuristic analysis — Copilot model unavailable)_`.
 - [ ] **Scenario: `/analyzePrompt` with a similar past query** — past session links appear in the response.
 - [ ] **Scenario: `Analyze Selected Prompt` command** — selecting text in an editor and running the command shows the analysis notification.
 - [ ] **Scenario: clean minimal prompt** — no flags, no suggestions — response says `"Looks good — well-scoped prompt"`.
+- [ ] **Scenario: Session Cost Advisor — two-turn session** — after the second user turn in a tracked session, an information message appears showing cumulative cost and a consolidated prompt.
+- [ ] **Scenario: Session Cost Advisor — savings below threshold** — for a session where all messages are very short, no information message is shown (savings < $0.001).
+- [ ] **Scenario: Session Cost Advisor disabled** — when `chatwizard.sessionCostAdvisor.enabled` is `false`, no message appears even after multiple turns.
+- [ ] **Scenario: "View Details" panel** — clicking the button in the information message opens the `SessionCostAdvicePanel` webview with the full consolidated prompt and cost breakdown.
 
 ### Manual Tests
 
@@ -936,15 +1022,22 @@ Local, zero-LLM prompt analysis: token count estimate, similarity check against 
 5. Verify no network request is made during any analysis (check the Network tab / Charles proxy or simply verify it works while offline).
 6. _(Potential bug surface)_ The price table is out of date (models change pricing). Verify the hardcoded cost is clearly labeled as an estimate and includes a "Last updated" notice so users know it may not be current.
 7. _(Potential bug surface)_ The draft prompt is in a non-English language. Verify the tokenizer handles multi-byte characters without crashing (BPE handles UTF-8 natively).
+8. Start a multi-turn chat session with at least 3 user turns. Verify the Session Cost Advisor information message appears after the 2nd turn onward, showing the cumulative spend and a consolidated prompt.
+9. Disable `chatwizard.sessionCostAdvisor.useLlm` (set to `false`). Repeat step 8. Verify the consolidated prompt is produced by the heuristic path (numbered list of stripped intents) confirming the fallback works.
+10. Set `chatwizard.sessionCostAdvisor.enabled = false`. Start a multi-turn session. Verify no cost-advisor message appears at any point.
+11. Click "View Details" in the Session Cost Advisor notification. Verify the webview shows: the full consolidated prompt in a copyable text area, a cost breakdown table (actual spend vs. estimated consolidated spend), and the savings amount and percentage.
+12. _(Potential bug surface)_ Session uses a model not present in `PRICE_TABLE` (e.g. a newly released model). Verify the advisor silently falls back to the closest known model rate and includes a disclaimer "(estimated, model pricing may differ)".
+13. _(Potential bug surface)_ The same intent is rephrased across multiple turns (e.g. "fix the login bug" → "still broken, fix login"). Verify the consolidator deduplicates this into a single intent, not two.
 
 ### Completion Checklist
 
-- [ ] All atomic tasks (20-A through 20-E) implemented and code-reviewed
+- [ ] All atomic tasks (20-A through 20-J) implemented and code-reviewed
 - [ ] All unit tests green
 - [ ] All e2e tests green
 - [ ] Manual tests performed and all issues fixed
 - [ ] `/analyzePrompt` command documented in README chat participant commands section
 - [ ] `ChatWizard: Analyze Selected Prompt` in README command palette section
+- [ ] Session Cost Advisor settings (`chatwizard.sessionCostAdvisor.enabled`, `chatwizard.sessionCostAdvisor.useLlm`) documented in README settings section
 - [ ] `work-plan-cost-effective-prompts.md` tasks marked complete
 - [ ] ⬜ → ✅ in this document and `whats-next.md`
 

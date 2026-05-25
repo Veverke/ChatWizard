@@ -138,8 +138,8 @@ function groupBySession(blocks: IndexedCodeBlock[]): SessionCodeBlockGroup[] {
 export class CodeBlockGroupItem extends vscode.TreeItem {
     readonly sessionRef: CodeBlockSessionRef;
 
-    constructor(group: SessionCodeBlockGroup) {
-        super(group.sessionTitle, vscode.TreeItemCollapsibleState.Collapsed);
+    constructor(group: SessionCodeBlockGroup, initialState = vscode.TreeItemCollapsibleState.Collapsed) {
+        super(group.sessionTitle, initialState);
 
         this.sessionRef = { sessionId: group.sessionId, blocks: group.blocks };
 
@@ -259,17 +259,26 @@ export class CbLanguageGroupItem extends vscode.TreeItem {
     readonly language: string;
 
     constructor(language: string, count: number) {
-        const displayLang = language || 'Plain / Unknown';
-        super(displayLang, vscode.TreeItemCollapsibleState.Expanded);
+        const displayLang = language || '[No Language]';
+        super(displayLang, vscode.TreeItemCollapsibleState.Collapsed);
         this.language = language;
         this.description = `${count} session${count === 1 ? '' : 's'}`;
         this.contextValue = 'cbLanguageGroup';
-        // Use file icon from extension when possible, otherwise a generic icon
-        const ext = langToExtension(language);
-        if (ext !== 'txt' && language) {
-            this.resourceUri = vscode.Uri.file(`file.${ext}`);
-        } else {
-            this.iconPath = new vscode.ThemeIcon('symbol-misc');
+        // resourceUri alone is overridden by folder icons on collapsible tree items in
+        // most file-icon themes.  An explicit iconPath takes precedence and ensures a
+        // language-appropriate icon is always shown at the top (language-group) level.
+        this.iconPath = new vscode.ThemeIcon(CbLanguageGroupItem._langIcon(language));
+    }
+
+    private static _langIcon(lang: string): string {
+        switch (lang.toLowerCase()) {
+            case 'markdown': return 'markdown';
+            case 'sql':      return 'database';
+            case 'bash': case 'shell': case 'powershell': case 'batch': return 'terminal';
+            case 'json': case 'yaml': case 'toml': case 'xml': return 'code';
+            case 'dockerfile': return 'package';
+            case '':           return 'symbol-misc';   // [No Language] group
+            default:           return 'file-code';
         }
     }
 }
@@ -315,14 +324,21 @@ export class CodeBlockTreeProvider implements vscode.TreeDataProvider<CodeBlockT
 
     getFilter(): CodeBlockFilter { return { ...this._filter }; }
 
+    /** Returns all distinct language labels currently in the index, sorted alphabetically
+     *  with the empty-string (no-language) entry last.  Used to populate the filter QuickPick. */
+    getLanguages(): string[] {
+        const all = this.engine.getLanguages();
+        return [...all.filter(l => l !== ''), ...all.filter(l => l === '')];
+    }
+
     hasActiveFilter(): boolean {
         const f = this._filter;
-        return !!(f.language || f.content || f.sessionSource || f.messageRole);
+        return !!(f.language !== undefined || f.content || f.sessionSource || f.messageRole);
     }
 
     private _blockMatchesFilter(block: IndexedCodeBlock): boolean {
         const f = this._filter;
-        if (f.language && !block.language.toLowerCase().includes(f.language.toLowerCase())) { return false; }
+        if (f.language !== undefined && block.language.toLowerCase() !== f.language.toLowerCase()) { return false; }
         if (f.content && !block.content.toLowerCase().includes(f.content.toLowerCase())) { return false; }
         if (f.sessionSource && block.sessionSource !== f.sessionSource) { return false; }
         if (f.messageRole && block.messageRole !== f.messageRole) { return false; }
@@ -337,7 +353,7 @@ export class CodeBlockTreeProvider implements vscode.TreeDataProvider<CodeBlockT
     private _filterDescription(): string {
         const f = this._filter;
         const parts: string[] = [];
-        if (f.language) { parts.push(`lang:"${f.language}"`); }
+        if (f.language !== undefined) { parts.push(f.language ? `lang:"${f.language}"` : 'lang:[no language]'); }
         if (f.content) { parts.push(`content:"${f.content}"`); }
         if (f.sessionSource) { parts.push(`source:${f.sessionSource}`); }
         if (f.messageRole) { parts.push(`role:${f.messageRole}`); }
@@ -474,7 +490,11 @@ export class CodeBlockTreeProvider implements vscode.TreeDataProvider<CodeBlockT
                 .filter(g => g.blocks.some(b => (b.language || '') === lang))
                 .map(g => {
                     const filteredBlocks = g.blocks.filter(b => (b.language || '') === lang);
-                    return new CodeBlockGroupItem({ ...g, blocks: filteredBlocks, primaryLanguage: lang });
+                    // Start expanded so code block leaves are visible after a single click
+                    return new CodeBlockGroupItem(
+                        { ...g, blocks: filteredBlocks, primaryLanguage: lang },
+                        vscode.TreeItemCollapsibleState.Expanded
+                    );
                 });
         }
 

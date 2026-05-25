@@ -201,12 +201,14 @@ section('Checking dependency gaps against VSIX contents');
 //
 //   prebuild-install   — runs only at `npm install` time to download pre-built
 //                        native binaries; irrelevant at extension runtime.
-//   @huggingface/jinja — @xenova/transformers uses this for chat-model Jinja
-//                        template parsing; ChatWizard uses transformers for
-//                        text embeddings only, so this code path is never hit.
+//   @huggingface/jinja — @xenova/transformers statically imports this for chat-model
+//                        Jinja template parsing. ChatWizard never calls apply_chat_template,
+//                        but the import fires at module-load time, so a stub package is
+//                        created inside node_modules/@xenova/transformers/node_modules/ by
+//                        package-vsix.mjs. It therefore appears in the VSIX but only as a
+//                        stub, and validation should not flag it as missing.
 const KNOWN_SAFE_OMISSIONS = new Set([
     'prebuild-install',
-    '@huggingface/jinja',
 ]);
 
 /**

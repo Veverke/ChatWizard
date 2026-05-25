@@ -32,6 +32,80 @@ export function extractTextContent(
 }
 
 /**
+ * Language alias map: normalises common abbreviations to their canonical names.
+ * Keys must be lowercase.
+ */
+const LANG_ALIASES: Record<string, string> = {
+    js: 'javascript',
+    ts: 'typescript',
+    tsx: 'tsx',
+    jsx: 'jsx',
+    py: 'python',
+    rb: 'ruby',
+    sh: 'bash',
+    shell: 'bash',
+    zsh: 'bash',
+    fish: 'bash',
+    'c++': 'cpp',
+    'c#': 'csharp',
+    cs: 'csharp',
+    'f#': 'fsharp',
+    fs: 'fsharp',
+    md: 'markdown',
+    yml: 'yaml',
+    ps1: 'powershell',
+    ps: 'powershell',
+    tf: 'terraform',
+    bat: 'batch',
+    cmd: 'batch',
+};
+
+/**
+ * Common English words that appear as fence-block labels but are not programming
+ * languages.  Any normalised label matching one of these is discarded.
+ */
+const LANG_DENYLIST = new Set([
+    'block', 'code', 'output', 'example', 'snippet', 'sample',
+    'note', 'text', 'content', 'data', 'result', 'response', 'request',
+    'error', 'warning', 'info', 'log', 'diff', 'patch',
+]);
+
+/**
+ * Validates and normalises a raw language label from a fenced code block.
+ *
+ * Rules applied (in order):
+ *  1. Trim surrounding whitespace.
+ *  2. Reject if empty or too long (> 40 chars).
+ *  3. Reject if the label contains any character outside the set: word chars
+ *     (a-zA-Z0-9_), hyphens, plus signs, and hash (#).  Dots are intentionally
+ *     excluded — no real language identifier contains one.  Hash is explicitly
+ *     allowed so that C# and F# are accepted.
+ *  4. Reject known non-language English words (e.g. "block", "output").
+ *  5. Lowercase.
+ *  6. Apply known aliases (e.g. `js` → `javascript`).
+ *
+ * Returns the normalised language string, or `''` if the label looks invalid.
+ */
+export function normalizeLanguage(raw: string): string {
+    const trimmed = raw.trim();
+
+    // Reject empty or suspiciously long labels
+    if (trimmed.length === 0 || trimmed.length > 40) { return ''; }
+
+    // Positive allowlist: only word chars (a-zA-Z0-9_), hyphens, plus signs, hash.
+    // Using a positive match makes the intent explicit and avoids any ambiguity
+    // with hyphen placement inside a negated class.
+    if (!/^[\w+#-]+$/.test(trimmed)) { return ''; }
+
+    const lower = trimmed.toLowerCase();
+
+    // Reject common English words that appear as fence labels but are not languages
+    if (LANG_DENYLIST.has(lower)) { return ''; }
+
+    return LANG_ALIASES[lower] ?? lower;
+}
+
+/**
  * Extracts fenced code blocks from message text.
  * Matches ``` optionalLanguage\ncontent\n``` patterns.
  */
@@ -41,12 +115,15 @@ export function extractCodeBlocks(
     messageIndex: number
 ): CodeBlock[] {
     const blocks: CodeBlock[] = [];
-    const codeBlockRegex = /```(\w*)\n([\s\S]*?)```/g;
+    // Accept any non-newline, non-backtick chars for the language label so the
+    // regex matches the same fences as Copilot's parser; normalizeLanguage()
+    // below discards anything that is not a real language identifier.
+    const codeBlockRegex = /```([^\n`]*)\n([\s\S]*?)```/g;
     let match: RegExpExecArray | null;
 
     while ((match = codeBlockRegex.exec(content)) !== null) {
         blocks.push({
-            language: match[1] ?? '',
+            language: normalizeLanguage(match[1] ?? ''),
             content: match[2].trim(),
             sessionId,
             messageIndex,
