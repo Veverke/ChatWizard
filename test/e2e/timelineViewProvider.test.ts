@@ -214,3 +214,50 @@ suite('TimelineViewProvider.getShellHtml — new features', () => {
     });
 });
 
+// ── JavaScript validity ───────────────────────────────────────────────────────
+// These tests guard against TypeScript syntax (type assertions, annotations, etc.)
+// being embedded inside <script> blocks, which causes a SyntaxError in the webview
+// and leaves the skeleton placeholder visible forever (the 'ready' message is never sent).
+
+suite('TimelineViewProvider.getShellHtml — script validity', () => {
+
+    function extractScripts(html: string): string[] {
+        const scripts: string[] = [];
+        const re = /<script(?:\s[^>]*)?>([^]*?)<\/script>/gi;
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(html)) !== null) {
+            if (m[1].trim()) { scripts.push(m[1]); }
+        }
+        return scripts;
+    }
+
+    test('all <script> blocks parse as valid JavaScript (no TypeScript syntax)', () => {
+        const html = TimelineViewProvider.getShellHtml();
+        const scripts = extractScripts(html);
+        assert.ok(scripts.length > 0, 'should have at least one script block');
+        for (const script of scripts) {
+            assert.doesNotThrow(
+                () => new Function(script),
+                `Script block should be syntactically valid JavaScript.\n` +
+                `A TypeScript "as Type" cast or other TS syntax inside a template-literal ` +
+                `<script> block causes a SyntaxError in the webview, preventing the ` +
+                `'ready' postMessage from firing and leaving the skeleton visible forever.`
+            );
+        }
+    });
+
+    test('no TypeScript type assertions in script blocks', () => {
+        const html = TimelineViewProvider.getShellHtml();
+        const scripts = extractScripts(html);
+        for (const script of scripts) {
+            // Match patterns like "} as SomeType" or "value as SomeType<..." which are
+            // valid TypeScript but illegal in browser JavaScript.
+            const tsAssertionPattern = /\bas\s+[A-Z][A-Za-z]*\s*[<(]/;
+            assert.ok(
+                !tsAssertionPattern.test(script),
+                'Script blocks must not contain TypeScript "as Type" assertions — they cause a SyntaxError in the webview'
+            );
+        }
+    });
+});
+

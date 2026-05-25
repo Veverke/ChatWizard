@@ -760,7 +760,7 @@ export class TimelineViewProvider implements vscode.WebviewViewProvider {
       roocode: 'cw-badge-roocode',
       windsurf:'cw-badge-windsurf',
       aider:   'cw-badge-aider',
-    } as Record<string,string>)[entry.source] ?? 'cw-badge-claude';
+    })[entry.source] ?? 'cw-badge-claude';
     const wsMeta       = entry.workspaceName || '(unknown workspace)';
     const promptText   = entry.firstPrompt   || '(no prompt)';
     const ariaLabel    = escHtml(entry.sessionTitle) + ', ' + sourceLabel + ', ' + escHtml(entry.date);

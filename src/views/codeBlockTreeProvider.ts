@@ -465,35 +465,41 @@ export class CodeBlockTreeProvider implements vscode.TreeDataProvider<CodeBlockT
             return element.sessionRef.blocks.map(b => new CodeBlockLeafItem(b));
         }
 
-        // Language group node: return the session groups belonging to this language
+        // Language group node: return the session groups that have blocks of this language,
+        // with only the matching-language blocks exposed (not the entire session block list).
         if (element instanceof CbLanguageGroupItem) {
             const allGroups = this._buildSortedGroups();
             const lang = element.language;
             return allGroups
-                .filter(g => (g.primaryLanguage || '') === lang)
-                .map(g => new CodeBlockGroupItem(g));
+                .filter(g => g.blocks.some(b => (b.language || '') === lang))
+                .map(g => {
+                    const filteredBlocks = g.blocks.filter(b => (b.language || '') === lang);
+                    return new CodeBlockGroupItem({ ...g, blocks: filteredBlocks, primaryLanguage: lang });
+                });
         }
 
         // Root level
         const allGroups = this._buildSortedGroups();
 
         if (this._groupMode === 'language') {
-            // Build language groups sorted: known languages A–Z, empty/unknown last
-            const langMap = new Map<string, SessionCodeBlockGroup[]>();
+            // Build language groups from every block language (not just primaryLanguage).
+            // A session may appear under multiple language groups; each group shows only
+            // the blocks of that specific language.
+            const langSessionCount = new Map<string, number>();
             for (const g of allGroups) {
-                const lang = g.primaryLanguage || '';
-                let arr = langMap.get(lang);
-                if (!arr) { arr = []; langMap.set(lang, arr); }
-                arr.push(g);
+                const langs = new Set(g.blocks.map(b => b.language || ''));
+                for (const lang of langs) {
+                    langSessionCount.set(lang, (langSessionCount.get(lang) ?? 0) + 1);
+                }
             }
-            const sorted = Array.from(langMap.entries()).sort(([a], [b]) => {
+            const sorted = Array.from(langSessionCount.entries()).sort(([a], [b]) => {
                 const aEmpty = !a;
                 const bEmpty = !b;
                 if (aEmpty && !bEmpty) { return 1; }
                 if (!aEmpty && bEmpty) { return -1; }
                 return a.localeCompare(b);
             });
-            return sorted.map(([lang, groups]) => new CbLanguageGroupItem(lang, groups.length));
+            return sorted.map(([lang, count]) => new CbLanguageGroupItem(lang, count));
         }
 
         // Flat view (original behaviour with pagination)

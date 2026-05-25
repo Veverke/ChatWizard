@@ -436,3 +436,55 @@ suite('SessionWebviewPanel — Shell skeleton placeholders', () => {
     });
 });
 
+// ── Cross-panel: all <script> blocks must be valid JavaScript ─────────────────
+// Catches TypeScript syntax (type assertions, annotations, etc.) accidentally
+// embedded inside webview <script> template literals.  Such syntax causes a
+// SyntaxError in the webview JS engine, preventing the 'ready' postMessage from
+// firing and leaving the skeleton/loading state visible forever.
+
+suite('All webview panels — embedded script blocks are valid JavaScript', () => {
+
+    function extractScripts(html: string): string[] {
+        const scripts: string[] = [];
+        const re = /<script(?:\s[^>]*)?>([^]*?)<\/script>/gi;
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(html)) !== null) {
+            if (m[1].trim()) { scripts.push(m[1]); }
+        }
+        return scripts;
+    }
+
+    function assertValidJs(html: string, panelName: string): void {
+        const scripts = extractScripts(html);
+        assert.ok(scripts.length > 0, `${panelName}: should have at least one script block`);
+        for (let i = 0; i < scripts.length; i++) {
+            assert.doesNotThrow(
+                () => new Function(scripts[i]),
+                `${panelName} script[${i}] is not valid JavaScript. ` +
+                `TypeScript syntax inside a template-literal <script> causes a SyntaxError ` +
+                `in the webview, leaving the loading skeleton visible forever.`
+            );
+        }
+    }
+
+    test('AnalyticsPanel.getShellHtml — all scripts parse as valid JS', () => {
+        assertValidJs(AnalyticsPanel.getShellHtml(), 'AnalyticsPanel');
+    });
+
+    test('CodeBlocksPanel.getShellHtml — all scripts parse as valid JS', () => {
+        assertValidJs(CodeBlocksPanel.getShellHtml(), 'CodeBlocksPanel');
+    });
+
+    test('PromptLibraryPanel.getShellHtml — all scripts parse as valid JS', () => {
+        assertValidJs(PromptLibraryPanel.getShellHtml(), 'PromptLibraryPanel');
+    });
+
+    test('SessionWebviewPanel._getShellHtml — all scripts parse as valid JS', () => {
+        assertValidJs((SessionWebviewPanel as any)._getShellHtml(), 'SessionWebviewPanel');
+    });
+
+    test('TimelineViewProvider.getShellHtml — all scripts parse as valid JS', () => {
+        assertValidJs(TimelineViewProvider.getShellHtml(), 'TimelineViewProvider');
+    });
+});
+
