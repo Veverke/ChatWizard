@@ -6,7 +6,6 @@ import { SearchTool } from './searchTool';
 import { SessionIndex } from '../../index/sessionIndex';
 import { tokenizeQuery } from '../../search/fullTextEngine';
 import { IReranker, TfIdfReranker } from '../../search/reranker';
-import * as vscode from 'vscode';
 
 const DEFAULT_LIMIT = 5;
 const MIN_LIMIT = 1;
@@ -256,9 +255,14 @@ export class GetContextTool implements IMcpTool {
         }
 
         // Optional reranking pass (behind config flag)
-        const rerankerEnabled = vscode.workspace
-            .getConfiguration('chatwizard')
-            .get<boolean>('mcp.reranker.enabled', false);
+        let rerankerEnabled = false;
+        try {
+            // eslint-disable-next-line @typescript-eslint/no-require-imports
+            const vscode = require('vscode') as typeof import('vscode');
+            rerankerEnabled = vscode.workspace
+                .getConfiguration('chatwizard')
+                .get<boolean>('mcp.reranker.enabled', false);
+        } catch { /* running outside VS Code — default to false */ }
 
         let finalIds = filteredIds;
         if (rerankerEnabled && this.reranker.isReady()) {
