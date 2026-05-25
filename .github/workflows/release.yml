@@ -41,10 +41,12 @@ jobs:
 
   # ── Test against VS Code Insiders before building any VSIX ──────────────────
   # Catches proposed-API regressions that only surface in Insiders.
-  # Runs on Linux only (fastest, no native-module rebuild needed for this check).
+  # Runs on Linux only (fastest).
   test-insiders:
     needs: verify-version
     runs-on: ubuntu-latest
+    env:
+      VSCODE_VERSION: insiders
     steps:
       - uses: actions/checkout@v6
 
@@ -55,8 +57,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Download VS Code Insiders
+        run: node -e "require('@vscode/test-electron').downloadAndUnzipVSCode('insiders')"
+
+      - name: Rebuild native modules for VS Code's Electron
+        run: npm run rebuild:native
+
       - name: Run integration tests against VS Code Insiders
-        run: xvfb-run -a npm run test:integration -- --vscode-version=insiders
+        run: xvfb-run -a npm run test:integration
 
   # ── Build one VSIX per platform on its matching OS ───────────────────────────
   build:
