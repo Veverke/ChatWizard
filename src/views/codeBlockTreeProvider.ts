@@ -327,17 +327,18 @@ export class CodeBlockTreeProvider implements vscode.TreeDataProvider<CodeBlockT
     /** Returns all distinct language labels currently in the index, sorted alphabetically
      *  with the empty-string (no-language) entry last.  Used to populate the filter QuickPick. */
     getLanguages(): string[] {
-        return this.engine.getLanguages();
+        const all = this.engine.getLanguages();
+        return [...all.filter(l => l !== ''), ...all.filter(l => l === '')];
     }
 
     hasActiveFilter(): boolean {
         const f = this._filter;
-        return !!(f.language || f.content || f.sessionSource || f.messageRole);
+        return !!(f.language !== undefined || f.content || f.sessionSource || f.messageRole);
     }
 
     private _blockMatchesFilter(block: IndexedCodeBlock): boolean {
         const f = this._filter;
-        if (f.language && block.language.toLowerCase() !== f.language.toLowerCase()) { return false; }
+        if (f.language !== undefined && block.language.toLowerCase() !== f.language.toLowerCase()) { return false; }
         if (f.content && !block.content.toLowerCase().includes(f.content.toLowerCase())) { return false; }
         if (f.sessionSource && block.sessionSource !== f.sessionSource) { return false; }
         if (f.messageRole && block.messageRole !== f.messageRole) { return false; }
@@ -352,7 +353,7 @@ export class CodeBlockTreeProvider implements vscode.TreeDataProvider<CodeBlockT
     private _filterDescription(): string {
         const f = this._filter;
         const parts: string[] = [];
-        if (f.language) { parts.push(`lang:"${f.language}"`); }
+        if (f.language !== undefined) { parts.push(f.language ? `lang:"${f.language}"` : 'lang:[no language]'); }
         if (f.content) { parts.push(`content:"${f.content}"`); }
         if (f.sessionSource) { parts.push(`source:${f.sessionSource}`); }
         if (f.messageRole) { parts.push(`role:${f.messageRole}`); }

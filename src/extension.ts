@@ -928,7 +928,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 const langItems: LangItem[] = [
                     ...langs.map(l => ({
                         label: l || '[No Language]',
-                        lang: l || undefined,
+                        lang: l,
                         description: current.language === l ? 'current' : undefined,
                     })),
                     { label: '$(close)  Clear filter', lang: undefined },

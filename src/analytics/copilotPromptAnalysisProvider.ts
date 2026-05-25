@@ -10,6 +10,12 @@ import type { ILlmAnalysisProvider, LlmPromptAnalysis, VerbosityFlag } from './p
 import type { ModelId } from '../utils/modelPriceTable';
 import { resolveModelId } from '../utils/modelPriceTable';
 
+/** Shared no-op token — avoids allocating a CancellationTokenSource when no external token is provided. */
+const NONE_TOKEN = {
+    isCancellationRequested: false,
+    onCancellationRequested: () => ({ dispose: () => void 0 }),
+} as unknown as import('vscode').CancellationToken;
+
 // ── Valid codes the LLM is allowed to emit ───────────────────────────────────
 const VALID_CODES = new Set<string>([
     'LARGE_CODE_BLOCK', 'OPEN_ENDED', 'MULTIPLE_QUESTIONS', 'VERY_LONG', 'REPETITIVE_PHRASING',
@@ -130,8 +136,7 @@ export class CopilotPromptAnalysisProvider implements ILlmAnalysisProvider {
                 vscode.LanguageModelChatMessage.User(userContent),
             ];
 
-            const ct = token as import('vscode').CancellationToken | undefined
-                ?? new vscode.CancellationTokenSource().token;
+            const ct = (token as import('vscode').CancellationToken | undefined) ?? NONE_TOKEN;
 
             const response = await model.sendRequest(
                 messages,

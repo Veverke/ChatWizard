@@ -477,7 +477,7 @@ export function createParticipantHandler(
                 }
                 // Footer shows which analysis path ran so the user knows the quality of the advice
                 const footer = analysis.analysisSource === 'llm'
-                    ? '_(analysis by Copilot o4-mini)_'
+                    ? '_(analysis by Copilot AI)_'
                     : '_(heuristic analysis — Copilot model unavailable)_';
                 lines.push(`\n---\n${footer}`);
                 stream.markdown(lines.join('\n'));

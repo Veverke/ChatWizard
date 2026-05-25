@@ -15,6 +15,12 @@ import type { ConsolidationResult } from './promptConsolidator';
 import { consolidate } from './promptConsolidator';
 import { countTokens } from '../utils/tokenizer';
 
+/** Shared no-op token — avoids allocating a CancellationTokenSource when no external token is provided. */
+const NONE_TOKEN = {
+    isCancellationRequested: false,
+    onCancellationRequested: () => ({ dispose: () => void 0 }),
+} as unknown as import('vscode').CancellationToken;
+
 const SYSTEM_PROMPT =
     'You are a prompt optimizer for AI coding assistants. ' +
     'The user sent the following numbered messages across a multi-turn chat session. ' +
@@ -64,8 +70,7 @@ export async function consolidateLlm(
             .map((m, i) => `Message ${i + 1}:\n${m.slice(0, 1500)}`)
             .join('\n\n---\n\n');
 
-        const ct = (token as import('vscode').CancellationToken | undefined)
-            ?? new vscode.CancellationTokenSource().token;
+        const ct = (token as import('vscode').CancellationToken | undefined) ?? NONE_TOKEN;
 
         const response = await model.sendRequest(
             [vscode.LanguageModelChatMessage.User(numbered)],

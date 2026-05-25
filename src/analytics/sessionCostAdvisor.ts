@@ -62,7 +62,7 @@ export class SessionCostAdvisor {
         // Resolve model IDs
         const resolvedTurns = turns.map(t => ({
             ...t,
-            modelId: (resolveModelId(String(t.modelId)) ?? t.modelId) as ModelId,
+            modelId: resolveModelId(String(t.modelId)) ?? 'gpt-4o-mini' as ModelId,
         }));
 
         // Accumulate actual session cost
