@@ -12,7 +12,8 @@ import * as os from 'os';
 import * as path from 'path';
 
 import { SessionIndex } from '../../../src/index/sessionIndex';
-import { SessionTreeProvider, SessionTreeItem, DateGroupTreeItem, LoadMoreTreeItem } from '../../../src/views/sessionTreeProvider';
+import { SessionTreeProvider, SessionTreeItem, DateGroupTreeItem, LoadMoreTreeItem, ContextGroupTreeItem } from '../../../src/views/sessionTreeProvider';
+import { SidecarMetadataStore } from '../../../src/index/sidecarMetadataStore';
 import { parseCopilotSession } from '../../../src/parsers/copilot';
 import { parseClaudeSession } from '../../../src/parsers/claude';
 import { writeCopilotSessions } from '../../helpers/fixtureFactory';
@@ -431,6 +432,139 @@ suite('Sessions Tree View', function () {
 
         assert.strictEqual(liveItem!.contextValue, 'session');
         assert.strictEqual(archItem!.contextValue, 'session.archived');
+    });
+
+    // ── Test 21: Group by Tag ─────────────────────────────────────────────
+
+    test('21a — groupMode=tag produces ContextGroupTreeItem nodes at root', async () => {
+        const index = new SessionIndex();
+        index.upsert(makeSession({ id: 'tg-1' }));
+
+        const store = new SidecarMetadataStore(tmpDir);
+        await store.patch('tg-1', { tags: ['bugfix'] });
+        index.setSidecarStore(store, await store.load());
+
+        const provider = new SessionTreeProvider(index);
+        provider.setGroupMode('tag');
+
+        const root = provider.getChildren(undefined);
+        const groups = root.filter(n => n instanceof ContextGroupTreeItem);
+        assert.ok(groups.length >= 1, 'expected at least one ContextGroupTreeItem');
+    });
+
+    test('21b — tagged session appears under its tag group', async () => {
+        const index = new SessionIndex();
+        index.upsert(makeSession({ id: 'tg-2' }));
+
+        const store = new SidecarMetadataStore(tmpDir);
+        await store.patch('tg-2', { tags: ['auth'] });
+        index.setSidecarStore(store, await store.load());
+
+        const provider = new SessionTreeProvider(index);
+        provider.setGroupMode('tag');
+
+        const root = provider.getChildren(undefined);
+        const group = root.find(
+            n => n instanceof ContextGroupTreeItem && n.groupKey === 'auth'
+        ) as ContextGroupTreeItem | undefined;
+        assert.ok(group, 'expected an "auth" group');
+
+        const children = provider.getChildren(group!);
+        const ids = children.filter(n => n instanceof SessionTreeItem).map(n => (n as SessionTreeItem).summary.id);
+        assert.ok(ids.includes('tg-2'), 'session tg-2 should be under the "auth" group');
+    });
+
+    test('21c — session with multiple tags appears under each tag group', async () => {
+        const index = new SessionIndex();
+        index.upsert(makeSession({ id: 'tg-3' }));
+
+        const store = new SidecarMetadataStore(tmpDir);
+        await store.patch('tg-3', { tags: ['perf', 'refactor'] });
+        index.setSidecarStore(store, await store.load());
+
+        const provider = new SessionTreeProvider(index);
+        provider.setGroupMode('tag');
+
+        const root = provider.getChildren(undefined);
+        const tagLabels = root
+            .filter(n => n instanceof ContextGroupTreeItem)
+            .map(n => (n as ContextGroupTreeItem).groupKey);
+        assert.ok(tagLabels.includes('perf'),    'expected a "perf" group');
+        assert.ok(tagLabels.includes('refactor'), 'expected a "refactor" group');
+
+        for (const label of ['perf', 'refactor']) {
+            const grp = root.find(
+                n => n instanceof ContextGroupTreeItem && n.groupKey === label
+            ) as ContextGroupTreeItem;
+            const children = provider.getChildren(grp);
+            const ids = children.filter(n => n instanceof SessionTreeItem).map(n => (n as SessionTreeItem).summary.id);
+            assert.ok(ids.includes('tg-3'), `session tg-3 should be under the "${label}" group`);
+        }
+    });
+
+    test('21d — session with no tags appears under "(untagged)" group', async () => {
+        const index = new SessionIndex();
+        index.upsert(makeSession({ id: 'tg-4' }));
+        // No tags — no sidecar store wired; getSidecarMeta returns undefined.
+
+        const provider = new SessionTreeProvider(index);
+        provider.setGroupMode('tag');
+
+        const root = provider.getChildren(undefined);
+        const untaggedGroup = root.find(
+            n => n instanceof ContextGroupTreeItem && n.groupKey === '(untagged)'
+        ) as ContextGroupTreeItem | undefined;
+        assert.ok(untaggedGroup, 'expected an "(untagged)" group');
+
+        const children = provider.getChildren(untaggedGroup!);
+        const ids = children.filter(n => n instanceof SessionTreeItem).map(n => (n as SessionTreeItem).summary.id);
+        assert.ok(ids.includes('tg-4'), 'untagged session should be under "(untagged)"');
+    });
+
+    test('21e — tag groups sorted alphabetically; "(untagged)" sorts last', async () => {
+        const index = new SessionIndex();
+        index.upsert(makeSession({ id: 'tg-a' }));
+        index.upsert(makeSession({ id: 'tg-b' }));
+        index.upsert(makeSession({ id: 'tg-c' }));  // will be untagged
+
+        const store = new SidecarMetadataStore(tmpDir);
+        await store.patch('tg-a', { tags: ['zebra'] });
+        await store.patch('tg-b', { tags: ['alpha'] });
+        index.setSidecarStore(store, await store.load());
+
+        const provider = new SessionTreeProvider(index);
+        provider.setGroupMode('tag');
+
+        const root = provider.getChildren(undefined);
+        const labels = root
+            .filter(n => n instanceof ContextGroupTreeItem)
+            .map(n => (n as ContextGroupTreeItem).groupKey);
+
+        assert.strictEqual(labels[labels.length - 1], '(untagged)', '"(untagged)" must be last');
+        const tagOnly = labels.filter(l => l !== '(untagged)');
+        assert.deepStrictEqual(tagOnly, [...tagOnly].sort(), 'named tags must be in alphabetical order');
+    });
+
+    test('21f — hasTags() returns false when no sessions have tags', () => {
+        const index = new SessionIndex();
+        index.upsert(makeSession({ id: 'tg-ht-1' }));
+        index.upsert(makeSession({ id: 'tg-ht-2' }));
+
+        const provider = new SessionTreeProvider(index);
+        assert.strictEqual(provider.hasTags(), false, 'hasTags() must be false with no sidecar metadata');
+    });
+
+    test('21g — hasTags() returns true when at least one session has a tag', async () => {
+        const index = new SessionIndex();
+        index.upsert(makeSession({ id: 'tg-ht-3' }));
+        index.upsert(makeSession({ id: 'tg-ht-4' }));
+
+        const store = new SidecarMetadataStore(tmpDir);
+        await store.patch('tg-ht-3', { tags: ['docs'] });
+        index.setSidecarStore(store, await store.load());
+
+        const provider = new SessionTreeProvider(index);
+        assert.strictEqual(provider.hasTags(), true, 'hasTags() must be true when at least one session is tagged');
     });
 
 });

@@ -5,7 +5,8 @@
 //   - Error messages and HTTP status codes
 //   - Decision phrases
 //
-// Pure function — no I/O, fully unit-testable.
+// extractEntities() is a pure function — no I/O, fully unit-testable.
+// runEntityExtractionJob() (further down) performs background I/O via SidecarMetadataStore.
 
 import { Session, ExtractedEntities } from '../types/index';
 import { SidecarMetadataStore } from '../index/sidecarMetadataStore';

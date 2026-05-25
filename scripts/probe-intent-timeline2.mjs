@@ -2,10 +2,13 @@
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
 
-const DB = 'C:/Users/ay250177/AppData/Roaming/Code - Insiders/User/globalStorage/GitHub.copilot-chat/session-store.db';
-const SIDECAR = 'C:/Users/ay250177/AppData/Roaming/Code - Insiders/User/globalStorage/veverke.chatwizard/chatwizard-metadata.json';
-const QUERY_NORM = 'c:/_/chatwizard/docs/intent.md';
-const BASENAME = 'intent.md';
+// Configure via environment variables or replace the placeholders with local paths.
+const DB = process.env['CW_DB_PATH']
+    ?? 'C:/Users/<username>/AppData/Roaming/Code - Insiders/User/globalStorage/GitHub.copilot-chat/session-store.db';
+const SIDECAR = process.env['CW_SIDECAR_PATH']
+    ?? 'C:/Users/<username>/AppData/Roaming/Code - Insiders/User/globalStorage/veverke.chatwizard/chatwizard-metadata.json';
+const QUERY_NORM = process.env['CW_QUERY_PATH'] ?? 'c:/_/chatwizard/docs/intent.md';
+const BASENAME = QUERY_NORM.split('/').pop() ?? 'intent.md';
 
 // --- helper: same as normalisePath (no symlink resolution, just slashes + drive) ---
 function normPath(p) {

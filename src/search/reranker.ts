@@ -67,36 +67,40 @@ export class TfIdfReranker implements IReranker {
             return candidates.map((c, i) => ({ id: c.id, originalRank: i, score: 0 }));
         }
 
-        // Build candidate texts (title + first 2000 chars of assistant responses)
+        // Build candidate texts (title + first 2000 chars of all messages)
         const candidateTexts = candidates.map(({ session }) =>
             buildCandidateText(session),
         );
+
+        // Tokenize candidate texts with the same tokenizer as the query, keeping per-token counts
+        const candidateTokenArrays = candidateTexts.map(text => tokenizeQuery(text));
+        const candidateTokenSets   = candidateTokenArrays.map(toks => new Set(toks));
+        const queryTokenSet = new Set(queryTokens); // O(1) membership check
 
         // Compute IDF for each query token across the candidate set
         const n = candidates.length;
         const idf = new Map<string, number>();
         for (const token of queryTokens) {
             let df = 0; // document frequency
-            for (const text of candidateTexts) {
-                if (text.includes(token)) { df++; }
+            for (const tokenSet of candidateTokenSets) {
+                if (tokenSet.has(token)) { df++; }
             }
             // IDF = log( (n + 1) / (df + 1) ) + 1  — smooth, avoids division by zero
             idf.set(token, Math.log((n + 1) / (df + 1)) + 1);
         }
 
         // Score each candidate
-        const rawScores = candidateTexts.map((text, i) => {
-            const words = text.split(/\s+/);
-            const wordCount = Math.max(words.length, 1);
+        const rawScores = candidateTokenArrays.map((tokens, i) => {
+            const tokenCount = Math.max(tokens.length, 1);
             const tokenCounts = new Map<string, number>();
-            for (const w of words) {
-                if (queryTokens.includes(w)) {
+            for (const w of tokens) {
+                if (queryTokenSet.has(w)) {
                     tokenCounts.set(w, (tokenCounts.get(w) ?? 0) + 1);
                 }
             }
             let score = 0;
             for (const token of queryTokens) {
-                const tf = (tokenCounts.get(token) ?? 0) / wordCount;
+                const tf = (tokenCounts.get(token) ?? 0) / tokenCount;
                 score += tf * (idf.get(token) ?? 1);
             }
             return { id: candidates[i].id, originalRank: i, rawScore: score };
@@ -121,16 +125,15 @@ export class TfIdfReranker implements IReranker {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Builds a space-separated token string from session title + assistant message content. */
+/** Builds a space-separated text string from session title + all message content (user and assistant). */
 function buildCandidateText(session: Session): string {
     const parts: string[] = [session.title.toLowerCase()];
     let charBudget = 2000;
     for (const msg of session.messages) {
-        if (msg.role !== 'assistant') { continue; }
+        if (charBudget <= 0) { break; }
         const snippet = msg.content.slice(0, charBudget).toLowerCase();
         parts.push(snippet);
         charBudget -= snippet.length;
-        if (charBudget <= 0) { break; }
     }
     return parts.join(' ');
 }

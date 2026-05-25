@@ -4,7 +4,7 @@
 //
 // The pattern is configurable via 'chatwizard.workItemPattern' (a regex string).
 // Default pattern covers: JIRA-style (ABC-123), GitHub issues (#123, GH-123),
-// Azure DevOps (#12345), and user-defined patterns.
+// Azure DevOps (AB#123), and user-defined patterns.
 //
 // Feature 11: Work-Item Grouping
 

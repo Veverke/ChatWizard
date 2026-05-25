@@ -7,7 +7,7 @@
 
 import { IMcpTool, McpToolInput, McpToolResult } from '../mcpContracts';
 import { SessionIndex } from '../../index/sessionIndex';
-import { normalisePath, sessionTouchesFile } from '../../utils/pathNormaliser';
+import { normalisePath, sessionTouchesFile, sessionMentionsFile } from '../../utils/pathNormaliser';
 
 const MAX_RESULTS = 20;
 
@@ -69,6 +69,18 @@ export class SessionsForFileTool implements IMcpTool {
 
             // Also check chronicleData.importantFiles
             if (sessionTouchesFile(session.chronicleData?.importantFiles, normQuery)) {
+                matches.push({
+                    id: summary.id,
+                    title: summary.title,
+                    updatedAt: session.updatedAt,
+                    source: session.source,
+                });
+                continue;
+            }
+
+            // Also check sidecar entity-extracted file paths
+            const sidecarFilePaths = this.sessionIndex.getSidecarMeta(summary.id)?.entities?.filePaths;
+            if (sessionMentionsFile(sidecarFilePaths, normQuery)) {
                 matches.push({
                     id: summary.id,
                     title: summary.title,

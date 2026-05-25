@@ -1,5 +1,7 @@
 const Database = require('better-sqlite3');
-const dbPath = 'C:\\Users\\ay250177\\AppData\\Roaming\\Code - Insiders\\User\\globalStorage\\github.copilot-chat\\session-store.db';
+// Configure via environment variable or replace the placeholder with a local path.
+const dbPath = process.env['CW_DB_PATH']
+    ?? 'C:\\Users\\<username>\\AppData\\Roaming\\Code - Insiders\\User\\globalStorage\\github.copilot-chat\\session-store.db';
 const db = new Database(dbPath, { readonly: true });
 const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all();
 console.log('Tables:', tables.map(t => t.name));

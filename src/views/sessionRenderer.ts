@@ -62,9 +62,10 @@ export class MessageRenderer {
         visibleIdx: number,
         visibleMessages: VisibleMessage[],
         assistantLabel: string,
-        fadeIdx: number | undefined
+        fadeIdx: number | undefined,
+        turnLabel?: string
     ): string {
-        return renderMessage(msg, origIdx, visibleIdx, visibleMessages, assistantLabel, fadeIdx);
+        return renderMessage(msg, origIdx, visibleIdx, visibleMessages, assistantLabel, fadeIdx, turnLabel);
     }
 
     static renderChunk(
@@ -96,23 +97,36 @@ export function renderChunk(
     withFade:  boolean
 ): string {
     const parts: string[] = [];
+
+    // Pre-compute P/R turn labels for all messages in this chunk (single O(n) pass).
+    let pCount = 0, rCount = 0;
+    for (let i = 0; i < start; i++) {
+        if (visibleMessages[i].msg.role === 'user') { pCount++; } else { rCount++; }
+    }
+    const chunkTurnLabels: string[] = [];
+    for (let i = start; i < end; i++) {
+        const role = visibleMessages[i].msg.role;
+        chunkTurnLabels.push(role === 'user' ? `P${++pCount}` : `R${++rCount}`);
+    }
+
     for (let i = start; i < end; i++) {
         const { msg, origIdx } = visibleMessages[i];
         const fadeIdx = withFade ? (i - start) : undefined;
+        const turnLabel = chunkTurnLabels[i - start];
 
         if (fadeIdx !== undefined && fadeIdx < 16) {
             // First 16 of initial render: include fade style, render fresh
-            parts.push(renderMessage(msg, origIdx, i, visibleMessages, assistantLabel, fadeIdx));
+            parts.push(renderMessage(msg, origIdx, i, visibleMessages, assistantLabel, fadeIdx, turnLabel));
             // Also populate cache with the non-faded version if missing
             if (renderedMessages[i] === null) {
                 renderedMessages[i] = renderMessage(
-                    msg, origIdx, i, visibleMessages, assistantLabel, undefined
+                    msg, origIdx, i, visibleMessages, assistantLabel, undefined, turnLabel
                 );
             }
         } else {
             if (renderedMessages[i] === null) {
                 renderedMessages[i] = renderMessage(
-                    msg, origIdx, i, visibleMessages, assistantLabel, undefined
+                    msg, origIdx, i, visibleMessages, assistantLabel, undefined, turnLabel
                 );
             }
             parts.push(renderedMessages[i]!);
@@ -132,7 +146,8 @@ export function renderMessage(
     visibleIdx:     number,
     visibleMessages: VisibleMessage[],
     assistantLabel: string,
-    fadeIdx:        number | undefined
+    fadeIdx:        number | undefined,
+    turnLabel?:     string   // pre-computed by renderChunk; derived here when absent
 ): string {
     const roleClass = msg.role === 'user' ? 'user' : 'assistant';
     const label     = msg.role === 'user' ? 'You' : assistantLabel;
@@ -141,14 +156,15 @@ export function renderMessage(
         : '';
     const fadeStyle = (fadeIdx !== undefined && fadeIdx < 16) ? ` style="--cw-i:${fadeIdx}"` : '';
 
-    // Compute independent P/R turn index for this message.
-    // Count all prior visible messages of the same role (1-based).
-    let pCount = 0, rCount = 0;
-    for (let i = 0; i <= visibleIdx; i++) {
-        if (visibleMessages[i].msg.role === 'user') { pCount++; }
-        else { rCount++; }
+    // Use pre-computed turn label when provided (avoids O(n) loop per message).
+    if (turnLabel === undefined) {
+        let pCount = 0, rCount = 0;
+        for (let i = 0; i <= visibleIdx; i++) {
+            if (visibleMessages[i].msg.role === 'user') { pCount++; }
+            else { rCount++; }
+        }
+        turnLabel = msg.role === 'user' ? `P${pCount}` : `R${rCount}`;
     }
-    const turnLabel = msg.role === 'user' ? `P${pCount}` : `R${rCount}`;
 
     // Skipped-line placeholder: show a notice instead of normal message content.
     if (msg.skipped) {

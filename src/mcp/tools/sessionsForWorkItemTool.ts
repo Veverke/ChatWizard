@@ -16,7 +16,7 @@ export class SessionsForWorkItemTool implements IMcpTool {
     readonly description =
         'Returns sessions associated with a work-item ID such as a JIRA ticket (ABC-123), ' +
         'GitHub issue (#123), or Azure DevOps item (AB#12345). ' +
-        'Matches against session titles and first user messages.';
+        'Matches against session titles and all messages (up to a character budget).';
 
     readonly inputSchema = {
         type: 'object',
