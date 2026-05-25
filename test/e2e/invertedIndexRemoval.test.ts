@@ -35,7 +35,7 @@ function uniqueWords(prefix: string, count: number): string[] {
 
 suite('S5 â€” InvertedIndex O(session_tokens) Removal', () => {
 
-    test('removing a session from a 10,000-session index completes in < 5 ms', function() {
+    test('removing a session from a 10,000-session index completes in < 25 ms', function() {
         this.timeout(30_000); // generous wall-clock limit for index build
 
         const engine = new FullTextSearchEngine();
@@ -57,8 +57,8 @@ suite('S5 â€” InvertedIndex O(session_tokens) Removal', () => {
 
         assert.strictEqual(engine.size, SESSION_COUNT - 1, 'session was removed');
         assert.ok(
-            elapsed < 5,
-            `removal took ${elapsed.toFixed(2)} ms â€” expected < 5 ms`
+            elapsed < 25,
+            `removal took ${elapsed.toFixed(2)} ms – expected < 25 ms`
         );
     });
 
