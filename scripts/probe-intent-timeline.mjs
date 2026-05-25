@@ -1,9 +1,11 @@
 // Diagnostic: check which sessions match intent.md using the same logic as CwTimelineProvider
 import { DatabaseSync } from 'node:sqlite';
 
-const dbPath = 'C:/Users/ay250177/AppData/Roaming/Code - Insiders/User/globalStorage/GitHub.copilot-chat/session-store.db';
-const QUERY_PATH = 'c:/_/chatwizard/docs/intent.md';
-const QUERY_BASENAME = 'intent.md';
+// Configure via environment variables or replace the placeholders with local paths.
+const dbPath = process.env['CW_DB_PATH']
+    ?? 'C:/Users/<username>/AppData/Roaming/Code - Insiders/User/globalStorage/GitHub.copilot-chat/session-store.db';
+const QUERY_PATH = process.env['CW_QUERY_PATH'] ?? 'c:/_/chatwizard/docs/intent.md';
+const QUERY_BASENAME = QUERY_PATH.split('/').pop() ?? 'intent.md';
 
 const db = new DatabaseSync(dbPath, { readOnly: true });
 

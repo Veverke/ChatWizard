@@ -27,6 +27,9 @@ export class ActiveSessionTagButton implements vscode.Disposable {
         this.disposables.push(
             liveTracker.onDidUpdate(() => this._refresh()),
         );
+
+        // Ensure correct initial visibility if a session is already active.
+        this._refresh();
     }
 
     private _refresh(): void {

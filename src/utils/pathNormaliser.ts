@@ -7,11 +7,27 @@ import * as path from 'path';
 import * as fs from 'fs';
 
 /**
+ * Cheap normalisation — resolves `.`/`..` via `path.resolve`, converts
+ * backslashes to forward slashes, and lowercases the drive letter.
+ * Does NOT perform synchronous disk I/O (no `fs.realpathSync`).
+ * Suitable for bulk comparisons inside loops over many sessions/paths.
+ */
+export function cheapNormalisePath(p: string): string {
+    if (!p || typeof p !== 'string') { return ''; }
+    let normalised = path.resolve(p).replace(/\\/g, '/');
+    normalised = normalised.replace(/^([A-Z]):\//, (_, drive: string) => `${drive.toLowerCase()}:/`);
+    return normalised;
+}
+
+/**
  * Normalises a file path for consistent comparison:
  *   - Resolves `.` and `..` segments
  *   - Converts backslashes to forward slashes
  *   - On Windows: lowercases the drive letter (e.g. `C:/` → `c:/`)
  *   - Attempts `fs.realpathSync` for symlink resolution (best-effort, no throw)
+ *
+ * Prefer `cheapNormalisePath` for bulk comparisons inside loops;
+ * use this only when symlink resolution is explicitly required.
  */
 export function normalisePath(p: string): string {
     if (!p || typeof p !== 'string') { return ''; }
@@ -43,13 +59,14 @@ export function isSamePath(a: string, b: string): boolean {
 /**
  * Checks whether a session's importantFiles (already normalised) contains the
  * given normalised query path.
+ * Uses cheapNormalisePath for per-entry normalisation to avoid repeated disk I/O.
  */
 export function sessionTouchesFile(
     importantFiles: string[] | undefined,
     normalisedQueryPath: string,
 ): boolean {
     if (!importantFiles || importantFiles.length === 0) { return false; }
-    return importantFiles.some(f => normalisePath(f) === normalisedQueryPath);
+    return importantFiles.some(f => cheapNormalisePath(f) === normalisedQueryPath);
 }
 
 /**
