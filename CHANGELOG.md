@@ -1,5 +1,109 @@
 # Change Log
 
+## [1.5.0] - 2026-05-25
+
+### Three new AI tool sources
+
+- **Continue.dev support** — indexes conversations stored by the Continue.dev extension at `~/.continue/sessions/` (all platforms). Configurable via `chatwizard.indexContinue` / `chatwizard.continueStoragePath`.
+- **Amazon Q Developer support** — indexes Amazon Q Developer chat sessions. Platform-aware path discovery for Windows, macOS, and Linux. Configurable via `chatwizard.indexAmazonQ` / `chatwizard.amazonQStoragePath`.
+- **Gemini Code Assist support** — indexes conversations from the Google Gemini Code Assist VS Code extension. Fully distinct from the existing Antigravity source; path discrimination prevents cross-contamination. Configurable via `chatwizard.indexGeminiCodeAssist` / `chatwizard.geminiCodeAssistStoragePath`.
+- All three new sources participate fully in full-text search, prompt library, code block extraction, analytics, model usage, timeline, source filtering, session archive, and the MCP server.
+
+### Chronicle Phase 3 — File-Centric History
+
+- **File History status bar** — when Chronicle data is populated, the status bar shows `$(comment) N sessions` for the active file. The item is hidden when the file has no history. Clicking it opens the new **File History panel** listing sessions that touched the file with dates, source badges, and summaries.
+- **File History CodeLens** — a `$(history) N ChatWizard sessions touched this file` lens at the top of files with Chronicle history. Gated behind `chatwizard.codeLens.enabled` (default: `true`).
+- **Explorer context menu** — right-click any file → **ChatWizard: Show File History** opens the File History panel. Also available from the editor tab context menu.
+- **`chatwizard_sessions_for_file` MCP tool** — new MCP tool returning sessions that touched a given file; accepts both absolute paths and workspace-relative paths.
+- **Path normalisation utility** (`pathNormaliser.ts`) — handles Windows drive letters, mixed slash styles, and trailing slashes; shared by the status bar, CodeLens, and MCP tool.
+
+### Chronicle Phase 4 — Branch & Work Item Grouping
+
+- **By Branch / By Work Item group modes** — the Sessions panel toolbar now includes two additional group-by modes alongside the existing date grouping. Sessions with no branch are grouped under `(no branch)`; unmatched sessions under `(unassigned)`.
+- **`chatwizard.workItemPattern`** setting — configure a regex to extract work-item IDs from branch names and commit messages (e.g. `[A-Z]+-\d+` for Jira, `AB#\d+` for Azure DevOps, `#\d+` for GitHub Issues). Invalid regex values surface a warning notification without crashing.
+- **`chatwizard_sessions_for_branch` MCP tool** — returns sessions on a specific git branch (case-insensitive match).
+- **`chatwizard_sessions_for_work_item` MCP tool** — returns sessions whose branch or commit matches the work-item pattern and extracted ID. Returns a structured `{ error: "NO_PATTERN" }` (not a thrown exception) when `chatwizard.workItemPattern` is not configured.
+
+### Session Archive
+
+- Every indexed session is mirrored to ChatWizard's own local storage (`globalStorageUri/archive/`). When a source tool prunes its history, ChatWizard continues serving those sessions from its own copy — labelled `· archived` in the tree with a tooltip explaining the source is unavailable.
+- Strategy A (file-per-session sources — Copilot, Claude, Cline, Roo Code, Aider, Antigravity, Continue.dev): raw file bytes are archived after a successful parse; updated on each watcher event.
+- Strategy B (SQLite sources — Cursor, Windsurf): session JSON is archived after each parse; restored directly without re-running the parser.
+- **`ChatWizard: Show Archive Statistics`** command — shows total archived sessions, total bytes, and oldest archived date.
+- **`Archive Session`** / **`Delete Archived Session`** context menu actions on session tree items.
+- Pruning settings (both default to `0` = disabled): `chatwizard.archive.maxAgeDays` (remove sessions older than N days) and `chatwizard.archive.maxSizeMB` (cap total archive size, removing oldest first). Pruning runs at startup after archive-only sessions are loaded.
+
+### Session Tagging
+
+- **Add / remove tags** via right-click → **Add Tag…** or **Remove Tag…** on any session tree item. Tags are freeform (`#bugfix`, `topic:auth`, `kind:decision`); comma-separated input is split and normalised (lowercased, leading `#` stripped for storage, restored on display).
+- **Tag chips in tree and reader** — up to 3 chips shown inline in the session tree item description; overflow displayed as `+N more`. Tags also appear in the session reader header alongside the source badge and date.
+- **Tag filter** — the existing **Filter Sessions…** command (`chatwizard.filterSessions`) now includes a "Filter by tags" option.
+- **`ChatWizard: Tag Active Session`** command — targets the session being actively written without requiring navigation to the history tree. A `$(tag) Tag session` status bar button appears while a session is live (within `chatwizard.activeSessionWindowMinutes`, default 120) and disappears when the session goes idle.
+- **`@chatwizard /tag`** — type `/tag label1, label2` in the Copilot Chat panel to tag the active session inline and receive a confirmation message. **`@chatwizard /removeTags`** removes tags the same way.
+- Pin state migration — existing pinned sessions are migrated to the new `chatwizard-metadata.json` store on first run; no manual action required.
+
+### AI-Generated Session Summaries _(Beta)_
+
+> **Beta:** end-to-end testing is incomplete. The feature is functional but may exhibit edge cases with very large indexes or unusual session content. Feedback welcome.
+
+- Every session now displays a one-line auto-generated summary as the tree-item tooltip and as a paragraph in the session reader header. Generation is fully transparent: the background job runs after indexing finishes and never blocks startup or navigation.
+- Three-tier generation strategy (tried in order):
+  1. Chronicle `checkpoints.overview` — free, instant, no LLM call.
+  2. VS Code LM API (Copilot subscription) — cheapest available model, one-shot prompt (`"Summarise this coding session in one sentence, max 15 words"`). Max 5 concurrent calls; rate-limited.
+  3. TF-IDF keyword heuristic — fully offline fallback; works without a Copilot subscription. LM API errors are never surfaced as user notifications.
+- **Regenerate Summary** context menu action re-clears and re-generates the summary for a specific session.
+
+### Entity Extraction from Sessions _(Beta)_
+
+> **Beta:** end-to-end testing is incomplete. Regex-based extraction may produce false positives on sessions that contain large pasted code blocks. Feedback welcome.
+
+- After indexing, a background job extracts structured entities from session content: **file paths**, **function/class names**, **error codes**, and **decision phrases**. Extraction is fully offline and stored in `chatwizard-metadata.json` with a version field — bumping the extractor version invalidates cached results.
+- **Entity chips in the session reader** — a collapsible "Entities" section shows auto-extracted chips (distinct visual style from user tags). File path chips are clickable and open the file in the editor.
+- **Entity-filtered MCP search** — `chatwizard_search` now accepts optional `entityType` (`"filePaths"` | `"functionNames"` | `"errors"` | `"decisions"`) and `entityValue` parameters; sessions not containing the entity are excluded before full-text scoring.
+
+### Prompt Cost Analysis
+
+- **`@chatwizard /analyzePrompt <draft prompt>`** — new chat participant command that analyzes a draft prompt **without any LLM calls**. Returns:
+  - Token count and estimated cost (input + output) at current GPT-4o and Claude Sonnet rates.
+  - Similarity check against your chat history — warns if you've asked something very similar before, with a link to the past session.
+  - Quality flags: large pasted code block (suggest referencing the file by path), open-ended scope (`list all`, `explain everything`), multiple questions in one prompt.
+  - Model suggestion when a cheaper model (e.g. GPT-4o mini, Claude Haiku) would be sufficient.
+- **`ChatWizard: Analyze Selected Prompt`** — select any text in any editor, right-click → **Analyze Selected Prompt** (or Command Palette). Results appear in an information message with a "View Details" link that opens a full analysis webview.
+- Price table (`modelPriceTable.ts`) covers GPT-4o, GPT-4o mini, Claude Sonnet, Claude Haiku, Gemini 1.5 Pro, and Gemini 2.0 Flash; labeled with a `// Last updated:` date to make staleness visible.
+
+### Obsidian & Notion Export
+
+- **`ChatWizard: Export Sessions to Obsidian`** — exports sessions as Obsidian-compatible Markdown (one `.md` file per session under `chatwizard/<source>/YYYY-MM-DD-<title-slug>.md`). Each file has a YAML frontmatter block (`title`, `source`, `date`, `tags`, `summary`, `chatwizard_id`) and wikilinks for file paths found in session content. A scope picker lets you export all sessions, pinned sessions only, or sessions filtered by tag.
+- **`ChatWizard: Export Sessions to Notion`** — exports sessions to a Notion database via the public Notion API (user-supplied API key and database ID). The API key is stored in VS Code `SecretStorage` — never in `settings.json` or any file that could be committed to git. Rate-limited to 3 req/s. **`ChatWizard: Forget Notion API Key`** clears the stored credential.
+
+### `@chatwizard` Chat Participant — new slash commands
+
+- **`/referMessage <P{N} | R{N}>`** — quotes a specific turn from the current live chat thread by its turn label. `@chatwizard /referMessage P2` streams back the second user prompt as a Markdown blockquote so the model has it as explicit context. `R` references quote assistant responses. Out-of-range references return a friendly message (e.g. `"No R5 found. This thread has 3 responses so far."`) — not an error.
+- **`/tag`** and **`/removeTags`** — see Session Tagging above.
+- **`/analyzePrompt`** — see Prompt Cost Analysis above.
+- **Clickable file links in `/continueFromHistory`** — files listed under "last time you were editing" are now emitted as VS Code native file pills (`stream.anchor()`), not plain text. Degrades gracefully to inline code when the file no longer exists on disk.
+
+### MCP Server — enhancements
+
+- **3 new MCP tools** (total: **11 tools**): `chatwizard_sessions_for_file`, `chatwizard_sessions_for_branch`, `chatwizard_sessions_for_work_item` (see Chronicle sections above).
+- **Optional reranker for `chatwizard_get_context`** — a TF-IDF cross-pass re-ranks candidates after the semantic + keyword merge for higher-quality results. Off by default; enable via `chatwizard.mcp.reranker.enabled`. Timing is logged to the output channel (`[Reranker] N candidates reranked in Xms`).
+
+### Session Reader improvements
+
+- **Turn labels** — every message bubble now displays a `P{N}` / `R{N}` label (user prompts and assistant responses numbered independently from 1). Hovering a bubble reveals a **⧉ copy-as-reference** button that writes a structured reference string (`[Session: <title>] P3 ↳ "First line..." "...last line."`) to the clipboard.
+- **Summary paragraph** in the session header (from AI-generated summaries above — Beta).
+- **Entity chips** collapsible section (from entity extraction above — Beta).
+- **Tag chips** in the session header (from session tagging above).
+
+### UI & developer experience
+
+- **Squirrel mascot status bar** — a persistent 🐿️ icon on the right side of the status bar. Pulses briefly (320 ms) when a notable event occurs (session indexed, index ready, new version available, etc.). Pulses every 20 s as a gentle idle heartbeat. Clicking navigates to the ChatWizard panel.
+- **`Group Sessions…` command** — cycles through group modes (date, branch, work item, none) from the Sessions panel toolbar.
+- **`Reveal in Explorer`** context menu action — reveals the session source file in the VS Code Explorer.
+- VS Code 1.121 API compatibility fixes.
+
+---
+
 ## [1.4.0] - 2026-05-05
 
 - **MCP Server Mode** — expose your full chat history as a [Model Context Protocol](https://modelcontextprotocol.io/) server so that AI tools can query past conversations as live context when answering new questions. The server binds to `localhost` only, is disabled by default, and requires a bearer token for every request.
