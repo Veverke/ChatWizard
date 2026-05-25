@@ -65,6 +65,17 @@ function queryElectronVersionFromVSCode() {
         );
     } catch { return null; }
 
+    // When VSCODE_VERSION is set (e.g. 'insiders'), sort matching directories
+    // first so we don't accidentally rebuild against the wrong Electron ABI when
+    // both stable and insiders copies are cached in .vscode-test/.
+    const wantInsiders = (process.env['VSCODE_VERSION'] ?? 'stable') === 'insiders';
+    dirs.sort((a, b) => {
+        const aInsiders = a.includes('insiders');
+        const bInsiders = b.includes('insiders');
+        if (wantInsiders) { return aInsiders === bInsiders ? 0 : aInsiders ? -1 : 1; }
+        return aInsiders === bInsiders ? 0 : aInsiders ? 1 : -1;
+    });
+
     for (const dir of dirs) {
         const bin = findVSCodeBinary(path.join(vscodeTestDir, dir));
         if (!bin) { continue; }

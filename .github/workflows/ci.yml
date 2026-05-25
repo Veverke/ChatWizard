@@ -13,6 +13,11 @@ jobs:
         vscode-version: [stable, insiders]
       fail-fast: false
     runs-on: ${{ matrix.os }}
+    env:
+      # Ensures both the native-module rebuild and the vscode-test runner use
+      # the same VS Code version (stable or insiders) so the Electron ABI
+      # of better-sqlite3 matches the runtime that executes the tests.
+      VSCODE_VERSION: ${{ matrix.vscode-version }}
 
     steps:
       - uses: actions/checkout@v4
