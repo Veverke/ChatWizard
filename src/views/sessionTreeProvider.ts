@@ -137,7 +137,7 @@ export class LoadingTreeItem extends vscode.TreeItem {
 // Date grouping
 // ---------------------------------------------------------------------------
 
-export type GroupMode = 'none' | 'date' | 'branch' | 'workItem';
+export type GroupMode = 'none' | 'date' | 'branch' | 'workItem' | 'tag';
 
 /**
  * Returns a bucket label for a given ISO date string.
@@ -209,14 +209,16 @@ export class DateGroupTreeItem extends vscode.TreeItem {
 
 export class ContextGroupTreeItem extends vscode.TreeItem {
     readonly groupKey: string;
-    readonly groupMode: 'branch' | 'workItem';
+    readonly groupMode: 'branch' | 'workItem' | 'tag';
 
-    constructor(label: string, count: number, mode: 'branch' | 'workItem') {
+    constructor(label: string, count: number, mode: 'branch' | 'workItem' | 'tag') {
         super(label, vscode.TreeItemCollapsibleState.Expanded);
         this.groupKey = label;
         this.groupMode = mode;
         this.description = `${count} session${count === 1 ? '' : 's'}`;
-        this.iconPath = new vscode.ThemeIcon(mode === 'branch' ? 'git-branch' : 'tag');
+        this.iconPath = new vscode.ThemeIcon(
+            mode === 'branch' ? 'git-branch' : mode === 'tag' ? 'bookmark' : 'tag'
+        );
         this.contextValue = 'contextGroup';
     }
 }
@@ -595,6 +597,10 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
                 const keys = extractWorkItemsFromSession(session.title, session.messages, pattern || undefined);
                 const key = keys.length > 0 ? keys[0] : '(no work item)';
                 return new ContextGroupTreeItem(key, 0, 'workItem');
+            } else if (this._groupMode === 'tag') {
+                const tags = this.index.getSidecarMeta(element.summary.id)?.tags ?? [];
+                const key = tags.length > 0 ? tags[0] : '(untagged)';
+                return new ContextGroupTreeItem(key, 0, 'tag');
             }
         }
         return undefined;
@@ -698,6 +704,29 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
             .map(([key, count]) => new ContextGroupTreeItem(key, count, 'workItem'));
     }
 
+    /** Groups summaries by tag. Sessions with multiple tags appear in each tag's group.
+     *  Sessions with no tags are grouped under '(untagged)'. */
+    private _buildTagGroups(summaries: SessionSummary[]): ContextGroupTreeItem[] {
+        const groupMap = new Map<string, number>();
+        for (const s of summaries) {
+            const tags = this.index.getSidecarMeta(s.id)?.tags;
+            if (!tags || tags.length === 0) {
+                groupMap.set('(untagged)', (groupMap.get('(untagged)') ?? 0) + 1);
+            } else {
+                for (const tag of tags) {
+                    groupMap.set(tag, (groupMap.get(tag) ?? 0) + 1);
+                }
+            }
+        }
+        return Array.from(groupMap.entries())
+            .sort((a, b) => {
+                if (a[0] === '(untagged)') { return 1; }
+                if (b[0] === '(untagged)') { return -1; }
+                return a[0].localeCompare(b[0]); // alphabetical
+            })
+            .map(([key, count]) => new ContextGroupTreeItem(key, count, 'tag'));
+    }
+
     /** True if at least one session has Chronicle branch data. */
     hasBranchData(): boolean {
         for (const s of this.index.getAllSummaries()) {
@@ -713,6 +742,15 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
             const session = this.index.get(s.id);
             if (!session) { continue; }
             if (extractWorkItemsFromSession(session.title, session.messages, pattern || undefined).length > 0) { return true; }
+        }
+        return false;
+    }
+
+    /** True if at least one session has at least one tag. */
+    hasTags(): boolean {
+        for (const s of this.index.getAllSummaries()) {
+            const tags = this.index.getSidecarMeta(s.id)?.tags;
+            if (tags && tags.length > 0) { return true; }
         }
         return false;
     }
@@ -739,12 +777,19 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
             const pinnedSet = new Set(this._pinnedIds);
             const pattern = vscode.workspace.getConfiguration('chatwizard').get<string>('workItemPattern', '');
             const matched = all.filter(s => {
-                const session = this.index.get(s.id);
-                if (!session) { return false; }
                 if (element.groupMode === 'branch') {
+                    const session = this.index.get(s.id);
+                    if (!session) { return false; }
                     const branch = session.chronicleData?.branch ?? '[no branch recorded]';
                     return branch === element.groupKey;
+                } else if (element.groupMode === 'tag') {
+                    const tags = this.index.getSidecarMeta(s.id)?.tags ?? [];
+                    return tags.length === 0
+                        ? element.groupKey === '(untagged)'
+                        : tags.includes(element.groupKey);
                 } else {
+                    const session = this.index.get(s.id);
+                    if (!session) { return false; }
                     const keys = extractWorkItemsFromSession(session.title, session.messages, pattern || undefined);
                     return keys.length === 0
                         ? element.groupKey === '(no work item)'
@@ -769,6 +814,9 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
         }
         if (this._groupMode === 'workItem') {
             return this._buildWorkItemGroups(all);
+        }
+        if (this._groupMode === 'tag') {
+            return this._buildTagGroups(all);
         }
 
         // Flat view (original behaviour with pagination)

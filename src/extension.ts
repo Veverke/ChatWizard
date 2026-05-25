@@ -448,7 +448,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // Restore persisted session group mode (default: 'date' — matches provider default)
     const savedSessionGroupMode = context.globalState.get<string>('sessionGroupMode') as GroupMode | undefined;
     if (savedSessionGroupMode === 'none' || savedSessionGroupMode === 'date' ||
-        savedSessionGroupMode === 'branch' || savedSessionGroupMode === 'workItem') {
+        savedSessionGroupMode === 'branch' || savedSessionGroupMode === 'workItem' ||
+        savedSessionGroupMode === 'tag') {
         provider.setGroupMode(savedSessionGroupMode);
     }
 
@@ -1086,6 +1087,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         vscode.commands.registerCommand('chatwizard.groupSessions', async () => {
             const hasBranch = provider.hasBranchData();
             const hasWorkItems = provider.hasWorkItems();
+            const hasTags = provider.hasTags();
             const current = provider.getGroupMode();
             const workItemPattern = vscode.workspace.getConfiguration('chatwizard').get<string>('workItemPattern', '');
 
@@ -1093,6 +1095,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 { label: '$(list-flat) No grouping',    mode: 'none' },
                 { label: '$(calendar) Group by Date',   mode: 'date' },
                 { label: `$(git-branch) Group by Branch${!hasBranch ? '  \u2014 open chats to populate' : ''}`, mode: 'branch' },
+                { label: `$(bookmark) Group by Tag${!hasTags ? '  \u2014 tag sessions to populate' : ''}`, mode: 'tag' },
                 ...(workItemPattern ? [{ label: '$(tag) Group by Work Item', mode: 'workItem' as GroupMode,
                   description: hasWorkItems ? undefined : 'No work items found in sessions' }] : []),
             ];
@@ -1101,6 +1104,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 none: '$(list-flat) No grouping',
                 date: '$(calendar) Group by Date',
                 branch: `$(git-branch) Group by Branch${!hasBranch ? '  \u2014 open chats to populate' : ''}`,
+                tag: `$(bookmark) Group by Tag${!hasTags ? '  \u2014 tag sessions to populate' : ''}`,
                 workItem: workItemPattern ? '$(tag) Group by Work Item' : undefined,
             }[current];
 
@@ -1125,16 +1129,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             provider.setGroupMode(picked.mode);
             treeView.description = provider.getDescription();
             void context.globalState.update('sessionGroupMode', picked.mode);
-            syncContext();
-        })
-    );
-    // Keep legacy commands functional (in case keyboard shortcuts were set)
-    context.subscriptions.push(
-        vscode.commands.registerCommand('chatwizard.toggleSessionGrouping', () => {
-            const next: GroupMode = provider.getGroupMode() === 'none' ? 'date' : 'none';
-            provider.setGroupMode(next);
-            treeView.description = provider.getDescription();
-            void context.globalState.update('sessionGroupMode', next);
             syncContext();
         })
     );

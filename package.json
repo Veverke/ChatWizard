@@ -1026,10 +1026,6 @@
           "when": "false"
         },
         {
-          "command": "chatwizard.toggleSessionGrouping",
-          "when": "false"
-        },
-        {
           "command": "chatwizard.enableCbGrouping",
           "when": "false"
         },
