@@ -65,7 +65,7 @@ async function selectCopilotModel(vscode: any): Promise<any | undefined> {
 
 // ── JSON parsing with fallback ───────────────────────────────────────────────
 
-function extractJson(raw: string): string {
+export function extractJson(raw: string): string {
     // Strip potential markdown fences
     const fence = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
     if (fence) { return fence[1].trim(); }
@@ -75,11 +75,16 @@ function extractJson(raw: string): string {
     return raw.trim();
 }
 
-function parseResponse(raw: string): LlmPromptAnalysis | null {
+export function parseResponse(raw: string): LlmPromptAnalysis | null {
     try {
         const jsonStr = extractJson(raw);
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const parsed = JSON.parse(jsonStr) as any;
+
+        // Reject non-object JSON (arrays, primitives, null)
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            return null;
+        }
 
         // Validate verbosityFlags
         const rawFlags: unknown[] = Array.isArray(parsed.verbosityFlags) ? parsed.verbosityFlags : [];
