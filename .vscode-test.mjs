@@ -5,9 +5,9 @@ import { defineConfig } from '@vscode/test-cli';
 const version = process.env['VSCODE_VERSION'] ?? 'stable';
 
 export default defineConfig({
-    version,
     tests: [
         {
+            version,
             files: ['out/test/e2e/*.test.js', 'out/test/e2e/mcp/**/*.test.js'],
             mocha: {
                 ui: 'tdd',
