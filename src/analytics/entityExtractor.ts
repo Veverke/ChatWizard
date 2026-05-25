@@ -15,13 +15,13 @@ export const ENTITIES_VERSION = 1;
 
 // ─── Regex patterns ───────────────────────────────────────────────────────────
 
-const FILE_PATH_RE = /\b([\w.\-/\\]+\.(?:ts|js|mjs|cjs|tsx|jsx|py|go|rs|java|cs|cpp|c|h|rb|php|swift|kt|json|yaml|yml|toml|md|sh|bash|zsh|html|css|scss|sql|graphql|proto|xml|env))\b/g;
+const FILE_PATH_RE = /\b([\w.\-/\\]+\.(?:ts|js|mjs|cjs|tsx|jsx|py|go|rs|java|cs|cpp|c|h|rb|php|swift|kt|json|yaml|yml|toml|md|sh|bash|zsh|html|css|scss|sql|graphql|proto|xml|env|prisma))\b/g;
 
 const FUNCTION_CLASS_RE = /\b(?:function|class|const|let|var|def|fn|func|method|async function|export function|export default function|export class|abstract class|interface)\s+([A-Za-z_]\w+)/g;
 
 const BACKTICK_FUNC_RE = /`([A-Za-z_]\w+)\(\)`/g;
 
-const ERROR_RE = /\b((?:Error|Exception|TypeError|ReferenceError|SyntaxError|RangeError|URIError|EvalError|NetworkError|TimeoutError|AbortError|NotFoundError|PermissionError|IOError|ValueError|KeyError|IndexError|AttributeError|RuntimeError|OverflowError|MemoryError|RecursionError)\b[^.;\n]*|SQLITE_\w+|ENOENT|EACCES|EPERM|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EHOSTUNREACH|EADDRINUSE|ENOMEM|E[A-Z_]{2,}|4\d\d\s+\w[\w\s]{0,30}|5\d\d\s+\w[\w\s]{0,30})/g;
+const ERROR_RE = /\b((?:Error|Exception|TypeError|ReferenceError|SyntaxError|RangeError|URIError|EvalError|NetworkError|TimeoutError|AbortError|NotFoundError|PermissionError|IOError|ValueError|KeyError|IndexError|AttributeError|RuntimeError|OverflowError|MemoryError|RecursionError)\b[^.;\n]*|[A-Za-z]\w+(?:Error|Exception)\b[^.;\n]*|SQLITE_\w+|ENOENT|EACCES|EPERM|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EHOSTUNREACH|EADDRINUSE|ENOMEM|E[A-Z_]{2,}|4\d\d\s+\w[\w\s]{0,30}|5\d\d\s+\w[\w\s]{0,30})/g;
 
 const DECISION_RE = /\b(?:I\s+(?:decided|chose|will use|am going to|have decided|went with)|we\s+(?:chose|decided|will use|went with|are going to)|the\s+(?:approach|decision|plan|strategy|solution)\s+is|decided\s+to\s+use|going\s+with|sticking\s+with|opted\s+for)\s+.{0,80}/gi;
 

@@ -116,10 +116,11 @@ Phase 0 — Sidecar data model + storage API     ← must complete first
 
 - [ ] Add **"Remove Tag…"** to context menu: shows `QuickPick` of existing tags on that session
 
-- [ ] Add **"Filter by Tag…"** command (`chatwizard.filterByTag`):
+- [x] **Tag filtering** built into `chatwizard.filterSessions` command:
   - `QuickPick` of all tags in use with session counts (`#auth (12)`, `#learning (8)`)
   - Multi-select: show sessions matching ANY selected tag
   - Active tag filter shown in the tree view title bar; clear button to reset
+  - _(No separate `chatwizard.filterByTag` command — merged into existing filter flow)_
 
 - [ ] Persist active tag filter to `workspaceState` so it survives panel reloads
 
@@ -297,7 +298,7 @@ Modified files:
 ```
 src/types/index.ts              ← SessionMetadata, ChatWizardMetadata, KBEntry, KBEntryType
 src/extension.ts                ← MetadataStore singleton, chatwizard.generateKnowledgeBase command,
-                                   chatwizard.filterByTag command
+                                   tag filter option in chatwizard.filterSessions command
 src/views/sessionTreeProvider.ts  ← tag chips, context menu items, tag filter
 src/views/sessionWebviewPanel.ts  ← tag chips in session header
 src/export/markdownSerializer.ts  ← reused by knowledgeBaseExporter

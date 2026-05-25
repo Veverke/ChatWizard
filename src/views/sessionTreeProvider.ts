@@ -30,7 +30,7 @@ export class SessionTreeItem extends vscode.TreeItem {
     readonly summary: SessionSummary;
     readonly pinned: boolean;
 
-    constructor(summary: SessionSummary, pinned = false, extensionUri?: vscode.Uri, tags?: string[]) {
+    constructor(summary: SessionSummary, pinned = false, extensionUri?: vscode.Uri, tags?: string[], summaryText?: string) {
         super(summary.title || 'Untitled Session', vscode.TreeItemCollapsibleState.None);
 
         this.id      = summary.id;   // stable identity → enables treeView.reveal()
@@ -56,6 +56,7 @@ export class SessionTreeItem extends vscode.TreeItem {
         const pinnedLine = pinned ? `\n\n📌 *Pinned*` : '';
         const archivedLine = summary.archived ? `\n\n🗂️ *Archived — original source file deleted*` : '';
         const tagsLine = tags && tags.length > 0 ? `\n\n**Tags:** ${tags.map(t => `\`#${t}\``).join(' ')}` : '';
+        const summaryLine = summaryText ? `\n\n**Summary:** ${summaryText}` : '';
         const interruptedLine = summary.interrupted ? `\n\n⚠ *Response not available — cancelled or incomplete*` : '';
         const parseErrorsLine = summary.hasParseErrors ? `\n\n⚠ *This session has parse errors — some lines could not be read*` : '';
 
@@ -74,7 +75,7 @@ export class SessionTreeItem extends vscode.TreeItem {
                 `\n\n${lbl('Updated:')} ${summary.updatedAt.slice(0, 16).replace('T', ' ')}` +
                 `\n\n${lbl('Size:')} ${sizeText}` +
                 `\n\n${summary.userMessageCount} prompts · ${summary.assistantMessageCount} responses` +
-                pinnedLine + archivedLine + tagsLine + interruptedLine + parseErrorsLine
+                pinnedLine + archivedLine + tagsLine + summaryLine + interruptedLine + parseErrorsLine
             );
             tooltip.isTrusted = true;
             tooltip.supportHtml = true;
@@ -86,7 +87,7 @@ export class SessionTreeItem extends vscode.TreeItem {
                 `**Updated:** ${summary.updatedAt.slice(0, 16).replace('T', ' ')}` +
                 sizeLine + `\n\n` +
                 `${summary.userMessageCount} prompts · ${summary.assistantMessageCount} responses` +
-                pinnedLine + archivedLine + tagsLine + interruptedLine + parseErrorsLine
+                pinnedLine + archivedLine + tagsLine + summaryLine + interruptedLine + parseErrorsLine
             );
         }
         this.tooltip = tooltip;
@@ -729,7 +730,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
             const pinnedInBucket   = bucketItems.filter(s =>  pinnedSet.has(s.id));
             const unpinnedInBucket = bucketItems.filter(s => !pinnedSet.has(s.id));
             return [...pinnedInBucket, ...unpinnedInBucket]
-                .map(s => new SessionTreeItem(s, pinnedSet.has(s.id), this.extensionUri, this.index.getSidecarMeta(s.id)?.tags));
+                .map(s => new SessionTreeItem(s, pinnedSet.has(s.id), this.extensionUri, this.index.getSidecarMeta(s.id)?.tags, this.index.getSidecarMeta(s.id)?.summary));
         }
 
         // When a ContextGroupTreeItem is expanded, return matching session children
@@ -750,7 +751,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
                         : keys.includes(element.groupKey);
                 }
             });
-            return matched.map(s => new SessionTreeItem(s, pinnedSet.has(s.id), this.extensionUri, this.index.getSidecarMeta(s.id)?.tags));
+            return matched.map(s => new SessionTreeItem(s, pinnedSet.has(s.id), this.extensionUri, this.index.getSidecarMeta(s.id)?.tags, this.index.getSidecarMeta(s.id)?.summary));
         }
 
         if (element) { return []; }
@@ -772,7 +773,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
 
         // Flat view (original behaviour with pagination)
         const visible = all.slice(0, this._visibleCount);
-        const items: SessionTreeNode[] = visible.map(s => new SessionTreeItem(s, pinnedSet.has(s.id), this.extensionUri, this.index.getSidecarMeta(s.id)?.tags));
+        const items: SessionTreeNode[] = visible.map(s => new SessionTreeItem(s, pinnedSet.has(s.id), this.extensionUri, this.index.getSidecarMeta(s.id)?.tags, this.index.getSidecarMeta(s.id)?.summary));
         const remaining = all.length - visible.length;
         if (remaining > 0) {
             items.push(new LoadMoreTreeItem(remaining));

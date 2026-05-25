@@ -14,8 +14,9 @@ export interface LiveSessionEntry {
 }
 
 export class LiveSessionTracker {
-    private readonly _map = new Map<SessionSource, LiveSessionEntry>();
+    private readonly _map = new Map<SessionSource, LiveSessionEntry & { _seq: number }>();
     private readonly _listeners = new Set<() => void>();
+    private _seq = 0;
 
     /**
      * Records a live update for the given source/session.
@@ -23,7 +24,7 @@ export class LiveSessionTracker {
      * Fires `onDidUpdate` listeners synchronously.
      */
     record(source: SessionSource, sessionId: string): void {
-        this._map.set(source, { sessionId, source, updatedAt: new Date() });
+        this._map.set(source, { sessionId, source, updatedAt: new Date(), _seq: ++this._seq });
         for (const l of this._listeners) { l(); }
     }
 
@@ -35,7 +36,7 @@ export class LiveSessionTracker {
         const cutoff = Date.now() - windowMs;
         return [...this._map.values()]
             .filter(e => e.updatedAt.getTime() >= cutoff)
-            .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+            .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime() || b._seq - a._seq);
     }
 
     /**
@@ -45,7 +46,7 @@ export class LiveSessionTracker {
      */
     getMostRecent(): LiveSessionEntry | undefined {
         if (this._map.size === 0) { return undefined; }
-        return [...this._map.values()].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())[0];
+        return [...this._map.values()].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime() || b._seq - a._seq)[0];
     }
 
     /**

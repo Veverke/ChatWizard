@@ -592,10 +592,11 @@ suite('parseCopilotSession — textEditGroup handling', () => {
     test('empty ``` fence placeholder is removed (not left as standalone fence)', () => {
         const { session } = parseCopilotSession(FIXTURE, 'ws-teg');
         const asstMsg = session.messages[1];
-        // Standalone ``` lines that aren't part of a language-tagged block indicate
-        // an un-replaced placeholder — there should be none
-        const standaloneBackticks = asstMsg.content.match(/^```\s*$/m);
-        assert.strictEqual(standaloneBackticks, null,
+        // If the textEditGroup replacement failed, the opening and closing ``` placeholders
+        // would appear on consecutive lines with no content or language tag between them.
+        // A properly replaced block has ``` <lang> as its opening line, not a bare ```.
+        const orphanedFencePair = asstMsg.content.match(/^```[ \t]*\r?\n```/m);
+        assert.strictEqual(orphanedFencePair, null,
             'Standalone ``` fence placeholder should have been replaced by the textEditGroup');
     });
 

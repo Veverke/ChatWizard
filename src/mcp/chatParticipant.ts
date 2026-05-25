@@ -22,6 +22,7 @@ import { tokenizeQuery } from '../search/fullTextEngine';
 import { resolveAnchorPaths } from '../utils/fileAnchorResolver';
 import type { SidecarMetadataStore } from '../index/sidecarMetadataStore';
 import type { LiveSessionTracker } from '../utils/liveSessionTracker';
+import { PromptAnalyzer } from '../analytics/promptAnalyzer';
 
 interface SessionRef { id: string; title: string; source: string; date: string; passage?: string; }
 
@@ -429,6 +430,46 @@ export function createParticipantHandler(
                 stream.markdown(
                     `Removed tag${rawTags.length > 1 ? 's' : ''} from **"${title}"**: ${rawTags.map(t => `\`${t}\``).join(', ')}`
                 );
+                return;
+            }
+
+            // ── /analyzePrompt — analyze a draft prompt ───────────────────────────
+            if (command === 'analyzePrompt') {
+                if (!userText.trim()) {
+                    stream.markdown(
+                        'Usage: `@chatwizard /analyzePrompt <your prompt text>`\n\n' +
+                        'Paste your draft prompt to analyze token count, estimated cost, and quality tips.'
+                    );
+                    return;
+                }
+                stream.progress('Analyzing prompt…');
+                const analyzer = new PromptAnalyzer();
+                const analysis = await analyzer.analyze(userText);
+                const lines: string[] = [
+                    '**Prompt Analysis**\n',
+                    `- **Tokens:** ~${analysis.tokenCount.toLocaleString()}`,
+                    `- **Suggested model:** ${analysis.suggestedModel}`,
+                ];
+                if (analysis.costEstimates.length > 0) {
+                    lines.push('- **Estimated cost:**');
+                    for (const c of analysis.costEstimates) {
+                        lines.push(`  - ${c.model}: $${c.estimate.totalUsd.toFixed(4)}`);
+                    }
+                }
+                if (analysis.verbosityFlags.length > 0) {
+                    lines.push('\n**⚠ Verbosity flags:**');
+                    for (const f of analysis.verbosityFlags) { lines.push(`- ${f.description}`); }
+                }
+                if (analysis.similarSessions.length > 0) {
+                    lines.push('\n**Similar past sessions:**');
+                    for (const s of analysis.similarSessions) {
+                        lines.push(`- ${s.title} _(score: ${s.score.toFixed(2)}, ${s.date?.slice(0, 10) ?? 'unknown date'})_`);
+                    }
+                }
+                if (analysis.verbosityFlags.length === 0 && analysis.similarSessions.length === 0) {
+                    lines.push('\n✅ Looks good — well-scoped prompt.');
+                }
+                stream.markdown(lines.join('\n'));
                 return;
             }
 

@@ -38,7 +38,7 @@ export interface PromptAnalysis {
 }
 
 // Open-ended phrases that indicate the user hasn't constrained the output
-const OPEN_ENDED_RE = /\b(tell me (everything|all|anything)|explain (in detail|fully|completely|thoroughly)|write me a (complete|full|comprehensive)|give me (a|an) overview|describe (everything|all|the entire|the whole))\b/i;
+const OPEN_ENDED_RE = /\b(tell me (everything|all|anything)|explain (everything|all|in detail|fully|completely|thoroughly)|write me a (complete|full|comprehensive)|give me (a|an) overview|describe (everything|all|the entire|the whole))\b/i;
 
 const MULTIPLE_Q_RE = /\?/g;
 

@@ -1,4 +1,4 @@
-# ChatWizard — P2 Feature Work Plan
+﻿# ChatWizard — P2 Feature Work Plan
 
 _Created: May 2026_
 
@@ -333,10 +333,9 @@ Users can attach freeform labels (`#bugfix`, `topic:auth`, `kind:decision`) to s
   - `chatwizard.removeTag` command: opens `QuickPick` of existing tags on that session; multi-select.
   - Both registered in `explorer/context` for `chatwizard.sessionItem` menu context.
 
-- [ ] **13-E** — `chatwizard.filterByTag` command
-  - `QuickPick` lists all tags with counts: `topic:auth  (12 sessions)`.
-  - Selecting a tag sets a "tag filter" on `SessionTreeProvider` that hides non-matching sessions.
-  - A visible filter indicator (e.g. `$(filter)` in the view title) lets the user clear the filter in one click.
+- [x] **13-E** — Tag filter built into the existing `filterSessions` command
+  - Tag filtering is incorporated into the main `chatwizard.filterSessions` QuickPick ("Filter by tags" option).
+  - No separate `filterByTag` command needed — removed to avoid duplication.
 
 - [x] **13-F** — Tag display in session reader webview
   - Session reader header shows tag chips alongside source badge and date.
@@ -355,7 +354,7 @@ Users can attach freeform labels (`#bugfix`, `topic:auth`, `kind:decision`) to s
   - Wire into the watcher: every path that calls `this.index.upsert(session)` for a live event (not the initial batch) also calls `this.liveTracker.record(session.source, session.id)`.
   - Pass the tracker reference down to the chat participant handler and the status bar button.
 
-- [ ] **13-H** — "Tag Active Session" — command palette + status bar entry point
+- [x] **13-H** — "Tag Active Session" — command palette + status bar entry point
   - **Problem this solves:** the primary real-world use case is tagging a session *while it is still in progress*, not after the fact from the history tree. All existing 13-D / 13-E entry points require navigating to a completed session in the tree.
   - `chatwizard.tagActiveSession` command:
     - Calls `liveTracker.getActive()`.
@@ -401,7 +400,7 @@ Users can attach freeform labels (`#bugfix`, `topic:auth`, `kind:decision`) to s
 
 - [ ] **Scenario: add a tag via right-click** — tag appears in tree item description and session reader header after adding.
 - [ ] **Scenario: remove a tag** — tag disappears from tree item and reader after removing.
-- [ ] **Scenario: filter by tag** — tree shows only sessions with the selected tag; view title shows filter indicator.
+- [ ] **Scenario: filter by tag** — use the main "Filter Sessions" command, choose "Filter by tags", select a tag; tree shows only matching sessions and view title shows filter indicator.
 - [ ] **Scenario: tag persists across restart** — after adding a tag and restarting VS Code, the tag is still visible.
 - [ ] **Scenario: pin migration** — after first upgrade, existing pinned sessions still show as pinned in the tree.
 - [ ] **Scenario: tag active session via command palette** — while a chat is open and updating, `chatwizard.tagActiveSession` pre-selects the current session; tag is stored and visible in the tree within seconds.
@@ -413,7 +412,7 @@ Users can attach freeform labels (`#bugfix`, `topic:auth`, `kind:decision`) to s
 
 1. Right-click a session, choose "Add Tag…". Type `topic:auth, #bugfix`. Verify both tags appear as chips on the tree item (max 3 shown inline).
 2. With 4+ tags on a session, verify `+1 more` overflow chip appears and hovering the tree item shows all tags in the tooltip.
-3. Run "Filter by Tag…" from the command palette. Select `#bugfix`. Verify the tree is filtered and a clear-filter button appears in the view title.
+3. Run "Filter Sessions…" from the command palette, choose "Filter by tags", select `#bugfix`. Verify the tree is filtered and a clear-filter button appears in the view title.
 4. Clear the tag filter. Verify all sessions reappear immediately.
 5. Close and reopen VS Code. Verify the tags added in step 1 are still present.
 6. Open a session in the reader. Verify tags appear in the header, consistent with what the tree shows.
@@ -732,15 +731,15 @@ Auto-generate a one-line summary for every session using a three-tier strategy: 
   - Pauses if the user starts typing in the editor (throttle via `onDidChangeTextDocument`).
   - Progress reported in the output channel, not the UI (silent by default).
 
-- [ ] **18-C** — Summary displayed in session tree tooltip
+- [x] **18-C** — Summary displayed in session tree tooltip
   - `SessionTreeProvider`: `item.tooltip = new vscode.MarkdownString(summary)` when summary available.
   - No change to the tree item label itself (summary is not shown inline — too noisy).
 
-- [ ] **18-D** — Summary displayed in session reader header
+- [x] **18-D** — Summary displayed in session reader header
   - Add a `<p class="session-summary">` below the title in the session webview HTML template.
   - If no summary yet: omit the element (not a placeholder — silently absent until generated).
 
-- [ ] **18-E** — "Regenerate Summary" context menu item
+- [x] **18-E** — "Regenerate Summary" context menu item
   - Command `chatwizard.regenerateSummary` available on session tree item right-click.
   - Clears cached summary for that session, re-runs `SummaryGenerator`, updates tree and reader.
 
@@ -817,7 +816,7 @@ Extract and index structured entities from session content post-indexing: file p
   - Processes sessions without `entities` (or with outdated `entitiesVersion`) in batches of 50.
   - All I/O is to `MetadataStore` — pure local processing, no network.
 
-- [ ] **19-D** — Entity-aware search extension
+- [x] **19-D** — Entity-aware search extension
   - Extend `SearchEngine.search()` to accept optional `entityFilter: { type: EntityType; value: string }`.
   - When filter is active, pre-filter sessions by `metadata.entities[type].includes(value)` before full-text search.
   - Expose via `chatwizard_search` MCP tool: new optional `entityType` and `entityValue` parameters.
@@ -891,7 +890,7 @@ Local, zero-LLM prompt analysis: token count estimate, similarity check against 
   - Returns `PromptAnalysis: { tokenCount, estimatedCostUsd, similarSessions, flags, modelSuggestion }`.
   - Synchronous for the heuristic parts; async for similarity check.
 
-- [ ] **20-C** — `@chatwizard /analyzePrompt` chat participant command
+- [x] **20-C** — `@chatwizard /analyzePrompt` chat participant command
   - Registered in `chatParticipant.ts` as a new command handler for `/analyzePrompt`.
   - Input: the user's prompt text (the content of the chat input after `/analyzePrompt`).
   - Output via `stream.markdown()`:
@@ -901,7 +900,7 @@ Local, zero-LLM prompt analysis: token count estimate, similarity check against 
     - Model suggestion if a cheaper model is appropriate.
   - Does **not** send the prompt anywhere; zero LLM calls.
 
-- [ ] **20-D** — `ChatWizard: Analyze Selected Prompt` editor command
+- [x] **20-D** — `ChatWizard: Analyze Selected Prompt` editor command
   - Registered in `package.json` as an editor context menu command when text is selected.
   - Reads the selection, calls `PromptAnalyzer.analyze()`, shows results in a VS Code information message with "View Details" button (opens a webview panel with full analysis).
   - Works regardless of which file the selection is in.
@@ -962,7 +961,7 @@ Add an optional cross-encoder reranker pass after the semantic + keyword merge i
 
 ### Atomic Tasks
 
-- [ ] **21-A** — Cross-encoder model selection
+- [x] **21-A** — N/A: TF-IDF approach chosen instead of ONNX/cross-encoder
   - Evaluate `ms-marco-MiniLM-L-6-v2` (ONNX, ~23 MB quantized) for accuracy and latency.
   - Benchmark: time 50-candidate reranking on Windows/macOS/Linux test machines.
   - Document: model file size, median latency per call, accuracy gain vs. bi-encoder-only (use existing `test/fixtures/` sessions as a retrieval evaluation set).
@@ -977,7 +976,7 @@ Add an optional cross-encoder reranker pass after the semantic + keyword merge i
   - Exposes `isReady(): boolean` — returns false before ONNX model is loaded or if load failed.
   - If `isReady()` is false: `score()` returns `candidates` unchanged (passthrough, no error).
 
-- [ ] **21-C** — Per-platform ONNX build & CI integration
+- [x] **21-C** — N/A: TF-IDF approach chosen instead of ONNX
   - Add `onnxruntime-node` to dependencies (already present for the bi-encoder — verify version compatibility).
   - Add the cross-encoder ONNX model file to `resources/models/reranker.onnx`.
   - Update `scripts/rebuild-native.js` to include the reranker model path.

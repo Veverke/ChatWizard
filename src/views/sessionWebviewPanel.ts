@@ -33,6 +33,7 @@ interface PanelMsgState {
     assistantLabel:   string;
     tags?:            string[];
     entities?:        ExtractedEntities;
+    summary?:         string;
     panel:            vscode.WebviewPanel;
 }
 
@@ -60,7 +61,8 @@ export class SessionWebviewPanel {
         targetBlockIdx?: number,
         highlightContainer?: boolean,
         tags?: string[],
-        entities?: ExtractedEntities
+        entities?: ExtractedEntities,
+        summary?: string,
     ): void {
         const config = vscode.workspace.getConfiguration('chatwizard');
         const userColor = config.get<string>('userMessageColor', '#007acc') || '#007acc';
@@ -121,7 +123,7 @@ export class SessionWebviewPanel {
                 session, visibleMessages, renderedMessages,
                 windowStart, windowEnd: initialWindowEnd,
                 streamVersion: newVersion,
-                assistantLabel, tags, entities, panel: existing,
+                assistantLabel, tags, entities, summary, panel: existing,
             });
             void SessionWebviewPanel._startStream(
                 session.id, newVersion, userColor, searchTerm, scrollInit, highlightContainer
@@ -142,7 +144,7 @@ export class SessionWebviewPanel {
             session, visibleMessages, renderedMessages,
             windowStart, windowEnd: initialWindowEnd,
             streamVersion: 0,
-            assistantLabel, tags, entities, panel,
+            assistantLabel, tags, entities, summary, panel,
         });
         SessionWebviewPanel._panels.set(session.id, panel);
 
@@ -248,6 +250,7 @@ export class SessionWebviewPanel {
             filePath:         session.filePath,
             tags:             state.tags ?? [],
             entities:         state.entities ?? null,
+            summary:          state.summary ?? null,
         });
 
         // ── Stream remaining initial window via setImmediate ──────────────────
@@ -649,6 +652,7 @@ export class SessionWebviewPanel {
 </head>
 <body>
   <h1 id="session-title"><span class="cw-skeleton" style="display:inline-block;height:1.1em;width:50%;vertical-align:middle"></span></h1>
+  <p id="session-summary" style="display:none;margin:4px 0 8px;opacity:0.7;font-size:0.875em;font-style:italic;"></p>
   <div id="session-tags" style="display:none"></div>
   <div class="session-meta" id="session-meta">
     <span id="session-model-field" style="display:none">Model: <span id="session-model"></span></span>
@@ -1170,6 +1174,16 @@ ${cwInteractiveJs()}
       var titleNode = document.getElementById('session-title');
       titleNode.textContent = data.title;
       titleNode.dataset.cwSessionId = data.sessionId;
+      var summaryEl = document.getElementById('session-summary');
+      if (summaryEl) {
+        if (data.summary) {
+          summaryEl.textContent = data.summary;
+          summaryEl.style.display = 'block';
+        } else {
+          summaryEl.textContent = '';
+          summaryEl.style.display = 'none';
+        }
+      }
       document.documentElement.style.setProperty('--cw-user-color', data.userColor || '#007acc');
       if (data.source) {
         var srcLabel = data.assistantLabel || data.source;

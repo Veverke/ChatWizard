@@ -48,7 +48,7 @@ export function extractWorkItems(text: string, pattern?: string): string[] {
 }
 
 /**
- * Extracts all work items from a session (title + first user message).
+ * Extracts all work items from a session (title + all messages up to a char budget).
  */
 export function extractWorkItemsFromSession(
     title: string,
@@ -56,14 +56,22 @@ export function extractWorkItemsFromSession(
     pattern?: string,
 ): string[] {
     const fromTitle = extractWorkItems(title, pattern);
-    const firstUserMsg = messages.find(m => m.role === 'user')?.content ?? '';
-    const fromMsg = extractWorkItems(firstUserMsg.slice(0, 500), pattern);
 
-    // Merge, deduplicate
+    // Scan all messages up to a total character budget to keep this efficient
+    // even for very long sessions.
+    const CHAR_BUDGET = 10_000;
+    let budget = CHAR_BUDGET;
     const seen = new Set(fromTitle);
     const all = [...fromTitle];
-    for (const item of fromMsg) {
-        if (!seen.has(item)) { seen.add(item); all.push(item); }
+
+    for (const msg of messages) {
+        if (budget <= 0) { break; }
+        const slice = msg.content.slice(0, budget);
+        budget -= slice.length;
+        for (const item of extractWorkItems(slice, pattern)) {
+            if (!seen.has(item)) { seen.add(item); all.push(item); }
+        }
     }
+
     return all;
 }

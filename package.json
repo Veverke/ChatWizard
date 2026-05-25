@@ -578,6 +578,16 @@
         "category": "Chat Wizard"
       },
       {
+        "command": "chatwizard.regenerateSummary",
+        "title": "Chat Wizard: Regenerate Summary",
+        "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.analyzeSelectedPrompt",
+        "title": "Chat Wizard: Analyze Selected Prompt",
+        "category": "Chat Wizard"
+      },
+      {
         "command": "chatwizard.showFileHistory",
         "title": "Chat Wizard: Show File Session History",
         "category": "Chat Wizard"
@@ -604,6 +614,13 @@
       }
     ],
     "menus": {
+      "editor/context": [
+        {
+          "command": "chatwizard.analyzeSelectedPrompt",
+          "when": "editorHasSelection",
+          "group": "chatwizard@1"
+        }
+      ],
       "explorer/context": [
         {
           "command": "chatwizard.showFileHistory",
@@ -874,6 +891,11 @@
           "command": "chatwizard.removeTagFromTree",
           "when": "viewItem == session || viewItem == session.pinned || viewItem == session.archived",
           "group": "5_tags@2"
+        },
+        {
+          "command": "chatwizard.regenerateSummary",
+          "when": "viewItem == session || viewItem == session.pinned",
+          "group": "5_tags@3"
         },
         {
           "command": "chatwizard.regenerateTitle",
@@ -1168,6 +1190,10 @@
           {
             "name": "removeTags",
             "description": "Remove tags from the active chat session (e.g. /removeTags #bugfix, topic:auth)"
+          },
+          {
+            "name": "analyzePrompt",
+            "description": "Analyze a draft prompt for token count, estimated cost, and quality tips"
           }
         ]
       }

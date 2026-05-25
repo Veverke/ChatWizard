@@ -73,6 +73,9 @@ import { BrandingStatusBarItem } from './ui/brandingStatusBar';
 import { FileHistoryCodeLensProvider } from './ui/fileHistoryCodeLens';
 import { FileHistoryPanel } from './views/fileHistoryPanel';
 import { discoverChronicleDbsAsync } from './readers/chronicleWorkspace';
+import { ActiveSessionTagButton } from './ui/activeSessionTagButton';
+import { LiveSessionTracker } from './utils/liveSessionTracker';
+import { PromptAnalyzer } from './analytics/promptAnalyzer';
 import { readChronicleCheckpoints, readChronicleSessions } from './parsers/chronicle';
 
 let watcher: ChatWizardWatcher | undefined;
@@ -98,6 +101,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     // Sidecar metadata store — persists pins, custom titles, tags etc. outside source files.
     const sidecarStore = new SidecarMetadataStore(context.globalStorageUri.fsPath);
+    const liveTracker = new LiveSessionTracker();
     // Best-effort load so the store's in-memory cache is warm before tree renders.
     void sidecarStore.load().then(cache => {
         index.setSidecarStore(sidecarStore, cache);
@@ -1188,7 +1192,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 return;
             }
             telemetry.record('session.opened', { source: session.source });
-            SessionWebviewPanel.show(context, session, searchTerm, false, undefined, undefined, undefined, highlightContainer, index.getSidecarMeta(session.id)?.tags, index.getSidecarMeta(session.id)?.entities);
+            SessionWebviewPanel.show(context, session, searchTerm, false, undefined, undefined, undefined, highlightContainer, index.getSidecarMeta(session.id)?.tags, index.getSidecarMeta(session.id)?.entities, index.getSidecarMeta(session.id)?.summary);
         })
     );
 
@@ -1205,7 +1209,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             const isLeaf = ref.blocks.length === 1;
             const targetMsgIdx = isLeaf ? ref.blocks[0].messageIndex : undefined;
             const targetBlockIdx = isLeaf ? (ref.blocks[0].blockIndexInMessage ?? 0) : undefined;
-            SessionWebviewPanel.show(context, session, undefined, isLeaf, targetMsgIdx, undefined, targetBlockIdx, undefined, index.getSidecarMeta(session.id)?.tags, index.getSidecarMeta(session.id)?.entities);
+            SessionWebviewPanel.show(context, session, undefined, isLeaf, targetMsgIdx, undefined, targetBlockIdx, undefined, index.getSidecarMeta(session.id)?.tags, index.getSidecarMeta(session.id)?.entities, index.getSidecarMeta(session.id)?.summary);
         })
     );
 
@@ -1548,7 +1552,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const mcpCapabilities = buildMcpCapabilities();
 
     // Register VS Code chat participant (@chatwizard) — same prompts as MCP, no server needed.
-    registerChatParticipant(context, mcpCapabilities.prompts, index);
+    const watcherRef = { current: watcher };
+    registerChatParticipant(context, mcpCapabilities.prompts, index, watcherRef, sidecarStore, liveTracker);
 
     const mcpServer = new McpServer(
         {
@@ -1994,7 +1999,36 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
         const w = await startWatcher(index, channel, scopeManager);
         watcher = w;
+        watcherRef.current = w;
         context.subscriptions.push(w);
+
+        // ── Feature 13-H: Active session tag button ───────────────────────────
+        w.setLiveTracker(liveTracker);
+        const activeSessionTagBtn = new ActiveSessionTagButton(liveTracker);
+        context.subscriptions.push(activeSessionTagBtn);
+
+        context.subscriptions.push(
+            vscode.commands.registerCommand('chatwizard.tagActiveSession', async () => {
+                const windowMs = (vscode.workspace.getConfiguration('chatwizard').get<number>('activeSessionWindowMinutes') ?? 120) * 60_000;
+                const active = liveTracker.getActive(windowMs);
+                const entry = active[0] ?? liveTracker.getMostRecent();
+                if (!entry) {
+                    void vscode.window.showInformationMessage('No active session found.');
+                    return;
+                }
+                const input = await vscode.window.showInputBox({
+                    prompt: 'Enter tag(s) for the active session, comma-separated',
+                    placeHolder: 'e.g. refactor, auth, bugfix',
+                });
+                const tags = input?.split(',').map(t => t.trim()).filter(Boolean) ?? [];
+                if (tags.length === 0) { return; }
+                for (const t of tags) { await sidecarStore.addTag(entry.sessionId, t); }
+                const reloadedCache = await sidecarStore.load();
+                index.setSidecarStore(sidecarStore, reloadedCache);
+                void vscode.window.showInformationMessage(`Tagged active session: ${tags.map(t => `"${t}"`).join(', ')}`);
+            })
+        );
+
         const copilotCount = index.getSummariesBySource('copilot').length;
         const claudeCount = index.getSummariesBySource('claude').length;
         channel.appendLine(
@@ -2185,6 +2219,58 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 for (const pick of picks) { await sidecarStore.removeTag(item.summary.id, pick.label); }
                 const reloadedCache = await sidecarStore.load();
                 index.setSidecarStore(sidecarStore, reloadedCache);
+            }),
+        );
+
+        // ── Feature 18-E: Regenerate summary command ──────────────────────────
+        context.subscriptions.push(
+            vscode.commands.registerCommand('chatwizard.regenerateSummary', async (item: SessionTreeItem) => {
+                const id = item?.summary?.id;
+                if (!id) { return; }
+                await sidecarStore.patch(id, { summary: undefined });
+                const session = index.get(id);
+                if (!session) { return; }
+                void vscode.window.showInformationMessage('Regenerating summary…');
+                const generator = new SummaryGenerator();
+                const newSummary = await generator.generate(session);
+                await sidecarStore.patch(id, { summary: newSummary });
+                const reloadedCache = await sidecarStore.load();
+                index.setSidecarStore(sidecarStore, reloadedCache);
+                provider.refresh();
+            }),
+        );
+
+        // ── Feature 20-D: Analyze Selected Prompt command ─────────────────────
+        context.subscriptions.push(
+            vscode.commands.registerCommand('chatwizard.analyzeSelectedPrompt', async () => {
+                const editor = vscode.window.activeTextEditor;
+                const selection = editor?.selection;
+                const text = editor?.document.getText(selection);
+                if (!text?.trim()) {
+                    void vscode.window.showInformationMessage('Select some text first to analyze as a prompt.');
+                    return;
+                }
+                const analyzer = new PromptAnalyzer();
+                const analysis = await analyzer.analyze(text);
+                const detail = [
+                    `Tokens: ~${analysis.tokenCount.toLocaleString()}`,
+                    analysis.costEstimates.length > 0
+                        ? `Est. cost: ${analysis.costEstimates.map(c => `${c.model}: $${c.estimate.totalUsd.toFixed(4)}`).join(' | ')}`
+                        : '',
+                    analysis.verbosityFlags.length > 0
+                        ? `Flags: ${analysis.verbosityFlags.map(f => f.description).join('; ')}`
+                        : 'No verbosity issues.',
+                ].filter(Boolean).join('\n');
+                const choice = await vscode.window.showInformationMessage(analysis.summary, 'View Details');
+                if (choice === 'View Details') {
+                    const panel = vscode.window.createWebviewPanel(
+                        'chatwizard.promptAnalysis',
+                        'Prompt Analysis',
+                        vscode.ViewColumn.Beside,
+                        {},
+                    );
+                    panel.webview.html = `<!DOCTYPE html><html><body><pre style="font-family:monospace;padding:16px;">${detail.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</pre></body></html>`;
+                }
             }),
         );
 

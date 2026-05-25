@@ -7,7 +7,8 @@ suite('PromptAnalyzer', () => {
     const analyzer = new PromptAnalyzer();
 
     test('detects VERY_LONG flag for long prompt', async () => {
-        const longText = 'word '.repeat(600);
+        // ~3300 words × 5 chars = 16 500 chars → countTokens returns ⌈16500/4⌉ = 4125 > 4000
+        const longText = 'word '.repeat(3300);
         const result = await analyzer.analyze(longText);
         assert.ok(result.verbosityFlags.some(f => f.code === 'VERY_LONG'));
     });

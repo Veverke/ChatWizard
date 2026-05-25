@@ -12,10 +12,9 @@ suite('pathNormaliser', () => {
         });
 
         test('lowercases the drive letter on Windows paths', () => {
-            // normalise a constructed path — the real realpath may not exist,
-            // so we test the known-to-exist __filename
             const result = normalisePath(__filename);
-            assert.strictEqual(result, result.toLowerCase().replace(/^([a-z]):/, m => m));
+            // normalisePath lowercases the drive letter (e.g. C:/ → c:/) but not the rest
+            assert.match(result, /^[a-z]:\//, 'Drive letter should be normalised to lowercase');
         });
 
     });
