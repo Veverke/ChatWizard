@@ -37,6 +37,14 @@ export interface SemanticIndexerVsCodeApi {
     runIndexingProgress(task: (report: (completed: number, total: number) => void) => Promise<void>): Promise<void>;
     /** Notify the user that background indexing finished. */
     showIndexingComplete(count: number): void;
+    /**
+     * Called after the model has been successfully downloaded for the first time.
+     * Implementations should persist a marker so `isFirstUse` returns `false` on
+     * subsequent activations, independent of where Xenova stores its model files.
+     */
+    markModelDownloaded(storagePath: string): void;
+    /** Notify the user that the model downloaded successfully and is ready. */
+    showModelReady(): void;
 }
 
 function defaultVsCodeApi(): SemanticIndexerVsCodeApi {
@@ -50,7 +58,10 @@ function defaultVsCodeApi(): SemanticIndexerVsCodeApi {
             return choice === 'Download';
         },
         isFirstUse(storagePath: string): boolean {
-            return !fs.existsSync(path.join(storagePath, MODEL_CACHE_SUBDIR));
+            // Check for the sentinel file written by markModelDownloaded().
+            // Checking only the directory is unreliable: @xenova/transformers may load
+            // the model from its own OS-level cache without creating this directory.
+            return !fs.existsSync(path.join(storagePath, MODEL_CACHE_SUBDIR, '.chatwizard-ready'));
         },
         async loadModelWithProgress(task: (report: (msg: string) => void) => Promise<void>): Promise<void> {
             await vscode.window.withProgress(
@@ -73,6 +84,22 @@ function defaultVsCodeApi(): SemanticIndexerVsCodeApi {
         showIndexingComplete(count: number): void {
             void vscode.window.showInformationMessage(
                 `Chat Wizard: Semantic index ready — ${count} session${count === 1 ? '' : 's'} indexed.`
+            );
+        },
+        markModelDownloaded(storagePath: string): void {
+            const dir = path.join(storagePath, MODEL_CACHE_SUBDIR);
+            if (!fs.existsSync(dir)) {
+                fs.mkdirSync(dir, { recursive: true });
+            }
+            try {
+                fs.writeFileSync(path.join(dir, '.chatwizard-ready'), '');
+            } catch {
+                // Non-critical: if writing fails the consent dialog may reappear on next reload.
+            }
+        },
+        showModelReady(): void {
+            void vscode.window.showInformationMessage(
+                'Chat Wizard: AI model downloaded successfully — semantic search is ready.'
             );
         },
     };
@@ -158,7 +185,8 @@ export class SemanticIndexer implements ISemanticIndexer {
         }
 
         // First-use consent
-        if (this.vsCodeApi.isFirstUse(this.storagePath)) {
+        const isFirstDownload = this.vsCodeApi.isFirstUse(this.storagePath);
+        if (isFirstDownload) {
             const consented = await this.vsCodeApi.showConsentDialog();
             if (!consented) {
                 this._declined = true;
@@ -170,6 +198,12 @@ export class SemanticIndexer implements ISemanticIndexer {
         await this.vsCodeApi.loadModelWithProgress(async (report) => {
             await this.engine.load(report);
         });
+
+        // On first successful download: persist the marker and notify the user.
+        if (isFirstDownload) {
+            this.vsCodeApi.markModelDownloaded(this.storagePath);
+            this.vsCodeApi.showModelReady();
+        }
 
         // Restore persisted index
         await this.index.load(path.join(this.storagePath, EMBEDDINGS_FILENAME));

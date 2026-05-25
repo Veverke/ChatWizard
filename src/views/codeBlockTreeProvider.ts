@@ -259,7 +259,7 @@ export class CbLanguageGroupItem extends vscode.TreeItem {
     readonly language: string;
 
     constructor(language: string, count: number) {
-        const displayLang = language || 'Plain / Unknown';
+        const displayLang = language || '[No Language]';
         super(displayLang, vscode.TreeItemCollapsibleState.Expanded);
         this.language = language;
         this.description = `${count} session${count === 1 ? '' : 's'}`;
@@ -315,6 +315,12 @@ export class CodeBlockTreeProvider implements vscode.TreeDataProvider<CodeBlockT
 
     getFilter(): CodeBlockFilter { return { ...this._filter }; }
 
+    /** Returns all distinct language labels currently in the index, sorted alphabetically
+     *  with the empty-string (no-language) entry last.  Used to populate the filter QuickPick. */
+    getLanguages(): string[] {
+        return this.engine.getLanguages();
+    }
+
     hasActiveFilter(): boolean {
         const f = this._filter;
         return !!(f.language || f.content || f.sessionSource || f.messageRole);
@@ -322,7 +328,7 @@ export class CodeBlockTreeProvider implements vscode.TreeDataProvider<CodeBlockT
 
     private _blockMatchesFilter(block: IndexedCodeBlock): boolean {
         const f = this._filter;
-        if (f.language && !block.language.toLowerCase().includes(f.language.toLowerCase())) { return false; }
+        if (f.language && block.language.toLowerCase() !== f.language.toLowerCase()) { return false; }
         if (f.content && !block.content.toLowerCase().includes(f.content.toLowerCase())) { return false; }
         if (f.sessionSource && block.sessionSource !== f.sessionSource) { return false; }
         if (f.messageRole && block.messageRole !== f.messageRole) { return false; }

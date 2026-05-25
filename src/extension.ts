@@ -229,6 +229,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                     indexer.scheduleSession(session);
                 }
             }
+        }).catch((err: unknown) => {
+            void vscode.window.showErrorMessage(
+                `Chat Wizard: Failed to initialize semantic search — ${String(err)}. Reload VS Code to retry.`
+            );
         });
     }
 
@@ -876,7 +880,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             const items: FilterItem[] = [
                 {
                     id: 'language',
-                    label: '$(symbol-event)  Language contains…',
+                    label: '$(symbol-event)  Language',
                     description: current.language ? `current: "${current.language}"` : undefined,
                 },
                 {
@@ -917,13 +921,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             const newFilter: CodeBlockFilter = { ...current };
 
             if (pick.id === 'language') {
-                const val = await vscode.window.showInputBox({
-                    title: 'Filter by language (case-insensitive substring)',
-                    value: current.language ?? '',
-                    placeHolder: 'e.g. typescript, python, javascript',
+                const langs = codeBlockProvider.getLanguages();
+                type LangItem = vscode.QuickPickItem & { lang: string | undefined };
+                const langItems: LangItem[] = [
+                    ...langs.map(l => ({
+                        label: l || '[No Language]',
+                        lang: l || undefined,
+                        description: current.language === l ? 'current' : undefined,
+                    })),
+                    { label: '$(close)  Clear filter', lang: undefined },
+                ];
+                const langPick = await vscode.window.showQuickPick(langItems, {
+                    title: 'Filter by language',
+                    placeHolder: 'Select a language',
                 });
-                if (val === undefined) { return; }
-                newFilter.language = val.trim() || undefined;
+                if (!langPick) { return; }
+                newFilter.language = langPick.lang;
 
             } else if (pick.id === 'content') {
                 const val = await vscode.window.showInputBox({

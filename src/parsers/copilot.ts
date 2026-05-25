@@ -3,6 +3,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { Session, Message, CodeBlock, ParseResult, MessageRole } from '../types/index';
+import { normalizeLanguage } from './claude';
 
 // ---------------------------------------------------------------------------
 // Security constants (SEC-7)
@@ -95,7 +96,7 @@ export function extractCodeBlocks(
     let match: RegExpExecArray | null;
 
     while ((match = pattern.exec(content)) !== null) {
-        const language = match[1].trim();
+        const language = normalizeLanguage(match[1]);
         const blockContent = match[2].trim();
         blocks.push({ language, content: blockContent, sessionId, messageIndex, blockIndexInMessage: blocks.length });
     }
