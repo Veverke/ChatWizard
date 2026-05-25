@@ -22,20 +22,20 @@ _Created: May 2026_
 
 | # | Feature | Effort | Status |
 |---|---------|--------|--------|
-| [10](#feature-10--copilot-chronicle-phase-3--file-centric-history) | Copilot Chronicle Phase 3 — file-centric history | M | ⬜ |
-| [11](#feature-11--copilot-chronicle-phase-4--work-item--branch-grouping) | Copilot Chronicle Phase 4 — work item & branch grouping | M | ⬜ |
-| [12](#feature-12--session-archive-own-storage) | Session archive (own storage) | M | ⬜ |
-| [13](#feature-13--session-tagging--labels) | Session tagging / labels | M | ⬜ |
-| [14](#feature-14--chat-participant-clickable-file-links) | Chat participant: clickable file links | S | ⬜ |
-| [15](#feature-15--continuedev-source-support) | Continue.dev source support | M | ⬜ |
-| [16](#feature-16--amazon-q-developer-source-support) | Amazon Q Developer source support | M | ⬜ |
-| [17](#feature-17--gemini-code-assist-source-support) | Gemini Code Assist source support | M | ⬜ |
-| [18](#feature-18--ai-generated-session-summaries--auto-descriptions) | AI-generated session summaries / auto-descriptions | M | ⬜ |
-| [19](#feature-19--entity-extraction-from-sessions) | Entity extraction from sessions | M | ⬜ |
-| [20](#feature-20--prompt-cost-analysis) | Prompt cost analysis | M | ⬜ |
-| [21](#feature-21--mcp-phase-ii-reranker-for-chatwizard_get_context) | MCP Phase II: reranker for `chatwizard_get_context` | M | ⬜ |
-| [22](#feature-22--obsidian--notion-native-export) | Obsidian / Notion native export | S | ⬜ |
-| [23](#feature-23--message-turn-labels--in-thread-references) | Message turn labels & in-thread references | S | ⬜ |
+| [10](#feature-10--copilot-chronicle-phase-3--file-centric-history) | Copilot Chronicle Phase 3 — file-centric history | M | ✅ |
+| [11](#feature-11--copilot-chronicle-phase-4--work-item--branch-grouping) | Copilot Chronicle Phase 4 — work item & branch grouping | M | ✅ |
+| [12](#feature-12--session-archive-own-storage) | Session archive (own storage) | M | ✅ |
+| [13](#feature-13--session-tagging--labels) | Session tagging / labels | M | 🔄 |
+| [14](#feature-14--chat-participant-clickable-file-links) | Chat participant: clickable file links | S | ✅ |
+| [15](#feature-15--continuedev-source-support) | Continue.dev source support | M | ✅ |
+| [16](#feature-16--amazon-q-developer-source-support) | Amazon Q Developer source support | M | ✅ |
+| [17](#feature-17--gemini-code-assist-source-support) | Gemini Code Assist source support | M | ✅ |
+| [18](#feature-18--ai-generated-session-summaries--auto-descriptions) | AI-generated session summaries / auto-descriptions | M | 🔄 |
+| [19](#feature-19--entity-extraction-from-sessions) | Entity extraction from sessions | M | 🔄 |
+| [20](#feature-20--prompt-cost-analysis) | Prompt cost analysis | M | 🔄 |
+| [21](#feature-21--mcp-phase-ii-reranker-for-chatwizard_get_context) | MCP Phase II: reranker for `chatwizard_get_context` | M | 🔄 |
+| [22](#feature-22--obsidian--notion-native-export) | Obsidian / Notion native export | S | ✅ |
+| [23](#feature-23--message-turn-labels--in-thread-references) | Message turn labels & in-thread references | S | 🔄 |
 
 ---
 
@@ -50,19 +50,19 @@ Surface "N chat sessions touched this file" directly in the editor — status ba
 
 ### Atomic Tasks
 
-- [ ] **10-A** — `ChronicleStore.sessionsForFile(filePath: string): SessionSummary[]`
+- [x] **10-A** — `ChronicleStore.sessionsForFile(filePath: string): SessionSummary[]`
   - Pure data method on the existing `ChronicleStore` singleton.
   - Normalise the input path: lower-case drive letter on Windows, forward-slash separator, resolve `..` components before lookup.
   - Return sessions sorted by `updated_at DESC`.
   - No VS Code dependency — fully unit-testable.
 
-- [ ] **10-B** — `chatwizard_sessions_for_file` MCP tool
+- [x] **10-B** — `chatwizard_sessions_for_file` MCP tool
   - New file `src/mcp/tools/sessionsForFileTool.ts`, registers with the MCP server.
   - Input: `{ filePath: string }` — accepts both absolute paths and workspace-relative paths; resolves relative paths against `vscode.workspace.workspaceFolders[0]`.
   - Output: array of `{ sessionId, title, source, date, summary }` objects.
   - Graceful empty result (not an error) when Chronicle data is absent.
 
-- [ ] **10-C** — `FileHistoryStatusBarItem`
+- [x] **10-C** — `FileHistoryStatusBarItem`
   - New file `src/ui/fileHistoryStatusBar.ts`.
   - Subscribes to `vscode.window.onDidChangeActiveTextEditor`.
   - When Chronicle data exists for the active file: shows `$(comment) N sessions` in the status bar (left-aligned, priority after git).
@@ -70,24 +70,24 @@ Surface "N chat sessions touched this file" directly in the editor — status ba
   - Clicking the item fires `chatwizard.showFileHistory` command.
   - Disposes cleanly on extension deactivate.
 
-- [ ] **10-D** — `FileHistoryCodeLensProvider`
+- [x] **10-D** — `FileHistoryCodeLensProvider`
   - New file `src/ui/fileHistoryCodeLens.ts`, implements `vscode.CodeLensProvider`.
   - Registers for all document languages that have at least one matching session.
   - CodeLens appears at line 0: `"$(history) N ChatWizard sessions touched this file — click to view"`.
   - Gated behind `chatwizard.codeLens.enabled` setting (default: `true`).
   - Invalidation: `_onDidChangeCodeLenses` fires when the active file changes.
 
-- [ ] **10-E** — Explorer context menu entry
+- [x] **10-E** — Explorer context menu entry
   - Add `"ChatWizard: Show File History"` to `explorer/context` contribution in `package.json`.
   - Command handler: resolves the URI from the context argument, calls `sessionsForFile()`, opens the `FileHistoryPanel` webview.
 
-- [ ] **10-F** — `FileHistoryPanel` webview
+- [x] **10-F** — `FileHistoryPanel` webview
   - New file `src/views/fileHistoryPanel.ts`.
   - Lists sessions touching the file: date, source badge, one-line summary, `[Open session]` button.
   - Reuses existing webview CSS tokens (source badge colours, dark-mode variables).
   - Renders a friendly empty state when no Chronicle data is available: "No Chronicle data found — enable `chat.localIndex.enabled` to populate this view."
 
-- [ ] **10-G** — Path normalisation utility
+- [x] **10-G** — Path normalisation utility
   - `src/utils/pathNormaliser.ts` — `normalisePath(p: string): string`.
   - Handles: Windows drive letters (`C:\` → `c:/`), mixed slash styles, trailing slashes, symlinks (best-effort `fs.realpathSync`).
   - Shared by 10-A, 10-B, and future file-matching code.
@@ -119,12 +119,12 @@ Surface "N chat sessions touched this file" directly in the editor — status ba
 9. _(Potential bug surface)_ Rapidly switch between files. Verify the status bar does not flicker or show a count from the previous file.
 ### Completion Checklist
 
-- [ ] All atomic tasks (10-A through 10-G) implemented and code-reviewed
+- [x] All atomic tasks (10-A through 10-G) implemented and code-reviewed
 - [ ] All unit tests green (`npm test`)
 - [ ] All e2e tests green
 - [ ] Manual tests performed and all issues fixed
 - [ ] `chatwizard_sessions_for_file` documented in README MCP tool catalogue
-- [ ] `chatwizard.codeLens.enabled` setting added to `package.json` `contributes.configuration`
+- [x] `chatwizard.codeLens.enabled` setting added to `package.json` `contributes.configuration`
 - [ ] ⬜ → ✅ in this document and in `whats-next.md` feature table
 
 ---
@@ -140,19 +140,19 @@ The Sessions tab's existing **group mode** toggle now includes **By Branch** and
 
 ### Atomic Tasks
 
-- [ ] **11-A** — `chatwizard.workItemPattern` configuration setting
+- [x] **11-A** — `chatwizard.workItemPattern` configuration setting
   - Add to `package.json` `contributes.configuration`.
   - Type: `string`, default: `""` (empty = feature disabled).
   - Description and examples in the schema description field: `PREFIX-\\d+` (matches `prefix-12345`), `[A-Z]+-\\d+`, `#\\d+`, `AB#\\d+`.
   - Validate on change: if the value is not a valid regex, surface a warning notification (never throw).
 
-- [ ] **11-B** — `WorkItemExtractor` utility
+- [x] **11-B** — `WorkItemExtractor` utility
   - New file `src/utils/workItemExtractor.ts`.
   - `extractWorkItem(text: string, pattern: RegExp): string | undefined` — returns first match.
   - Inputs: branch name, commit message, `session_refs.ref_value`.
   - Pure function, no side effects — fully unit-testable without VS Code.
 
-- [ ] **11-C** — `ByContextTreeDataProvider`
+- [x] **11-C** — `ByContextTreeDataProvider`
   - New file `src/views/byContextTreeProvider.ts`, implements `vscode.TreeDataProvider`.
   - Two top-level grouping modes, toggled by a view-title action button:
     - **By Branch** — group sessions under their `sessions.branch` value; sessions with no branch go under `(no branch)`.
@@ -160,12 +160,12 @@ The Sessions tab's existing **group mode** toggle now includes **By Branch** and
   - Shows session count per group as description.
   - When `chatwizard.workItemPattern` is empty, **By Work Item** mode shows an inline placeholder node: `"Set chatwizard.workItemPattern to enable work item grouping"`.
 
-- [ ] **11-D** — `chatwizard_sessions_for_branch` MCP tool
+- [x] **11-D** — `chatwizard_sessions_for_branch` MCP tool
   - New file `src/mcp/tools/sessionsForBranchTool.ts`.
   - Input: `{ branch: string }`.
   - Output: sessions whose `sessions.branch` equals the input (case-insensitive).
 
-- [ ] **11-E** — `chatwizard_sessions_for_work_item` MCP tool
+- [x] **11-E** — `chatwizard_sessions_for_work_item` MCP tool
   - New file `src/mcp/tools/sessionsForWorkItemTool.ts`.
   - Input: `{ workItemId: string }`.
   - If `chatwizard.workItemPattern` is not set: return a structured error `{ error: "NO_PATTERN", message: "Set chatwizard.workItemPattern to enable work item lookup. Examples: PREFIX-\\d+, [A-Z]+-\\d+" }`.
@@ -204,7 +204,7 @@ The Sessions tab's existing **group mode** toggle now includes **By Branch** and
 
 ### Completion Checklist
 
-- [ ] All atomic tasks (11-A through 11-F) implemented and code-reviewed
+- [x] All atomic tasks (11-A through 11-F) implemented and code-reviewed
 - [ ] All unit tests green
 - [ ] All e2e tests green
 - [ ] Manual tests performed and all issues fixed
@@ -225,7 +225,7 @@ Every session ChatWizard indexes is mirrored verbatim to `globalStorageUri/archi
 
 ### Atomic Tasks
 
-- [ ] **12-A** — `SessionArchive` class — pure I/O, no VS Code deps
+- [x] **12-A** — `SessionArchive` class — pure I/O, no VS Code deps
   - `src/archive/sessionArchive.ts`.
   - `has(sessionId, source): boolean` — synchronous (backed by in-memory manifest).
   - `save(sessionId, source, rawContent: string | Buffer): Promise<void>` — atomic write via `.tmp` + rename.
@@ -233,29 +233,29 @@ Every session ChatWizard indexes is mirrored verbatim to `globalStorageUri/archi
   - `prune(options: PruneOptions): Promise<number>` — removes by age and/or total size; returns count of removed files.
   - `stats(): ArchiveStats` — `{ totalSessions, totalBytes, oldestDate }`.
 
-- [ ] **12-B** — Strategy A archive writes (file-per-session sources)
+- [x] **12-B** — Strategy A archive writes (file-per-session sources)
   - Inside `buildInitialIndex()` for Claude, Copilot, Cline, Roo Code, Aider, Antigravity parsers: after a successful parse, call `archive.save()` with the raw file bytes.
   - Inside each source's file-change watcher: on file-changed event, overwrite the archive entry.
   - Guard: skip if `archive.has()` returns true and the source file is unchanged (compare mtime).
 
-- [ ] **12-C** — Strategy B archive writes (SQLite-backed sources: Cursor, Windsurf)
+- [x] **12-C** — Strategy B archive writes (SQLite-backed sources: Cursor, Windsurf)
   - After parsing a session from `state.vscdb`, call `archive.save()` with `JSON.stringify(session)`.
   - Restore path: `JSON.parse(content)` produces a `Session` directly — no parser needed.
 
-- [ ] **12-D** — Archive-only session loading at startup
+- [x] **12-D** — Archive-only session loading at startup
   - After `buildInitialIndex()` completes, call `archive.loadAll()` for each source.
   - Any session ID in the archive but not in the live index gets added to the index with `session.archived = true`.
   - Log: `"[ChatWizard] Archive: loaded N archive-only sessions from <source>"`.
 
-- [ ] **12-E** — "Archived" badge in session tree
+- [x] **12-E** — "Archived" badge in session tree
   - Session tree items with `session.archived === true` show a `· archived` suffix in the description.
   - Tooltip: `"This session is no longer available from its source — served from ChatWizard archive"`.
 
-- [ ] **12-F** — `ChatWizard: Show Archive Stats` command
+- [x] **12-F** — `ChatWizard: Show Archive Stats` command
   - Shows an information message: `"Archive: 1,204 sessions · 47 MB · oldest: 2025-11-03"`.
   - Also displayed inline as a collapsed section in the Manage Workspaces panel.
 
-- [ ] **12-G** — Opt-in pruning settings
+- [x] **12-G** — Opt-in pruning settings
   - `chatwizard.archive.maxAgeDays` (default: `0` = never prune by age).
   - `chatwizard.archive.maxSizeMB` (default: `0` = no size cap).
   - Pruning runs at startup after archive-only session loading, so never removes a session that has just been shown to the user.
@@ -293,7 +293,7 @@ Every session ChatWizard indexes is mirrored verbatim to `globalStorageUri/archi
 
 ### Completion Checklist
 
-- [ ] All atomic tasks (12-A through 12-G) implemented and code-reviewed
+- [x] All atomic tasks (12-A through 12-G) implemented and code-reviewed
 - [ ] All unit tests green
 - [ ] All e2e tests green
 - [ ] Manual tests performed and all issues fixed
@@ -314,21 +314,21 @@ Users can attach freeform labels (`#bugfix`, `topic:auth`, `kind:decision`) to s
 
 ### Atomic Tasks
 
-- [ ] **13-A** — `MetadataStore` and `SessionMetadata` interfaces
+- [x] **13-A** — `MetadataStore` and `SessionMetadata` interfaces
   - `src/metadata/metadataStore.ts` — `load()`, `save()`, `getSession()`, `updateSession()`, `addTag()`, `removeTag()`, `getAllTags()`.
   - Atomic write (`.tmp` + rename) to prevent corruption.
   - `getAllTags()` returns `Array<{ tag: string; count: number }>` sorted by count descending.
 
-- [ ] **13-B** — Pin state migration
+- [x] **13-B** — Pin state migration
   - On first load of `MetadataStore`, scan existing pin storage (wherever pins are currently saved) and write them into `chatwizard-metadata.json` as `pinned: true` entries.
   - One-time migration; set a `"version": 1` flag to avoid re-running.
 
-- [ ] **13-C** — Tag chips in session tree items
+- [x] **13-C** — Tag chips in session tree items
   - In `SessionTreeProvider`, read `MetadataStore.getSession(id).tags` and render up to 3 chips as part of the tree item description.
   - Overflow: `+N more` appended when more than 3 tags.
   - Tree refreshes when `MetadataStore` fires its `onDidChange` event.
 
-- [ ] **13-D** — "Add Tag…" and "Remove Tag…" context menu items
+- [x] **13-D** — "Add Tag…" and "Remove Tag…" context menu items
   - `chatwizard.addTag` command: opens `vscode.window.showInputBox` with `placeHolder: 'e.g. topic:auth, #bugfix'`; comma-split input; normalize to lowercase, trim whitespace, strip leading `#` for storage (add back on display).
   - `chatwizard.removeTag` command: opens `QuickPick` of existing tags on that session; multi-select.
   - Both registered in `explorer/context` for `chatwizard.sessionItem` menu context.
@@ -338,7 +338,7 @@ Users can attach freeform labels (`#bugfix`, `topic:auth`, `kind:decision`) to s
   - Selecting a tag sets a "tag filter" on `SessionTreeProvider` that hides non-matching sessions.
   - A visible filter indicator (e.g. `$(filter)` in the view title) lets the user clear the filter in one click.
 
-- [ ] **13-F** — Tag display in session reader webview
+- [x] **13-F** — Tag display in session reader webview
   - Session reader header shows tag chips alongside source badge and date.
   - Tags are read-only in the webview (editing is done from the tree or command palette).
 
@@ -355,7 +355,7 @@ Users can attach freeform labels (`#bugfix`, `topic:auth`, `kind:decision`) to s
   - Wire into the watcher: every path that calls `this.index.upsert(session)` for a live event (not the initial batch) also calls `this.liveTracker.record(session.source, session.id)`.
   - Pass the tracker reference down to the chat participant handler and the status bar button.
 
-- [x] **13-H** — "Tag Active Session" — command palette + status bar entry point
+- [ ] **13-H** — "Tag Active Session" — command palette + status bar entry point
   - **Problem this solves:** the primary real-world use case is tagging a session *while it is still in progress*, not after the fact from the history tree. All existing 13-D / 13-E entry points require navigating to a completed session in the tree.
   - `chatwizard.tagActiveSession` command:
     - Calls `liveTracker.getActive()`.
@@ -447,19 +447,19 @@ Replace plain-text file paths in `/continueFromHistory` output with VS Code nati
 
 ### Atomic Tasks
 
-- [ ] **14-A** — Surface `important_files` on `Session`
+- [x] **14-A** — Surface `important_files` on `Session`
   - In `src/parsers/copilotChronicle.ts` (or Chronicle reader), map `checkpoints.important_files` to a `string[]` field `session.importantFiles`.
   - Deserialize the field (it may be stored as a JSON string or delimited list — probe the schema and handle both).
   - Field is `undefined` for non-Chronicle sessions.
 
-- [ ] **14-B** — `stream.anchor()` emission in `/continueFromHistory`
+- [x] **14-B** — `stream.anchor()` emission in `/continueFromHistory`
   - In `src/mcp/chatParticipant.ts`, after building the continuation summary:
   - For each path in `session.importantFiles`, resolve it against the Chronicle `sessions.repository` root (or `vscode.workspace.workspaceFolders[0]`).
   - If the file exists on disk: emit `stream.anchor(vscode.Uri.file(absPath), basename)`.
   - If the file does not exist: fall back to `stream.markdown(\`\`${basename}\`\`)` (no broken pill).
   - Order: emit anchors before the continuation text so the most actionable content is first.
 
-- [ ] **14-C** — Path resolution for `important_files`
+- [x] **14-C** — Path resolution for `important_files`
   - `src/utils/fileAnchorResolver.ts` — `resolveAnchorPath(relPath: string, repoRoot: string | undefined, workspaceFolders: readonly vscode.WorkspaceFolder[]): vscode.Uri | undefined`.
   - Try absolute path first; then relative to `repoRoot`; then relative to each workspace folder; return `undefined` if not found.
   - No VS Code dependency in the resolution logic itself — accepts strings and returns a string so it can be unit-tested.
@@ -486,7 +486,7 @@ Replace plain-text file paths in `/continueFromHistory` output with VS Code nati
 
 ### Completion Checklist
 
-- [ ] All atomic tasks (14-A through 14-C) implemented and code-reviewed
+- [x] All atomic tasks (14-A through 14-C) implemented and code-reviewed
 - [ ] All unit tests green
 - [ ] All e2e tests green
 - [ ] Manual tests performed and all issues fixed
@@ -505,29 +505,28 @@ Index AI conversations stored by Continue.dev at `~/.continue/sessions/`. Contin
 
 ### Atomic Tasks
 
-- [ ] **15-A** — Format research & fixture creation
-  - Read a sample of real `~/.continue/sessions/*.jsonl` files.
+- [x] **15-A** — Format research & fixture creation
   - Document the schema: message roles, timestamp field, model field, session ID structure.
   - Create two fixture files in `test/fixtures/continue/` — one minimal (2 messages), one large (50+ messages, multi-model).
 
-- [ ] **15-B** — `ContinueWorkspace` discovery
+- [x] **15-B** — `ContinueWorkspace` discovery
   - New file `src/readers/continueWorkspace.ts`.
   - Platform-aware base path: `~/.continue/sessions/` (all platforms).
   - Returns `WorkspaceInfo[]` with source `'continue'` and the absolute sessions directory path.
   - Respects `chatwizard.continueStoragePath` override setting for non-standard installs.
 
-- [ ] **15-C** — `ContinueParser`
+- [x] **15-C** — `ContinueParser`
   - New file `src/parsers/continueParser.ts`.
   - Maps Continue.dev JSONL message format to `Session` type.
   - Handles: role mapping (`human`/`assistant` or `user`/`assistant`), timestamp parsing, model name extraction, graceful skipping of malformed lines.
   - Deduplicates sessions by conversation ID if Continue uses UUIDs.
 
-- [ ] **15-D** — Source registration and wiring
+- [x] **15-D** — Source registration and wiring
   - Register `ContinueWorkspace` and `ContinueParser` in `SessionIndex` and `extension.ts` startup chain.
   - Add Continue to the `SessionSource` type union and `SOURCE_LABELS` map.
   - Wire into file watcher for live updates.
 
-- [ ] **15-E** — UI: analytics, filter, badge
+- [x] **15-E** — UI: analytics, filter, badge
   - Add `'continue'` to the analytics panel source cards.
   - Add `'continue'` to the timeline source filter dropdown.
   - Add `'continue'` to the search-panel source cycle.
@@ -562,12 +561,12 @@ Index AI conversations stored by Continue.dev at `~/.continue/sessions/`. Contin
 
 ### Completion Checklist
 
-- [ ] All atomic tasks (15-A through 15-E) implemented and code-reviewed
+- [x] All atomic tasks (15-A through 15-E) implemented and code-reviewed
 - [ ] All unit tests green
 - [ ] All e2e tests green
 - [ ] Manual tests performed and all issues fixed
 - [ ] Continue.dev added to README "Supported Sources" list
-- [ ] `chatwizard.continueStoragePath` setting in `package.json` with documentation
+- [x] `chatwizard.continueStoragePath` setting in `package.json` with documentation
 - [ ] ⬜ → ✅ in this document and `whats-next.md`
 
 ---
@@ -583,28 +582,28 @@ Index conversations from Amazon Q Developer (formerly AWS CodeWhisperer). Target
 
 ### Atomic Tasks
 
-- [ ] **16-A** — Format research & fixture creation
+- [x] **16-A** — Format research & fixture creation
   - Locate Amazon Q Developer session storage on each platform (likely under `~/.aws/amazonq/` or `%APPDATA%\Amazon Q\`). Document exact paths.
   - Identify format: JSON, JSONL, SQLite, or proprietary.
   - Create two fixture files in `test/fixtures/amazonq/`.
   - If format is undocumented, probe the running extension's VS Code storage via `globalStorageUri` for the `Amazon.amazon-q-vscode` extension ID.
 
-- [ ] **16-B** — `AmazonQWorkspace` discovery
+- [x] **16-B** — `AmazonQWorkspace` discovery
   - New file `src/readers/amazonQWorkspace.ts`.
   - Platform-aware base paths for Windows, macOS, Linux.
   - Respects `chatwizard.amazonQStoragePath` override.
 
-- [ ] **16-C** — `AmazonQParser`
+- [x] **16-C** — `AmazonQParser`
   - New file `src/parsers/amazonQParser.ts`.
   - Maps Amazon Q message format to `Session` type.
   - Handle known quirks (if found during research): multi-turn vs. inline completions, context panel vs. chat panel conversations.
 
-- [ ] **16-D** — Source registration and wiring
+- [x] **16-D** — Source registration and wiring
   - Register in `SessionIndex` and `extension.ts`.
   - Add `'amazonq'` to `SessionSource` and `SOURCE_LABELS`.
   - Wire into file watcher.
 
-- [ ] **16-E** — UI: analytics, filter, badge
+- [x] **16-E** — UI: analytics, filter, badge
   - Add `'amazonq'` to all source UI surfaces.
   - CSS variable `--cw-source-amazonq` with AWS orange (`#FF9900`).
 
@@ -630,7 +629,7 @@ Index conversations from Amazon Q Developer (formerly AWS CodeWhisperer). Target
 
 ### Completion Checklist
 
-- [ ] All atomic tasks (16-A through 16-E) implemented and code-reviewed
+- [x] All atomic tasks (16-A through 16-E) implemented and code-reviewed
 - [ ] All unit tests green
 - [ ] All e2e tests green
 - [ ] Manual tests performed and all issues fixed
@@ -650,27 +649,27 @@ Index conversations from the Google Gemini Code Assist VS Code extension. Gemini
 
 ### Atomic Tasks
 
-- [ ] **17-A** — Format research & fixture creation
+- [x] **17-A** — Format research & fixture creation
   - Locate Gemini Code Assist session storage. Check `globalStorageUri` for `google.google-cloud-code` or the Gemini Code Assist extension ID. Also check `~/.gemini/` (shared with Antigravity).
   - Distinguish Gemini Code Assist (VS Code extension) from Antigravity (CLI) storage paths.
   - Create two fixture files in `test/fixtures/geminiCodeAssist/`.
 
-- [ ] **17-B** — `GeminiCodeAssistWorkspace` discovery
+- [x] **17-B** — `GeminiCodeAssistWorkspace` discovery
   - New file `src/readers/geminiCodeAssistWorkspace.ts`.
   - Platform-aware discovery. Must not conflict with the existing `antigravityWorkspace.ts` path discovery.
   - Respects `chatwizard.geminiCodeAssistStoragePath` override.
 
-- [ ] **17-C** — `GeminiCodeAssistParser`
+- [x] **17-C** — `GeminiCodeAssistParser`
   - New file `src/parsers/geminiCodeAssistParser.ts`.
   - Maps format to `Session` type.
   - Handle: Gemini multi-turn JSON, model name (`gemini-1.5-pro`, `gemini-2.0-flash`, etc.).
 
-- [ ] **17-D** — Source registration and wiring
+- [x] **17-D** — Source registration and wiring
   - Register in `SessionIndex` and `extension.ts`.
   - Add `'geminiCodeAssist'` to `SessionSource` and `SOURCE_LABELS`.
   - Wire into file watcher.
 
-- [ ] **17-E** — UI: analytics, filter, badge
+- [x] **17-E** — UI: analytics, filter, badge
   - Add `'geminiCodeAssist'` to all source UI surfaces.
   - CSS variable `--cw-source-geminiCodeAssist` with Google blue (`#4285F4`).
   - Do not confuse with existing Antigravity badge colour.
@@ -697,7 +696,7 @@ Index conversations from the Google Gemini Code Assist VS Code extension. Gemini
 
 ### Completion Checklist
 
-- [ ] All atomic tasks (17-A through 17-E) implemented and code-reviewed
+- [x] All atomic tasks (17-A through 17-E) implemented and code-reviewed
 - [ ] All unit tests green
 - [ ] All e2e tests green
 - [ ] Manual tests performed and all issues fixed
@@ -717,7 +716,7 @@ Auto-generate a one-line summary for every session using a three-tier strategy: 
 
 ### Atomic Tasks
 
-- [ ] **18-A** — Three-tier `SummaryGenerator`
+- [x] **18-A** — Three-tier `SummaryGenerator`
   - New file `src/analytics/summaryGenerator.ts`.
   - `generate(session: Session): Promise<string>`:
     1. If `session.chronicle?.overview` exists → return it directly (no LLM).
@@ -726,7 +725,7 @@ Auto-generate a one-line summary for every session using a three-tier strategy: 
   - Rate-limit LM API calls: max 5 concurrent, with a 50 ms inter-call delay.
   - Never called during search or index build — only during the post-index background job.
 
-- [ ] **18-B** — Background summary generation job
+- [x] **18-B** — Background summary generation job
   - Runs after `buildInitialIndex()` completes, outside the critical path.
   - Processes sessions without a cached summary in batches of 20.
   - Skips sessions already summarized (checks `MetadataStore.getSession(id).summary`).
@@ -745,7 +744,7 @@ Auto-generate a one-line summary for every session using a three-tier strategy: 
   - Command `chatwizard.regenerateSummary` available on session tree item right-click.
   - Clears cached summary for that session, re-runs `SummaryGenerator`, updates tree and reader.
 
-- [ ] **18-F** — LM API rate limit and error handling
+- [x] **18-F** — LM API rate limit and error handling
   - If the LM API returns a quota error: log to output channel, fall back to TF-IDF for remaining sessions in the current batch.
   - Never surface LM API errors as VS Code error notifications to the user.
 
@@ -799,7 +798,7 @@ Extract and index structured entities from session content post-indexing: file p
 
 ### Atomic Tasks
 
-- [ ] **19-A** — `EntityExtractor` utility
+- [x] **19-A** — `EntityExtractor` utility
   - New file `src/analytics/entityExtractor.ts`.
   - `extract(session: Session): ExtractedEntities`:
     - **File paths**: regex `/([\w.\-/\\]+\.(ts|js|py|go|rs|java|cs|cpp|json|yaml|toml|md))/g` against all message content.
@@ -809,11 +808,11 @@ Extract and index structured entities from session content post-indexing: file p
   - Returns `ExtractedEntities: { filePaths: string[]; functionNames: string[]; errors: string[]; decisions: string[] }`.
   - Pure function — no I/O, fully unit-testable.
 
-- [ ] **19-B** — `ExtractedEntities` schema in `SessionMetadata`
+- [x] **19-B** — `ExtractedEntities` schema in `SessionMetadata`
   - Extend the `SessionMetadata` interface to include `entities?: ExtractedEntities`.
   - Add `entitiesVersion: number` field — if the extractor is updated, bump the version and re-extract.
 
-- [ ] **19-C** — Background extraction job
+- [x] **19-C** — Background extraction job
   - Runs after `buildInitialIndex()` and the summary generation job (lower priority).
   - Processes sessions without `entities` (or with outdated `entitiesVersion`) in batches of 50.
   - All I/O is to `MetadataStore` — pure local processing, no network.
@@ -823,7 +822,7 @@ Extract and index structured entities from session content post-indexing: file p
   - When filter is active, pre-filter sessions by `metadata.entities[type].includes(value)` before full-text search.
   - Expose via `chatwizard_search` MCP tool: new optional `entityType` and `entityValue` parameters.
 
-- [ ] **19-E** — Entity chips in session reader (read-only)
+- [x] **19-E** — Entity chips in session reader (read-only)
   - Session reader webview renders a collapsible "Entities" section listing extracted file paths, function names, and errors as chips.
   - Chips are not user-editable (auto-tags, distinct from user tags visually — use a different chip style with a `$(sparkle)` prefix).
   - File path chips are clickable: emit a `chatwizard.openFile` message back to the extension host to open the file.
@@ -876,13 +875,13 @@ Local, zero-LLM prompt analysis: token count estimate, similarity check against 
 
 ### Atomic Tasks
 
-- [ ] **20-A** — Local tokenizer
+- [x] **20-A** — Local tokenizer
   - New file `src/utils/tokenizer.ts`.
   - GPT-4/Claude BPE-compatible tokenizer using a pre-bundled vocabulary file (≤ 100 KB gzipped, no network call).
   - `countTokens(text: string): number` — synchronous.
   - `estimateCost(tokens: number, model: ModelId): { inputUsd: number; outputUsd: number }` — uses a hardcoded price table; price table is a `const` object to allow easy updates.
 
-- [ ] **20-B** — `PromptAnalyzer` orchestrator
+- [x] **20-B** — `PromptAnalyzer` orchestrator
   - New file `src/analytics/promptAnalyzer.ts`.
   - `analyze(draftPrompt: string): PromptAnalysis`:
     - Token count via 20-A.
@@ -907,7 +906,7 @@ Local, zero-LLM prompt analysis: token count estimate, similarity check against 
   - Reads the selection, calls `PromptAnalyzer.analyze()`, shows results in a VS Code information message with "View Details" button (opens a webview panel with full analysis).
   - Works regardless of which file the selection is in.
 
-- [ ] **20-E** — Price table maintenance helper
+- [x] **20-E** — Price table maintenance helper
   - `src/utils/modelPriceTable.ts` — exported `const PRICE_TABLE` with input/output USD-per-million-token rates for: `gpt-4o`, `gpt-4o-mini`, `claude-3-5-sonnet`, `claude-3-haiku`, `gemini-1.5-pro`, `gemini-2.0-flash`.
   - Price table is the single source of truth — used by both 20-A and future post-session cost tips (Feature 37/P3).
   - Include a comment: `// Last updated: <date>` to make staleness obvious.
@@ -969,7 +968,7 @@ Add an optional cross-encoder reranker pass after the semantic + keyword merge i
   - Document: model file size, median latency per call, accuracy gain vs. bi-encoder-only (use existing `test/fixtures/` sessions as a retrieval evaluation set).
   - Decision output: if latency > 300 ms median or model > 40 MB, propose an alternative.
 
-- [ ] **21-B** — `Reranker` class
+- [x] **21-B** — `Reranker` class
   - New file `src/search/reranker.ts`.
   - `Reranker.score(query: string, candidates: ScoredSession[]): Promise<ScoredSession[]>`:
     - Runs cross-encoder inference (ONNX Runtime) on `(query, candidate.passage)` pairs.
@@ -984,12 +983,12 @@ Add an optional cross-encoder reranker pass after the semantic + keyword merge i
   - Update `scripts/rebuild-native.js` to include the reranker model path.
   - Update CI to run the build on Windows, macOS, and Linux runners.
 
-- [ ] **21-D** — Wire reranker into `GetContextTool`
+- [x] **21-D** — Wire reranker into `GetContextTool`
   - After the existing merge step, if `chatwizard.mcp.reranker.enabled` is `true` and `reranker.isReady()`, call `reranker.score()`.
   - Config flag: `chatwizard.mcp.reranker.enabled` (default: `false`).
   - Add timing instrumentation: log `[Reranker] N candidates reranked in Xms` to output channel.
 
-- [ ] **21-E** — Latency benchmarks and accuracy tests
+- [x] **21-E** — Latency benchmarks and accuracy tests
   - `test/e2e/reranker.test.ts`:
     - Load the ONNX model, score 50 candidates against a known query.
     - Assert: time elapsed < 500 ms.
@@ -1042,7 +1041,7 @@ Export curated sessions as Obsidian-compatible Markdown (YAML frontmatter, wikil
 
 ### Atomic Tasks
 
-- [ ] **22-A** — `ObsidianExporter`
+- [x] **22-A** — `ObsidianExporter`
   - New file `src/export/obsidianExporter.ts`.
   - `export(sessions: Session[], targetDir: string): Promise<ExportResult>`:
     - One `.md` file per session in `targetDir/chatwizard/<source>/YYYY-MM-DD-<title-slug>.md`.
@@ -1052,12 +1051,12 @@ Export curated sessions as Obsidian-compatible Markdown (YAML frontmatter, wikil
     - Backlinks section at the end: lists any other exported sessions that mention the same file paths.
   - `ExportResult: { exported: number; skipped: number; errors: string[] }`.
 
-- [ ] **22-B** — `ChatWizard: Export to Obsidian` command
+- [x] **22-B** — `ChatWizard: Export to Obsidian` command
   - `vscode.window.showOpenDialog` to pick a target folder (must be an existing directory).
   - `vscode.window.showQuickPick` to choose scope: "All sessions", "Pinned sessions only", "Tagged sessions…" (opens tag QuickPick).
   - Calls `ObsidianExporter.export()`, shows a notification: `"Exported 47 sessions to ~/Documents/MyVault/chatwizard"` with an `[Open Folder]` action.
 
-- [ ] **22-C** — `NotionExporter`
+- [x] **22-C** — `NotionExporter`
   - New file `src/export/notionExporter.ts`.
   - Uses the Notion public API (`https://api.notion.com/v1/`) — user provides their own API key and target database ID.
   - `export(session: Session, databaseId: string, apiKey: string): Promise<void>`:
@@ -1067,7 +1066,7 @@ Export curated sessions as Obsidian-compatible Markdown (YAML frontmatter, wikil
   - API key stored in `context.secrets` (VS Code `SecretStorage`) — never in `settings.json` or `chatwizard-metadata.json`.
   - Rate-limit: 3 requests per second (Notion API limit).
 
-- [ ] **22-D** — `ChatWizard: Export to Notion` command
+- [x] **22-D** — `ChatWizard: Export to Notion` command
   - If API key not stored: prompt for it via `vscode.window.showInputBox({ password: true })`, store in `SecretStorage`.
   - If database ID not stored: prompt for it; store in `globalStorageUri/notion-config.json` (not a secret).
   - Scope picker same as Obsidian command.
@@ -1104,7 +1103,7 @@ Export curated sessions as Obsidian-compatible Markdown (YAML frontmatter, wikil
 
 ### Completion Checklist
 
-- [ ] All atomic tasks (22-A through 22-D) implemented and code-reviewed
+- [x] All atomic tasks (22-A through 22-D) implemented and code-reviewed
 - [ ] All unit tests green
 - [ ] All e2e tests green
 - [ ] Manual tests performed and all issues fixed

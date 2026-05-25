@@ -54,7 +54,7 @@ function defaultVsCodeApi(): SemanticIndexerVsCodeApi {
         },
         async loadModelWithProgress(task: (report: (msg: string) => void) => Promise<void>): Promise<void> {
             await vscode.window.withProgress(
-                { location: vscode.ProgressLocation.Window, title: 'Chat Wizard: loading AI model…', cancellable: false },
+                { location: vscode.ProgressLocation.Notification, title: 'Chat Wizard: Downloading AI model…', cancellable: false },
                 async (progress) => {
                     await task(msg => progress.report({ message: msg }));
                 },
