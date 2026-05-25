@@ -138,8 +138,8 @@ function groupBySession(blocks: IndexedCodeBlock[]): SessionCodeBlockGroup[] {
 export class CodeBlockGroupItem extends vscode.TreeItem {
     readonly sessionRef: CodeBlockSessionRef;
 
-    constructor(group: SessionCodeBlockGroup) {
-        super(group.sessionTitle, vscode.TreeItemCollapsibleState.Collapsed);
+    constructor(group: SessionCodeBlockGroup, initialState = vscode.TreeItemCollapsibleState.Collapsed) {
+        super(group.sessionTitle, initialState);
 
         this.sessionRef = { sessionId: group.sessionId, blocks: group.blocks };
 
@@ -260,16 +260,25 @@ export class CbLanguageGroupItem extends vscode.TreeItem {
 
     constructor(language: string, count: number) {
         const displayLang = language || '[No Language]';
-        super(displayLang, vscode.TreeItemCollapsibleState.Expanded);
+        super(displayLang, vscode.TreeItemCollapsibleState.Collapsed);
         this.language = language;
         this.description = `${count} session${count === 1 ? '' : 's'}`;
         this.contextValue = 'cbLanguageGroup';
-        // Use file icon from extension when possible, otherwise a generic icon
-        const ext = langToExtension(language);
-        if (ext !== 'txt' && language) {
-            this.resourceUri = vscode.Uri.file(`file.${ext}`);
-        } else {
-            this.iconPath = new vscode.ThemeIcon('symbol-misc');
+        // resourceUri alone is overridden by folder icons on collapsible tree items in
+        // most file-icon themes.  An explicit iconPath takes precedence and ensures a
+        // language-appropriate icon is always shown at the top (language-group) level.
+        this.iconPath = new vscode.ThemeIcon(CbLanguageGroupItem._langIcon(language));
+    }
+
+    private static _langIcon(lang: string): string {
+        switch (lang.toLowerCase()) {
+            case 'markdown': return 'markdown';
+            case 'sql':      return 'database';
+            case 'bash': case 'shell': case 'powershell': case 'batch': return 'terminal';
+            case 'json': case 'yaml': case 'toml': case 'xml': return 'code';
+            case 'dockerfile': return 'package';
+            case '':           return 'symbol-misc';   // [No Language] group
+            default:           return 'file-code';
         }
     }
 }
@@ -480,7 +489,11 @@ export class CodeBlockTreeProvider implements vscode.TreeDataProvider<CodeBlockT
                 .filter(g => g.blocks.some(b => (b.language || '') === lang))
                 .map(g => {
                     const filteredBlocks = g.blocks.filter(b => (b.language || '') === lang);
-                    return new CodeBlockGroupItem({ ...g, blocks: filteredBlocks, primaryLanguage: lang });
+                    // Start expanded so code block leaves are visible after a single click
+                    return new CodeBlockGroupItem(
+                        { ...g, blocks: filteredBlocks, primaryLanguage: lang },
+                        vscode.TreeItemCollapsibleState.Expanded
+                    );
                 });
         }
 

@@ -40,7 +40,7 @@ import { TimelineViewProvider } from './timeline/timelineViewProvider';
 import { TelemetryRecorder } from './telemetry/telemetryRecorder';
 import { registerManageWorkspacesCommand } from './commands/manageWorkspaces';
 import { registerPaletteCommands } from './commands/paletteCommands';
-import { SemanticIndexer } from './search/semanticIndexer';
+import { SemanticIndexer, defaultVsCodeApi } from './search/semanticIndexer';
 import { EmbeddingEngine } from './search/embeddingEngine';
 import { SemanticIndex } from './search/semanticIndex';
 import { SemanticSearchPanel } from './search/semanticSearchPanel';
@@ -74,6 +74,7 @@ import { FileHistoryCodeLensProvider } from './ui/fileHistoryCodeLens';
 import { FileHistoryPanel } from './views/fileHistoryPanel';
 import { discoverChronicleDbsAsync } from './readers/chronicleWorkspace';
 import { ActiveSessionTagButton } from './ui/activeSessionTagButton';
+import { SessionCostAdvisorNotifier } from './ui/sessionCostAdvisorNotifier';
 import { LiveSessionTracker } from './utils/liveSessionTracker';
 import { PromptAnalyzer } from './analytics/promptAnalyzer';
 import { readChronicleCheckpoints, readChronicleSessions } from './parsers/chronicle';
@@ -219,6 +220,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             context.globalStorageUri.fsPath,
             (cacheDir) => new EmbeddingEngine(cacheDir),
             () => new SemanticIndex(),
+            defaultVsCodeApi(context.globalState),
         );
         semanticIndexer = indexer;
         void indexer.initialize().then(() => {
@@ -2013,6 +2015,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         w.setLiveTracker(liveTracker);
         const activeSessionTagBtn = new ActiveSessionTagButton(liveTracker);
         context.subscriptions.push(activeSessionTagBtn);
+
+        // ── Feature 20-J: Session Cost Advisor ───────────────────────────────
+        const costAdvisorNotifier = new SessionCostAdvisorNotifier(liveTracker, index);
+        context.subscriptions.push(costAdvisorNotifier);
 
         context.subscriptions.push(
             vscode.commands.registerCommand('chatwizard.tagActiveSession', async () => {

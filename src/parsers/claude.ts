@@ -61,14 +61,28 @@ const LANG_ALIASES: Record<string, string> = {
 };
 
 /**
+ * Common English words that appear as fence-block labels but are not programming
+ * languages.  Any normalised label matching one of these is discarded.
+ */
+const LANG_DENYLIST = new Set([
+    'block', 'code', 'output', 'example', 'snippet', 'sample',
+    'note', 'text', 'content', 'data', 'result', 'response', 'request',
+    'error', 'warning', 'info', 'log', 'diff', 'patch',
+]);
+
+/**
  * Validates and normalises a raw language label from a fenced code block.
  *
  * Rules applied (in order):
  *  1. Trim surrounding whitespace.
- *  2. Reject if empty, too long (> 40 chars), or contains characters that cannot
- *     appear in a real language name (newlines, commas, quotes, semicolons, etc.).
- *  3. Lowercase.
- *  4. Apply known aliases (e.g. `js` → `javascript`).
+ *  2. Reject if empty or too long (> 40 chars).
+ *  3. Reject if the label contains any character outside the set: word chars
+ *     (a-zA-Z0-9_), hyphens, plus signs, and hash (#).  Dots are intentionally
+ *     excluded — no real language identifier contains one.  Hash is explicitly
+ *     allowed so that C# and F# are accepted.
+ *  4. Reject known non-language English words (e.g. "block", "output").
+ *  5. Lowercase.
+ *  6. Apply known aliases (e.g. `js` → `javascript`).
  *
  * Returns the normalised language string, or `''` if the label looks invalid.
  */
@@ -78,11 +92,16 @@ export function normalizeLanguage(raw: string): string {
     // Reject empty or suspiciously long labels
     if (trimmed.length === 0 || trimmed.length > 40) { return ''; }
 
-    // Reject if it contains any character that is not valid in a language name.
-    // Valid: word chars (a-z A-Z 0-9 _), hyphens, plus signs, hash (#), dots.
-    if (/[^\w.+#-]/.test(trimmed)) { return ''; }
+    // Positive allowlist: only word chars (a-zA-Z0-9_), hyphens, plus signs, hash.
+    // Using a positive match makes the intent explicit and avoids any ambiguity
+    // with hyphen placement inside a negated class.
+    if (!/^[\w+#-]+$/.test(trimmed)) { return ''; }
 
     const lower = trimmed.toLowerCase();
+
+    // Reject common English words that appear as fence labels but are not languages
+    if (LANG_DENYLIST.has(lower)) { return ''; }
+
     return LANG_ALIASES[lower] ?? lower;
 }
 
