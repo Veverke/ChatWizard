@@ -45,14 +45,11 @@ if (!electronVersion) {
 // ── Helper: locate VS Code binary and query it ────────────────────────────────
 
 /**
- * Walk .vscode-test/, find the downloaded VS Code binary, and query it for the
- * real Electron version via `ELECTRON_RUN_AS_NODE=1 <binary> -e "..."`.
+ * Walk .vscode-test/, find the downloaded VS Code installation, and read the
+ * Electron version from resources/app/package.json.  Falls back to querying
+ * the binary with ELECTRON_RUN_AS_NODE=1 if the file is not found.
  *
- * This is reliable for both stable and insiders because the Electron version
- * comes from the binary itself, not from a version-string file that only
- * contains the VS Code application version.
- *
- * @returns {string|null} Electron version string (e.g. "34.5.1") or null.
+ * @returns {string|null} Electron version string (e.g. "39.8.8") or null.
  */
 function queryElectronVersionFromVSCode() {
     const vscodeTestDir = path.resolve(__dirname, '..', '.vscode-test');
@@ -77,7 +74,16 @@ function queryElectronVersionFromVSCode() {
     });
 
     for (const dir of dirs) {
-        const bin = findVSCodeBinary(path.join(vscodeTestDir, dir));
+        const installDir = path.join(vscodeTestDir, dir);
+
+        // Fast path: read the Electron version from the VS Code package.json.
+        // This avoids executing the binary (which can fail on headless Linux CI
+        // due to sandbox restrictions).
+        const fromPkg = readElectronVersionFromInstallDir(installDir);
+        if (fromPkg) { return fromPkg; }
+
+        // Slow path: run the binary with ELECTRON_RUN_AS_NODE=1.
+        const bin = findVSCodeBinary(installDir);
         if (!bin) { continue; }
 
         try {
@@ -97,6 +103,45 @@ function queryElectronVersionFromVSCode() {
         } catch {
             // binary found but failed to execute — try next entry
         }
+    }
+    return null;
+}
+
+/**
+ * Read the Electron version from `resources/app/package.json` inside a VS Code
+ * installation directory, without executing the binary.
+ *
+ * On Windows archive builds the layout has an extra hash sub-directory:
+ *   <installDir>/<hash>/resources/app/package.json
+ * On macOS and Linux the layout is flat:
+ *   <installDir>/resources/app/package.json
+ *
+ * VS Code's internal package.json stores the Electron version in devDependencies.
+ *
+ * @param {string} installDir
+ * @returns {string|null} Electron version string (e.g. "39.8.8") or null.
+ */
+function readElectronVersionFromInstallDir(installDir) {
+    const candidates = [
+        path.join(installDir, 'resources', 'app', 'package.json'),
+    ];
+    // Windows archive builds add a hash sub-directory; probe each direct child.
+    try {
+        for (const child of fs.readdirSync(installDir)) {
+            candidates.push(path.join(installDir, child, 'resources', 'app', 'package.json'));
+        }
+    } catch { /* ignore */ }
+
+    for (const candidate of candidates) {
+        try {
+            if (!fs.existsSync(candidate)) { continue; }
+            const pkg = JSON.parse(fs.readFileSync(candidate, 'utf8'));
+            const ver = pkg?.devDependencies?.electron;
+            if (ver && /^\d+\.\d+\.\d+$/.test(ver)) {
+                console.log(`[rebuild-native] Detected Electron ${ver} from ${candidate}`);
+                return ver;
+            }
+        } catch { /* ignore */ }
     }
     return null;
 }
