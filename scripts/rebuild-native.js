@@ -5,7 +5,9 @@
  *
  * Electron version resolution order:
  *   1. VSCODE_ELECTRON_VERSION environment variable
- *   2. The `version` file written by @vscode/test-electron under .vscode-test/
+ *   2. Query the downloaded VS Code binary via ELECTRON_RUN_AS_NODE=1 — works
+ *      for both stable and insiders because it reads process.versions.electron
+ *      from the actual binary rather than the VS Code version string.
  *   3. Hard-coded fallback constant below (update when VS Code ships a new Electron)
  *
  * This script must run on the target OS because better-sqlite3 compiles
@@ -24,7 +26,7 @@ const path = require('path');
 
 // ── Fallback Electron version ────────────────────────────────────────────────
 // Keep this in sync with the Electron version shipped in the minimum required
-// VS Code release.  Check: https://github.com/microsoft/vscode/blob/main/version
+// VS Code stable release.  Check: https://github.com/microsoft/vscode/blob/main/cgmanifest.json
 const FALLBACK_ELECTRON_VERSION = '39.8.8';
 
 // ── Resolve Electron version ─────────────────────────────────────────────────
@@ -32,32 +34,92 @@ const FALLBACK_ELECTRON_VERSION = '39.8.8';
 let electronVersion = process.env['VSCODE_ELECTRON_VERSION'];
 
 if (!electronVersion) {
-    // Try to read from a .vscode-test download (populated by `npm test`)
-    const vscodeTestDir = path.resolve(__dirname, '..', '.vscode-test');
-    try {
-        const entries = fs.readdirSync(vscodeTestDir);
-        for (const entry of entries) {
-            // Each entry is either a version archive dir or an extracted dir.
-            // Walk one level deep looking for a `version` file.
-            for (const subEntry of [entry, path.join(entry, fs.readdirSync(path.join(vscodeTestDir, entry)).find(e => !e.includes('.')) || '')]) {
-                const candidate = path.join(vscodeTestDir, subEntry, 'version');
-                if (fs.existsSync(candidate)) {
-                    const v = fs.readFileSync(candidate, 'utf8').trim();
-                    if (/^\d+\.\d+\.\d+$/.test(v)) {
-                        electronVersion = v;
-                        break;
-                    }
-                }
-            }
-            if (electronVersion) { break; }
-        }
-    } catch {
-        // .vscode-test does not exist (CI/CD fresh environment) — use fallback.
-    }
+    electronVersion = queryElectronVersionFromVSCode();
 }
 
 if (!electronVersion) {
+    console.warn(`[rebuild-native] Could not detect Electron version from VS Code binary; using fallback ${FALLBACK_ELECTRON_VERSION}`);
     electronVersion = FALLBACK_ELECTRON_VERSION;
+}
+
+// ── Helper: locate VS Code binary and query it ────────────────────────────────
+
+/**
+ * Walk .vscode-test/, find the downloaded VS Code binary, and query it for the
+ * real Electron version via `ELECTRON_RUN_AS_NODE=1 <binary> -e "..."`.
+ *
+ * This is reliable for both stable and insiders because the Electron version
+ * comes from the binary itself, not from a version-string file that only
+ * contains the VS Code application version.
+ *
+ * @returns {string|null} Electron version string (e.g. "34.5.1") or null.
+ */
+function queryElectronVersionFromVSCode() {
+    const vscodeTestDir = path.resolve(__dirname, '..', '.vscode-test');
+    if (!fs.existsSync(vscodeTestDir)) { return null; }
+
+    let dirs;
+    try {
+        dirs = fs.readdirSync(vscodeTestDir).filter(e =>
+            fs.statSync(path.join(vscodeTestDir, e)).isDirectory()
+        );
+    } catch { return null; }
+
+    for (const dir of dirs) {
+        const bin = findVSCodeBinary(path.join(vscodeTestDir, dir));
+        if (!bin) { continue; }
+
+        try {
+            const ver = execSync(
+                `"${bin}" -e "process.stdout.write(process.versions.electron)"`,
+                {
+                    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+                    timeout: 15000,
+                    stdio: ['pipe', 'pipe', 'pipe'],
+                }
+            ).toString().trim();
+
+            if (/^\d+\.\d+\.\d+$/.test(ver)) {
+                console.log(`[rebuild-native] Detected Electron ${ver} from ${bin}`);
+                return ver;
+            }
+        } catch {
+            // binary found but failed to execute — try next entry
+        }
+    }
+    return null;
+}
+
+/**
+ * Given a VS Code installation directory, return the path to the Electron
+ * binary suitable for ELECTRON_RUN_AS_NODE=1, or null if not found.
+ *
+ * @param {string} installDir
+ * @returns {string|null}
+ */
+function findVSCodeBinary(installDir) {
+    if (process.platform === 'win32') {
+        for (const name of ['Code.exe', 'Code - Insiders.exe']) {
+            const p = path.join(installDir, name);
+            if (fs.existsSync(p)) { return p; }
+        }
+    } else if (process.platform === 'darwin') {
+        // The ELECTRON_RUN_AS_NODE binary lives inside the .app bundle.
+        let apps;
+        try { apps = fs.readdirSync(installDir).filter(e => e.endsWith('.app')); }
+        catch { apps = []; }
+        for (const app of apps) {
+            const p = path.join(installDir, app, 'Contents', 'MacOS', 'Electron');
+            if (fs.existsSync(p)) { return p; }
+        }
+    } else {
+        // Linux — the binary sits directly in the install directory.
+        for (const name of ['code', 'code-insiders', 'code-exploration']) {
+            const p = path.join(installDir, name);
+            if (fs.existsSync(p)) { return p; }
+        }
+    }
+    return null;
 }
 
 // ── Run electron-rebuild ──────────────────────────────────────────────────────
