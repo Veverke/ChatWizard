@@ -167,46 +167,20 @@ summaries, and links to the full session detail.
 The Explorer right-click context menu entry ("Show ChatWizard History") is an
 additional entry point but not the primary trigger.
 
-### Phase 4 — Work item & branch grouping view (new tab)
+### Phase 4 — Work item & branch grouping (Sessions tab, implemented)
 
-A dedicated **"By Context"** tab in the ChatWizard sidebar that groups sessions by
-two switchable dimensions:
+The Sessions tab gains two new group modes, accessible via the **Group Sessions…** QuickPick button (toolbar icon):
 
-**Work item grouping (e.g. Jira)**
-- Parse `session_refs.ref_value` for commit messages and branch names
-- Apply a user-configured regex to extract work item IDs from those strings
+- **Group by Branch** — reads `sessions.branch` from Chronicle DB; sessions without branch data go to `[no branch recorded]`. Requires `chatwizard.chronicle.enableLocalIndex = true` to populate.
+- **Group by Work Item** — applies `chatwizard.workItemPattern` regex against session titles and messages; sessions with no match go to `(no work item)`.
+
+Both modes replaced the previously planned separate "By Context" sidebar tab. The QuickPick also offers "No grouping" and "Group by Date" for parity with existing behaviour.
 
 **VS Code setting:**
 ```jsonc
 // settings.json
-"chatwizard.workItemPattern": "XLR-\\d{5}"
+"chatwizard.workItemPattern": "PREFIX-\\d+"
 ```
-
-The extension uses `new RegExp(chatwizard.workItemPattern)` and runs it against each
-commit message / branch name. The first match is the work item ID for that session.
-
-No default value — if the setting is empty or absent, the work item grouping dimension
-is hidden from the "By Context" tab and the `chatwizard_sessions_for_work_item` tool
-returns an actionable error asking the user to configure the pattern.
-
-The pattern should be documented with examples in the README:
-```
-XLR-\d{5}          → XLR-12345   (5-digit Jira-style)
-[A-Z]+-\d+          → PROJ-1 … PROJ-99999  (any Jira project)
-#\d+                → #42  (GitHub issue refs)
-AB#\d+              → AB#123  (Azure DevOps work items)
-```
-
-- Group all sessions whose commits/branches contain a match for the pattern
-- Each group shows: work item ID, total sessions, date range, files touched, summary
-
-**Branch grouping**
-- Group sessions by `sessions.branch`
-- Each group shows: branch name, sessions in chronological order, total files touched
-
-The tab webview supports switching between "Work Item" and "Branch" grouping via a
-toggle. Within each group, sessions are listed as cards with title, date, and a
-one-line summary. Clicking a card opens the full session detail.
 
 **MCP tools to match:**
 ```

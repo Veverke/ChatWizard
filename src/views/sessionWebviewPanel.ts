@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { Session } from '../types/index';
+import { Session, ExtractedEntities } from '../types/index';
 import { cwThemeCss, syntaxHighlighterCss, cwInteractiveJs } from '../webview/cwTheme';
 import { friendlyModelName } from '../analytics/modelNames';
 import { friendlySourceName } from '../ui/sourceUi';
@@ -31,6 +31,9 @@ interface PanelMsgState {
     windowEnd:        number;            // exclusive end currently in webview
     streamVersion:    number;            // bumped to abort stale streams
     assistantLabel:   string;
+    tags?:            string[];
+    entities?:        ExtractedEntities;
+    summary?:         string;
     panel:            vscode.WebviewPanel;
 }
 
@@ -43,6 +46,9 @@ export class SessionWebviewPanel {
     /** Per-panel window / streaming state */
     static readonly _panelState = new Map<string, PanelMsgState>();
 
+    /** Output channel for surfacing silent errors */
+    static _channel: vscode.OutputChannel | undefined;
+
     // ── Public entry point ────────────────────────────────────────────────────
 
     static show(
@@ -53,7 +59,10 @@ export class SessionWebviewPanel {
         targetBlockMessageIndex?: number,
         _targetBlockContent?: string,  // deprecated — kept for call-site compat, unused
         targetBlockIdx?: number,
-        highlightContainer?: boolean
+        highlightContainer?: boolean,
+        tags?: string[],
+        entities?: ExtractedEntities,
+        summary?: string,
     ): void {
         const config = vscode.workspace.getConfiguration('chatwizard');
         const userColor = config.get<string>('userMessageColor', '#007acc') || '#007acc';
@@ -114,7 +123,7 @@ export class SessionWebviewPanel {
                 session, visibleMessages, renderedMessages,
                 windowStart, windowEnd: initialWindowEnd,
                 streamVersion: newVersion,
-                assistantLabel, panel: existing,
+                assistantLabel, tags, entities, summary, panel: existing,
             });
             void SessionWebviewPanel._startStream(
                 session.id, newVersion, userColor, searchTerm, scrollInit, highlightContainer
@@ -135,7 +144,7 @@ export class SessionWebviewPanel {
             session, visibleMessages, renderedMessages,
             windowStart, windowEnd: initialWindowEnd,
             streamVersion: 0,
-            assistantLabel, panel,
+            assistantLabel, tags, entities, summary, panel,
         });
         SessionWebviewPanel._panels.set(session.id, panel);
 
@@ -155,6 +164,15 @@ export class SessionWebviewPanel {
                 } else if (msg.command === 'copy' && msg.text) {
                     void vscode.env.clipboard.writeText(msg.text);
                     void vscode.window.showInformationMessage('Chat copied to clipboard.');
+                } else if (msg.command === 'copyTurnRef' && msg.text) {
+                    void vscode.env.clipboard.writeText(msg.text);
+                    void vscode.window.showInformationMessage('Reference copied to clipboard.');
+                } else if ((msg as any).type === 'iife-error') {
+                    const errMsg = `[ChatWizard] Webview IIFE error for session ${session.id}: ${(msg as any).message}`;
+                    SessionWebviewPanel._channel?.appendLine(errMsg);
+                    console.error(errMsg);
+                } else if (msg.type === 'revealInTree') {
+                    void vscode.commands.executeCommand('chatwizard.revealInSessionsTree', session.id);
                 }
             },
             undefined,
@@ -170,6 +188,25 @@ export class SessionWebviewPanel {
     // ── Streaming pipeline ────────────────────────────────────────────────────
 
     static async _startStream(
+        panelId:          string,
+        myVersion:        number,
+        userColor:        string,
+        searchTerm:       string | undefined,
+        scrollInit:       ScrollInit,
+        highlightContainer?: boolean
+    ): Promise<void> {
+        try {
+        return await SessionWebviewPanel.__startStreamInner(
+            panelId, myVersion, userColor, searchTerm, scrollInit, highlightContainer
+        );
+        } catch (err) {
+            const msg = `[ChatWizard] _startStream error for panel ${panelId}: ${err instanceof Error ? err.stack ?? err.message : String(err)}`;
+            SessionWebviewPanel._channel?.appendLine(msg);
+            console.error(msg);
+        }
+    }
+
+    private static async __startStreamInner(
         panelId:          string,
         myVersion:        number,
         userColor:        string,
@@ -195,6 +232,7 @@ export class SessionWebviewPanel {
         void panel.webview.postMessage({
             type: 'render',
             title:            session.title,
+            sessionId:        session.id,
             source:           session.source,
             assistantLabel,
             userColor,
@@ -210,6 +248,9 @@ export class SessionWebviewPanel {
             parseErrors:      session.parseErrors ?? [],
             sourceNotes:      session.sourceNotes ?? [],
             filePath:         session.filePath,
+            tags:             state.tags ?? [],
+            entities:         state.entities ?? null,
+            summary:          state.summary ?? null,
         });
 
         // ── Stream remaining initial window via setImmediate ──────────────────
@@ -332,6 +373,11 @@ export class SessionWebviewPanel {
       padding-bottom: 8px;
       border-bottom: none;
     }
+    h1#session-title {
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    h1#session-title:hover { opacity: 0.65; }
     .session-meta {
       display: none;
       font-size: 0.82em;
@@ -343,6 +389,30 @@ export class SessionWebviewPanel {
     .session-meta span {
       font-weight: 600;
       opacity: 1;
+    }
+    #session-tags { min-height: 0; margin-bottom: 6px; padding-bottom: 6px; border-bottom: 1px solid var(--vscode-textBlockQuote-background, #444); }
+    .cw-tag-chip {
+      display: inline-flex; align-items: center;
+      border-radius: 2em; padding: 1px 9px;
+      font-size: 0.75em; font-weight: 500;
+      margin: 0 4px 0 0; border: 1px solid currentColor; opacity: 0.88;
+    }
+    details#session-entities {
+      font-size: 0.82em;
+      margin-bottom: 8px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--vscode-textBlockQuote-background, #444);
+    }
+    .cw-entities-summary { cursor: pointer; opacity: 0.65; user-select: none; }
+    .cw-entities-summary:hover { opacity: 1; }
+    #session-entities-body { padding-top: 5px; display: flex; flex-direction: column; gap: 4px; }
+    .cw-entity-row { display: flex; flex-wrap: wrap; gap: 3px; align-items: baseline; }
+    .cw-entity-row-label { font-weight: 600; opacity: 0.65; margin-right: 3px; white-space: nowrap; }
+    .cw-entity-chip {
+      display: inline-block; border-radius: 3px; padding: 0 5px;
+      font-size: 0.92em; font-family: var(--vscode-editor-font-family, monospace);
+      background: var(--vscode-textBlockQuote-background, rgba(128,128,128,0.15));
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 28em;
     }
     .toolbar {
       position: sticky;
@@ -404,6 +474,30 @@ export class SessionWebviewPanel {
       opacity: 0.75;
     }
     .message.user .role-label { color: var(--cw-user-color); }
+    .cw-turn-label {
+      font-size: 0.72em;
+      font-family: var(--vscode-editor-font-family, monospace);
+      opacity: 0.45;
+      padding: 0 3px;
+      border: 1px solid currentColor;
+      border-radius: 3px;
+      user-select: none;
+    }
+    .cw-copy-ref-btn {
+      margin-left: auto;
+      background: none;
+      border: none;
+      cursor: pointer;
+      opacity: 0;
+      padding: 1px 4px;
+      font-size: 0.85em;
+      color: inherit;
+      transition: opacity 0.15s;
+      border-radius: 3px;
+      line-height: 1;
+    }
+    .message:hover .cw-copy-ref-btn { opacity: 0.4; }
+    .cw-copy-ref-btn:hover { opacity: 1 !important; background: var(--cw-surface-subtle); }
     .timestamp { font-size: 0.78em; opacity: 0.5; }
     .message-body { word-wrap: break-word; }
     .message-body p { margin: 0.4em 0; }
@@ -558,11 +652,17 @@ export class SessionWebviewPanel {
 </head>
 <body>
   <h1 id="session-title"><span class="cw-skeleton" style="display:inline-block;height:1.1em;width:50%;vertical-align:middle"></span></h1>
+  <p id="session-summary" style="display:none;margin:4px 0 8px;opacity:0.7;font-size:0.875em;font-style:italic;"></p>
+  <div id="session-tags" style="display:none"></div>
   <div class="session-meta" id="session-meta">
     <span id="session-model-field" style="display:none">Model: <span id="session-model"></span></span>
     <span class="meta-sep" id="session-meta-sep" style="display:none"> &nbsp;·&nbsp; </span>
     <span id="session-req-field" style="display:none">User Requests: <span id="session-user-req"></span></span>
   </div>
+  <details id="session-entities" style="display:none">
+    <summary class="cw-entities-summary">&#128269; Entities</summary>
+    <div id="session-entities-body"></div>
+  </details>
   <div class="toolbar">
     <div class="search-group">
       <input id="search-input" type="text" placeholder="Search in messages&#8230;" autocomplete="off" aria-label="Search within session messages" />
@@ -607,10 +707,19 @@ export class SessionWebviewPanel {
 ${cwInteractiveJs()}
 (function() {
   var vscode = acquireVsCodeApi();
+  try {
 
   // ── State ──────────────────────────────────────────────────────────────────
   var _hasMore     = false;
   var _loadingMore = false;
+
+  // ── Tag color palette (matches tree view emoji palette) ───────────────────
+  var _CW_TAG_PALETTE = ['#f47067','#f0883e','#e3b341','#56d364','#58a6ff','#bc8cff','#c29070'];
+  function cwTagColor(tag) {
+    var h = 0;
+    for (var i = 0; i < tag.length; i++) { h = (h * 31 + tag.charCodeAt(i)) & 0xffff; }
+    return _CW_TAG_PALETTE[h % _CW_TAG_PALETTE.length];
+  }
 
   // ── Back to top ────────────────────────────────────────────────────────────
   var backTopBtn = document.getElementById('backToTop');
@@ -618,6 +727,14 @@ ${cwInteractiveJs()}
     backTopBtn.classList.toggle('visible', window.scrollY > 300);
   });
   backTopBtn.addEventListener('click', function() { window.scrollTo({ top: 0, behavior: 'smooth' }); });
+
+  // ── Session title — click to reveal in Sessions tree ─────────────────────
+  var titleEl = document.getElementById('session-title');
+  titleEl.title = 'Click to reveal in Sessions panel';
+  titleEl.addEventListener('click', function() {
+    var sid = titleEl.dataset.cwSessionId;
+    if (sid) { vscode.postMessage({ type: 'revealInTree', sessionId: sid }); }
+  });
 
   // ── Export excerpt ─────────────────────────────────────────────────────────
   document.getElementById('export-excerpt-btn').addEventListener('click', function() {
@@ -706,6 +823,27 @@ ${cwInteractiveJs()}
     vscode.postMessage({ command: 'exportSelection', text: savedSelText });
     savedSelText = '';
     hideMenu();
+  });
+
+  // ── Turn reference copy button ──────────────────────────────────────────
+  document.addEventListener('click', function(e) {
+    var btn = e.target && e.target.closest ? e.target.closest('.cw-copy-ref-btn') : null;
+    if (!btn) { return; }
+    e.stopPropagation();
+    var turnLabel = btn.dataset.turn || '';
+    var msgEl = btn.closest('.message');
+    if (!msgEl) { return; }
+    var bodyEl = msgEl.querySelector('.message-body[data-raw]');
+    var raw = bodyEl ? (bodyEl.dataset.raw || '') : '';
+    var lines = raw.split('\\n').map(function(l) { return l.trim(); }).filter(Boolean);
+    var firstLine = lines[0] || '';
+    var lastLine  = lines.length > 1 ? lines[lines.length - 1] : '';
+    var titleEl = document.getElementById('session-title');
+    var sessionTitle = titleEl ? (titleEl.textContent || '').trim() : '';
+    var ref = (lastLine && lastLine !== firstLine)
+      ? '[Session: ' + sessionTitle + '] ' + turnLabel + '\\n\u21b3 "' + firstLine + '"\\n   "' + lastLine + '"'
+      : '[Session: ' + sessionTitle + '] ' + turnLabel + '\\n\u21b3 "' + firstLine + '"';
+    vscode.postMessage({ command: 'copyTurnRef', text: ref });
   });
 
   // ── Syntax highlighter ─────────────────────────────────────────────────────
@@ -1033,7 +1171,19 @@ ${cwInteractiveJs()}
     var data = event.data;
 
     if (data.type === 'render') {
-      document.getElementById('session-title').textContent = data.title;
+      var titleNode = document.getElementById('session-title');
+      titleNode.textContent = data.title;
+      titleNode.dataset.cwSessionId = data.sessionId;
+      var summaryEl = document.getElementById('session-summary');
+      if (summaryEl) {
+        if (data.summary) {
+          summaryEl.textContent = data.summary;
+          summaryEl.style.display = 'block';
+        } else {
+          summaryEl.textContent = '';
+          summaryEl.style.display = 'none';
+        }
+      }
       document.documentElement.style.setProperty('--cw-user-color', data.userColor || '#007acc');
       if (data.source) {
         var srcLabel = data.assistantLabel || data.source;
@@ -1059,6 +1209,55 @@ ${cwInteractiveJs()}
         }
         if (showModel && showReq && sepEl) { sepEl.style.display = 'inline'; }
         metaEl.style.display = 'block';
+      }
+      // Tags chips
+      var tagsEl = document.getElementById('session-tags');
+      if (tagsEl) {
+        if (data.tags && data.tags.length > 0) {
+          tagsEl.innerHTML = data.tags.map(function(t) {
+            var c = cwTagColor(t);
+            return '<span class="cw-tag-chip" style="color:' + c + '">#' + escH(t) + '</span>';
+          }).join('');
+          tagsEl.style.display = 'block';
+        } else {
+          tagsEl.innerHTML = '';
+          tagsEl.style.display = 'none';
+        }
+      }
+      // Entities collapsible section
+      var entitiesEl = document.getElementById('session-entities');
+      var entitiesBody = document.getElementById('session-entities-body');
+      if (entitiesEl && entitiesBody) {
+        var ent = data.entities || {};
+        var entGroups = [
+          { label: '\uD83D\uDCC4 Files',        items: ent.filePaths },
+          { label: '\u2699\uFE0F Functions',     items: ent.functionNames },
+          { label: '\u26A0\uFE0F Errors',        items: ent.errors },
+          { label: '\uD83D\uDCA1 Decisions',     items: ent.decisions }
+        ];
+        var nonEmpty = entGroups.filter(function(g) { return g.items && g.items.length > 0; });
+        if (nonEmpty.length > 0) {
+          entitiesBody.innerHTML = '';
+          nonEmpty.forEach(function(g) {
+            var row = document.createElement('div');
+            row.className = 'cw-entity-row';
+            var lbl = document.createElement('span');
+            lbl.className = 'cw-entity-row-label';
+            lbl.textContent = g.label + ': ';
+            row.appendChild(lbl);
+            g.items.forEach(function(item) {
+              var chip = document.createElement('span');
+              chip.className = 'cw-entity-chip';
+              chip.textContent = item;
+              chip.title = item;
+              row.appendChild(chip);
+            });
+            entitiesBody.appendChild(row);
+          });
+          entitiesEl.style.display = 'block';
+        } else {
+          entitiesEl.style.display = 'none';
+        }
       }
       container.innerHTML = data.messagesHtml;
 
@@ -1142,6 +1341,9 @@ ${cwInteractiveJs()}
 
   // Signal ready — extension host will send the 'render' payload
   vscode.postMessage({ type: 'ready' });
+  } catch(err) {
+    vscode.postMessage({ type: 'iife-error', message: String(err) });
+  }
 })();
 </script>
 </body>

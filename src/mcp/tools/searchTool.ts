@@ -26,8 +26,8 @@ export class SearchTool implements IMcpTool {
         'Full-text keyword search across all indexed chat sessions. ' +
         'Returns sessions whose messages contain all supplied keywords, ' +
         'with a snippet of the matching content. ' +
-        'Optionally filter by source (e.g. "copilot", "claude", "cursor") ' +
-        'or workspaceId.';
+        'Optionally filter by source (e.g. "copilot", "claude", "cursor"), ' +
+        'workspaceId, or entity type/value (e.g. file paths, function names, errors, decisions).';
 
     readonly inputSchema = {
         type: 'object',
@@ -47,6 +47,15 @@ export class SearchTool implements IMcpTool {
             workspaceId: {
                 type: 'string',
                 description: 'Restrict results to a specific workspace (opaque ID).',
+            },
+            entityType: {
+                type: 'string',
+                enum: ['filePaths', 'functionNames', 'errors', 'decisions'],
+                description: 'Filter to sessions that contain the specified entity type (requires entity extraction to have run).',
+            },
+            entityValue: {
+                type: 'string',
+                description: 'Substring to match within the entityType list (case-insensitive). Only applied when entityType is also set.',
             },
         },
         required: ['query'],
@@ -75,12 +84,16 @@ export class SearchTool implements IMcpTool {
 
         const source = typeof input['source'] === 'string' ? input['source'] : undefined;
         const workspaceId = typeof input['workspaceId'] === 'string' ? input['workspaceId'] : undefined;
+        const entityType = typeof input['entityType'] === 'string' ? input['entityType'] as 'filePaths' | 'functionNames' | 'errors' | 'decisions' : undefined;
+        const entityValue = typeof input['entityValue'] === 'string' ? input['entityValue'] : undefined;
 
         const { results } = this.ftse.search({
             text: query,
             filter: {
                 source: source as SessionSource | undefined,
                 workspaceId,
+                entityType,
+                entityValue,
             },
         });
 

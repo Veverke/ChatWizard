@@ -189,3 +189,4 @@ The following were considered and ruled out:
 - `FileSystemWatcher` provides live updates as sessions are written during active chats
 - Copilot JSONL files are append-only operation logs (not snapshots) and require log replay to reconstruct conversation state
 - Token counting uses the tokenizer vocab files already present on disk from the Copilot Chat extension installation
+ - Token counting uses the tokenizer vocab files already present on disk from the Copilot Chat extension installation

@@ -1,0 +1,29 @@
+{
+  "id": "amzq-session-dynamodb-002",
+  "title": "Optimizing DynamoDB GSI query performance",
+  "model": "amazon.nova-pro-v1:0",
+  "messages": [
+    {
+      "sender": "USER",
+      "content": "Our DynamoDB table has a GSI on userId + createdAt. Queries for a user's last 30 days of orders take 800ms. The table has 50M items. How do I make this faster?",
+      "time": 1716300000000
+    },
+    {
+      "sender": "ASSISTANT",
+      "content": "800ms on a 50M-item table with a GSI usually means either a hot partition or a poorly chosen key schema. Let's diagnose:\n\n**Check for hot partition key:**\n```python\nimport boto3\ncw = boto3.client('cloudwatch')\nmetrics = cw.get_metric_statistics(\n    Namespace='AWS/DynamoDB',\n    MetricName='ConsumedReadCapacityUnits',\n    Dimensions=[{'Name': 'TableName', 'Value': 'orders'}, {'Name': 'GlobalSecondaryIndexName', 'Value': 'userId-createdAt-index'}],\n    # ... 1-hour window\n)\n```\n\n**Key schema issues:**\n- If `userId` is high-cardinality (millions of users) and each user has few orders, your GSI is well-distributed — the issue is elsewhere.\n- If you have 'super users' with 100K+ orders, their partition is hot.\n\n**Quick wins:**\n1. Add a `FilterExpression` with `createdAt > :thirtyDaysAgo` and use `ScanIndexForward=False` (newest first) with `Limit=100`.\n2. Compress rarely-queried attributes with `ProjectionType=INCLUDE` on the GSI.\n3. For super-users, use write sharding: `userId#shard0`, `userId#shard1` and fan-out reads.",
+      "time": 1716300015000
+    },
+    {
+      "sender": "USER",
+      "content": "We do have some merchants with 500K+ orders. The shard approach sounds right. How do I implement the fan-out reads without making the application code too complex?",
+      "time": 1716300090000
+    },
+    {
+      "sender": "ASSISTANT",
+      "content": "Abstract the sharding behind a repository class so callers never see it:\n\n```typescript\nconst SHARD_COUNT = 10;\n\nclass OrderRepository {\n  async getRecentOrders(userId: string, days: number): Promise<Order[]> {\n    const cutoff = Date.now() - days * 86400_000;\n    \n    // Fan out to all shards in parallel\n    const shardQueries = Array.from({ length: SHARD_COUNT }, (_, i) =>\n      this.queryOneShard(`${userId}#shard${i}`, cutoff)\n    );\n    \n    const results = await Promise.all(shardQueries);\n    return results\n      .flat()\n      .sort((a, b) => b.createdAt - a.createdAt)\n      .slice(0, 100);\n  }\n\n  private async queryOneShard(shardKey: string, cutoff: number): Promise<Order[]> {\n    const result = await this.ddb.query({\n      TableName: 'orders',\n      IndexName: 'userId-createdAt-index',\n      KeyConditionExpression: 'userId = :uid AND createdAt > :cutoff',\n      ExpressionAttributeValues: { ':uid': shardKey, ':cutoff': cutoff },\n      ScanIndexForward: false,\n      Limit: 100,\n    }).promise();\n    return result.Items as Order[];\n  }\n}\n```\n\nWith 10 shards, 10 parallel queries of a warm partition each take ~20-40ms instead of 800ms on a single hot partition.",
+      "time": 1716300120000
+    }
+  ],
+  "createdAt": 1716300000000,
+  "updatedAt": 1716300120000
+}

@@ -378,6 +378,7 @@ suite('parseCopilotSession — branch coverage edge cases', () => {
         const assistantMsg = session.messages.find(m => m.role === 'assistant');
         assert.ok(assistantMsg);
         assert.ok(assistantMsg.content.includes('Real answer'));
+
         assert.ok(!assistantMsg.content.includes('Metadata'));
     });
 
@@ -488,4 +489,232 @@ suite('parseCopilotSession — branch coverage edge cases', () => {
         const { session } = parseCopilotSession(filePath, 'ws1');
         assert.ok(session.messages.length >= 1);
     });
+});
+
+// ---------------------------------------------------------------------------
+// parseCopilotSession — terminal notification filtering
+// ---------------------------------------------------------------------------
+// Fixture: session-with-terminal-notifications.jsonl
+// Three turns: real prompt → terminal notification → real prompt
+// Expectation: notification turn produces no user message; final count = 4
+// ---------------------------------------------------------------------------
+
+suite('parseCopilotSession — terminal notification filtering', () => {
+
+    const FIXTURE = path.join(FIXTURE_DIR, 'session-with-terminal-notifications.jsonl');
+
+    test('returns no errors', () => {
+        const { errors } = parseCopilotSession(FIXTURE, 'ws-notify');
+        assert.strictEqual(errors.length, 0, `Unexpected errors: ${errors.join(', ')}`);
+    });
+
+    test('session has exactly 4 messages (notification turn produces none)', () => {
+        const { session } = parseCopilotSession(FIXTURE, 'ws-notify');
+        assert.strictEqual(session.messages.length, 4,
+            `Expected 4 msgs (2 real turns × user+assistant), got ${session.messages.length}`);
+    });
+
+    test('messages alternate user/assistant/user/assistant', () => {
+        const { session } = parseCopilotSession(FIXTURE, 'ws-notify');
+        const roles = session.messages.map((m: Message) => m.role);
+        assert.deepStrictEqual(roles, ['user', 'assistant', 'user', 'assistant']);
+    });
+
+    test('no message content contains the terminal notification text', () => {
+        const { session } = parseCopilotSession(FIXTURE, 'ws-notify');
+        for (const msg of session.messages) {
+            assert.ok(
+                !msg.content.includes('[Terminal'),
+                `Message "${msg.content.slice(0, 60)}" should not contain notification text`
+            );
+        }
+    });
+
+    test('first user message is the ESLint question', () => {
+        const { session } = parseCopilotSession(FIXTURE, 'ws-notify');
+        assert.strictEqual(session.messages[0].content,
+            'How do I configure ESLint in a TypeScript project?');
+    });
+
+    test('second user message is the Prettier question', () => {
+        const { session } = parseCopilotSession(FIXTURE, 'ws-notify');
+        assert.strictEqual(session.messages[2].content,
+            'How do I integrate Prettier with ESLint?');
+    });
+
+    test('message IDs skip the notification request ID', () => {
+        const { session } = parseCopilotSession(FIXTURE, 'ws-notify');
+        assert.strictEqual(session.messages[0].id, 'req-001');
+        assert.strictEqual(session.messages[1].id, 'req-001-response');
+        assert.strictEqual(session.messages[2].id, 'req-003');
+        assert.strictEqual(session.messages[3].id, 'req-003-response');
+    });
+
+    test('title is derived from the first real user message', () => {
+        const { session } = parseCopilotSession(FIXTURE, 'ws-notify');
+        assert.strictEqual(session.title, 'How do I configure ESLint in a TypeScript project?');
+    });
+
+});
+
+// ---------------------------------------------------------------------------
+// parseCopilotSession — textEditGroup handling
+// ---------------------------------------------------------------------------
+// Fixture: session-with-tool-calls.jsonl
+// Turn 1: AI responds with textEditGroup for a .ts file (surrounded by ``` fences)
+// ---------------------------------------------------------------------------
+
+suite('parseCopilotSession — textEditGroup handling', () => {
+
+    const FIXTURE = path.join(FIXTURE_DIR, 'session-with-tool-calls.jsonl');
+
+    test('returns no errors', () => {
+        const { errors } = parseCopilotSession(FIXTURE, 'ws-teg');
+        assert.strictEqual(errors.length, 0, `Unexpected errors: ${errors.join(', ')}`);
+    });
+
+    test('first assistant response contains a TypeScript code fence', () => {
+        const { session } = parseCopilotSession(FIXTURE, 'ws-teg');
+        const asstMsg = session.messages[1];
+        assert.ok(asstMsg.content.includes('```typescript'),
+            `Expected TypeScript code fence, got: ${asstMsg.content.slice(0, 120)}`);
+    });
+
+    test('first assistant response contains the refactored function code', () => {
+        const { session } = parseCopilotSession(FIXTURE, 'ws-teg');
+        const asstMsg = session.messages[1];
+        assert.ok(asstMsg.content.includes('export function formatDate'),
+            'Should include the refactored function definition');
+        assert.ok(asstMsg.content.includes('Date | null'),
+            'Should include the null-safe parameter type');
+    });
+
+    test('empty ``` fence placeholder is removed (not left as standalone fence)', () => {
+        const { session } = parseCopilotSession(FIXTURE, 'ws-teg');
+        const asstMsg = session.messages[1];
+        // If the textEditGroup replacement failed, the opening and closing ``` placeholders
+        // would appear on consecutive lines with no content or language tag between them.
+        // A properly replaced block has ``` <lang> as its opening line, not a bare ```.
+        const orphanedFencePair = asstMsg.content.match(/^```[ \t]*\r?\n```/m);
+        assert.strictEqual(orphanedFencePair, null,
+            'Standalone ``` fence placeholder should have been replaced by the textEditGroup');
+    });
+
+    test('language is inferred from file extension (.ts → typescript)', () => {
+        const { session } = parseCopilotSession(FIXTURE, 'ws-teg');
+        const asstMsg = session.messages[1];
+        // The code block in extractCodeBlocks should have language 'typescript'
+        const tsBlock = asstMsg.codeBlocks.find((b: { language: string }) => b.language === 'typescript');
+        assert.ok(tsBlock !== undefined, 'Should have a code block with language "typescript"');
+    });
+
+    test('non-code surrounding text is preserved', () => {
+        const { session } = parseCopilotSession(FIXTURE, 'ws-teg');
+        const asstMsg = session.messages[1];
+        assert.ok(asstMsg.content.includes('Here is the updated implementation'),
+            'Surrounding prose text should be retained');
+        assert.ok(asstMsg.content.includes('non-null-safe version'),
+            'Text after the code block should be retained');
+    });
+
+});
+
+// ---------------------------------------------------------------------------
+// parseCopilotSession — inlineReference handling
+// ---------------------------------------------------------------------------
+// Fixture: session-with-tool-calls.jsonl
+// Turn 2: AI response contains both a Type B file reference and a Type A symbol reference
+// ---------------------------------------------------------------------------
+
+suite('parseCopilotSession — inlineReference handling', () => {
+
+    const FIXTURE = path.join(FIXTURE_DIR, 'session-with-tool-calls.jsonl');
+
+    test('Type B file reference (top-level name field) is rendered as backtick-wrapped name', () => {
+        const { session } = parseCopilotSession(FIXTURE, 'ws-ref');
+        const asstMsg = session.messages[3]; // second assistant response
+        assert.ok(asstMsg.content.includes('`src/utils/formatDate.ts`'),
+            `Expected file ref, content was: ${asstMsg.content}`);
+    });
+
+    test('Type A symbol reference (inlineReference.name) is rendered as backtick-wrapped name', () => {
+        const { session } = parseCopilotSession(FIXTURE, 'ws-ref');
+        const asstMsg = session.messages[3];
+        assert.ok(asstMsg.content.includes('`formatDate`'),
+            `Expected symbol ref, content was: ${asstMsg.content}`);
+    });
+
+    test('surrounding text is preserved alongside inline references', () => {
+        const { session } = parseCopilotSession(FIXTURE, 'ws-ref');
+        const asstMsg = session.messages[3];
+        assert.ok(asstMsg.content.includes('Updated'), 'Preceding text should be present');
+        assert.ok(asstMsg.content.includes('JSDoc'), 'Trailing text should be present');
+    });
+
+});
+
+// ---------------------------------------------------------------------------
+// parseCopilotSession — interrupted flag
+// ---------------------------------------------------------------------------
+// Fixture: session-with-tool-calls.jsonl
+// Turn 3: AI responds with only toolInvocationSerialized (no text)
+//   → user message gets interrupted=true, no assistant message is added
+// ---------------------------------------------------------------------------
+
+suite('parseCopilotSession — interrupted flag', () => {
+
+    const FIXTURE = path.join(FIXTURE_DIR, 'session-with-tool-calls.jsonl');
+
+    test('total message count is 5 (tool-call turn produces no assistant message)', () => {
+        const { session } = parseCopilotSession(FIXTURE, 'ws-int');
+        assert.strictEqual(session.messages.length, 5,
+            `Expected 5 msgs: 3 users + 2 assistants (no asst for tool-call turn), got ${session.messages.length}`);
+    });
+
+    test('last message is the user message from the tool-call turn', () => {
+        const { session } = parseCopilotSession(FIXTURE, 'ws-int');
+        const last = session.messages[4];
+        assert.strictEqual(last.role, 'user');
+        assert.ok(last.content.includes('What unit tests should I write'),
+            `Expected unit-test question, got: ${last.content}`);
+    });
+
+    test('user message from tool-call turn has interrupted=true', () => {
+        const { session } = parseCopilotSession(FIXTURE, 'ws-int');
+        const last = session.messages[4];
+        assert.strictEqual((last as Message & { interrupted?: boolean }).interrupted, true,
+            'interrupted flag should be set on the user message when AI used tools without text');
+    });
+
+    test('normal user messages do NOT have interrupted=true', () => {
+        const { session } = parseCopilotSession(FIXTURE, 'ws-int');
+        // First and second user messages had real AI responses
+        const firstUser  = session.messages[0];
+        const secondUser = session.messages[2];
+        assert.ok(!(firstUser  as Message & { interrupted?: boolean }).interrupted, 'First user msg should not be interrupted');
+        assert.ok(!(secondUser as Message & { interrupted?: boolean }).interrupted, 'Second user msg should not be interrupted');
+    });
+
+    test('inline construction: interrupted is set when AI response has only toolInvocationSerialized', () => {
+        // This test constructs the session inline to verify the flag without relying on a fixture file.
+        const tmpDir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'cw-interrupted-'));
+        try {
+            const filePath = path.join(tmpDir2, 'interrupted-inline.jsonl');
+            const snapshot = { kind: 0, v: { sessionId: 'int-inline', creationDate: 1705400000000, requests: [], inputState: {} } };
+            const patch = {
+                kind: 2, k: ['requests'], v: [{
+                    requestId: 'ri-1', kind: null, timestamp: 1705400005000,
+                    message: { text: 'Quick question' },
+                    response: [{ kind: 'toolInvocationSerialized', value: '{"tool":"search"}' }],
+                }],
+            };
+            fs.writeFileSync(filePath, JSON.stringify(snapshot) + '\n' + JSON.stringify(patch), 'utf-8');
+            const { session } = parseCopilotSession(filePath, 'ws-inline');
+            assert.strictEqual(session.messages.length, 1, 'Only the user message should be present');
+            assert.strictEqual((session.messages[0] as Message & { interrupted?: boolean }).interrupted, true);
+        } finally {
+            fs.rmSync(tmpDir2, { recursive: true, force: true });
+        }
+    });
+
 });

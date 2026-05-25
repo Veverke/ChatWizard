@@ -1,6 +1,6 @@
 // src/search/fullTextEngine.ts
 
-import { Session } from '../types/index';
+import { Session, ExtractedEntities } from '../types/index';
 import { SearchQuery, SearchResult, SearchResponse } from './types';
 import { extractSnippet, findFirstMatch } from './snippetExtractor';
 
@@ -119,6 +119,14 @@ export class FullTextSearchEngine {
      * These are excluded from search results to keep the main index bounded.
      */
     private readonly hapaxStore = new Map<string, { sessionId: string; postings: Set<string> }>();
+
+    /** Optional getter for session metadata (used for entity-aware filtering) */
+    private _getMetadata?: (sessionId: string) => { entities?: ExtractedEntities } | undefined;
+
+    /** Wire up a metadata getter so entity filters work in `_sessionPassesFilter`. */
+    setMetadataGetter(getter: (sessionId: string) => { entities?: ExtractedEntities } | undefined): void {
+        this._getMetadata = getter;
+    }
 
     get size(): number {
         return this.sessions.size;
@@ -475,6 +483,12 @@ export class FullTextSearchEngine {
         }
         if (filter.dateTo !== undefined && session.updatedAt > filter.dateTo) {
             return false;
+        }
+        if (filter.entityType !== undefined && filter.entityValue !== undefined) {
+            const meta = this._getMetadata?.(session.id);
+            const list: string[] = meta?.entities?.[filter.entityType] ?? [];
+            const term = filter.entityValue.toLowerCase();
+            if (!list.some(e => e.toLowerCase().includes(term))) { return false; }
         }
         return true;
     }

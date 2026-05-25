@@ -775,3 +775,72 @@ suite('SessionIndex — setSidecarStore and customTitle override', () => {
         assert.strictEqual(notified, true);
     });
 });
+
+// ---------------------------------------------------------------------------
+// toSummary — archived field propagation
+// ---------------------------------------------------------------------------
+
+suite('SessionIndex — toSummary archived field', () => {
+
+    test('toSummary: archived=true is propagated to summary', () => {
+        const session = makeSession({ id: 'arch-1', archived: true });
+        const summary = toSummary(session);
+        assert.strictEqual(summary.archived, true);
+    });
+
+    test('toSummary: archived is undefined (not false) when session has no archived field', () => {
+        const session = makeSession({ id: 'arch-2' });
+        const summary = toSummary(session);
+        assert.strictEqual(summary.archived, undefined);
+    });
+
+    test('toSummary: archived is undefined when explicitly set to false', () => {
+        const session = makeSession({ id: 'arch-3', archived: false });
+        const summary = toSummary(session);
+        assert.strictEqual(summary.archived, undefined);
+    });
+
+    test('getAllSummaries() returns archived=true for an upserted archived session', () => {
+        const index = new SessionIndex();
+        const session = makeSession({ id: 'arch-idx-1', archived: true });
+        index.upsert(session);
+        const summaries = index.getAllSummaries();
+        const summary = summaries.find(s => s.id === 'arch-idx-1');
+        assert.ok(summary !== undefined, 'session should be in index');
+        assert.strictEqual(summary!.archived, true);
+    });
+
+    test('getAllSummaries() returns archived=undefined for a non-archived session', () => {
+        const index = new SessionIndex();
+        const session = makeSession({ id: 'arch-idx-2' });
+        index.upsert(session);
+        const summaries = index.getAllSummaries();
+        const summary = summaries.find(s => s.id === 'arch-idx-2');
+        assert.ok(summary !== undefined);
+        assert.strictEqual(summary!.archived, undefined);
+    });
+
+    test('batchUpsert: archived and live sessions both appear with correct archived flag', () => {
+        const index = new SessionIndex();
+        const live     = makeSession({ id: 'batch-live',     archived: false });
+        const archived = makeSession({ id: 'batch-archived', archived: true });
+        index.batchUpsert([live, archived]);
+
+        const summaries = index.getAllSummaries();
+        const liveSummary     = summaries.find(s => s.id === 'batch-live');
+        const archivedSummary = summaries.find(s => s.id === 'batch-archived');
+
+        assert.ok(liveSummary !== undefined && archivedSummary !== undefined, 'both sessions should be indexed');
+        assert.strictEqual(liveSummary!.archived,     undefined, 'live session summary.archived should be undefined');
+        assert.strictEqual(archivedSummary!.archived, true,      'archived session summary.archived should be true');
+    });
+
+    test('re-upserting with archived=false clears the archived flag to undefined', () => {
+        const index = new SessionIndex();
+        index.upsert(makeSession({ id: 'arch-flip', archived: true }));
+        index.upsert(makeSession({ id: 'arch-flip', archived: false }));
+        const summary = index.getAllSummaries().find(s => s.id === 'arch-flip');
+        assert.strictEqual(summary!.archived, undefined, 'archived should be cleared on re-upsert as live');
+    });
+
+});

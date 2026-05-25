@@ -1,6 +1,6 @@
 # ChatWizard — User Guide
 
-ChatWizard indexes every AI chat session from all your tools (Copilot, Claude, Cursor, Cline, Roo Code, Windsurf, Aider, Antigravity) into one searchable archive — without sending anything off your machine.
+ChatWizard indexes every AI chat session from all your tools (Copilot, Claude, Cursor, Cline, Roo Code, Windsurf, Aider, Antigravity, Continue.dev, Amazon Q Developer, Gemini Code Assist) into one searchable archive — without sending anything off your machine.
 
 ---
 
@@ -19,8 +19,13 @@ ChatWizard indexes every AI chat session from all your tools (Copilot, Claude, C
 11. [Export](#11-export)
 12. [MCP Server & AI Integrations](#12-mcp-server--ai-integrations)
 13. [Workspace Management](#13-workspace-management)
-14. [Settings Reference](#14-settings-reference)
-15. [Commands Reference](#15-commands-reference)
+14. [File History](#14-file-history)
+15. [Session Tagging](#15-session-tagging)
+16. [Session Archive](#16-session-archive)
+17. [AI Intelligence — Summaries & Entity Extraction](#17-ai-intelligence--summaries--entity-extraction)
+18. [Prompt Cost Analysis](#18-prompt-cost-analysis)
+19. [Settings Reference](#19-settings-reference)
+20. [Commands Reference](#20-commands-reference)
 
 ---
 
@@ -30,7 +35,7 @@ ChatWizard indexes every AI chat session from all your tools (Copilot, Claude, C
 2. The extension indexes sessions automatically on startup — no configuration needed for most setups.
 3. Click the **Chat Wizard** speech-bubble icon in the Activity Bar to open the sidebar.
 
-> **Supported tools:** GitHub Copilot, Claude Code, Cline, Roo Code, Cursor, Windsurf, Aider, Google Antigravity.
+> **Supported tools:** GitHub Copilot, Claude Code, Cline, Roo Code, Cursor, Windsurf, Aider, Google Antigravity, Continue.dev, Amazon Q Developer, Gemini Code Assist.
 
 ---
 
@@ -98,7 +103,14 @@ Pin important sessions so they float to the top. Use the **pin icon** on the row
 |--------|-------------|
 | Pin / Unpin Session | Keeps session at top of list |
 | Export Session to Markdown | Save single session as `.md` |
+| Add Tag… | Attach one or more freeform labels (see [Session Tagging](#15-session-tagging)) |
+| Remove Tag… | Remove tags from the session |
+| Regenerate Summary | Re-generate the AI-produced one-line summary |
+| Archive Session | Force an immediate archive snapshot |
+| Delete Archived Session | Remove from archive (live session is unaffected) |
+| Reveal in Explorer | Show the source file in the VS Code Explorer |
 | Export Selected… | Multi-select export |
+| Inject as Context… | Export session and open it as context in a new Copilot Chat |
 
 ---
 
@@ -118,7 +130,7 @@ Selecting a result opens the session scrolled to the matching message.
 | Regex search for a function name | `/handleAuthError` |
 
 **Filters available in the search QuickPick:**
-- **Source** — All / Copilot / Claude / Cline / Roo Code / Cursor / Windsurf / Aider / Antigravity
+- **Source** — All / Copilot / Claude / Cline / Roo Code / Cursor / Windsurf / Aider / Antigravity / Continue.dev / Amazon Q / Gemini Code Assist
 - **Role** — All / Prompts only / Responses only
 
 > If results exceed 500, a banner prompts you to refine the query.
@@ -277,6 +289,55 @@ Ctrl+Shift+P → Chat Wizard: Export… → Export Session Excerpt…
 
 **Output format:** Each file has a metadata header (source, model, date, workspace), H2 headings for user messages, H3 for AI responses, and syntax-highlighted code blocks.
 
+### Inject a Session as Context into a New Chat
+
+Turn any past session into live context for a brand-new Copilot Chat conversation in one click:
+
+1. Right-click any session in the Sessions panel
+2. Choose **Inject as Context…**
+
+ChatWizard will:
+- Silently export the session to a Markdown file in your workspace root (no save dialog)
+- Open that file in the editor so you can inspect it
+- Open Copilot Chat pre-filled with `#file:/path/to/session.md Use this exported chat session as context for our conversation.`
+- Leave the message unsent so you can customise the prompt before pressing **Enter**
+
+> **Tip:** You can edit the pre-filled message to add a specific question, e.g. `#file:my-session.md We were debugging a race condition here — continue from where we left off.`
+
+### Export to Obsidian
+
+```
+Ctrl+Shift+P → Chat Wizard: Export… → Export Sessions to Obsidian
+```
+
+Exports sessions as Obsidian-compatible Markdown files (one `.md` per session) into a folder you choose — ideally inside your Obsidian vault.
+
+**Output format per file:**
+- YAML frontmatter: `title`, `source`, `date`, `tags` (from your ChatWizard tags), `summary`, `chatwizard_id`
+- Messages as Markdown (`**You:**` / `**Assistant:**` headings)
+- File paths found in session content are emitted as `[[filename]]` wikilinks
+
+**Scope picker:** choose "All sessions", "Pinned sessions only", or "Tagged sessions…" to export a curated subset.
+
+Re-running the export overwrites existing files — it does not create duplicates.
+
+### Export to Notion
+
+```
+Ctrl+Shift+P → Chat Wizard: Export… → Export Sessions to Notion
+```
+
+Exports sessions as pages in a Notion database using the public Notion API.
+
+**First-time setup:**
+1. In Notion, create an integration at [notion.so/my-integrations](https://www.notion.so/my-integrations) and copy the API key.
+2. Share a database with your integration.
+3. Run the export command — ChatWizard prompts for the API key (stored in VS Code `SecretStorage`, **never** in `settings.json`) and the database ID.
+
+Subsequent exports skip the prompts and go directly to exporting.
+
+To clear the stored API key: `Ctrl+Shift+P` → **ChatWizard: Forget Notion API Key**.
+
 ---
 
 ## 12. MCP Server & AI Integrations
@@ -303,13 +364,16 @@ The MCP server exposes your entire local chat history to any MCP-compatible AI t
 | Tool | What it does | Key parameters |
 |------|-------------|----------------|
 | `chatwizard_get_context` | Best single tool — combines semantic + keyword search, returns ranked passages | `topic`, `limit` |
-| `chatwizard_search` | Keyword/full-text search across all sessions | `query`, `source`, `limit` |
+| `chatwizard_search` | Keyword/full-text search across all sessions | `query`, `source`, `limit`, `entityType`, `entityValue` |
 | `chatwizard_find_similar` | Semantic similarity search (requires semantic search enabled) | `query`, `minScore`, `limit` |
 | `chatwizard_get_session` | Fetch a session by ID (truncated to 4 000 chars) | `sessionId`, `maxChars` |
 | `chatwizard_get_session_full` | Fetch complete untruncated session | `sessionId` |
 | `chatwizard_list_recent` | List most-recently-updated sessions | `limit`, `source`, `since` |
 | `chatwizard_list_sources` | Which tools are indexed and session counts | _(none)_ |
 | `chatwizard_server_info` | Server health, version, session count, uptime | _(none)_ |
+| `chatwizard_sessions_for_file` | Sessions that touched a specific file (Chronicle required) | `filePath` |
+| `chatwizard_sessions_for_branch` | Sessions on a specific git branch | `branch` |
+| `chatwizard_sessions_for_work_item` | Sessions for a work-item ID (requires `chatwizard.workItemPattern`) | `workItemId` |
 
 **Example — ask Claude Desktop about a past decision:**
 > The AI calls `chatwizard_get_context` with topic `"authentication strategy"` → retrieves your past sessions on that topic → answers based on your actual history.
@@ -429,7 +493,22 @@ A lightweight alternative — **no MCP server required**. Invoke directly from t
 ```
 @chatwizard /continueFromHistory MCP server implementation
 ```
-→ Lists your 5 most recent sessions on that topic and proposes the 3 most valuable next actions.
+→ Lists your 5 most recent sessions on that topic and proposes the 3 most valuable next actions. Important files from Chronicle sessions are shown as clickable VS Code file pills.
+
+```
+@chatwizard /tag #bugfix, topic:auth
+```
+→ Tags the currently active chat session with the given labels. Use `/removeTags #bugfix` to remove.
+
+```
+@chatwizard /referMessage P3
+```
+→ Streams the third user prompt from the current chat thread back as a Markdown blockquote — useful for referencing an earlier turn without scrolling back. `R2` quotes the second assistant response.
+
+```
+@chatwizard /analyzePrompt Explain everything about the authentication system in this codebase
+```
+→ Offline analysis: token count, estimated cost, quality flags (open-ended scope detected, similar past sessions found), and model suggestion.
 
 Run **Chat Wizard: Connect GitHub Copilot** to configure the participant. For global context instructions across all workspaces, run **Chat Wizard: Set Up Global Copilot Instructions**.
 
@@ -482,7 +561,187 @@ A multi-select list shows every discovered workspace with its path, size, and se
 
 ---
 
-## 14. Settings Reference
+## 14. File History
+
+Chronicle-powered visibility into which sessions touched the current file — directly in the editor, without opening the history panel.
+
+### Status Bar
+
+When Chronicle data is populated (`chatwizard.indexChronicle: true`), the status bar shows **`$(comment) N sessions`** for the active file. The item is hidden when the file has no history. Click it to open the File History panel.
+
+### CodeLens
+
+A `$(history) N ChatWizard sessions touched this file — click to view` lens appears at the top of files with Chronicle data. Disable via `chatwizard.codeLens.enabled: false`; the status bar and Explorer menu continue to work regardless.
+
+### Explorer Context Menu
+
+Right-click any file in the Explorer (or the editor tab) → **ChatWizard: Show File History**.
+
+### File History Panel
+
+Lists sessions that touched the file with:
+- Date and source badge
+- One-line summary (from AI-generated summaries)
+- **[Open session]** button — opens the session webview
+
+When no Chronicle data exists for the file, the panel shows an empty state: _"No Chronicle data found — enable `chat.localIndex.enabled` to populate this view."_
+
+### MCP Tool
+
+`chatwizard_sessions_for_file` accepts both absolute paths and workspace-relative paths. Useful for injecting file-centric context from any MCP client:
+
+> _"Call `chatwizard_sessions_for_file` with `src/auth.ts` and show me the recent sessions."_
+
+---
+
+## 15. Session Tagging
+
+Attach freeform labels to sessions for quick filtering and future retrieval.
+
+### Adding Tags
+
+Right-click any session → **Add Tag…**. Enter one or more comma-separated labels:
+
+```
+#bugfix, topic:auth, kind:decision
+```
+
+Tags are normalised (lowercased, leading `#` stripped for storage, displayed with `#` prefix).
+
+### Removing Tags
+
+Right-click → **Remove Tag…** — opens a multi-select QuickPick of the session's existing tags.
+
+### Tag Display
+
+- **Session tree** — up to 3 tag chips shown inline; overflow displayed as `+N more`.
+- **Session reader header** — tag chips appear alongside the source badge and date.
+
+### Filtering by Tag
+
+```
+Ctrl+Shift+P → Chat Wizard: Filter Sessions… → Filter by tags
+```
+
+Select one or more tags; the Sessions panel shows only matching sessions. A clear-filter button appears in the view title.
+
+### Tagging the Active Session
+
+When you're actively working in a chat tool, use one of these to tag the session without leaving your flow:
+
+- **Command Palette:** `Ctrl+Shift+P` → **ChatWizard: Tag Active Session**
+- **Status bar button:** `$(tag) Tag session` appears in the status bar while a session is live (within `chatwizard.activeSessionWindowMinutes`, default 120 min). Disappears once the session goes idle.
+- **Chat command:** type `@chatwizard /tag #bugfix, topic:auth` directly in the Copilot Chat panel. `@chatwizard /removeTags #bugfix` removes tags the same way.
+
+### Pin Migration
+
+On first run of 1.5.0, existing pinned sessions are automatically migrated to the new `chatwizard-metadata.json` store. No manual action required.
+
+---
+
+## 16. Session Archive
+
+ChatWizard mirrors every indexed session to its own local storage so you never lose history if a source tool prunes its data.
+
+### How It Works
+
+After each successful parse, the raw session content is saved to `<extension globalStorageUri>/archive/<source>/<sessionId>.<ext>`. On the next startup, any session present in the archive but no longer in the live index is loaded and marked as archived.
+
+Archived sessions appear in the Sessions panel with a **`· archived`** suffix and a tooltip: _"This session is no longer available from its source — served from ChatWizard archive."_
+
+### Show Archive Statistics
+
+```
+Ctrl+Shift+P → Chat Wizard: Settings… → Show Archive Statistics
+```
+
+Displays total archived sessions, total size on disk, and the oldest archived date.
+
+### Pruning
+
+By default, the archive grows unbounded. To cap it:
+
+| Setting | Default | Effect |
+|---------|---------|--------|
+| `chatwizard.archive.maxAgeDays` | `0` (disabled) | Remove sessions older than N days |
+| `chatwizard.archive.maxSizeMB` | `0` (disabled) | Cap total size — oldest sessions removed first |
+
+Pruning runs at startup **after** archived sessions are loaded, so they are always visible at least once before any removal.
+
+### Manual Archive Actions
+
+Right-click any session in the Sessions panel:
+- **Archive Session** — forces an immediate archive snapshot of that session.
+- **Delete Archived Session** — removes the archive copy (the live session is unaffected).
+
+---
+
+## 17. AI Intelligence — Summaries & Entity Extraction
+
+> **Beta:** These two features are functional but have not completed full end-to-end testing. They run silent background jobs and will not break other functionality, but may produce unexpected results on very large indexes or sessions containing large pasted code blocks. Please [report any issues on GitHub](https://github.com/veverke/chatwizard/issues).
+
+### Session Summaries _(Beta)_
+
+After indexing completes, ChatWizard generates a one-line summary for every session in the background. The summary appears as:
+- **Tree item tooltip** — hover any session in the Sessions panel.
+- **Session reader header** — a paragraph below the session title.
+
+Generation is transparent and never blocks startup. Three-tier strategy:
+1. Chronicle `checkpoints.overview` (free, instant — no LLM).
+2. VS Code LM API (Copilot subscription, cheapest model, one-shot prompt). Errors are silenced — the fallback is used instead.
+3. TF-IDF keyword extraction (fully offline — works without Copilot).
+
+To force a refresh: right-click any session → **Regenerate Summary**.
+
+### Entity Extraction _(Beta)_
+
+A second background job extracts structured entities from session content and stores them in `chatwizard-metadata.json`:
+
+| Entity type | Examples |
+|-------------|---------|
+| File paths | `src/auth.ts`, `package.json` |
+| Function / class names | `handleLogin`, `AuthService` |
+| Error codes | `SQLITE_BUSY`, `ENOENT`, `TypeError: Cannot read` |
+| Decision phrases | `"I decided to use"`, `"we chose"`, `"the approach is"` |
+
+**In the session reader:** a collapsible **Entities** section shows chips for extracted entries. File path chips open the file in the editor when clicked. Entity chips use a distinct visual style (🔮 prefix) to distinguish them from user-applied tags.
+
+**In MCP search:** `chatwizard_search` accepts optional `entityType` and `entityValue` parameters to pre-filter sessions by extracted entity before full-text scoring:
+
+> _"Call `chatwizard_search` with `entityType: 'errors', entityValue: 'SQLITE_BUSY'`"_
+
+---
+
+## 18. Prompt Cost Analysis
+
+Analyze a draft prompt **offline** before sending it — no LLM calls, no network access.
+
+### Via the Chat Panel
+
+```
+@chatwizard /analyzePrompt <your draft prompt>
+```
+
+The response shows:
+- **Token count and estimated cost** — input + output at current model rates (GPT-4o, Claude Sonnet, Gemini Pro, and mini variants).
+- **Past-session similarity** — if you've asked something very similar before, a link to that session is shown so you can review first.
+- **Quality flags** (if any):
+  - Large code block pasted inline → suggest referencing the file by path.
+  - Open-ended scope (`list all`, `explain everything`) → suggest narrowing.
+  - Multiple questions in one prompt → suggest splitting.
+- **Model suggestion** — when the prompt is short and straightforward, a cheaper model is recommended.
+
+### Via the Editor
+
+1. Select any text in any editor.
+2. Right-click → **ChatWizard: Analyze Selected Prompt** (or Command Palette).
+3. An information message shows the token count and cost; click **View Details** for the full analysis.
+
+> **Note:** The price table is hardcoded and labeled with a "Last updated" date. Model pricing changes; treat the cost figures as rough estimates.
+
+---
+
+## 19. Settings Reference
 
 ### Data Scope
 
@@ -506,6 +765,9 @@ Each source has an index toggle and an optional custom path override:
 | `chatwizard.indexWindsurf` | `true` | `chatwizard.windsurfStoragePath` |
 | `chatwizard.indexAider` | `true` | `chatwizard.aiderSearchRoots` (array), `chatwizard.aiderSearchDepth` (default `3`) |
 | `chatwizard.indexAntigravity` | `true` | `chatwizard.antigravityBrainPath` |
+| `chatwizard.indexContinue` | `true` | `chatwizard.continueStoragePath` |
+| `chatwizard.indexAmazonQ` | `true` | `chatwizard.amazonQStoragePath` |
+| `chatwizard.indexGeminiCodeAssist` | `true` | `chatwizard.geminiCodeAssistStoragePath` |
 
 Leave a path override empty to use the platform default location.
 
@@ -523,6 +785,34 @@ Leave a path override empty to use the platform default location.
 | `chatwizard.mcpServer.enabled` | `false` | Start server on VS Code launch |
 | `chatwizard.mcpServer.port` | `6789` | Listening port (restart required) |
 | `chatwizard.mcpServer.allowTokenRotation` | `false` | Allow token rotation command |
+| `chatwizard.mcp.reranker.enabled` | `false` | Enable TF-IDF reranker for `chatwizard_get_context` |
+
+### Chronicle & File History
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `chatwizard.indexChronicle` | `true` | Enrich sessions with Copilot Chronicle checkpoint data |
+| `chatwizard.chronicle.enableLocalIndex` | `true` | Auto-enable `chat.localIndex.enabled` for branch & file data |
+| `chatwizard.codeLens.enabled` | `true` | Show "N sessions touched this file" CodeLens in editors |
+
+### Branch & Work Item Grouping
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `chatwizard.workItemPattern` | `""` (disabled) | Regex to extract work-item IDs from branch names. Examples: `[A-Z]+-\d+` (Jira), `AB#\d+` (Azure DevOps), `#\d+` (GitHub Issues) |
+
+### Session Tagging
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `chatwizard.activeSessionWindowMinutes` | `120` | Look-back window for "active session" detection; controls when the `$(tag) Tag session` status bar button is shown |
+
+### Session Archive
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `chatwizard.archive.maxAgeDays` | `0` (disabled) | Prune archived sessions older than N days at startup |
+| `chatwizard.archive.maxSizeMB` | `0` (disabled) | Cap total archive size; oldest sessions removed first |
 
 ### Appearance
 
@@ -542,7 +832,7 @@ Leave a path override empty to use the platform default location.
 
 ---
 
-## 15. Commands Reference
+## 20. Commands Reference
 
 ### Command Palette (user-facing)
 
@@ -552,6 +842,7 @@ Leave a path override empty to use the platform default location.
 | `chatwizard.semanticSearch` | Chat Wizard: Find Sessions by Topic (Semantic) |
 | `chatwizard.filterSessions` | Chat Wizard: Filter Sessions… |
 | `chatwizard.configureSortOrder` | Chat Wizard: Configure Sort Order… |
+| `chatwizard.groupSessions` | Chat Wizard: Group Sessions… |
 | `chatwizard.filterCodeBlocks` | Chat Wizard: Filter Code Blocks… |
 | `chatwizard.showCodeBlocks` | Chat Wizard: Show Code Blocks |
 | `chatwizard.showPromptLibrary` | Chat Wizard: Show Prompt Library |
@@ -560,6 +851,14 @@ Leave a path override empty to use the platform default location.
 | `chatwizard.exportAll` | Chat Wizard: Export All Sessions… |
 | `chatwizard.exportSelected` | Chat Wizard: Export Selected Sessions… |
 | `chatwizard.exportExcerpt` | Chat Wizard: Export Session Excerpt… |
+| `chatwizard.exportToObsidian` | Chat Wizard: Export Sessions to Obsidian |
+| `chatwizard.exportToNotion` | Chat Wizard: Export Sessions to Notion |
+| `chatwizard.forgetNotionApiKey` | Chat Wizard: Forget Notion API Key |
+| `chatwizard.injectAsContext` | Right-click session → Inject as Context… |
+| `chatwizard.tagActiveSession` | Chat Wizard: Tag Active Session |
+| `chatwizard.showFileHistory` | Chat Wizard: Show File Session History |
+| `chatwizard.showArchiveStats` | Chat Wizard: Show Archive Statistics |
+| `chatwizard.analyzeSelectedPrompt` | Chat Wizard: Analyze Selected Prompt |
 | `chatwizard.manageWatchedWorkspaces` | Chat Wizard: Manage Watched Workspaces |
 | `chatwizard.rescan` | Chat Wizard: Rescan Sessions |
 | `chatwizard.startMcpServer` | Chat Wizard: Start MCP Server |
@@ -576,6 +875,13 @@ Leave a path override empty to use the platform default location.
 | `chatwizard.pinSession` / `chatwizard.unpinSession` | Pin icon on session row / right-click menu |
 | `chatwizard.exportSession` | Right-click menu / inline export icon |
 | `chatwizard.exportFromTreeSelection` | Right-click menu (multi-select) |
+| `chatwizard.injectAsContext` | Right-click menu → Inject as Context… |
+| `chatwizard.addTagFromTree` | Right-click menu → Add Tag… |
+| `chatwizard.removeTagFromTree` | Right-click menu → Remove Tag… |
+| `chatwizard.regenerateSummary` | Right-click menu → Regenerate Summary |
+| `chatwizard.archiveSession` | Right-click menu → Archive Session |
+| `chatwizard.deleteArchivedSession` | Right-click menu → Delete Archived Session |
+| `chatwizard.revealSessionInExplorer` | Right-click menu → Reveal in Explorer |
 | `chatwizard.openSession` | Click a session in the Sessions panel |
 | `chatwizard.openSessionFromCodeBlock` | Click an entry in the Code Blocks panel |
 | `chatwizard.loadMoreSessions` | "Load More" item at bottom of Sessions panel |
@@ -597,9 +903,18 @@ Code Blocks panel toolbar cycles through: `chatwizard.cbSortByDate`, `chatwizard
 | Search by concept/meaning | `Ctrl+Shift+P` → **Find Sessions by Topic (Semantic)** |
 | Find a code snippet the AI wrote | Code Blocks panel → filter by language |
 | Reuse a past prompt | Prompt Library → search → copy |
+| Tag the session you're currently in | Status bar `$(tag) Tag session` or `@chatwizard /tag #label` |
+| See which sessions touched a file | Right-click the file in Explorer → **Show File History** |
+| Group sessions by git branch | Sessions panel toolbar → Group → By Branch |
+| Group sessions by work item (Jira, AzDO…) | Set `chatwizard.workItemPattern`, then Group → By Work Item |
+| Check whether a draft prompt is worthwhile | `@chatwizard /analyzePrompt <draft>` |
+| Quote a past turn in the current chat | `@chatwizard /referMessage P3` |
 | Check token usage this month | Analytics panel |
 | See which models you've used | Model Usage panel |
 | Export a session to Markdown | Right-click session → Export Session to Markdown |
+| Export to an Obsidian vault | `Ctrl+Shift+P` → **Export Sessions to Obsidian** |
+| Export to Notion | `Ctrl+Shift+P` → **Export Sessions to Notion** |
+| Inject a session as context into a new chat | Right-click session → Inject as Context… |
 | Ask Copilot using your history | `@chatwizard /queryHistory <question>` |
 | Connect Claude Desktop to your history | Enable MCP server → Copy MCP Config → paste & restart |
 | Force a full re-index | `Ctrl+Shift+P` → **Chat Wizard: Rescan Sessions** |

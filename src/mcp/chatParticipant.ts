@@ -14,9 +14,15 @@
 
 import * as vscode from 'vscode';
 import type { IMcpPrompt } from './mcpContracts';
+import type { Message } from '../types/index';
 import { PROMPT_DEFS } from './prompts/contextPrompts';
 import { SessionIndex } from '../index/sessionIndex';
+import type { ChatWizardWatcher } from '../watcher/fileWatcher';
 import { tokenizeQuery } from '../search/fullTextEngine';
+import { resolveAnchorPaths } from '../utils/fileAnchorResolver';
+import type { SidecarMetadataStore } from '../index/sidecarMetadataStore';
+import type { LiveSessionTracker } from '../utils/liveSessionTracker';
+import { PromptAnalyzer } from '../analytics/promptAnalyzer';
 
 interface SessionRef { id: string; title: string; source: string; date: string; passage?: string; }
 
@@ -246,10 +252,13 @@ export function createParticipantHandler(
     promptMap: Map<string, IMcpPrompt>,
     sessionIndex: SessionIndex,
     makeUserMessage: UserMessageFactory = (text) => vscode.LanguageModelChatMessage.User(text),
+    watcherRef?: { current: ChatWizardWatcher | undefined },
+    sidecarStore?: SidecarMetadataStore,
+    liveTracker?: LiveSessionTracker,
 ) {
     return async (
         request: vscode.ChatRequest,
-        _chatContext: vscode.ChatContext,
+        chatContext: vscode.ChatContext,
         stream: vscode.ChatResponseStream,
         token: vscode.CancellationToken,
     ): Promise<vscode.ChatResult | void> => {
@@ -268,6 +277,202 @@ export function createParticipantHandler(
         const fullName = `chatwizard.${command}`;
         const prompt = promptMap.get(fullName);
         if (!prompt) {
+            // ── /referMessage — inline handler (no IMcpPrompt class) ───────────
+            if (command === 'referMessage') {
+                // Format: /referMessage P3 [optional question]
+                const parts        = userText.trim().split(/\s+/);
+                const refArg       = (parts[0] ?? '').toUpperCase();
+                const userQuestion = parts.slice(1).join(' ').trim();
+
+                const match = refArg.match(/^([PR])(\d+)$/);
+                if (!match) {
+                    stream.markdown(
+                        'Usage: `@chatwizard /referMessage P3` or `@chatwizard /referMessage P3 <question>`\n\n' +
+                        '`P{N}` = Nth user prompt in the current session; `R{N}` = Nth assistant response.'
+                    );
+                    return;
+                }
+                const wantUser = match[1] === 'P';
+                const n        = parseInt(match[2], 10);
+                const refLabel = `${match[1]}${n}`;
+
+                // Find the most recent session saved by CW for this workspace.
+                const wsPath    = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+                const summaries = sessionIndex.getAllSummaries(); // sorted updatedAt desc
+                const candidate = wsPath
+                    ? (summaries.find(s => s.workspacePath && s.workspacePath.startsWith(wsPath)) ?? summaries[0])
+                    : summaries[0];
+
+                if (!candidate) {
+                    stream.markdown('No sessions found in the ChatWizard index.');
+                    return;
+                }
+
+                // Flush: re-read the session file from disk to pick up messages since the last watch event.
+                stream.progress('Syncing session…');
+                watcherRef?.current?.refreshSessionById(candidate.id);
+
+                const session = sessionIndex.get(candidate.id);
+                if (!session) {
+                    stream.markdown('Session data unavailable.');
+                    return;
+                }
+
+                // Walk all messages, counting non-skipped user/assistant turns.
+                let count = 0;
+                let found: Message | undefined;
+                for (const msg of session.messages) {
+                    if (msg.skipped) { continue; }
+                    if ((msg.role === 'user') === wantUser) {
+                        count++;
+                        if (count === n) { found = msg; break; }
+                    }
+                }
+
+                if (!found) {
+                    const kind  = wantUser ? 'prompt' : 'response';
+                    const total = session.messages.filter(m => !m.skipped && (m.role === 'user') === wantUser).length;
+                    stream.markdown(
+                        `No \`${refLabel}\` in session **"${session.title}"**. ` +
+                        `It has ${total} ${kind}${total !== 1 ? 's' : ''} so far ` +
+                        `_(note: the current message may not be saved yet)_.`
+                    );
+                    return;
+                }
+
+                const content = found.content.trim();
+                if (!content) {
+                    stream.markdown(`\`${refLabel}\` exists but has no text content.`);
+                    return;
+                }
+
+                if (!userQuestion) {
+                    // No question — display the referenced turn for verification.
+                    const kind = wantUser ? 'Prompt' : 'Response';
+                    stream.markdown(
+                        `**[${refLabel}]** ${kind}:\n\n` +
+                        content.split('\n').map((l: string) => `> ${l}`).join('\n')
+                    );
+                    return;
+                }
+
+                // Question provided — call the LLM with the referenced turn as explicit context.
+                const llmPrompt =
+                    `The following is message [${refLabel}] from the current chat session:\n\n` +
+                    `${content}\n\n---\n\n${userQuestion}`;
+                stream.progress(`Reading ${refLabel}…`);
+                const msgs = [makeUserMessage(llmPrompt)] as vscode.LanguageModelChatMessage[];
+                const modelResponse = await request.model.sendRequest(msgs, {}, token);
+                for await (const chunk of modelResponse.text) {
+                    stream.markdown(chunk);
+                }
+                return;
+            }
+
+            // ── /tag — tag the active chat session ───────────────────────────────
+            if (command === 'tag') {
+                if (!sidecarStore || !liveTracker) {
+                    stream.markdown('Tag functionality is not available in this context.');
+                    return;
+                }
+                const rawTags = userText.split(',').map(t => t.trim()).filter(Boolean);
+                if (rawTags.length === 0) {
+                    stream.markdown(
+                        'Usage: `@chatwizard /tag #bugfix, topic:auth`\n\n' +
+                        'Provide one or more comma-separated tags to apply to the active session.'
+                    );
+                    return;
+                }
+                const windowMs = (
+                    vscode.workspace.getConfiguration('chatwizard').get<number>('activeSessionWindowMinutes') ?? 120
+                ) * 60_000;
+                const active = liveTracker.getActive(windowMs);
+                const entry = active[0] ?? liveTracker.getMostRecent();
+                if (!entry) {
+                    stream.markdown('No active session found. Start a chat in a supported AI tool and try again.');
+                    return;
+                }
+                for (const t of rawTags) { await sidecarStore.addTag(entry.sessionId, t); }
+                const sess = sessionIndex.get(entry.sessionId);
+                const title = sess?.title ?? entry.sessionId;
+                stream.markdown(
+                    `Tagged session **"${title}"** with: ${rawTags.map(t => `\`${t}\``).join(', ')}`
+                );
+                return;
+            }
+
+            // ── /removeTags — remove tags from the active chat session ────────────
+            if (command === 'removeTags') {
+                if (!sidecarStore || !liveTracker) {
+                    stream.markdown('Tag functionality is not available in this context.');
+                    return;
+                }
+                const rawTags = userText.split(',').map(t => t.trim()).filter(Boolean);
+                if (rawTags.length === 0) {
+                    stream.markdown(
+                        'Usage: `@chatwizard /removeTags #bugfix, topic:auth`\n\n' +
+                        'Provide one or more comma-separated tags to remove from the active session.'
+                    );
+                    return;
+                }
+                const windowMs = (
+                    vscode.workspace.getConfiguration('chatwizard').get<number>('activeSessionWindowMinutes') ?? 120
+                ) * 60_000;
+                const active = liveTracker.getActive(windowMs);
+                const entry = active[0] ?? liveTracker.getMostRecent();
+                if (!entry) {
+                    stream.markdown('No active session found. Start a chat in a supported AI tool and try again.');
+                    return;
+                }
+                for (const t of rawTags) { await sidecarStore.removeTag(entry.sessionId, t); }
+                const sess = sessionIndex.get(entry.sessionId);
+                const title = sess?.title ?? entry.sessionId;
+                stream.markdown(
+                    `Removed tag${rawTags.length > 1 ? 's' : ''} from **"${title}"**: ${rawTags.map(t => `\`${t}\``).join(', ')}`
+                );
+                return;
+            }
+
+            // ── /analyzePrompt — analyze a draft prompt ───────────────────────────
+            if (command === 'analyzePrompt') {
+                if (!userText.trim()) {
+                    stream.markdown(
+                        'Usage: `@chatwizard /analyzePrompt <your prompt text>`\n\n' +
+                        'Paste your draft prompt to analyze token count, estimated cost, and quality tips.'
+                    );
+                    return;
+                }
+                stream.progress('Analyzing prompt…');
+                const analyzer = new PromptAnalyzer();
+                const analysis = await analyzer.analyze(userText);
+                const lines: string[] = [
+                    '**Prompt Analysis**\n',
+                    `- **Tokens:** ~${analysis.tokenCount.toLocaleString()}`,
+                    `- **Suggested model:** ${analysis.suggestedModel}`,
+                ];
+                if (analysis.costEstimates.length > 0) {
+                    lines.push('- **Estimated cost:**');
+                    for (const c of analysis.costEstimates) {
+                        lines.push(`  - ${c.model}: $${c.estimate.totalUsd.toFixed(4)}`);
+                    }
+                }
+                if (analysis.verbosityFlags.length > 0) {
+                    lines.push('\n**⚠ Verbosity flags:**');
+                    for (const f of analysis.verbosityFlags) { lines.push(`- ${f.description}`); }
+                }
+                if (analysis.similarSessions.length > 0) {
+                    lines.push('\n**Similar past sessions:**');
+                    for (const s of analysis.similarSessions) {
+                        lines.push(`- ${s.title} _(score: ${s.score.toFixed(2)}, ${s.date?.slice(0, 10) ?? 'unknown date'})_`);
+                    }
+                }
+                if (analysis.verbosityFlags.length === 0 && analysis.similarSessions.length === 0) {
+                    lines.push('\n✅ Looks good — well-scoped prompt.');
+                }
+                stream.markdown(lines.join('\n'));
+                return;
+            }
+
             stream.markdown(`Chat Wizard: unknown command \`/${command}\`.`);
             return;
         }
@@ -333,6 +538,23 @@ export function createParticipantHandler(
                 stream.progress(`Assembling answer from ${enrichedRefs.length} confirmed match${enrichedRefs.length === 1 ? '' : 'es'}…`);
                 if (enrichedRefs.length > 0) {
                     stream.markdown(buildSourcesMarkdown(enrichedRefs, queryTokens));
+
+                    // Feature 14: emit clickable file anchors for importantFiles
+                    const allFiles = enrichedRefs.flatMap(ref => {
+                        const s = sessionIndex.get(ref.id);
+                        return [
+                            ...(s?.importantFiles ?? []),
+                            ...(s?.chronicleData?.importantFiles ?? []),
+                        ];
+                    });
+                    const uniqueFiles = [...new Set(allFiles)];
+                    if (uniqueFiles.length > 0) {
+                        const resolved = await resolveAnchorPaths(uniqueFiles);
+                        for (const { absPath } of resolved.slice(0, 5)) {
+                            stream.anchor(vscode.Uri.file(absPath));
+                        }
+                    }
+
                     const refIds = enrichedRefs.map(r => r.id).join(',');
                     stream.button({ title: '✅ Yes — use history', command: 'chatwizard.query.continued', arguments: [userText, refIds] });
                     stream.button({ title: '❌ No — get general guidance', command: 'chatwizard.query.general', arguments: [userText] });
@@ -415,11 +637,18 @@ const PARTICIPANT_ID = 'Veverke.chatwizard';
  * @param context       Extension context (participant is pushed onto subscriptions).
  * @param prompts       The live IMcpPrompt instances built in extension.ts.
  * @param sessionIndex  Live session index used to validate source refs.
+ * @param watcherRef    Optional ref to the live ChatWizardWatcher, set after watcher starts.
+ *                      Used by /referMessage to flush the session index before turn lookup.
+ * @param sidecarStore  Sidecar metadata store used by /tag to persist tags.
+ * @param liveTracker   Live session tracker used by /tag to identify the active session.
  */
 export function registerChatParticipant(
     context: vscode.ExtensionContext,
     prompts: IMcpPrompt[],
     sessionIndex: SessionIndex,
+    watcherRef?: { current: ChatWizardWatcher | undefined },
+    sidecarStore?: SidecarMetadataStore,
+    liveTracker?: LiveSessionTracker,
 ): void {
     // Guard: chat participants require VS Code ≥ 1.90.
     if (typeof vscode.chat?.createChatParticipant !== 'function') {
@@ -427,7 +656,7 @@ export function registerChatParticipant(
     }
 
     const promptMap = new Map(prompts.map(p => [p.name, p]));
-    const handler = createParticipantHandler(promptMap, sessionIndex);
+    const handler = createParticipantHandler(promptMap, sessionIndex, undefined, watcherRef, sidecarStore, liveTracker);
 
     // Commands used by Phase 1 stream.button() calls.
     context.subscriptions.push(

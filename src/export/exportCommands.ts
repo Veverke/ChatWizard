@@ -211,4 +211,36 @@ export function registerExportCommands(
             await vscode.window.showTextDocument(uri);
         })
     );
+
+    // -----------------------------------------------------------------------
+    // chatwizard.injectAsContext — export session silently and inject into
+    // a new Copilot Chat conversation as a #file: context reference.
+    // -----------------------------------------------------------------------
+    context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.injectAsContext', async (item: SessionTreeItem | { id: string }) => {
+            const sessionId = 'summary' in item ? item.summary.id : item.id;
+            const session = index.get(sessionId);
+            if (!session) {
+                vscode.window.showErrorMessage(`Session not found: ${sessionId}`);
+                return;
+            }
+
+            // Write to workspace root (or home dir) — no save dialog so the flow
+            // remains uninterrupted.
+            const filename = `${safeFilename(session.title)}.md`;
+            const exportUri = vscode.Uri.joinPath(defaultFolderUri(), filename);
+            await vscode.workspace.fs.writeFile(exportUri, Buffer.from(serializeSession(session), 'utf8'));
+
+            // Open the file in the editor so the user can inspect it.
+            await vscode.window.showTextDocument(exportUri, { preview: false });
+
+            // Pre-fill a new Copilot Chat with a #file: reference.
+            // isPartialQuery:true lets the user review/edit before submitting.
+            const fsPath = exportUri.fsPath;
+            await vscode.commands.executeCommand('workbench.action.chat.open', {
+                query: `#file:${fsPath} Use this exported chat session as context for our conversation.`,
+                isPartialQuery: true,
+            });
+        })
+    );
 }

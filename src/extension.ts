@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { SessionIndex } from './index/sessionIndex';
-import { Session, ScopedWorkspace, SessionSource } from './types/index';
+import { Session, ScopedWorkspace, SessionSource, ChronicleData } from './types/index';
 import { ChatWizardWatcher, startWatcher } from './watcher/fileWatcher';
 import { WorkspaceScopeManager } from './watcher/workspaceScope';
 import { discoverCopilotWorkspacesAsync } from './readers/copilotWorkspace';
@@ -12,6 +12,7 @@ import {
     SessionTreeProvider,
     SessionTreeItem,
     DateGroupTreeItem,
+    ContextGroupTreeItem,
     LoadMoreTreeItem,
     SortMode,
     SortKey,
@@ -59,6 +60,23 @@ import { isNewerVersion } from './utils/semver';
 import { registerChatParticipant } from './mcp/chatParticipant';
 import { NullSemanticIndexer, ISemanticIndexer } from './search/semanticContracts';
 import { SidecarMetadataStore } from './index/sidecarMetadataStore';
+import { SessionArchive } from './archive/sessionArchive';
+import { SummaryGenerator, runSummaryBackgroundJob } from './analytics/summaryGenerator';
+import { runEntityExtractionJob } from './analytics/entityExtractor';
+import { ObsidianExporter } from './export/obsidianExporter';
+import { NotionExporter } from './export/notionExporter';
+import { SessionsForFileTool } from './mcp/tools/sessionsForFileTool';
+import { SessionsForBranchTool } from './mcp/tools/sessionsForBranchTool';
+import { SessionsForWorkItemTool } from './mcp/tools/sessionsForWorkItemTool';
+import { FileHistoryStatusBarItem } from './ui/fileHistoryStatusBar';
+import { BrandingStatusBarItem } from './ui/brandingStatusBar';
+import { FileHistoryCodeLensProvider } from './ui/fileHistoryCodeLens';
+import { FileHistoryPanel } from './views/fileHistoryPanel';
+import { discoverChronicleDbsAsync } from './readers/chronicleWorkspace';
+import { ActiveSessionTagButton } from './ui/activeSessionTagButton';
+import { LiveSessionTracker } from './utils/liveSessionTracker';
+import { PromptAnalyzer } from './analytics/promptAnalyzer';
+import { readChronicleCheckpoints, readChronicleSessions } from './parsers/chronicle';
 
 let watcher: ChatWizardWatcher | undefined;
 
@@ -76,8 +94,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     const index = new SessionIndex();
 
+    // Branding status-bar item — created early so all listeners below can call brandingBar.notify()
+    const version = String(context.extension.packageJSON.version ?? '0.0.0');
+    const brandingBar = new BrandingStatusBarItem(version);
+    context.subscriptions.push(brandingBar);
+
     // Sidecar metadata store — persists pins, custom titles, tags etc. outside source files.
     const sidecarStore = new SidecarMetadataStore(context.globalStorageUri.fsPath);
+    const liveTracker = new LiveSessionTracker();
     // Best-effort load so the store's in-memory cache is warm before tree renders.
     void sidecarStore.load().then(cache => {
         index.setSidecarStore(sidecarStore, cache);
@@ -138,6 +162,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // Build full-text search engine — populated lazily via the typed change listener.
     // The batch event fired by batchUpsert() (inside startWatcher) will index all sessions.
     const engine = new FullTextSearchEngine();
+    engine.setMetadataGetter(id => index.getSidecarMeta(id));
     // Incremental updates: only re-index the changed session instead of full rebuild
     const searchIndexListener = index.addTypedChangeListener((event) => {
         if (event.type === 'upsert') {
@@ -159,6 +184,29 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         }
     });
     context.subscriptions.push(searchIndexListener);
+
+    // Branding status-bar: notify on session batch load and live upserts
+    const _cap = (s: string) => s ? s[0].toUpperCase() + s.slice(1) : s;
+    let _brandingUpsertDebounce: ReturnType<typeof setTimeout> | undefined;
+    let _brandingUpsertSources: string[] = [];
+    const brandingSessionListener = index.addTypedChangeListener((event) => {
+        if (event.type === 'batch' && event.sessions.length > 0) {
+            const bySource = new Map<string, number>();
+            for (const s of event.sessions) { bySource.set(s.source, (bySource.get(s.source) ?? 0) + 1); }
+            const detail = [...bySource.entries()].map(([src, n]) => `${_cap(src)}: ${n}`).join(', ');
+            brandingBar.notify(`${event.sessions.length} sessions loaded (${detail})`);
+        } else if (event.type === 'upsert') {
+            _brandingUpsertSources.push(event.session.source ?? 'unknown');
+            if (_brandingUpsertDebounce) { clearTimeout(_brandingUpsertDebounce); }
+            _brandingUpsertDebounce = setTimeout(() => {
+                const src = _cap(_brandingUpsertSources[0] ?? 'unknown');
+                const n = _brandingUpsertSources.length;
+                _brandingUpsertSources = [];
+                brandingBar.notify(n === 1 ? `New ${src} session indexed` : `${n} sessions updated`);
+            }, 3_000);
+        }
+    });
+    context.subscriptions.push(brandingSessionListener);
 
     // ── Semantic search ──────────────────────────────────────────────────────────
     // Instantiated only when chatwizard.enableSemanticSearch is true.
@@ -296,13 +344,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         );
     }
 
-    const codeBlockListener = index.addChangeListener(() => {
-        codeBlockEngine.index(index.getAllCodeBlocks());
-        CodeBlocksPanel.refresh(index, codeBlockEngine);
-        codeBlockTreeView.description = codeBlockProvider.getDescription();
-        codeBlockTreeView.message = index.getAllCodeBlocks().length === 0 ? makeEmptyStateMsg('code blocks') : undefined;
-    });
-    context.subscriptions.push(codeBlockListener);
+    // NOTE: codeBlockListener is registered AFTER codeBlockTreeView is declared (below)
+    // to avoid a temporal dead zone ReferenceError when the listener fires during init.
 
     // Refresh Prompt Library panel (editor tab) and sidebar view when index changes
     const promptLibraryListener = index.addChangeListener(() => {
@@ -323,6 +366,74 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     });
     context.subscriptions.push(timelineListener);
 
+    // ── Feature 12: Session archive ──────────────────────────────────────────
+    // Registered here (before startWatcher) so it receives the initial batch event.
+    const archive = new SessionArchive(context.globalStorageUri.fsPath);
+    const archiveListener = index.addTypedChangeListener((event) => {
+        const cfg = vscode.workspace.getConfiguration('chatwizard');
+        const maxAgeDays = cfg.get<number>('archive.maxAgeDays', 0);
+        const maxSizeMB  = cfg.get<number>('archive.maxSizeMB',  0);
+
+        const archiveSession = async (session: import('./types').Session) => {
+            if (archive.has(session.id, session.source)) { return; }
+            await archive.save(session.id, session.source, JSON.stringify(session));
+        };
+
+        if (event.type === 'batch') {
+            // Skip restoring archive-only sessions on the second (archive-restore) batch
+            // to avoid an infinite loop: only act when the batch contains non-archived sessions.
+            if (event.sessions.some(s => !s.archived)) {
+                void (async () => {
+                    await archive.init();
+                    await Promise.all(event.sessions.filter(s => !s.archived).map(archiveSession));
+                    const pruned = await archive.prune({ maxAgeDays, maxSizeMB });
+
+                    // 12-D: restore sessions that exist in the archive but not in the live index
+                    const allArchived = await archive.loadAllSources();
+                    const archivedOnly: import('./types').Session[] = [];
+                    for (const entry of allArchived) {
+                        if (!index.get(entry.sessionId)) {
+                            const raw = await archive.loadRaw(entry.sessionId, entry.source);
+                            if (raw) {
+                                try {
+                                    const session = { ...JSON.parse(raw) as import('./types').Session, archived: true as const };
+                                    archivedOnly.push(session);
+                                } catch { /* ignore corrupt archive entries */ }
+                            }
+                        }
+                    }
+
+                    const stats = await archive.stats();
+                    channel.appendLine(
+                        `[Archive] ${stats.totalSessions} session(s) archived ` +
+                        `(${(stats.totalBytes / 1024).toFixed(1)} KB)` +
+                        (pruned > 0 ? `, pruned ${pruned}` : '') +
+                        (archivedOnly.length > 0 ? `, restored ${archivedOnly.length} from archive` : '')
+                    );
+
+                    if (archivedOnly.length > 0) {
+                        index.batchUpsert(archivedOnly);
+                    }
+                })();
+            }
+        } else if (event.type === 'upsert') {
+            void archiveSession(event.session);
+        } else if (event.type === 'remove') {
+            // Source file was deleted — re-surface the archived copy in the live index
+            void (async () => {
+                const entry = await archive.findAnySource(event.sessionId);
+                if (!entry) { return; }
+                const raw = await archive.loadRaw(entry.sessionId, entry.source);
+                if (!raw) { return; }
+                try {
+                    const restored = { ...JSON.parse(raw) as import('./types').Session, archived: true as const };
+                    index.upsert(restored);
+                } catch { /* ignore corrupt archive entry */ }
+            })();
+        }
+    });
+    context.subscriptions.push(archiveListener);
+
     const provider = new SessionTreeProvider(index, context.extensionUri);
 
     // Restore persisted sort stack
@@ -336,7 +447,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     // Restore persisted session group mode (default: 'date' — matches provider default)
     const savedSessionGroupMode = context.globalState.get<string>('sessionGroupMode') as GroupMode | undefined;
-    if (savedSessionGroupMode === 'none' || savedSessionGroupMode === 'date') {
+    if (savedSessionGroupMode === 'none' || savedSessionGroupMode === 'date' ||
+        savedSessionGroupMode === 'branch' || savedSessionGroupMode === 'workItem') {
         provider.setGroupMode(savedSessionGroupMode);
     }
 
@@ -369,6 +481,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         void vscode.commands.executeCommand('setContext', 'chatwizard.sortDir', primary.direction);
         void vscode.commands.executeCommand('setContext', 'chatwizard.hasFilter', provider.hasActiveFilter());
         void vscode.commands.executeCommand('setContext', 'chatwizard.sessionGrouped', provider.isGrouped());
+        void vscode.commands.executeCommand('setContext', 'chatwizard.sessionGroupMode', provider.getGroupMode());
     }
     syncContext();
 
@@ -426,6 +539,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // Show rich empty-state message initially (no data yet); cleared once code blocks are indexed.
     codeBlockTreeView.message = makeEmptyStateMsg('code blocks');
     context.subscriptions.push(codeBlockTreeView);
+
+    // Register codeBlockListener here (after codeBlockTreeView is initialised)
+    // to avoid accessing the const before its declaration (TDZ ReferenceError).
+    let _prevCodeBlockCount = 0;
+    const codeBlockListener = index.addChangeListener(() => {
+        const allBlocks = index.getAllCodeBlocks();
+        codeBlockEngine.index(allBlocks);
+        CodeBlocksPanel.refresh(index, codeBlockEngine);
+        codeBlockTreeView.description = codeBlockProvider.getDescription();
+        codeBlockTreeView.message = allBlocks.length === 0 ? makeEmptyStateMsg('code blocks') : undefined;
+        if (allBlocks.length > _prevCodeBlockCount) {
+            const added = allBlocks.length - _prevCodeBlockCount;
+            brandingBar.notify(`${added} new code block${added === 1 ? '' : 's'} extracted`, 'chatwizard.showCodeBlocks');
+        }
+        _prevCodeBlockCount = allBlocks.length;
+    });
+    context.subscriptions.push(codeBlockListener);
 
     /** Apply a single-key primary sort (toolbar buttons). */
     function applySort(mode: SortMode): void {
@@ -601,6 +731,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                     description: current.onlyWithWarnings ? 'currently active' : undefined,
                 },
                 {
+                    id: 'tags',
+                    label: '$(tag)  Tags…',
+                    description: current.tags && current.tags.length > 0
+                        ? `current: ${current.tags.map(t => `#${t}`).join(', ')}`
+                        : undefined,
+                },
+                {
                     id: '_clear',
                     label: '$(close)  Clear all filters',
                     alwaysShow: true,
@@ -703,6 +840,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
             } else if (pick.id === 'onlyWithWarnings') {
                 newFilter.onlyWithWarnings = !current.onlyWithWarnings || undefined;
+
+            } else if (pick.id === 'tags') {
+                const allTags = await sidecarStore.getAllTags();
+                if (allTags.length === 0) { void vscode.window.showInformationMessage('No tags defined yet.'); return; }
+                const tagItems = allTags.map(t => ({
+                    label: `#${t.tag}`,
+                    description: `${t.count} session${t.count === 1 ? '' : 's'}`,
+                    picked: current.tags?.includes(t.tag) ?? false,
+                }));
+                const chosen = await vscode.window.showQuickPick(tagItems, {
+                    title: 'Filter by tags — sessions matching any selected tag',
+                    canPickMany: true,
+                });
+                if (chosen === undefined) { return; }
+                newFilter.tags = chosen.length > 0 ? chosen.map(c => c.label.slice(1)) : undefined;
             }
 
             provider.setFilter(newFilter);
@@ -832,6 +984,90 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             savePins();
         })
     );
+    context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.revealSessionInExplorer', async (item: SessionTreeItem) => {
+            if (item.summary.archived) {
+                // Original source file has been deleted — reveal the JSON copy in the ChatWizard archive.
+                const entry = await archive.findAnySource(item.summary.id);
+                if (!entry) {
+                    vscode.window.showErrorMessage('Archived file not found in the ChatWizard archive.');
+                    return;
+                }
+                vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(entry.filePath));
+            } else {
+                vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(item.summary.filePath));
+            }
+        })
+    );
+    context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.archiveSession', async (item: SessionTreeItem) => {
+            const summary = item.summary;
+            if (summary.archived) { return; }
+
+            // Cursor (and similar) use a shared .vscdb SQLite file — deleting it would
+            // remove all sessions stored in that database, not just this one.
+            if (summary.filePath.endsWith('.vscdb') || summary.filePath.endsWith('.db')) {
+                vscode.window.showErrorMessage(
+                    `Cannot archive ${friendlySourceName(summary.source)} sessions: ` +
+                    `the source file is a shared database and cannot be safely deleted.`
+                );
+                return;
+            }
+
+            const confirm = await vscode.window.showWarningMessage(
+                `Archive "${summary.title}"?\n\n` +
+                `The original source file will be permanently deleted — only the ChatWizard copy will remain.`,
+                { modal: true },
+                'Archive'
+            );
+            if (confirm !== 'Archive') { return; }
+
+            // Ensure the session is saved to the archive before the source is removed
+            const session = index.get(summary.id);
+            if (!session) {
+                vscode.window.showErrorMessage('Session not found in index — cannot archive.');
+                return;
+            }
+            try {
+                await archive.save(session.id, session.source, JSON.stringify(session));
+            } catch (err) {
+                vscode.window.showErrorMessage(`Failed to write to archive: ${err}`);
+                return;
+            }
+
+            // Delete the source file. The file watcher fires onDidDelete → index.remove
+            // → archive listener re-surfaces the session with archived: true.
+            try {
+                const { promises: fsPromises } = await import('fs');
+                await fsPromises.unlink(summary.filePath);
+            } catch (err) {
+                vscode.window.showErrorMessage(`Failed to delete source file: ${err}`);
+            }
+        })
+    );
+    context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.deleteArchivedSession', async (item: SessionTreeItem) => {
+            const summary = item.summary;
+            if (!summary.archived) { return; }
+
+            const confirm = await vscode.window.showWarningMessage(
+                `Permanently delete "${summary.title}"?\n\n` +
+                `The ChatWizard archive copy will be deleted. This cannot be undone.`,
+                { modal: true },
+                'Delete'
+            );
+            if (confirm !== 'Delete') { return; }
+
+            // Remove from archive on disk
+            const session = index.get(summary.id);
+            const source = session?.source ?? summary.source;
+            await archive.delete(summary.id, source);
+
+            // Remove from the live index — no restore will happen because the archive
+            // entry is now gone
+            index.remove(summary.id);
+        })
+    );
 
     // ------------------------------------------------------------------
     // Load more commands (pagination)
@@ -847,8 +1083,55 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // Group toggle commands
     // ------------------------------------------------------------------
     context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.groupSessions', async () => {
+            const hasBranch = provider.hasBranchData();
+            const hasWorkItems = provider.hasWorkItems();
+            const current = provider.getGroupMode();
+            const workItemPattern = vscode.workspace.getConfiguration('chatwizard').get<string>('workItemPattern', '');
+
+            const items: Array<{ label: string; description?: string; mode: GroupMode }> = [
+                { label: '$(list-flat) No grouping',    mode: 'none' },
+                { label: '$(calendar) Group by Date',   mode: 'date' },
+                { label: `$(git-branch) Group by Branch${!hasBranch ? '  \u2014 open chats to populate' : ''}`, mode: 'branch' },
+                ...(workItemPattern ? [{ label: '$(tag) Group by Work Item', mode: 'workItem' as GroupMode,
+                  description: hasWorkItems ? undefined : 'No work items found in sessions' }] : []),
+            ];
+
+            const activeLabel = {
+                none: '$(list-flat) No grouping',
+                date: '$(calendar) Group by Date',
+                branch: `$(git-branch) Group by Branch${!hasBranch ? '  \u2014 open chats to populate' : ''}`,
+                workItem: workItemPattern ? '$(tag) Group by Work Item' : undefined,
+            }[current];
+
+            const picked = await vscode.window.showQuickPick(
+                items.map(i => ({ ...i, picked: i.label === activeLabel })),
+                { placeHolder: 'Choose how to group sessions\u2026', title: 'Group Sessions' },
+            );
+            if (!picked) { return; }
+
+            if (picked.mode === 'workItem' && !hasWorkItems) {
+                void vscode.window.showInformationMessage(
+                    'No work items found. Add ticket references (e.g. prefix-12345) to session titles, or set chatwizard.workItemPattern in settings.',
+                    'Open Settings',
+                ).then(choice => {
+                    if (choice === 'Open Settings') {
+                        void vscode.commands.executeCommand('workbench.action.openSettings', 'chatwizard.workItemPattern');
+                    }
+                });
+                return;
+            }
+
+            provider.setGroupMode(picked.mode);
+            treeView.description = provider.getDescription();
+            void context.globalState.update('sessionGroupMode', picked.mode);
+            syncContext();
+        })
+    );
+    // Keep legacy commands functional (in case keyboard shortcuts were set)
+    context.subscriptions.push(
         vscode.commands.registerCommand('chatwizard.toggleSessionGrouping', () => {
-            const next: GroupMode = provider.getGroupMode() === 'date' ? 'none' : 'date';
+            const next: GroupMode = provider.getGroupMode() === 'none' ? 'date' : 'none';
             provider.setGroupMode(next);
             treeView.description = provider.getDescription();
             void context.globalState.update('sessionGroupMode', next);
@@ -909,7 +1192,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 return;
             }
             telemetry.record('session.opened', { source: session.source });
-            SessionWebviewPanel.show(context, session, searchTerm, false, undefined, undefined, undefined, highlightContainer);
+            SessionWebviewPanel.show(context, session, searchTerm, false, undefined, undefined, undefined, highlightContainer, index.getSidecarMeta(session.id)?.tags, index.getSidecarMeta(session.id)?.entities, index.getSidecarMeta(session.id)?.summary);
         })
     );
 
@@ -926,7 +1209,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             const isLeaf = ref.blocks.length === 1;
             const targetMsgIdx = isLeaf ? ref.blocks[0].messageIndex : undefined;
             const targetBlockIdx = isLeaf ? (ref.blocks[0].blockIndexInMessage ?? 0) : undefined;
-            SessionWebviewPanel.show(context, session, undefined, isLeaf, targetMsgIdx, undefined, targetBlockIdx);
+            SessionWebviewPanel.show(context, session, undefined, isLeaf, targetMsgIdx, undefined, targetBlockIdx, undefined, index.getSidecarMeta(session.id)?.tags, index.getSidecarMeta(session.id)?.entities, index.getSidecarMeta(session.id)?.summary);
         })
     );
 
@@ -984,6 +1267,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     context.subscriptions.push(
         vscode.commands.registerCommand('chatwizard.focusSessionTree', () => {
             void vscode.commands.executeCommand('chatwizardSessions.focus');
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.revealInSessionsTree', async (sessionId: string) => {
+            const summary = index.getAllSummaries().find(s => s.id === sessionId);
+            if (!summary) { return; }
+            const item = new SessionTreeItem(summary, provider.isPinned(sessionId), context.extensionUri);
+            await vscode.commands.executeCommand('chatwizardSessions.focus');
+            // focus:false keeps the webview focused; select:true highlights the row
+            await treeView.reveal(item, { select: true, focus: false });
         })
     );
 
@@ -1240,6 +1534,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             getContextTool,
             new ListSourcesTool(index),
             new ServerInfoTool(index, semanticProxy, extensionVersion, mcpServerStartTime),
+            new SessionsForFileTool(index),
+            new SessionsForBranchTool(index),
+            new SessionsForWorkItemTool(index),
         ];
 
         const getSessionFullTool = new GetSessionFullTool(index);
@@ -1255,7 +1552,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const mcpCapabilities = buildMcpCapabilities();
 
     // Register VS Code chat participant (@chatwizard) — same prompts as MCP, no server needed.
-    registerChatParticipant(context, mcpCapabilities.prompts, index);
+    const watcherRef = { current: watcher };
+    registerChatParticipant(context, mcpCapabilities.prompts, index, watcherRef, sidecarStore, liveTracker);
 
     const mcpServer = new McpServer(
         {
@@ -1373,6 +1671,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 // Ensure global Copilot instructions are present for plain-language prompts.
                 void setupGlobalCopilotInstructions(context, channel, /* silent */ true);
                 const port = mcpServer.port;
+                brandingBar.notify(`MCP server running on :${port}`, 'chatwizard.startMcpServer');
                 void vscode.window.showInformationMessage(
                     `Chat Wizard MCP server started on port ${port}. ` +
                     `Use 'Chat Wizard: Copy MCP Config to Clipboard' to set up your AI tool.`
@@ -1700,13 +1999,330 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
         const w = await startWatcher(index, channel, scopeManager);
         watcher = w;
+        watcherRef.current = w;
         context.subscriptions.push(w);
+
+        // ── Feature 13-H: Active session tag button ───────────────────────────
+        w.setLiveTracker(liveTracker);
+        const activeSessionTagBtn = new ActiveSessionTagButton(liveTracker);
+        context.subscriptions.push(activeSessionTagBtn);
+
+        context.subscriptions.push(
+            vscode.commands.registerCommand('chatwizard.tagActiveSession', async () => {
+                const windowMs = (vscode.workspace.getConfiguration('chatwizard').get<number>('activeSessionWindowMinutes') ?? 120) * 60_000;
+                const active = liveTracker.getActive(windowMs);
+                const entry = active[0] ?? liveTracker.getMostRecent();
+                if (!entry) {
+                    void vscode.window.showInformationMessage('No active session found.');
+                    return;
+                }
+                const input = await vscode.window.showInputBox({
+                    prompt: 'Enter tag(s) for the active session, comma-separated',
+                    placeHolder: 'e.g. refactor, auth, bugfix',
+                });
+                const tags = input?.split(',').map(t => t.trim()).filter(Boolean) ?? [];
+                if (tags.length === 0) { return; }
+                for (const t of tags) { await sidecarStore.addTag(entry.sessionId, t); }
+                const reloadedCache = await sidecarStore.load();
+                index.setSidecarStore(sidecarStore, reloadedCache);
+                void vscode.window.showInformationMessage(`Tagged active session: ${tags.map(t => `"${t}"`).join(', ')}`);
+            })
+        );
+
         const copilotCount = index.getSummariesBySource('copilot').length;
         const claudeCount = index.getSummariesBySource('claude').length;
         channel.appendLine(
             `Chat Wizard activated — ${index.size} sessions indexed (${copilotCount} Copilot, ${claudeCount} Claude)`
         );
         telemetry.record('extension.activated', { sessionCount: index.size });
+
+        // ── Feature 18: AI summaries background job ───────────────────────────
+        void runSummaryBackgroundJob(
+            () => index.getAllSummaries().map(s => s.id),
+            (id) => index.get(id),
+            sidecarStore,
+            channel,
+            new SummaryGenerator(),
+        );
+
+        // ── Feature 19: Entity extraction background job ──────────────────────
+        void runEntityExtractionJob(
+            () => index.getAllSummaries().map(s => s.id),
+            (id) => index.get(id),
+            sidecarStore,
+            channel,
+        );
+
+        // ── Branding status-bar item ────────────────────────────────────────────
+        // ── Feature 10: File history UI ────────────────────────────────────────
+        const fileHistoryStatusBar = new FileHistoryStatusBarItem(index, (count, normPath) => {
+            const fileName = normPath.split(/[\\/]/).pop() ?? normPath;
+            brandingBar.notify(
+                `${count} session${count === 1 ? '' : 's'} touched ${fileName}`,
+                'chatwizard.showFileHistory',
+            );
+        });
+        context.subscriptions.push(fileHistoryStatusBar);
+
+        const fileHistoryCodeLens = new FileHistoryCodeLensProvider(index);
+        context.subscriptions.push(
+            vscode.languages.registerCodeLensProvider({ scheme: 'file' }, fileHistoryCodeLens),
+            fileHistoryCodeLens,
+        );
+
+        context.subscriptions.push(
+            vscode.commands.registerCommand('chatwizard.showFileHistory', (arg?: vscode.Uri | string) => {
+                const filePath = arg instanceof vscode.Uri ? arg.fsPath : arg;
+                FileHistoryPanel.show(context.extensionUri, index, filePath);
+            }),
+        );
+
+        // ── Chronicle integration (branch + checkpoint data for branch grouping) ──
+        // 1. Optionally enable Copilot's local index so sessions.branch gets populated.
+        const cwCfg = vscode.workspace.getConfiguration('chatwizard');
+        if (cwCfg.get<boolean>('chronicle.enableLocalIndex', true)) {
+            const currentValue = vscode.workspace.getConfiguration().get<boolean>('chat.localIndex.enabled');
+            if (currentValue !== true) {
+                void vscode.workspace.getConfiguration().update(
+                    'chat.localIndex.enabled',
+                    true,
+                    vscode.ConfigurationTarget.Global,
+                );
+            }
+        }
+
+        // 2. Read Chronicle DBs and merge branch + checkpoint data into the index.
+        const globalStorageDir = require('path').dirname(context.globalStorageUri.fsPath) as string;
+        const globalChronicleDbPath = require('path').join(globalStorageDir, 'GitHub.copilot-chat', 'session-store.db') as string;
+
+        let chronicleMergeActive = false; // prevents the debounce from firing during our own merge
+
+        async function loadChronicleData(): Promise<void> {
+            try {
+                const perWorkspaceDbs = await discoverChronicleDbsAsync();
+                const dbPaths = new Set<string>([
+                    globalChronicleDbPath,
+                    ...perWorkspaceDbs.map(d => d.dbPath),
+                ]);
+
+                const bySessionId = new Map<string, ChronicleData>();
+
+                for (const dbPath of dbPaths) {
+                    for (const s of readChronicleSessions(dbPath)) {
+                        const existing = bySessionId.get(s.sessionId);
+                        bySessionId.set(s.sessionId, {
+                            overview:         existing?.overview         ?? null,
+                            workDone:         existing?.workDone         ?? null,
+                            technicalDetails: existing?.technicalDetails ?? null,
+                            nextSteps:        existing?.nextSteps        ?? null,
+                            createdAt:        existing?.createdAt        ?? null,
+                            importantFiles:   existing?.importantFiles,
+                            branch:           s.branch     ?? existing?.branch     ?? null,
+                            repository:       s.repository ?? existing?.repository ?? null,
+                        });
+                    }
+                    for (const cp of readChronicleCheckpoints(dbPath)) {
+                        const existing = bySessionId.get(cp.sessionId);
+                        bySessionId.set(cp.sessionId, {
+                            overview:         cp.overview         ?? existing?.overview         ?? null,
+                            workDone:         cp.workDone         ?? existing?.workDone         ?? null,
+                            technicalDetails: cp.technicalDetails ?? existing?.technicalDetails ?? null,
+                            nextSteps:        cp.nextSteps        ?? existing?.nextSteps        ?? null,
+                            createdAt:        cp.createdAt        ?? existing?.createdAt        ?? null,
+                            importantFiles:   cp.importantFiles   ?? existing?.importantFiles,
+                            branch:           existing?.branch     ?? null,
+                            repository:       existing?.repository ?? null,
+                        });
+                    }
+                }
+
+                chronicleMergeActive = true;
+                try {
+                    if (bySessionId.size > 0) {
+                        index.mergeChronicleData(
+                            Array.from(bySessionId.entries()).map(([sessionId, data]) => ({ sessionId, data })),
+                        );
+                        const withFiles = Array.from(bySessionId.values()).filter(d => d.importantFiles && d.importantFiles.length > 0).length;
+                        channel.appendLine(`[Chronicle] Merged ${bySessionId.size} session(s) from Chronicle (${withFiles} with importantFiles)`);
+                        brandingBar.notify(`Branch context merged for ${bySessionId.size} session${bySessionId.size === 1 ? '' : 's'}`);
+                    } else {
+                        channel.appendLine('[Chronicle] Connected to Chronicle DB — no checkpoints yet');
+                    }
+                } finally {
+                    chronicleMergeActive = false;
+                }
+            } catch (err) {
+                chronicleMergeActive = false;
+                channel.appendLine(`[Chronicle] Failed to load: ${err}`);
+            }
+        }
+
+        // Load on activation
+        void loadChronicleData();
+
+        // Re-read after genuinely new sessions appear (debounced 4 s).
+        // Guarded by chronicleMergeActive so Chronicle's own mergeChronicleData()
+        // notification doesn't trigger a redundant re-read.
+        let chronicleDebounce: ReturnType<typeof setTimeout> | undefined;
+        context.subscriptions.push(index.addChangeListener(() => {
+            if (chronicleMergeActive) { return; }
+            if (chronicleDebounce) { clearTimeout(chronicleDebounce); }
+            chronicleDebounce = setTimeout(() => { void loadChronicleData(); }, 4000);
+        }));
+
+        // ── Feature 13: Tagging commands ──────────────────────────────────────
+        context.subscriptions.push(
+            vscode.commands.registerCommand('chatwizard.addTag', async (sessionId?: string) => {
+                const id = sessionId ?? await pickSessionId(index);
+                if (!id) { return; }
+                const input = await vscode.window.showInputBox({ prompt: 'Enter tag(s), comma-separated', placeHolder: 'e.g. refactor, auth, bugfix' });
+                const tags = input?.split(',').map(t => t.trim()).filter(Boolean) ?? [];
+                if (tags.length === 0) { return; }
+                for (const t of tags) { await sidecarStore.addTag(id, t); }
+                const reloadedCache = await sidecarStore.load();
+                index.setSidecarStore(sidecarStore, reloadedCache);
+                void vscode.window.showInformationMessage(`Added: ${tags.map(t => `"${t}"`).join(', ')}`);
+            }),
+            vscode.commands.registerCommand('chatwizard.removeTag', async (sessionId?: string) => {
+                const id = sessionId ?? await pickSessionId(index);
+                if (!id) { return; }
+                const existing = (await sidecarStore.get(id))?.tags ?? [];
+                if (existing.length === 0) { void vscode.window.showInformationMessage('No tags to remove.'); return; }
+                const tag = await vscode.window.showQuickPick(existing, { placeHolder: 'Select tag to remove' });
+                if (tag) {
+                    await sidecarStore.removeTag(id, tag);
+                    const reloadedCache = await sidecarStore.load();
+                    index.setSidecarStore(sidecarStore, reloadedCache);
+                    void vscode.window.showInformationMessage(`Tag "${tag}" removed.`);
+                }
+            }),
+            vscode.commands.registerCommand('chatwizard.addTagFromTree', async (item: SessionTreeItem) => {
+                const input = await vscode.window.showInputBox({ prompt: 'Enter tag(s), comma-separated', placeHolder: 'e.g. refactor, auth, bugfix' });
+                const tags = input?.split(',').map(t => t.trim()).filter(Boolean) ?? [];
+                if (tags.length === 0) { return; }
+                for (const t of tags) { await sidecarStore.addTag(item.summary.id, t); }
+                const reloadedCache = await sidecarStore.load();
+                index.setSidecarStore(sidecarStore, reloadedCache);
+                void vscode.window.showInformationMessage(`Added: ${tags.map(t => `"${t}"`).join(', ')}`);
+            }),
+            vscode.commands.registerCommand('chatwizard.removeTagFromTree', async (item: SessionTreeItem) => {
+                const existing = (await sidecarStore.get(item.summary.id))?.tags ?? [];
+                if (existing.length === 0) {
+                    void vscode.window.showInformationMessage('This session has no tags.');
+                    return;
+                }
+                const picks = await vscode.window.showQuickPick(
+                    existing.map(t => ({ label: t })),
+                    { placeHolder: 'Select tags to remove', canPickMany: true }
+                );
+                if (!picks || picks.length === 0) { return; }
+                for (const pick of picks) { await sidecarStore.removeTag(item.summary.id, pick.label); }
+                const reloadedCache = await sidecarStore.load();
+                index.setSidecarStore(sidecarStore, reloadedCache);
+            }),
+        );
+
+        // ── Feature 18-E: Regenerate summary command ──────────────────────────
+        context.subscriptions.push(
+            vscode.commands.registerCommand('chatwizard.regenerateSummary', async (item: SessionTreeItem) => {
+                const id = item?.summary?.id;
+                if (!id) { return; }
+                await sidecarStore.patch(id, { summary: undefined });
+                const session = index.get(id);
+                if (!session) { return; }
+                void vscode.window.showInformationMessage('Regenerating summary…');
+                const generator = new SummaryGenerator();
+                const newSummary = await generator.generate(session);
+                await sidecarStore.patch(id, { summary: newSummary });
+                const reloadedCache = await sidecarStore.load();
+                index.setSidecarStore(sidecarStore, reloadedCache);
+                provider.refresh();
+            }),
+        );
+
+        // ── Feature 20-D: Analyze Selected Prompt command ─────────────────────
+        context.subscriptions.push(
+            vscode.commands.registerCommand('chatwizard.analyzeSelectedPrompt', async () => {
+                const editor = vscode.window.activeTextEditor;
+                const selection = editor?.selection;
+                const text = editor?.document.getText(selection);
+                if (!text?.trim()) {
+                    void vscode.window.showInformationMessage('Select some text first to analyze as a prompt.');
+                    return;
+                }
+                const analyzer = new PromptAnalyzer();
+                const analysis = await analyzer.analyze(text);
+                const detail = [
+                    `Tokens: ~${analysis.tokenCount.toLocaleString()}`,
+                    analysis.costEstimates.length > 0
+                        ? `Est. cost: ${analysis.costEstimates.map(c => `${c.model}: $${c.estimate.totalUsd.toFixed(4)}`).join(' | ')}`
+                        : '',
+                    analysis.verbosityFlags.length > 0
+                        ? `Flags: ${analysis.verbosityFlags.map(f => f.description).join('; ')}`
+                        : 'No verbosity issues.',
+                ].filter(Boolean).join('\n');
+                const choice = await vscode.window.showInformationMessage(analysis.summary, 'View Details');
+                if (choice === 'View Details') {
+                    const panel = vscode.window.createWebviewPanel(
+                        'chatwizard.promptAnalysis',
+                        'Prompt Analysis',
+                        vscode.ViewColumn.Beside,
+                        {},
+                    );
+                    panel.webview.html = `<!DOCTYPE html><html><body><pre style="font-family:monospace;padding:16px;">${detail.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</pre></body></html>`;
+                }
+            }),
+        );
+
+        // ── Feature 22: Export commands ───────────────────────────────────────
+        context.subscriptions.push(
+            vscode.commands.registerCommand('chatwizard.exportToObsidian', async () => {
+                const uri = await vscode.window.showOpenDialog({
+                    canSelectFolders: true, canSelectFiles: false, openLabel: 'Select Obsidian vault folder',
+                });
+                if (!uri?.[0]) { return; }
+                const sessions = index.getAllSummaries().map(s => index.get(s.id)).filter((s): s is NonNullable<typeof s> => s != null);
+                const exporter = new ObsidianExporter();
+                const result = await exporter.export(sessions, { targetDir: uri[0].fsPath, overwrite: false }, async (id) => {
+                    return await sidecarStore.get(id) ?? undefined;
+                });
+                void vscode.window.showInformationMessage(`Obsidian export: ${result.written} written, ${result.skipped} skipped, ${result.errors.length} errors.`);
+            }),
+            vscode.commands.registerCommand('chatwizard.exportToNotion', async () => {
+                const secretStorage = context.secrets;
+                let apiKey = await secretStorage.get('chatwizard.notionApiKey');
+                if (!apiKey) {
+                    apiKey = await vscode.window.showInputBox({
+                        prompt: 'Enter your Notion integration API key (stored in VS Code SecretStorage)',
+                        password: true,
+                    });
+                    if (!apiKey) { return; }
+                    await secretStorage.store('chatwizard.notionApiKey', apiKey);
+                }
+                const databaseId = await vscode.window.showInputBox({ prompt: 'Enter Notion database ID' });
+                if (!databaseId) { return; }
+                const sessions = index.getAllSummaries().map(s => index.get(s.id)).filter((s): s is NonNullable<typeof s> => s != null);
+                const exporter = new NotionExporter();
+                void vscode.window.showInformationMessage(`Exporting ${sessions.length} sessions to Notion…`);
+                const result = await exporter.export(sessions, { databaseId, apiKey });
+                void vscode.window.showInformationMessage(`Notion export: ${result.written} written, ${result.errors.length} errors.`);
+            }),
+            vscode.commands.registerCommand('chatwizard.forgetNotionApiKey', async () => {
+                await context.secrets.delete('chatwizard.notionApiKey');
+                void vscode.window.showInformationMessage('Notion API key removed from SecretStorage.');
+            }),
+        );
+
+        // ── Feature 12: Archive stats command ─────────────────────────────────
+        context.subscriptions.push(
+            vscode.commands.registerCommand('chatwizard.showArchiveStats', async () => {
+                const stats = await archive.stats();
+                void vscode.window.showInformationMessage(
+                    `Archive: ${stats.totalSessions} session(s), ${(stats.totalBytes / 1024).toFixed(1)} KB` +
+                    (stats.oldestDate ? `, oldest: ${stats.oldestDate.slice(0, 10)}` : '')
+                );
+            }),
+        );
     })().catch(err => channel.appendLine(`[error] Watcher init failed: ${err}`));
 }
 
@@ -1717,6 +2333,16 @@ export function deactivate(): void {
 
 function capitalise(s: string): string {
     return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/** Quick-pick helper for tag/session commands that need a session ID. */
+async function pickSessionId(index: SessionIndex): Promise<string | undefined> {
+    const summaries = index.getAllSummaries().slice(0, 50);
+    const pick = await vscode.window.showQuickPick(
+        summaries.map(s => ({ label: s.title, description: s.id, id: s.id })),
+        { placeHolder: 'Select a session' },
+    );
+    return pick?.id;
 }
 
 /**

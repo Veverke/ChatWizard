@@ -16,6 +16,10 @@ export interface SearchFilter {
     searchPrompts?: boolean;
     /** Include assistant-turn messages in search (default: true) */
     searchResponses?: boolean;
+    /** Restrict to sessions whose extracted entities contain `entityValue` under `entityType` */
+    entityType?: 'filePaths' | 'functionNames' | 'errors' | 'decisions';
+    /** Substring to match (case-insensitive) within the `entityType` list */
+    entityValue?: string;
 }
 
 /** A search query issued by the caller */

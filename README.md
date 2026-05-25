@@ -1,4 +1,4 @@
-﻿# ChatWizard
+﻿# Chat Wizard
 
 [![VS Code Marketplace](https://vsmarketplacebadges.dev/version/Veverke.chatwizard.svg)](https://marketplace.visualstudio.com/items?itemName=Veverke.chatwizard)
 [![Installs](https://vsmarketplacebadges.dev/installs/Veverke.chatwizard.svg)](https://marketplace.visualstudio.com/items?itemName=Veverke.chatwizard)
@@ -16,20 +16,44 @@
 [![VS Code](https://img.shields.io/badge/VS%20Code-%E2%89%A51.85-0098FF?logo=visual-studio-code&logoColor=white)](https://marketplace.visualstudio.com/items?itemName=Veverke.chatwizard)
 [![MCP](https://img.shields.io/badge/MCP-server%20included-7B2FBE?logo=anthropic&logoColor=white)](https://modelcontextprotocol.io)
 
-Inspired by https://github.com/Veverke/bAInder, I decided to make a VS Code extension, with a developer perspective in mind.
+**Chat Wizard is a VS Code extension** that lets you search, analyze, and manage AI chat history from tools like **GitHub Copilot**, **Claude**, **Cursor**, **Cline**, **Windsurf**, **Continue.dev**, **Amazon Q Developer**, **Gemini Code Assist**, and more.
 
-Your AI chat history — unified, searchable, and always yours. Chat Wizard reads session data from every major AI coding tool and gives you a single place to search, browse, and analyse it all. Your conversation history is no longer trapped inside whichever tool or IDE created it.
+It acts as a **unified AI coding assistant memory and analytics layer** for developers — your conversation history is no longer trapped inside whichever tool or IDE created it. _Inspired by [bAInder](https://github.com/Veverke/bAInder)._
 
-> **Tags:** AI chat manager · Copilot chat manager · Claude chat manager · chat history viewer · prompt library · code block search · token usage analytics · LLM productivity · VS Code AI tools · conversation history manager · Cline chat manager · Roo code chat manager · Cursor chat manager · Windsurf chat manager · Aider chat manager · Google Antigravity chat manager
+> **Tags:** AI chat manager · Copilot chat manager · Claude chat manager · chat history viewer · prompt library · code block search · token usage analytics · LLM productivity · VS Code AI tools · conversation history manager · Cline chat manager · Roo code chat manager · Cursor chat manager · Windsurf chat manager · Aider chat manager · Google Antigravity chat manager · Continue.dev chat manager · Amazon Q chat manager · Gemini Code Assist chat manager
 
 ---
 
-## Why ChatWizard?
+## Why Chat Wizard?
 
 - **Your history travels with you.** Switch from Cursor to VS Code, try Windsurf for a project, add Cline to your workflow — your full conversation archive stays intact and searchable in one place. No more context lost when you change tools or IDEs.
-- **Everything in one view.** Whether you use one AI coding tool or five, Chat Wizard aggregates sessions from all of them. Search across a year of Copilot, Claude, Cline, Cursor, Windsurf, Aider, and Google Antigravity conversations in a single query.
+- **Everything in one view.** Whether you use one AI coding tool or five, Chat Wizard aggregates sessions from all of them. Search across a year of Copilot, Claude, Cline, Cursor, Windsurf, Aider, Google Antigravity, Continue.dev, Amazon Q Developer, and Gemini Code Assist conversations in a single query.
 - **100% local, read-only, zero setup.** Chat Wizard never makes a network call, never modifies your session files, and requires no API key or account. It passively reads what your existing tools already write to disk.
 - **Not just a viewer.** Full-text search with regex, a deduplicated prompt library, a code block archive, per-model usage analytics, and a timeline with activity heat maps — capabilities that no individual AI tool exposes.
+
+---
+
+## AI Chat History Viewer for VS Code
+
+Search and browse all your AI coding conversations in one place. Chat Wizard aggregates session data from every major AI coding tool into a single searchable panel — directly inside VS Code. No context is lost when you switch tools, workspaces, or IDEs.
+
+---
+
+## GitHub Copilot Chat Manager
+
+Chat Wizard lets you explore, search, and analyze your **GitHub Copilot Chat** conversations outside the native Copilot panel. Browse sessions across all your workspaces, search by keyword or regex, export to Markdown, and inject past sessions as context into new chats.
+
+---
+
+## Works With Cursor, Windsurf, Claude Code, Cline & More
+
+Not locked to any single AI coding tool. Chat Wizard reads sessions from **GitHub Copilot**, **Claude Code**, **Cline**, **Roo Code**, **Cursor**, **Windsurf**, **Aider**, **Google Antigravity**, **Continue.dev**, **Amazon Q Developer**, and **Gemini Code Assist** — giving you a unified manager for your entire AI coding history.
+
+---
+
+## Reuse Past AI Answers Without Chatting Again
+
+Instead of asking the same question twice, search your Chat Wizard history. Find the exact code snippet, explanation, or solution from weeks ago in seconds. The **Code Block Library** and **Prompt Library** make your past AI conversations instantly reusable.
 
 ---
 
@@ -75,9 +99,16 @@ Your AI chat history — unified, searchable, and always yours. Chat Wizard read
 - **Analytics** — token usage charts, daily activity, top projects, top terms, longest sessions
 - **Model Usage** — per-model request counts with date-range filtering and workspace/session drill-down
 - **Timeline** — chronological feed with activity heat map, work bursts, topic drift ribbon, and streak stats
-- **Export** — single session, multi-select, all sessions, or excerpt — to structured Markdown
-- **MCP Server** — expose your full chat history to Claude Desktop, Cursor, Continue, and Copilot agent mode via the Model Context Protocol
-- **`@chatwizard` Copilot Chat Participant** — `/queryHistory` and `/continueFromHistory` directly in Copilot Chat, no MCP server required
+- **Export** — single session, multi-select, all sessions, or excerpt — to structured Markdown, **Obsidian vault**, or **Notion database**
+- **Session Archive** — every indexed session is mirrored locally so history survives source tool pruning
+- **Session Tagging** — attach freeform labels to sessions; filter, search, and tag the active session from the status bar or `/tag` chat command
+- **File History** — Chronicle-powered "N sessions touched this file" in the status bar, CodeLens, and Explorer right-click; `chatwizard_sessions_for_file` MCP tool
+- **Branch & Work Item Grouping** — group sessions by git branch or extracted work-item ID (Jira, GitHub Issues, Azure DevOps)
+- **AI Session Summaries** _(Beta)_ — auto-generated one-line summaries for every session (Chronicle data first, then VS Code LM API, then offline TF-IDF)
+- **Entity Extraction** _(Beta)_ — automatic extraction of file paths, function names, error codes, and decision phrases; filterable chips in the session reader
+- **Prompt Cost Analysis** — offline token count, estimated cost, quality tips, and past-session similarity check for any draft prompt
+- **MCP Server** — expose your full chat history to Claude Desktop, Cursor, Continue, and Copilot agent mode via the Model Context Protocol (**11 tools**)
+- **`@chatwizard` Copilot Chat Participant** — `/queryHistory`, `/continueFromHistory`, `/tag`, `/referMessage`, and `/analyzePrompt` directly in Copilot Chat, no MCP server required
 - **Live Indexing** — file watcher keeps all views up-to-date as new sessions are written, with no manual refresh needed
 - **100% local** — no network calls, no account, read-only access to your existing session files
 
@@ -85,11 +116,11 @@ For detailed usage instructions, settings, and commands see the **[User Guide](d
 
 ---
 
-## ChatWizard vs. Native Chat Interfaces
+## Chat Wizard vs. Native Chat Interfaces
 
 Capabilities not available in the built-in GitHub Copilot Chat panel or the Claude Code terminal:
 
-| Capability | ChatWizard | Copilot Chat (VS Code) | Claude Code (terminal) |
+| Capability | Chat Wizard | Copilot Chat (VS Code) | Claude Code (terminal) |
 |-----------|:----------:|:---------------------:|:---------------------:|
 | Browse all past sessions across all workspaces | ✅ | ❌ per-workspace only | ❌ no GUI history |
 | Cross-session full-text search | ✅ | ❌ | ❌ |
@@ -97,8 +128,18 @@ Capabilities not available in the built-in GitHub Copilot Chat panel or the Clau
 | Filter sessions by model, date range, message count | ✅ | ❌ | ❌ |
 | Multi-key composite sort of session list | ✅ | ❌ | ❌ |
 | Pin & drag-and-drop reorder sessions | ✅ | ❌ | ❌ |
+| Tag and label sessions | ✅ | ❌ | ❌ |
+| Archive sessions to survive source-tool pruning | ✅ | ❌ | ❌ |
+| Group sessions by git branch or work-item ID | ✅ | ❌ | ❌ |
+| AI-generated one-line session summaries _(Beta)_ | ✅ | ❌ | ❌ |
+| Auto-extract entities (files, functions, errors, decisions) _(Beta)_ | ✅ | ❌ | ❌ |
+| "N sessions touched this file" in status bar & CodeLens | ✅ | ❌ | ❌ |
+| Analyze draft prompt for cost, quality & past-query similarity | ✅ | ❌ | ❌ |
 | Export conversations to Markdown | ✅ | ❌ | ❌ |
 | Export a message excerpt (selected turns only) | ✅ | ❌ | ❌ |
+| Export to Obsidian vault (YAML frontmatter + wikilinks) | ✅ | ❌ | ❌ |
+| Export to Notion database (via Notion API) | ✅ | ❌ | ❌ |
+| Inject a past session as context into a new chat | ✅ | ❌ | ❌ |
 | Unified code block library across all sessions | ✅ | ❌ | ❌ |
 | Filter & sort AI-generated code blocks by language, content, source, role | ✅ | ❌ | ❌ |
 | One-click copy of any historical code block | ✅ | ❌ | ❌ |
@@ -125,7 +166,10 @@ Capabilities not available in the built-in GitHub Copilot Chat panel or the Clau
 | **Roo Code** (`rooveterinaryinc.roo-cline`) | Per-task JSON files at `%APPDATA%/Code/User/globalStorage/rooveterinaryinc.roo-cline/tasks/<taskId>/` (Cline-compatible format) |
 | **Cursor** | SQLite `state.vscdb` at `%APPDATA%/Cursor/User/workspaceStorage/<hash>/` — chat history stored under the `composer.composerData` key. Requires `better-sqlite3` (pre-built native module bundled with the extension). |
 | **Windsurf** (Codeium) | SQLite `state.vscdb` at `%APPDATA%/Windsurf/User/workspaceStorage/<hash>/` — Cascade chat history stored under the `cascade.sessionData` key. Reuses the same `better-sqlite3` driver. |
-| **Aider** | Markdown `.aider.chat.history.md` files written by Aider into each project root. ChatWizard scans all open VS Code workspace folders plus any paths listed in `chatwizard.aiderSearchRoots` (up to `chatwizard.aiderSearchDepth` levels deep, default 3). Optional `.aider.conf.yml` in the same directory is read for the `model:` key. No central storage directory — files live inside your project repos. |
+| **Aider** | Markdown `.aider.chat.history.md` files written by Aider into each project root. Chat Wizard scans all open VS Code workspace folders plus any paths listed in `chatwizard.aiderSearchRoots` (up to `chatwizard.aiderSearchDepth` levels deep, default 3). Optional `.aider.conf.yml` in the same directory is read for the `model:` key. No central storage directory — files live inside your project repos. |
+| **Continue.dev** | JSONL session files at `~/.continue/sessions/` (all platforms). Configurable via `chatwizard.continueStoragePath`. |
+| **Amazon Q Developer** | Platform-aware path discovery (`~/.aws/amazonq/` and per-platform variants). Configurable via `chatwizard.amazonQStoragePath`. |
+| **Gemini Code Assist** | VS Code extension `globalStorageUri` for the Gemini Code Assist extension. Path discrimination prevents overlap with the existing Antigravity source. Configurable via `chatwizard.geminiCodeAssistStoragePath`. |
 
 > For tools with partial support, see [Limited Support](#limited-support) below.
 
@@ -152,7 +196,7 @@ Some tools are supported with constraints. Features that operate on prompts alon
 ## Requirements
 
 - VS Code **1.85.0** or later.
-- At least one supported AI coding tool installed and actively used: **GitHub Copilot Chat**, **Claude Code**, **Cline**, **Roo Code**, **Cursor**, **Windsurf**, **Aider**, or **Google Antigravity** (limited support — prompts only; see [Limited Support](#limited-support)). Chat Wizard reads the session files these tools write — it does not create sessions itself and requires no additional configuration for standard installs.
+- At least one supported AI coding tool installed and actively used: **GitHub Copilot Chat**, **Claude Code**, **Cline**, **Roo Code**, **Cursor**, **Windsurf**, **Aider**, **Continue.dev**, **Amazon Q Developer**, **Gemini Code Assist**, or **Google Antigravity** (limited support — prompts only; see [Limited Support](#limited-support)). Chat Wizard reads the session files these tools write — it does not create sessions itself and requires no additional configuration for standard installs.
 
 ---
 
@@ -170,8 +214,8 @@ See the **[User Guide → Commands Reference](docs/user-guide.md#15-commands-ref
 
 ## Architecture & Privacy
 
-- **All processing is local.** ChatWizard never makes network requests. No session content, metadata, or telemetry is ever transmitted to any external server.
-- **Read-only access.** ChatWizard reads AI chat session files but never writes to them or modifies them in any way.
+- **All processing is local.** Chat Wizard never makes network requests. No session content, metadata, or telemetry is ever transmitted to any external server.
+- **Read-only access.** Chat Wizard reads AI chat session files but never writes to them or modifies them in any way.
 - **Live index updates.** A `FileSystemWatcher` monitors the session directories and rebuilds the affected index entries whenever new sessions are created or existing ones are updated. All views refresh automatically.
 - **No external indexing dependencies.** Full-text search uses a custom in-memory inverted index. Similarity clustering uses trigram scoring. Analytics use local token-count approximations. No ML models, no network calls.
 - **MCP server — local and auth-gated.** When enabled, the MCP server binds exclusively to `127.0.0.1` (never `0.0.0.0`). All requests require a bearer token generated with `crypto.randomBytes(32)` and stored in VS Code's extension storage. The token is never logged. A `/health` endpoint is intentionally unauthenticated so clients can verify connectivity; it returns only `{ status: "ok", sessions: N }`.
@@ -183,11 +227,28 @@ See the **[User Guide → Commands Reference](docs/user-guide.md#15-commands-ref
 
 - **Copilot Chat session parsing** reconstructs conversation state by replaying an append-only operation log. Very large sessions (hundreds of messages) may take slightly longer to parse on first index build.
 - **Claude Code epoch sessions** — sessions with a creation date of 1970-01-01 (epoch) or with zero messages are silently skipped during indexing. This matches Claude Code's own behavior of writing placeholder files before sessions are populated.
-- **Token counts are approximations.** ChatWizard uses character-based counting (characters / 4) for Claude and Google Antigravity (Gemini) sessions, and word-based counting (words x 1.3) for Copilot/GPT sessions. These figures are estimates and will not exactly match the billing token counts reported by the respective providers.
+- **Token counts are approximations.** Chat Wizard uses character-based counting (characters / 4) for Claude and Google Antigravity (Gemini) sessions, and word-based counting (words x 1.3) for Copilot/GPT sessions. These figures are estimates and will not exactly match the billing token counts reported by the respective providers.
 - **Cursor and Windsurf schema stability.** Both IDEs store chat data in private SQLite databases whose internal schema can change in any update without notice. Chat Wizard targets the current schema; a future Cursor or Windsurf release may require a matching Chat Wizard update before sessions from those sources are visible again.
 ---
 
 ## Release Notes
+
+### 1.5.0
+
+- **Three new sources** — **Continue.dev**, **Amazon Q Developer**, and **Gemini Code Assist**. All three participate in search, analytics, archive, and MCP.
+- **Chronicle Phase 3 — File-Centric History** — `$(comment) N sessions` status bar item and CodeLens for the active file; Explorer right-click "Show File History"; `chatwizard_sessions_for_file` MCP tool.
+- **Chronicle Phase 4 — Branch & Work Item Grouping** — By Branch and By Work Item group modes on the Sessions panel; `chatwizard.workItemPattern` setting; `chatwizard_sessions_for_branch` and `chatwizard_sessions_for_work_item` MCP tools.
+- **Session Archive** — all sessions mirrored locally; `· archived` badge when source is gone; `Show Archive Statistics` command; configurable age/size pruning.
+- **Session Tagging** — right-click Add/Remove Tag; tag chips in tree and reader; tag filter; `Tag Active Session` command and status bar button; `@chatwizard /tag` and `/removeTags` chat commands.
+- **AI Session Summaries** _(Beta)_ — background generation via Chronicle → LM API → TF-IDF fallback; shown in tree tooltip and reader header; `Regenerate Summary` context menu.
+- **Entity Extraction** _(Beta)_ — auto-extracted file paths, function names, errors, and decisions; entity chips in session reader; `chatwizard_search` entity filter parameters.
+- **Prompt Cost Analysis** — `@chatwizard /analyzePrompt`; `ChatWizard: Analyze Selected Prompt` editor command; offline token count, cost estimate, quality flags, and similarity check.
+- **Obsidian & Notion export** — `ChatWizard: Export Sessions to Obsidian` (YAML frontmatter + wikilinks); `ChatWizard: Export Sessions to Notion` (Notion API; key in SecretStorage).
+- **`@chatwizard` new commands** — `/referMessage` (quote a turn by P/R label); clickable file pills in `/continueFromHistory`.
+- **MCP Server** — 3 new tools (total: **11**); optional TF-IDF reranker for `chatwizard_get_context` (`chatwizard.mcp.reranker.enabled`).
+- **Session Reader** — `P{N}` / `R{N}` turn labels with ⧉ copy-as-reference button on every message.
+- **Squirrel mascot** 🐿️ — persistent status bar icon with gentle pulse animation.
+- VS Code 1.121 API compatibility.
 
 ### 1.4.0
 
@@ -232,7 +293,7 @@ Initial release. All nine development phases complete:
 - Phase 0: Foundation — parsers, file watchers, session index
 - Phase 1: Session Management Panel — TreeView, reader, sort, filter, pin, drag-drop
 - Phase 2: Unified Full-Text Search — inverted index, QuickPick UI, regex, role filters
-- Phase 3: Export to Markdown — single, all, multi-select, excerpt
+- Phase 3: Export to Markdown — single, all, multi-select, excerpt, inject as context
 - Phase 4: Code Block Extraction — language filter, content search, copy-to-clipboard
 - Phase 5: Prompt Library — deduplication, frequency ranking, copy
 - Phase 6: Analytics Dashboard — token usage, daily activity chart, top projects, top terms
@@ -244,7 +305,7 @@ Initial release. All nine development phases complete:
 
 ## Support the Project
 
-If ChatWizard is saving you time, a quick ⭐ review takes 30 seconds and makes a real difference for discoverability:
+If Chat Wizard is saving you time, a quick ⭐ review takes 30 seconds and makes a real difference for discoverability:
 
 → [**Leave a review on VS Code Marketplace**](https://marketplace.visualstudio.com/items?itemName=Veverke.chatwizard&ssr=false#review-details)  
 → [**Leave a review on Open VSX Registry**](https://open-vsx.org/extension/Veverke/chatwizard)

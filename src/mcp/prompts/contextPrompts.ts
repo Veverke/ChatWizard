@@ -346,4 +346,9 @@ export const PROMPT_DEFS: ReadonlyArray<{
         description: 'Find reusable prompts from your chat history',
         argName: 'topic',
     },
+    {
+        command: 'referMessage',
+        description: 'Quote a specific turn from this chat thread by its P/R label (e.g. P3, R2)',
+        argName: 'ref',
+    },
 ];

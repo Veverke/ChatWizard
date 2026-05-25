@@ -1,7 +1,7 @@
 // src/types/index.ts
 
 /** Which AI chat extension produced the session */
-export type SessionSource = 'copilot' | 'claude' | 'cline' | 'roocode' | 'cursor' | 'windsurf' | 'aider' | 'antigravity';
+export type SessionSource = 'copilot' | 'claude' | 'cline' | 'roocode' | 'cursor' | 'windsurf' | 'aider' | 'antigravity' | 'continue' | 'amazonq' | 'geminiCodeAssist';
 
 /** Role of a message participant */
 export type MessageRole = 'user' | 'assistant';
@@ -38,6 +38,8 @@ export interface Message {
     skippedLineLength?: number;
     /** The limit that was in effect when the line was skipped (only set when skipped = true) */
     skippedLineLimit?: number;
+    /** True when this user message arrived while AI was still processing tool calls for a prior response */
+    interrupted?: boolean;
 }
 
 /** A complete chat session (one conversation thread) */
@@ -76,6 +78,16 @@ export interface Session {
      * Source remains unchanged (e.g. 'antigravity'); this field provides finer provenance.
      */
     subSource?: string;
+    /**
+     * True when the session source file has been deleted and the session is being served
+     * from the ChatWizard archive (Feature 12).
+     */
+    archived?: boolean;
+    /**
+     * Files that were explicitly touched or mentioned in this session, extracted from
+     * Chronicle `checkpoints.important_files` (Feature 14).
+     */
+    importantFiles?: string[];
 }
 
 /** Copilot Chronicle checkpoint summary attached to a Copilot session */
@@ -90,6 +102,12 @@ export interface ChronicleData {
     nextSteps: string | null;
     /** ISO timestamp when the checkpoint was created */
     createdAt: string | null;
+    /** Files touched in this session (from checkpoints.important_files) */
+    importantFiles?: string[];
+    /** Git branch active during the session (from Chronicle sessions table) */
+    branch?: string | null;
+    /** Remote repository URL or name (from Chronicle sessions table) */
+    repository?: string | null;
 }
 
 /** A fenced code block with session metadata attached, for the Code Blocks panel */
@@ -147,6 +165,8 @@ export interface SessionSummary {
     interrupted?: boolean;
     /** True when the session has one or more non-fatal parse errors */
     hasParseErrors?: boolean;
+    /** True when the session is being served from the ChatWizard archive (source file deleted) */
+    archived?: boolean;
 }
 
 /** Per-assistant request count within a WorkspaceUsage */
@@ -247,7 +267,7 @@ export interface ScopedWorkspace {
     /** Unique per source — Copilot storage hash or Claude project directory name */
     id: string;
     /** Which AI extension produced this workspace */
-    source: 'copilot' | 'claude' | 'cline' | 'roocode' | 'cursor' | 'windsurf' | 'aider';
+    source: 'copilot' | 'claude' | 'cline' | 'roocode' | 'cursor' | 'windsurf' | 'aider' | 'continue' | 'amazonq' | 'geminiCodeAssist';
     /** Human-readable absolute path to the workspace root */
     workspacePath: string;
     /** Physical directory containing the session files */
@@ -291,6 +311,12 @@ export interface SessionMetadata {
     createdAt?: string;
     /** ISO-8601, when it was last modified */
     updatedAt?: string;
+    /** One-line AI-generated or Chronicle-derived summary (Feature 18) */
+    summary?: string;
+    /** Entities extracted from session content (Feature 19) */
+    entities?: ExtractedEntities;
+    /** Version of the entity extractor that produced `entities` (bump to invalidate cache) */
+    entitiesVersion?: number;
 }
 
 /** An in-line annotation attached to a specific message in a session */
@@ -300,4 +326,16 @@ export interface SessionAnnotation {
     noteText: string;
     /** ISO-8601 */
     createdAt: string;
+}
+
+/** Structured entities extracted from session content (Feature 19) */
+export interface ExtractedEntities {
+    /** Source file paths mentioned in the session */
+    filePaths: string[];
+    /** Function and class names mentioned */
+    functionNames: string[];
+    /** Error messages, codes, and HTTP status codes */
+    errors: string[];
+    /** Decision phrases ("I decided to...", "we chose...", etc.) */
+    decisions: string[];
 }

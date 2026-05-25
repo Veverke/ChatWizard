@@ -39,9 +39,31 @@ jobs:
             exit 1
           fi
 
+  # ── Test against VS Code Insiders before building any VSIX ──────────────────
+  # Catches proposed-API regressions that only surface in Insiders.
+  # Runs on Linux only (fastest, no native-module rebuild needed for this check).
+  test-insiders:
+    needs: verify-version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run unit + integration tests against VS Code Insiders
+        run: xvfb-run -a npm test -- --vscode-version=insiders
+
+      - name: Run integration tests against VS Code Insiders
+        run: xvfb-run -a npm run test:integration -- --vscode-version=insiders
+
   # ── Build one VSIX per platform on its matching OS ───────────────────────────
   build:
-    needs: verify-version
+    needs: [verify-version, test-insiders]
     strategy:
       matrix:
         include:

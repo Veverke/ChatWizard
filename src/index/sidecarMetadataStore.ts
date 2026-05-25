@@ -121,4 +121,53 @@ export class SidecarMetadataStore {
     async setPin(sessionId: string, pinned: boolean): Promise<void> {
         await this.patch(sessionId, { isPinned: pinned });
     }
+
+    /**
+     * Adds a tag to a session.  Tags are stored lowercase; duplicates are silently ignored.
+     * Empty or whitespace-only tags are also ignored.
+     */
+    async addTag(sessionId: string, tag: string): Promise<void> {
+        const normalised = tag.trim().toLowerCase().replace(/^#+/, '');
+        if (!normalised) { return; }
+        const map = this.cache ?? await this.load();
+        const existing = map.get(sessionId) ?? { sessionId };
+        const tags = existing.tags ?? [];
+        if (!tags.includes(normalised)) {
+            await this.patch(sessionId, { tags: [...tags, normalised] });
+        }
+    }
+
+    /** Removes a tag from a session.  No-op if the tag does not exist. */
+    async removeTag(sessionId: string, tag: string): Promise<void> {
+        const normalised = tag.trim().toLowerCase().replace(/^#+/, '');
+        const map = this.cache ?? await this.load();
+        const existing = map.get(sessionId);
+        if (!existing?.tags) { return; }
+        const updated = existing.tags.filter(t => t !== normalised);
+        if (updated.length !== existing.tags.length) {
+            await this.patch(sessionId, { tags: updated });
+        }
+    }
+
+    /**
+     * Returns all tags across all sessions with their usage counts,
+     * sorted by count descending.
+     */
+    async getAllTags(): Promise<Array<{ tag: string; count: number }>> {
+        const map = this.cache ?? await this.load();
+        const counts = new Map<string, number>();
+        for (const meta of map.values()) {
+            for (const tag of meta.tags ?? []) {
+                counts.set(tag, (counts.get(tag) ?? 0) + 1);
+            }
+        }
+        return Array.from(counts.entries())
+            .map(([tag, count]) => ({ tag, count }))
+            .sort((a, b) => b.count - a.count);
+    }
+
+    /** Shortcut: sets only `summary`, leaving other fields intact. */
+    async setSummary(sessionId: string, summary: string): Promise<void> {
+        await this.patch(sessionId, { summary });
+    }
 }

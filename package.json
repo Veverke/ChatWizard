@@ -2,7 +2,7 @@
   "name": "chatwizard",
   "displayName": "Chat Wizard",
   "description": "Browse, search, and analyze AI coding-assistant conversation history from GitHub Copilot, Claude Code, Cline, Roo Code, Cursor, Windsurf, Aider, and Google Antigravity (prompts only). Chat history viewer, prompt library, code block browser, token analytics, and timeline — all in one extension.",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "publisher": "Veverke",
   "icon": "images/icon.png",
   "license": "SEE LICENSE IN LICENSE",
@@ -233,7 +233,7 @@
       },
       {
         "command": "chatwizard.pinSession",
-        "title": "Pin Session",
+        "title": "📌 Pin Session",
         "category": "Chat Wizard",
         "icon": "$(pin)"
       },
@@ -242,6 +242,24 @@
         "title": "Unpin Session",
         "category": "Chat Wizard",
         "icon": "$(pinned)"
+      },
+      {
+        "command": "chatwizard.revealSessionInExplorer",
+        "title": "📂 Reveal in Explorer",
+        "category": "Chat Wizard",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "chatwizard.archiveSession",
+        "title": "🗂️ Archive Session",
+        "category": "Chat Wizard",
+        "icon": "$(archive)"
+      },
+      {
+        "command": "chatwizard.deleteArchivedSession",
+        "title": "🗑️ Delete Archived Session",
+        "category": "Chat Wizard",
+        "icon": "$(trash)"
       },
       {
         "command": "chatwizard.loadMoreSessions",
@@ -266,6 +284,12 @@
         "icon": "$(list-flat)"
       },
       {
+        "command": "chatwizard.groupSessions",
+        "title": "Group Sessions…",
+        "category": "Chat Wizard",
+        "icon": "$(list-tree)"
+      },
+      {
         "command": "chatwizard.enableCbGrouping",
         "title": "Group Code Blocks by Language",
         "category": "Chat Wizard",
@@ -279,7 +303,7 @@
       },
       {
         "command": "chatwizard.exportSession",
-        "title": "Export Session to Markdown",
+        "title": "📝 Export Session to Markdown",
         "category": "Chat Wizard",
         "icon": "$(export)"
       },
@@ -302,9 +326,15 @@
       },
       {
         "command": "chatwizard.exportFromTreeSelection",
-        "title": "Export Selected…",
+        "title": "📤 Export Selected…",
         "category": "Chat Wizard",
         "icon": "$(export)"
+      },
+      {
+        "command": "chatwizard.injectAsContext",
+        "title": "💬 Inject as Context…",
+        "category": "Chat Wizard",
+        "icon": "$(comment-discussion)"
       },
       {
         "command": "chatwizard.showCodeBlocks",
@@ -338,7 +368,7 @@
       },
       {
         "command": "chatwizard.regenerateTitle",
-        "title": "Regenerate Title",
+        "title": "✏️ Regenerate Title",
         "category": "Chat Wizard",
         "icon": "$(edit)"
       },
@@ -521,9 +551,89 @@
         "command": "chatwizard.setupGlobalInstructions",
         "title": "Chat Wizard: Set Up Global Copilot Instructions",
         "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.addTag",
+        "title": "Chat Wizard: Add Tag to Session",
+        "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.removeTag",
+        "title": "Chat Wizard: Remove Tag from Session",
+        "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.addTagFromTree",
+        "title": "🏷️ Add Tag…",
+        "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.removeTagFromTree",
+        "title": "🏷️ Remove Tag…",
+        "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.tagActiveSession",
+        "title": "Chat Wizard: Tag Active Session",
+        "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.regenerateSummary",
+        "title": "Chat Wizard: Regenerate Summary",
+        "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.analyzeSelectedPrompt",
+        "title": "Chat Wizard: Analyze Selected Prompt",
+        "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.showFileHistory",
+        "title": "Chat Wizard: Show File Session History",
+        "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.showArchiveStats",
+        "title": "Chat Wizard: Show Archive Statistics",
+        "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.exportToObsidian",
+        "title": "Chat Wizard: Export Sessions to Obsidian",
+        "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.exportToNotion",
+        "title": "Chat Wizard: Export Sessions to Notion",
+        "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.forgetNotionApiKey",
+        "title": "Chat Wizard: Forget Notion API Key",
+        "category": "Chat Wizard"
       }
     ],
     "menus": {
+      "editor/context": [
+        {
+          "command": "chatwizard.analyzeSelectedPrompt",
+          "when": "editorHasSelection",
+          "group": "chatwizard@1"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "chatwizard.showFileHistory",
+          "when": "!explorerResourceIsFolder",
+          "group": "chatWizard@1"
+        }
+      ],
+      "editor/title/context": [
+        {
+          "command": "chatwizard.showFileHistory",
+          "group": "chatWizard@1"
+        }
+      ],
       "view/title": [
         {
           "command": "chatwizard.filterSessions",
@@ -536,13 +646,8 @@
           "group": "navigation@0"
         },
         {
-          "command": "chatwizard.enableSessionGrouping",
-          "when": "view == chatwizardSessions && chatwizard.sessionGrouped == false",
-          "group": "navigation@0"
-        },
-        {
-          "command": "chatwizard.disableSessionGrouping",
-          "when": "view == chatwizardSessions && chatwizard.sessionGrouped != false",
+          "command": "chatwizard.groupSessions",
+          "when": "view == chatwizardSessions",
           "group": "navigation@0"
         },
         {
@@ -743,6 +848,11 @@
           "group": "2_export@2"
         },
         {
+          "command": "chatwizard.injectAsContext",
+          "when": "viewItem == session || viewItem == session.pinned",
+          "group": "2_export@3"
+        },
+        {
           "command": "chatwizard.pinSession",
           "when": "viewItem == session",
           "group": "inline@1"
@@ -758,6 +868,36 @@
           "group": "inline@2"
         },
         {
+          "command": "chatwizard.revealSessionInExplorer",
+          "when": "viewItem == session || viewItem == session.pinned || viewItem == session.archived",
+          "group": "3_reveal@1"
+        },
+        {
+          "command": "chatwizard.archiveSession",
+          "when": "viewItem == session || viewItem == session.pinned",
+          "group": "4_archive@1"
+        },
+        {
+          "command": "chatwizard.deleteArchivedSession",
+          "when": "viewItem == session.archived",
+          "group": "4_archive@1"
+        },
+        {
+          "command": "chatwizard.addTagFromTree",
+          "when": "viewItem == session || viewItem == session.pinned || viewItem == session.archived",
+          "group": "5_tags@1"
+        },
+        {
+          "command": "chatwizard.removeTagFromTree",
+          "when": "viewItem == session || viewItem == session.pinned || viewItem == session.archived",
+          "group": "5_tags@2"
+        },
+        {
+          "command": "chatwizard.regenerateSummary",
+          "when": "viewItem == session || viewItem == session.pinned",
+          "group": "5_tags@3"
+        },
+        {
           "command": "chatwizard.regenerateTitle",
           "when": "viewItem == session || viewItem == session.pinned",
           "group": "session@3"
@@ -769,6 +909,14 @@
         }
       ],
       "commandPalette": [
+        {
+          "command": "chatwizard.addTagFromTree",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.removeTagFromTree",
+          "when": "false"
+        },
         {
           "command": "chatwizard.openSession",
           "when": "false"
@@ -878,6 +1026,10 @@
           "when": "false"
         },
         {
+          "command": "chatwizard.toggleSessionGrouping",
+          "when": "false"
+        },
+        {
           "command": "chatwizard.enableCbGrouping",
           "when": "false"
         },
@@ -903,6 +1055,10 @@
         },
         {
           "command": "chatwizard.exportFromTreeSelection",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.injectAsContext",
           "when": "false"
         },
         {
@@ -1022,195 +1178,307 @@
           {
             "name": "getPrompts",
             "description": "Find reusable prompts from your chat history"
+          },
+          {
+            "name": "referMessage",
+            "description": "Quote a specific turn from this chat thread (e.g. P3, R2)"
+          },
+          {
+            "name": "tag",
+            "description": "Tag the active chat session with labels (e.g. /tag #bugfix, topic:auth)"
+          },
+          {
+            "name": "removeTags",
+            "description": "Remove tags from the active chat session (e.g. /removeTags #bugfix, topic:auth)"
+          },
+          {
+            "name": "analyzePrompt",
+            "description": "Analyze a draft prompt for token count, estimated cost, and quality tips"
           }
         ]
       }
     ],
-    "configuration": {
-      "title": "Chat Wizard",
-      "properties": {
-        "chatwizard.userMessageColor": {
-          "type": "string",
-          "default": "#007acc",
-          "description": "Accent color for user message border and label (hex, e.g. #ff6600, or CSS color name).",
-          "format": "color-hex"
-        },
-        "chatwizard.tooltipLabelColor": {
-          "type": "string",
-          "default": "",
-          "description": "Color for field label text in session hover tooltips (hex or CSS name). Leave blank for default theme color.",
-          "format": "color-hex"
-        },
-        "chatwizard.codeBlockHighlightColor": {
-          "type": "string",
-          "default": "#EA5C00",
-          "description": "Box-shadow color applied to code blocks when opening a session from the Code Blocks view. Leave blank to disable highlighting.",
-          "format": "color-hex"
-        },
-        "chatwizard.scrollToFirstCodeBlock": {
-          "type": "boolean",
-          "default": true,
-          "description": "When opening a session from the Code Blocks view, automatically scroll to the first code block."
-        },
-        "chatwizard.claudeProjectsPath": {
-          "type": "string",
-          "default": "",
-          "description": "Custom path to the Claude Code projects directory (where .jsonl session files are stored). Leave empty to use the default: ~/.claude/projects"
-        },
-        "chatwizard.copilotStoragePath": {
-          "type": "string",
-          "default": "",
-          "description": "Custom path to the GitHub Copilot Chat workspace storage directory. Leave empty to use the platform default (%APPDATA%/Code/User/workspaceStorage on Windows)."
-        },
-        "chatwizard.enableTelemetry": {
-          "type": "boolean",
-          "default": false,
-          "description": "Enable local usage telemetry. Events are recorded to a local JSONL file in the extension's global storage directory. No data ever leaves your machine."
-        },
-        "chatwizard.enabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "Enable or disable the Chat Wizard extension. When false, no sessions are indexed and all file watching is skipped."
-        },
-        "chatwizard.indexClaude": {
-          "type": "boolean",
-          "default": true,
-          "description": "Index Claude Code chat sessions from ~/.claude/projects/ (or the configured custom path)."
-        },
-        "chatwizard.indexCopilot": {
-          "type": "boolean",
-          "default": true,
-          "description": "Index GitHub Copilot Chat sessions from VS Code workspace storage."
-        },
-        "chatwizard.indexChronicle": {
-          "type": "boolean",
-          "default": true,
-          "description": "Enrich sessions with Copilot Chronicle checkpoint summaries (overview, work done, technical details, next steps). Only active when indexCopilot is also true."
-        },
-        "chatwizard.oldestSessionDate": {
-          "type": "string",
-          "default": "",
-          "pattern": "^(\\d{4}-\\d{2}-\\d{2})?$",
-          "patternErrorMessage": "Use YYYY-MM-DD format, e.g. 2025-01-01, or leave empty for no date limit.",
-          "description": "Only load sessions created on or after this date (YYYY-MM-DD). Leave empty to load all sessions regardless of date."
-        },
-        "chatwizard.maxSessions": {
-          "type": "integer",
-          "default": 0,
-          "minimum": 0,
-          "description": "Maximum number of sessions to load. When set to a value greater than 0, only the N most recently updated sessions are kept after all other filters are applied. Set to 0 for no limit."
-        },
-        "chatwizard.maxLineLengthChars": {
-          "type": "integer",
-          "default": 1000000,
-          "minimum": 10000,
-          "description": "Maximum character length of a single JSONL line when parsing Claude sessions. Lines exceeding this limit are shown as a notice placeholder in the session viewer instead of being silently dropped. Increase this if large messages are being truncated; lower it to reduce memory usage when indexing."
-        },
-        "chatwizard.indexCline": {
-          "type": "boolean",
-          "default": true,
-          "description": "Index Cline (saoudrizwan.claude-dev) task history."
-        },
-        "chatwizard.clineStoragePath": {
-          "type": "string",
-          "default": "",
-          "description": "Override the Cline globalStorage path. Leave empty to use the default OS location (%APPDATA%/Code/User/globalStorage/saoudrizwan.claude-dev/tasks on Windows)."
-        },
-        "chatwizard.indexRooCode": {
-          "type": "boolean",
-          "default": true,
-          "description": "Index Roo Code (rooveterinaryinc.roo-cline) task history."
-        },
-        "chatwizard.rooCodeStoragePath": {
-          "type": "string",
-          "default": "",
-          "description": "Override the Roo Code globalStorage path. Leave empty to use the default OS location (%APPDATA%/Code/User/globalStorage/rooveterinaryinc.roo-cline/tasks on Windows)."
-        },
-        "chatwizard.indexCursor": {
-          "type": "boolean",
-          "default": true,
-          "description": "Index Cursor chat sessions from the Cursor workspaceStorage directory."
-        },
-        "chatwizard.cursorStoragePath": {
-          "type": "string",
-          "default": "",
-          "description": "Override the Cursor workspaceStorage path. Leave empty to use the default OS location (%APPDATA%/Cursor/User/workspaceStorage on Windows)."
-        },
-        "chatwizard.indexWindsurf": {
-          "type": "boolean",
-          "default": true,
-          "description": "Index Windsurf (Codeium) Cascade chat sessions from the Windsurf workspaceStorage directory."
-        },
-        "chatwizard.windsurfStoragePath": {
-          "type": "string",
-          "default": "",
-          "description": "Override the Windsurf workspaceStorage path. Leave empty to use the default OS location (%APPDATA%/Windsurf/User/workspaceStorage on Windows)."
-        },
-        "chatwizard.indexAider": {
-          "type": "boolean",
-          "default": true,
-          "description": "Index Aider chat history files (.aider.chat.history.md) found in VS Code workspace folders and any configured aiderSearchRoots."
-        },
-        "chatwizard.aiderSearchRoots": {
-          "type": "array",
-          "items": {
-            "type": "string"
+    "configuration": [
+      {
+        "title": "Chat Wizard: General",
+        "properties": {
+          "chatwizard.enabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Enable or disable the Chat Wizard extension. When false, no sessions are indexed and all file watching is skipped."
           },
-          "default": [],
-          "description": "Additional root directories to search for .aider.chat.history.md files (up to aiderSearchDepth levels deep)."
-        },
-        "chatwizard.aiderSearchDepth": {
-          "type": "integer",
-          "default": 3,
-          "minimum": 1,
-          "maximum": 5,
-          "description": "Maximum directory depth to recurse when searching for .aider.chat.history.md files (default: 3, max: 5)."
-        },
-        "chatwizard.indexAntigravity": {
-          "type": "boolean",
-          "default": true,
-          "description": "Index Google Antigravity agent conversation sessions from the ~/.gemini/antigravity/brain directory."
-        },
-        "chatwizard.antigravityBrainPath": {
-          "type": "string",
-          "default": "",
-          "description": "Override the Google Antigravity brain directory path. Leave empty to use the default OS location (~/.gemini/antigravity/brain)."
-        },
-        "chatwizard.enableSemanticSearch": {
-          "type": "boolean",
-          "default": false,
-          "description": "Enable topic-similarity search powered by a local AI model. Finds past sessions by topic — not keywords. Downloads a ~22 MB model on first use."
-        },
-        "chatwizard.semanticMinScore": {
-          "type": "number",
-          "default": 0.35,
-          "minimum": 0,
-          "maximum": 1,
-          "description": "Minimum similarity score (0–1) for a session to appear in topic similarity search results. Lower values show more (but less relevant) results. Recommended range: 0.30–0.45."
-        },
-        "chatwizard.mcpServer.enabled": {
-          "type": "boolean",
-          "default": false,
-          "description": "Start a local MCP server so AI tools can query your chat history as context."
-        },
-        "chatwizard.mcpServer.port": {
-          "type": "number",
-          "default": 6789,
-          "minimum": 1024,
-          "maximum": 65535,
-          "description": "Port for the local MCP server. Restart VS Code after changing."
-        },
-        "chatwizard.mcpServer.allowTokenRotation": {
-          "type": "boolean",
-          "default": false,
-          "markdownDescription": "When `true`, the **Chat Wizard: Rotate MCP Token** command (`chatwizard.rotateMcpToken`) is permitted to generate a new MCP bearer token, immediately invalidating the previous one. All AI tools configured with the old token must be reconfigured after rotation."
+          "chatwizard.enableTelemetry": {
+            "type": "boolean",
+            "default": false,
+            "description": "Enable local usage telemetry. Events are recorded to a local JSONL file in the extension's global storage directory. No data ever leaves your machine."
+          },
+          "chatwizard.activeSessionWindowMinutes": {
+            "type": "integer",
+            "default": 120,
+            "minimum": 1,
+            "description": "How many minutes back ChatWizard looks when detecting an 'active' session for the Tag Active Session command and status bar button. Sessions updated within this window are considered active."
+          },
+          "chatwizard.oldestSessionDate": {
+            "type": "string",
+            "default": "",
+            "pattern": "^(\\d{4}-\\d{2}-\\d{2})?$",
+            "patternErrorMessage": "Use YYYY-MM-DD format, e.g. 2025-01-01, or leave empty for no date limit.",
+            "description": "Only load sessions created on or after this date (YYYY-MM-DD). Leave empty to load all sessions regardless of date."
+          },
+          "chatwizard.maxSessions": {
+            "type": "integer",
+            "default": 0,
+            "minimum": 0,
+            "description": "Maximum number of sessions to load. When set to a value greater than 0, only the N most recently updated sessions are kept after all other filters are applied. Set to 0 for no limit."
+          },
+          "chatwizard.maxLineLengthChars": {
+            "type": "integer",
+            "default": 1000000,
+            "minimum": 10000,
+            "description": "Maximum character length of a single JSONL line when parsing Claude sessions. Lines exceeding this limit are shown as a notice placeholder in the session viewer instead of being silently dropped. Increase this if large messages are being truncated; lower it to reduce memory usage when indexing."
+          }
+        }
+      },
+      {
+        "title": "Chat Wizard: Sources",
+        "properties": {
+          "chatwizard.indexClaude": {
+            "type": "boolean",
+            "default": true,
+            "description": "Index Claude Code chat sessions from ~/.claude/projects/ (or the configured custom path)."
+          },
+          "chatwizard.claudeProjectsPath": {
+            "type": "string",
+            "default": "",
+            "description": "Custom path to the Claude Code projects directory (where .jsonl session files are stored). Leave empty to use the default: ~/.claude/projects"
+          },
+          "chatwizard.indexCopilot": {
+            "type": "boolean",
+            "default": true,
+            "description": "Index GitHub Copilot Chat sessions from VS Code workspace storage."
+          },
+          "chatwizard.copilotStoragePath": {
+            "type": "string",
+            "default": "",
+            "description": "Custom path to the GitHub Copilot Chat workspace storage directory. Leave empty to use the platform default (%APPDATA%/Code/User/workspaceStorage on Windows)."
+          },
+          "chatwizard.indexChronicle": {
+            "type": "boolean",
+            "default": true,
+            "description": "Enrich sessions with Copilot Chronicle checkpoint summaries (overview, work done, technical details, next steps). Only active when indexCopilot is also true."
+          },
+          "chatwizard.chronicle.enableLocalIndex": {
+            "type": "boolean",
+            "default": true,
+            "description": "Automatically enable Copilot's local session index (chat.localIndex.enabled) on startup. Required for git branch data to populate when grouping sessions by Branch in the Sessions view."
+          },
+          "chatwizard.indexCline": {
+            "type": "boolean",
+            "default": true,
+            "description": "Index Cline (saoudrizwan.claude-dev) task history."
+          },
+          "chatwizard.clineStoragePath": {
+            "type": "string",
+            "default": "",
+            "description": "Override the Cline globalStorage path. Leave empty to use the default OS location (%APPDATA%/Code/User/globalStorage/saoudrizwan.claude-dev/tasks on Windows)."
+          },
+          "chatwizard.indexRooCode": {
+            "type": "boolean",
+            "default": true,
+            "description": "Index Roo Code (rooveterinaryinc.roo-cline) task history."
+          },
+          "chatwizard.rooCodeStoragePath": {
+            "type": "string",
+            "default": "",
+            "description": "Override the Roo Code globalStorage path. Leave empty to use the default OS location (%APPDATA%/Code/User/globalStorage/rooveterinaryinc.roo-cline/tasks on Windows)."
+          },
+          "chatwizard.indexCursor": {
+            "type": "boolean",
+            "default": true,
+            "description": "Index Cursor chat sessions from the Cursor workspaceStorage directory."
+          },
+          "chatwizard.cursorStoragePath": {
+            "type": "string",
+            "default": "",
+            "description": "Override the Cursor workspaceStorage path. Leave empty to use the default OS location (%APPDATA%/Cursor/User/workspaceStorage on Windows)."
+          },
+          "chatwizard.indexWindsurf": {
+            "type": "boolean",
+            "default": true,
+            "description": "Index Windsurf (Codeium) Cascade chat sessions from the Windsurf workspaceStorage directory."
+          },
+          "chatwizard.windsurfStoragePath": {
+            "type": "string",
+            "default": "",
+            "description": "Override the Windsurf workspaceStorage path. Leave empty to use the default OS location (%APPDATA%/Windsurf/User/workspaceStorage on Windows)."
+          },
+          "chatwizard.indexAider": {
+            "type": "boolean",
+            "default": true,
+            "description": "Index Aider chat history files (.aider.chat.history.md) found in VS Code workspace folders and any configured aiderSearchRoots."
+          },
+          "chatwizard.aiderSearchRoots": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": [],
+            "description": "Additional root directories to search for .aider.chat.history.md files (up to aiderSearchDepth levels deep)."
+          },
+          "chatwizard.aiderSearchDepth": {
+            "type": "integer",
+            "default": 3,
+            "minimum": 1,
+            "maximum": 5,
+            "description": "Maximum directory depth to recurse when searching for .aider.chat.history.md files (default: 3, max: 5)."
+          },
+          "chatwizard.indexAntigravity": {
+            "type": "boolean",
+            "default": true,
+            "description": "Index Google Antigravity agent conversation sessions from the ~/.gemini/antigravity/brain directory."
+          },
+          "chatwizard.antigravityBrainPath": {
+            "type": "string",
+            "default": "",
+            "description": "Override the Google Antigravity brain directory path. Leave empty to use the default OS location (~/.gemini/antigravity/brain)."
+          },
+          "chatwizard.indexContinue": {
+            "type": "boolean",
+            "default": true,
+            "description": "Index Continue.dev AI assistant sessions from ~/.continue/sessions."
+          },
+          "chatwizard.continueStoragePath": {
+            "type": "string",
+            "default": "",
+            "description": "Override the Continue.dev sessions directory path. Leave empty to use the default OS location (~/.continue/sessions)."
+          },
+          "chatwizard.indexAmazonQ": {
+            "type": "boolean",
+            "default": true,
+            "description": "Index Amazon Q Developer conversation sessions from VS Code extension storage."
+          },
+          "chatwizard.amazonQStoragePath": {
+            "type": "string",
+            "default": "",
+            "description": "Override the Amazon Q Developer storage directory path. Leave empty to auto-detect."
+          },
+          "chatwizard.indexGeminiCodeAssist": {
+            "type": "boolean",
+            "default": true,
+            "description": "Index Gemini Code Assist conversation sessions from VS Code extension storage."
+          },
+          "chatwizard.geminiCodeAssistStoragePath": {
+            "type": "string",
+            "default": "",
+            "description": "Override the Gemini Code Assist storage directory path. Leave empty to auto-detect."
+          }
+        }
+      },
+      {
+        "title": "Chat Wizard: Search",
+        "properties": {
+          "chatwizard.enableSemanticSearch": {
+            "type": "boolean",
+            "default": true,
+            "description": "Enable topic-similarity search powered by a local AI model. Finds past sessions by topic — not keywords. Downloads a ~22 MB model on first use."
+          },
+          "chatwizard.semanticMinScore": {
+            "type": "number",
+            "default": 0.35,
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Minimum similarity score (0–1) for a session to appear in topic similarity search results. Lower values show more (but less relevant) results. Recommended range: 0.30–0.45."
+          },
+          "chatwizard.mcp.reranker.enabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Enable TF-IDF reranking of MCP context results after initial retrieval (Feature 21). Improves relevance at a small CPU cost."
+          },
+          "chatwizard.workItemPattern": {
+            "type": "string",
+            "default": "",
+            "markdownDescription": "Regular expression for extracting work-item IDs from session titles and messages. Used when grouping sessions by **Work Item** in the Sessions view (Group Sessions… button).\n\nExample: `PREFIX-\\d+` matches tickets like `prefix-12345`.\n\nLeave empty to disable work item grouping — no Work Item group will appear in the Sessions view."
+          }
+        }
+      },
+      {
+        "title": "Chat Wizard: MCP Server",
+        "properties": {
+          "chatwizard.mcpServer.enabled": {
+            "type": "boolean",
+            "default": false,
+            "description": "Start a local MCP server so AI tools can query your chat history as context."
+          },
+          "chatwizard.mcpServer.port": {
+            "type": "number",
+            "default": 6789,
+            "minimum": 1024,
+            "maximum": 65535,
+            "description": "Port for the local MCP server. Restart VS Code after changing."
+          },
+          "chatwizard.mcpServer.allowTokenRotation": {
+            "type": "boolean",
+            "default": false,
+            "markdownDescription": "When `true`, the **Chat Wizard: Rotate MCP Token** command (`chatwizard.rotateMcpToken`) is permitted to generate a new MCP bearer token, immediately invalidating the previous one. All AI tools configured with the old token must be reconfigured after rotation."
+          }
+        }
+      },
+      {
+        "title": "Chat Wizard: Archive",
+        "properties": {
+          "chatwizard.archive.maxAgeDays": {
+            "type": "number",
+            "default": 0,
+            "minimum": 0,
+            "description": "Maximum age (days) for archived sessions. Sessions older than this will be pruned. 0 = no age limit."
+          },
+          "chatwizard.archive.maxSizeMB": {
+            "type": "number",
+            "default": 0,
+            "minimum": 0,
+            "description": "Maximum total archive size (MB). Oldest sessions are pruned first when the limit is exceeded. 0 = no size limit."
+          }
+        }
+      },
+      {
+        "title": "Chat Wizard: Appearance",
+        "properties": {
+          "chatwizard.userMessageColor": {
+            "type": "string",
+            "default": "#007acc",
+            "description": "Accent color for user message border and label (hex, e.g. #ff6600, or CSS color name).",
+            "format": "color-hex"
+          },
+          "chatwizard.tooltipLabelColor": {
+            "type": "string",
+            "default": "",
+            "description": "Color for field label text in session hover tooltips (hex or CSS name). Leave blank for default theme color.",
+            "format": "color-hex"
+          },
+          "chatwizard.codeBlockHighlightColor": {
+            "type": "string",
+            "default": "#EA5C00",
+            "description": "Box-shadow color applied to code blocks when opening a session from the Code Blocks view. Leave blank to disable highlighting.",
+            "format": "color-hex"
+          },
+          "chatwizard.scrollToFirstCodeBlock": {
+            "type": "boolean",
+            "default": true,
+            "description": "When opening a session from the Code Blocks view, automatically scroll to the first code block."
+          },
+          "chatwizard.codeLens.enabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Show a CodeLens at the top of files that were referenced in ChatWizard sessions (Feature 10: File History)."
+          }
         }
       }
-    }
+    ]
   },
   "scripts": {
     "prepare": "husky",
-    "vscode:prepublish": "npm run rebuild:native && npm run bundle",
+    "validate:release": "node scripts/validate-release.mjs",
+    "vscode:prepublish": "npm run rebuild:native && npm run bundle && npm run validate:release",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile && npm run lint",
@@ -1221,13 +1489,16 @@
     "rebuild:native": "node scripts/rebuild-native.js",
     "bundle": "esbuild src/extension.ts --bundle --platform=node --external:vscode --external:better-sqlite3 --external:@xenova/transformers --outfile=dist/extension.js",
     "bundle:watch": "esbuild src/extension.ts --bundle --platform=node --external:vscode --external:better-sqlite3 --external:@xenova/transformers --outfile=dist/extension.js --sourcemap --watch",
-    "test:coverage": "vscode-test --coverage --coverage-reporter lcov --coverage-reporter text --coverage-reporter json-summary && node -e \"const s=require('./coverage/coverage-summary.json'),T=90,EXCL=['fileWatcher.ts','sessionWebviewPanel.ts','analyticsPanel.ts','codeBlocksPanel.ts','mcpServer.ts','chatParticipant.ts','configPaths.ts','timelineViewProvider.ts','getContextTool.ts','cursor.ts','copilot.ts','antigravity.ts','copilotWorkspace.ts'];function adj(k){let tot=s.total[k].total,cov=s.total[k].covered;for(const[f,d]of Object.entries(s)){if(f==='total')continue;const n=f.split(/[/\\\\\\\\]/).pop();if(EXCL.includes(n)){tot-=d[k].total;cov-=d[k].covered;}}return tot>0?cov/tot*100:100;}const f=['branches','functions','lines','statements'].filter(k=>adj(k)<T);if(f.length){console.error('\\nCoverage below '+T+'%: '+f.map(k=>k+' '+adj(k).toFixed(2)+'%').join(', '));process.exit(1);}console.log('Coverage OK (>='+T+'%)')\"",
+    "test:coverage": "vscode-test --coverage --coverage-reporter lcov --coverage-reporter text --coverage-reporter json-summary && node -e \"const s=require('./coverage/coverage-summary.json'),T=90,EXCL=['fileWatcher.ts','sessionWebviewPanel.ts','analyticsPanel.ts','codeBlocksPanel.ts','mcpServer.ts','chatParticipant.ts','configPaths.ts','timelineViewProvider.ts','getContextTool.ts','cursor.ts','copilot.ts','antigravity.ts','copilotWorkspace.ts','sessionTreeProvider.ts','summaryGenerator.ts','amazonQWorkspace.ts','continueWorkspace.ts','geminiCodeAssistWorkspace.ts','sourceBrandIcons.ts','fileAnchorResolver.ts','promptLibraryPanel.ts','semanticSearchPanel.ts'];function adj(k){let tot=s.total[k].total,cov=s.total[k].covered;for(const[f,d]of Object.entries(s)){if(f==='total')continue;const n=f.split(/[/\\\\\\\\]/).pop();if(EXCL.includes(n)){tot-=d[k].total;cov-=d[k].covered;}}return tot>0?cov/tot*100:100;}const f=['branches','functions','lines','statements'].filter(k=>adj(k)<T);if(f.length){console.error('\\nCoverage below '+T+'%: '+f.map(k=>k+' '+adj(k).toFixed(2)+'%').join(', '));process.exit(1);}console.log('Coverage OK (>='+T+'%)')\"",
     "test:flaky": "node scripts/detect-flaky.mjs",
     "smoke": "tsx scripts/smoke-test-mcp-server.ts && tsx scripts/smoke-test-phase4.ts",
     "e2e:mcp": "tsx scripts/e2e-mcp-scenarios.ts",
-    "package:vsix:win32-x64": "npm run rebuild:native && npm run bundle && npx @vscode/vsce package --target win32-x64 --out chatwizard-win32-x64.vsix",
-    "package:vsix:linux-x64": "npm run rebuild:native && npm run bundle && npx @vscode/vsce package --target linux-x64 --out chatwizard-linux-x64.vsix",
-    "package:vsix:darwin-arm64": "npm run rebuild:native && npm run bundle && npx @vscode/vsce package --target darwin-arm64 --out chatwizard-darwin-arm64.vsix"
+    "package:vsix:win32-x64": "npm run rebuild:native && npm run bundle && node scripts/package-vsix.mjs win32-x64",
+    "package:vsix:linux-x64": "npm run rebuild:native && npm run bundle && node scripts/package-vsix.mjs linux-x64",
+    "package:vsix:darwin-x64": "npm run rebuild:native && npm run bundle && node scripts/package-vsix.mjs darwin-x64",
+    "package:vsix:darwin-arm64": "npm run rebuild:native && npm run bundle && node scripts/package-vsix.mjs darwin-arm64",
+    "install:stable": "code --install-extension chatwizard-win32-x64.vsix --force",
+    "install:insiders": "code-insiders --install-extension chatwizard-win32-x64.vsix --force"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
@@ -1250,5 +1521,9 @@
     "husky": "^9.1.7",
     "tsx": "^4.22.1",
     "typescript": "^5.3.3"
+  },
+  "optionalDependencies": {
+    "onnxruntime-web": "^1.14.0",
+    "sharp": "^0.32.6"
   }
 }
