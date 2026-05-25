@@ -1,6 +1,6 @@
 // test/e2e/pathNormaliser.test.ts
 import * as assert from 'assert';
-import { normalisePath, isSamePath, sessionTouchesFile } from '../../src/utils/pathNormaliser';
+import { normalisePath, isSamePath, sessionTouchesFile, sessionMentionsFile } from '../../src/utils/pathNormaliser';
 
 suite('pathNormaliser', () => {
 
@@ -51,6 +51,34 @@ suite('pathNormaliser', () => {
 
         test('returns false for empty list', () => {
             assert.strictEqual(sessionTouchesFile([], normalisePath('/foo.ts')), false);
+        });
+
+    });
+
+    suite('sessionMentionsFile', () => {
+
+        test('returns true on exact match', () => {
+            const norm = normalisePath('/project/src/index.ts');
+            assert.strictEqual(sessionMentionsFile([norm], norm), true);
+        });
+
+        test('returns true on suffix match for relative path', () => {
+            const abs = normalisePath('/project/docs/intent.md');
+            assert.strictEqual(sessionMentionsFile(['docs/intent.md'], abs), true);
+        });
+
+        test('returns true on basename match', () => {
+            const abs = normalisePath('/project/docs/intent.md');
+            assert.strictEqual(sessionMentionsFile(['intent.md'], abs), true);
+        });
+
+        test('returns false when no match', () => {
+            const abs = normalisePath('/project/src/foo.ts');
+            assert.strictEqual(sessionMentionsFile(['bar.ts', 'baz.ts'], abs), false);
+        });
+
+        test('returns false for undefined paths', () => {
+            assert.strictEqual(sessionMentionsFile(undefined, normalisePath('/foo.ts')), false);
         });
 
     });
