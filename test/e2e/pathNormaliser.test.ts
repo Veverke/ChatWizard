@@ -12,6 +12,7 @@ suite('pathNormaliser', () => {
         });
 
         test('lowercases the drive letter on Windows paths', () => {
+            if (process.platform !== 'win32') { return; }   // drive letters only exist on Windows
             const result = normalisePath(__filename);
             // normalisePath lowercases the drive letter (e.g. C:/ → c:/) but not the rest
             assert.match(result, /^[a-z]:\//, 'Drive letter should be normalised to lowercase');
