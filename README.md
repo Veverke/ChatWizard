@@ -169,18 +169,6 @@ Capabilities not available in the built-in GitHub Copilot Chat panel or the Clau
 | **Amazon Q Developer** | Platform-aware path discovery (`~/.aws/amazonq/` and per-platform variants). Configurable via `chatwizard.amazonQStoragePath`. |
 | **Gemini Code Assist** | VS Code extension `globalStorageUri` for the Gemini Code Assist extension. Path discrimination prevents overlap with the existing Antigravity source. Configurable via `chatwizard.geminiCodeAssistStoragePath`. |
 
-> For tools with partial support, see [Limited Support](#limited-support) below.
-
----
-
-## Limited Support
-
-Some tools are supported with constraints. Features that operate on prompts alone — **Prompt Library**, **Full-Text Search**, **Analytics**, and **Timeline** — work fully. The session reader displays an informational banner explaining what is unavailable.
-
-| Tool | What works | Limitation |
-|------|-----------|------------|
-| **Google Antigravity** | Prompt Library, full-text search, analytics, timeline, session reader (prompts only) | AI responses are not available from disk. Antigravity stores conversation content in an encrypted format that requires the running Language Server to decode. Only prompts are indexed. Configurable via `chatwizard.indexAntigravity` / `chatwizard.antigravityBrainPath`. |
-
 ---
 
 ## Installation
@@ -194,7 +182,7 @@ Some tools are supported with constraints. Features that operate on prompts alon
 ## Requirements
 
 - VS Code **1.85.0** or later.
-- At least one supported AI coding tool installed and actively used: **GitHub Copilot Chat**, **Claude Code**, **Cline**, **Roo Code**, **Cursor**, **Windsurf**, **Aider**, **Continue.dev**, **Amazon Q Developer**, **Gemini Code Assist**, or **Google Antigravity** (limited support — prompts only; see [Limited Support](#limited-support)). Chat Wizard reads the session files these tools write — it does not create sessions itself and requires no additional configuration for standard installs.
+- At least one supported AI coding tool installed and actively used: **GitHub Copilot Chat**, **Claude Code**, **Cline**, **Roo Code**, **Cursor**, **Windsurf**, **Aider**, **Continue.dev**, **Amazon Q Developer**, **Gemini Code Assist**, or **Google Antigravity**. Chat Wizard reads the session files these tools write — it does not create sessions itself and requires no additional configuration for standard installs.
 
 ---
 
@@ -244,13 +232,14 @@ See the **[User Guide → Commands Reference](docs/user-guide.md#15-commands-ref
 - **`@chatwizard` new commands** — `/referMessage` (quote a turn by P/R label); clickable file pills in `/continueFromHistory`.
 - **MCP Server** — 3 new tools (total: **11**); optional TF-IDF reranker for `chatwizard_get_context` (`chatwizard.mcp.reranker.enabled`).
 - **Session Reader** — `P{N}` / `R{N}` turn labels with ⧉ copy-as-reference button on every message.
-- **Squirrel mascot** 🐿️ — persistent status bar icon with gentle pulse animation.
+- **Squirrel mascot** 🐿️ — persistent status bar icon with gentle pulse animation, notifying about background events.
 - VS Code 1.121 API compatibility.
 
 ### 1.4.0
 
 - **MCP Server Mode** — local HTTP/SSE server exposing your full chat history via the Model Context Protocol. Binds to `localhost` only; all requests require a bearer token. Enable via `chatwizard.mcpServer.enabled`.
   - **8 MCP tools:** `chatwizard_search`, `chatwizard_find_similar`, `chatwizard_get_session`, `chatwizard_get_session_full`, `chatwizard_list_recent`, `chatwizard_get_context`, `chatwizard_list_sources`, `chatwizard_server_info`.
+  - **Google Antigravity** - fully supported now (filled in gaps from v1.3.0)
   - **2 MCP prompts:** `chatwizard.queryHistory`, `chatwizard.continueFromHistory` — available to any MCP client.
   - Config clipboard flow, status bar indicator, first-run consent modal.
   - **Token rotation** — `Chat Wizard: Rotate MCP Token` (`chatwizard.rotateMcpToken`) generates a new bearer token. Gated by `chatwizard.mcpServer.allowTokenRotation`.
