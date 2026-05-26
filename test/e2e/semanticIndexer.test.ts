@@ -139,6 +139,7 @@ async function makeReadyIndexer(engineOpts: Parameters<typeof makeEngineStub>[0]
         (_cacheDir) => engine,
         () => index,
         api,
+        0,
     );
     await indexer.initialize();
     return { indexer, engine, index, api };
@@ -352,7 +353,7 @@ suite('SemanticIndexer.scheduleSession', () => {
         };
         const index = makeIndexStub();
         const api = makeVsCodeApiStub({ isFirstUse: false });
-        const indexer = new SemanticIndexer('/storage', () => engine, () => index, api);
+        const indexer = new SemanticIndexer('/storage', () => engine, () => index, api, 0);
         await indexer.initialize();
 
         // Use sessions with no title so each session produces exactly 1 embed entry;

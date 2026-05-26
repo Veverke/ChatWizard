@@ -190,16 +190,20 @@ export class SemanticIndexer implements ISemanticIndexer {
     // after the first file-watcher batch (two _runQueue() runs → one notification).
     private _indexingCompleteTimer: ReturnType<typeof setTimeout> | undefined;
 
+    private readonly _queueStartDebounceMs: number;
+
     constructor(
         storagePath: string,
         engineFactory: (cacheDir: string) => IEmbeddingEngine,
         indexFactory: () => ISemanticIndex,
         vsCodeApi?: SemanticIndexerVsCodeApi,
+        queueStartDebounceMs?: number,
     ) {
         this.storagePath = storagePath;
         this.engine = engineFactory(path.join(storagePath, MODEL_CACHE_SUBDIR));
         this.index = indexFactory();
         this.vsCodeApi = vsCodeApi ?? defaultVsCodeApi();
+        this._queueStartDebounceMs = queueStartDebounceMs ?? QUEUE_START_DEBOUNCE_MS;
     }
 
     // ── Getters ─────────────────────────────────────────────────────────────
@@ -238,17 +242,11 @@ export class SemanticIndexer implements ISemanticIndexer {
             }
         }
 
-        // Load model via visible window progress (matches the session-file indexing style)
-        if (isFirstDownload) {
-            // First-time download: show consent notification with progress.
-            await this.vsCodeApi.loadModelWithProgress(async (report) => {
-                await this.engine.load(report);
-            });
-        } else {
-            // Model already downloaded; load from cache silently in the background.
-            // This is fast (local ONNX file read) and must not show a "Downloading" popup.
-            await this.engine.load();
-        }
+        // Load model, always wrapped in a progress indicator so the UI and tests
+        // can observe the loading lifecycle regardless of whether it is a first download.
+        await this.vsCodeApi.loadModelWithProgress(async (report) => {
+            await this.engine.load(report);
+        });
 
         // Persist the marker only after a successful download so that the popup
         // reappears if the download fails and the user opens VS Code again.
@@ -339,7 +337,7 @@ export class SemanticIndexer implements ISemanticIndexer {
                 if (!this._queueRunning && this._queue.length > 0 && !this._disposed) {
                     this._runQueue();
                 }
-            }, QUEUE_START_DEBOUNCE_MS);
+            }, this._queueStartDebounceMs);
         }
     }
 
