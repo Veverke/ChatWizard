@@ -19,7 +19,6 @@ export default defineConfig({
     coverage: {
         exclude: [
             '**/dist/**',
-            '**/test/**',
             '**/watcher/fileWatcher.ts',
             '**/mcp/chatParticipant.ts',
             '**/timeline/timelineViewProvider.ts',
