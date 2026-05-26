@@ -100,7 +100,7 @@ async function makeReadyIndexer() {
     const engine = makeEngineStub();
     const index = makeIndexStub();
     const api = makeVsCodeApiStub();
-    const indexer = new SemanticIndexer('/storage', () => engine, () => index, api);
+    const indexer = new SemanticIndexer('/storage', () => engine, () => index, api, 0);
     await indexer.initialize();
     return { indexer, engine, index };
 }

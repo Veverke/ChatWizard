@@ -10,6 +10,11 @@ import { Session } from '../types/index';
 const EMBEDDINGS_FILENAME = 'semantic-embeddings.bin';
 const SAVE_DEBOUNCE_MS = 5_000;
 const MODEL_CACHE_SUBDIR = 'models';
+// How long to wait after the last scheduleSession() call before starting to embed.
+// This lets the archive-restore batch (which arrives a second or two after the
+// initial file-watcher batch) be collected before the queue runs, so the progress
+// bar shows the correct total from the very first update.
+const QUEUE_START_DEBOUNCE_MS = 4_000;
 
 /**
  * Injectable VS Code interactions — replace in unit tests to avoid real UI dialogs.
@@ -90,9 +95,14 @@ export function defaultVsCodeApi(globalState?: SemanticGlobalState): SemanticInd
         },
         async runIndexingProgress(task: (report: (completed: number, total: number) => void) => Promise<void>): Promise<void> {
             await vscode.window.withProgress(
-                { location: vscode.ProgressLocation.Window, title: 'Chat Wizard: indexing…', cancellable: false },
+                { location: vscode.ProgressLocation.Notification, title: 'Chat Wizard: building vector embeddings for semantic search…', cancellable: false },
                 async (progress) => {
+                    // Use an indeterminate spinner with live count text.
+                    // Determinate (increment) mode breaks when the total grows mid-run
+                    // (archive restore adds sessions after the first batch starts), causing
+                    // the percentage to go backwards and the bar to stall.
                     await task((completed, total) => {
+                        if (total === 0) { return; }
                         progress.report({ message: `${completed} / ${total} sessions` });
                     });
                 },
@@ -100,7 +110,7 @@ export function defaultVsCodeApi(globalState?: SemanticGlobalState): SemanticInd
         },
         showIndexingComplete(count: number): void {
             void vscode.window.showInformationMessage(
-                `Chat Wizard: Semantic index ready — ${count} session${count === 1 ? '' : 's'} indexed.`
+                `Chat Wizard: Semantic search ready — ${count} session${count === 1 ? '' : 's'} have vector embeddings.`
             );
         },
         markModelDownloaded(storagePath: string): void {
@@ -169,16 +179,31 @@ export class SemanticIndexer implements ISemanticIndexer {
     // Debounced save timer
     private _saveTimer: ReturnType<typeof setTimeout> | undefined;
 
+    // Debounced queue start timer.
+    // Resets on every scheduleSession() call so embedding only begins after sessions
+    // stop arriving — letting both the live batch and the archive-restore batch land
+    // before the first embed, ensuring the progress total is correct from the start.
+    private _queueStartTimer: ReturnType<typeof setTimeout> | undefined;
+
+    // Debounced "indexing complete" notification timer.
+    // Prevents a double notification when the archive-restore batch arrives shortly
+    // after the first file-watcher batch (two _runQueue() runs → one notification).
+    private _indexingCompleteTimer: ReturnType<typeof setTimeout> | undefined;
+
+    private readonly _queueStartDebounceMs: number;
+
     constructor(
         storagePath: string,
         engineFactory: (cacheDir: string) => IEmbeddingEngine,
         indexFactory: () => ISemanticIndex,
         vsCodeApi?: SemanticIndexerVsCodeApi,
+        queueStartDebounceMs?: number,
     ) {
         this.storagePath = storagePath;
         this.engine = engineFactory(path.join(storagePath, MODEL_CACHE_SUBDIR));
         this.index = indexFactory();
         this.vsCodeApi = vsCodeApi ?? defaultVsCodeApi();
+        this._queueStartDebounceMs = queueStartDebounceMs ?? QUEUE_START_DEBOUNCE_MS;
     }
 
     // ── Getters ─────────────────────────────────────────────────────────────
@@ -217,7 +242,8 @@ export class SemanticIndexer implements ISemanticIndexer {
             }
         }
 
-        // Load model via visible window progress (matches the session-file indexing style)
+        // Load model, always wrapped in a progress indicator so the UI and tests
+        // can observe the loading lifecycle regardless of whether it is a first download.
         await this.vsCodeApi.loadModelWithProgress(async (report) => {
             await this.engine.load(report);
         });
@@ -248,6 +274,12 @@ export class SemanticIndexer implements ISemanticIndexer {
             return;
         }
         if (this.index.has(session.id)) {
+            return;
+        }
+        // Skip if this session is already queued but not yet processed — avoids
+        // enqueuing duplicate work and inflating _totalSessionsQueued when repeated
+        // upsert events fire for the same session.
+        if (this._pendingBySession.has(session.id)) {
             return;
         }
 
@@ -293,7 +325,25 @@ export class SemanticIndexer implements ISemanticIndexer {
         this._pendingBySession.set(session.id, added);
 
         if (!this._queueRunning) {
-            this._runQueue();
+            // Cancel any pending "indexing complete" notification — more sessions are
+            // arriving, so the current run's completion toast must be suppressed.
+            if (this._indexingCompleteTimer !== undefined) {
+                clearTimeout(this._indexingCompleteTimer);
+                this._indexingCompleteTimer = undefined;
+            }
+            // Debounce: reset the start timer on every new session so the queue only
+            // begins once sessions stop arriving. This ensures both the live batch (85)
+            // and the archive-restore batch (24 more) are collected before embedding
+            // starts, giving a stable total (109) from the very first progress report.
+            if (this._queueStartTimer !== undefined) {
+                clearTimeout(this._queueStartTimer);
+            }
+            this._queueStartTimer = setTimeout(() => {
+                this._queueStartTimer = undefined;
+                if (!this._queueRunning && this._queue.length > 0 && !this._disposed) {
+                    this._runQueue();
+                }
+            }, this._queueStartDebounceMs);
         }
     }
 
@@ -339,10 +389,18 @@ export class SemanticIndexer implements ISemanticIndexer {
         // Drain the queue without embedding remaining items
         this._queue = [];
 
-        // Cancel pending debounced save and flush immediately
+        // Cancel pending timers
+        if (this._queueStartTimer !== undefined) {
+            clearTimeout(this._queueStartTimer);
+            this._queueStartTimer = undefined;
+        }
         if (this._saveTimer !== undefined) {
             clearTimeout(this._saveTimer);
             this._saveTimer = undefined;
+        }
+        if (this._indexingCompleteTimer !== undefined) {
+            clearTimeout(this._indexingCompleteTimer);
+            this._indexingCompleteTimer = undefined;
         }
 
         // Final save (fire-and-forget — cannot await in dispose)
@@ -357,32 +415,65 @@ export class SemanticIndexer implements ISemanticIndexer {
         this._queueRunning = true;
 
         await this.vsCodeApi.runIndexingProgress(async (report) => {
-            while (this._queue.length > 0 && !this._disposed) {
-                const entry = this._queue.shift()!;
+            // Show the current cumulative state immediately when the notification opens
+            // (important for the archive-restore second pass, which starts at e.g. "89/109").
+            report(this._totalSessionsCompleted, this._totalSessionsQueued);
 
-                try {
-                    const embedding = await this.engine.embed(entry.text);
-                    this.index.add(entry.sessionId, entry.role, entry.messageIndex, entry.paragraphIndex, embedding);
-                    this._scheduleSave();
-                } catch {
-                    // Skip failed embeddings — don't crash the queue
-                } finally {
-                    const remaining = (this._pendingBySession.get(entry.sessionId) ?? 1) - 1;
-                    if (remaining === 0) {
-                        this._pendingBySession.delete(entry.sessionId);
-                        this._totalSessionsCompleted++;
-                    } else {
-                        this._pendingBySession.set(entry.sessionId, remaining);
+            while (this._queue.length > 0 && !this._disposed) {
+                // Collect all entries for the session at the front of the queue.
+                // scheduleSession() appends a session's entries contiguously, so entries
+                // for the same session are always grouped together at the queue head.
+                const currentSessionId = this._queue[0].sessionId;
+                const sessionEntries: QueueEntry[] = [];
+                while (this._queue.length > 0 && this._queue[0].sessionId === currentSessionId) {
+                    sessionEntries.push(this._queue.shift()!);
+                }
+
+                // Embed every text chunk for this session.
+                for (const entry of sessionEntries) {
+                    try {
+                        const embedding = await this.engine.embed(entry.text);
+                        this.index.add(entry.sessionId, entry.role, entry.messageIndex, entry.paragraphIndex, embedding);
+                        this._scheduleSave();
+                    } catch {
+                        // Skip failed embeddings — don't crash the queue.
                     }
+                }
+
+                // Session complete: update counters and report ONCE (not once per chunk).
+                // Calling report() once per session means VS Code renders a meaningful
+                // "N / total" update for each session instead of hundreds of identical
+                // "0 / total" calls that get throttled away.
+                // Guard: only count the session once — if it somehow appears in a second
+                // block (e.g. a race between scheduleSession and _runQueue), skip the
+                // counter update so the session is never double-counted.
+                if (this._pendingBySession.has(currentSessionId)) {
+                    this._pendingBySession.delete(currentSessionId);
+                    this._totalSessionsCompleted++;
                     report(this._totalSessionsCompleted, this._totalSessionsQueued);
                 }
+
+                // Yield to the event loop so VS Code can render the progress update
+                // before the next session's embeddings begin.
+                await new Promise<void>(r => setImmediate(r));
             }
         });
 
         this._queueRunning = false;
 
         if (!this._disposed && this._totalSessionsCompleted > 0) {
-            this.vsCodeApi.showIndexingComplete(this._totalSessionsCompleted);
+            // Debounce: the archive-restore batch fires a second _runQueue() run a few
+            // hundred ms after the first completes.  Wait before showing the notification
+            // so both runs are reported as a single final count.
+            if (this._indexingCompleteTimer !== undefined) {
+                clearTimeout(this._indexingCompleteTimer);
+            }
+            this._indexingCompleteTimer = setTimeout(() => {
+                this._indexingCompleteTimer = undefined;
+                if (!this._disposed) {
+                    this.vsCodeApi.showIndexingComplete(this._totalSessionsCompleted);
+                }
+            }, 5_000);
         }
     }
 

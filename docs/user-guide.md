@@ -23,9 +23,8 @@ ChatWizard indexes every AI chat session from all your tools (Copilot, Claude, C
 15. [Session Tagging](#15-session-tagging)
 16. [Session Archive](#16-session-archive)
 17. [AI Intelligence — Summaries & Entity Extraction](#17-ai-intelligence--summaries--entity-extraction)
-18. [Prompt Cost Analysis](#18-prompt-cost-analysis)
-19. [Settings Reference](#19-settings-reference)
-20. [Commands Reference](#20-commands-reference)
+18. [Settings Reference](#18-settings-reference)
+19. [Commands Reference](#19-commands-reference)
 
 ---
 
@@ -505,11 +504,6 @@ A lightweight alternative — **no MCP server required**. Invoke directly from t
 ```
 → Streams the third user prompt from the current chat thread back as a Markdown blockquote — useful for referencing an earlier turn without scrolling back. `R2` quotes the second assistant response.
 
-```
-@chatwizard /analyzePrompt Explain everything about the authentication system in this codebase
-```
-→ Offline analysis: token count, estimated cost, quality flags (open-ended scope detected, similar past sessions found), and model suggestion.
-
 Run **Chat Wizard: Connect GitHub Copilot** to configure the participant. For global context instructions across all workspaces, run **Chat Wizard: Set Up Global Copilot Instructions**.
 
 | | `@chatwizard` participant | MCP server |
@@ -712,36 +706,7 @@ A second background job extracts structured entities from session content and st
 
 ---
 
-## 18. Prompt Cost Analysis
-
-Analyze a draft prompt **offline** before sending it — no LLM calls, no network access.
-
-### Via the Chat Panel
-
-```
-@chatwizard /analyzePrompt <your draft prompt>
-```
-
-The response shows:
-- **Token count and estimated cost** — input + output at current model rates (GPT-4o, Claude Sonnet, Gemini Pro, and mini variants).
-- **Past-session similarity** — if you've asked something very similar before, a link to that session is shown so you can review first.
-- **Quality flags** (if any):
-  - Large code block pasted inline → suggest referencing the file by path.
-  - Open-ended scope (`list all`, `explain everything`) → suggest narrowing.
-  - Multiple questions in one prompt → suggest splitting.
-- **Model suggestion** — when the prompt is short and straightforward, a cheaper model is recommended.
-
-### Via the Editor
-
-1. Select any text in any editor.
-2. Right-click → **ChatWizard: Analyze Selected Prompt** (or Command Palette).
-3. An information message shows the token count and cost; click **View Details** for the full analysis.
-
-> **Note:** The price table is hardcoded and labeled with a "Last updated" date. Model pricing changes; treat the cost figures as rough estimates.
-
----
-
-## 19. Settings Reference
+## 18. Settings Reference
 
 ### Data Scope
 
@@ -832,7 +797,7 @@ Leave a path override empty to use the platform default location.
 
 ---
 
-## 20. Commands Reference
+## 19. Commands Reference
 
 ### Command Palette (user-facing)
 
@@ -858,7 +823,6 @@ Leave a path override empty to use the platform default location.
 | `chatwizard.tagActiveSession` | Chat Wizard: Tag Active Session |
 | `chatwizard.showFileHistory` | Chat Wizard: Show File Session History |
 | `chatwizard.showArchiveStats` | Chat Wizard: Show Archive Statistics |
-| `chatwizard.analyzeSelectedPrompt` | Chat Wizard: Analyze Selected Prompt |
 | `chatwizard.manageWatchedWorkspaces` | Chat Wizard: Manage Watched Workspaces |
 | `chatwizard.rescan` | Chat Wizard: Rescan Sessions |
 | `chatwizard.startMcpServer` | Chat Wizard: Start MCP Server |
@@ -907,7 +871,6 @@ Code Blocks panel toolbar cycles through: `chatwizard.cbSortByDate`, `chatwizard
 | See which sessions touched a file | Right-click the file in Explorer → **Show File History** |
 | Group sessions by git branch | Sessions panel toolbar → Group → By Branch |
 | Group sessions by work item (Jira, AzDO…) | Set `chatwizard.workItemPattern`, then Group → By Work Item |
-| Check whether a draft prompt is worthwhile | `@chatwizard /analyzePrompt <draft>` |
 | Quote a past turn in the current chat | `@chatwizard /referMessage P3` |
 | Check token usage this month | Analytics panel |
 | See which models you've used | Model Usage panel |

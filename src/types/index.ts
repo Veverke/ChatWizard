@@ -84,6 +84,12 @@ export interface Session {
      */
     archived?: boolean;
     /**
+     * True when the user explicitly archived the session via the Sessions view context menu.
+     * Distinguishes user-initiated archiving from automatic archiving caused by the source
+     * tool pruning the file (e.g. VS Code / Copilot deleting old session files).
+     */
+    userArchived?: boolean;
+    /**
      * Files that were explicitly touched or mentioned in this session, extracted from
      * Chronicle `checkpoints.important_files` (Feature 14).
      */
@@ -167,6 +173,8 @@ export interface SessionSummary {
     hasParseErrors?: boolean;
     /** True when the session is being served from the ChatWizard archive (source file deleted) */
     archived?: boolean;
+    /** True when the user explicitly archived this session via the context menu (vs. auto-archived due to source tool pruning) */
+    userArchived?: boolean;
 }
 
 /** Per-assistant request count within a WorkspaceUsage */

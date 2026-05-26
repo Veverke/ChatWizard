@@ -82,18 +82,7 @@ export class SessionArchive {
         return `${source}::${sessionId}`;
     }
 
-    /** Serialises manifest writes so concurrent save() calls don't race on the .tmp file. */
-    private _saveManifestLock: Promise<void> = Promise.resolve();
-
-    private saveManifest(): Promise<void> {
-        this._saveManifestLock = this._saveManifestLock.then(
-            () => this._doSaveManifest(),
-            () => this._doSaveManifest(),
-        );
-        return this._saveManifestLock;
-    }
-
-    private async _doSaveManifest(): Promise<void> {
+    private async saveManifest(): Promise<void> {
         if (!this.manifest) { return; }
         try {
             await fs.promises.mkdir(this.archiveRoot, { recursive: true });

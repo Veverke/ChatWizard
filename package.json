@@ -61,7 +61,14 @@
     "Visualization"
   ],
   "activationEvents": [
-    "onStartupFinished"
+    "onStartupFinished",
+    "onView:chatwizardSessions",
+    "onView:chatwizardPromptLibrary",
+    "onView:chatwizardCodeBlocks",
+    "onView:chatwizardAnalytics",
+    "onView:chatwizardModelUsage",
+    "onView:chatwizardTimeline",
+    "onChatParticipant:Veverke.chatwizard"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -583,11 +590,6 @@
         "category": "Chat Wizard"
       },
       {
-        "command": "chatwizard.analyzeSelectedPrompt",
-        "title": "Chat Wizard: Analyze Selected Prompt",
-        "category": "Chat Wizard"
-      },
-      {
         "command": "chatwizard.showFileHistory",
         "title": "Chat Wizard: Show File Session History",
         "category": "Chat Wizard"
@@ -614,13 +616,7 @@
       }
     ],
     "menus": {
-      "editor/context": [
-        {
-          "command": "chatwizard.analyzeSelectedPrompt",
-          "when": "editorHasSelection",
-          "group": "chatwizard@1"
-        }
-      ],
+      "editor/context": [],
       "explorer/context": [
         {
           "command": "chatwizard.showFileHistory",
@@ -869,7 +865,7 @@
         },
         {
           "command": "chatwizard.revealSessionInExplorer",
-          "when": "viewItem == session || viewItem == session.pinned || viewItem == session.archived",
+          "when": "viewItem == session || viewItem == session.pinned || viewItem == session.archived || viewItem == session.userArchived",
           "group": "3_reveal@1"
         },
         {
@@ -879,17 +875,17 @@
         },
         {
           "command": "chatwizard.deleteArchivedSession",
-          "when": "viewItem == session.archived",
+          "when": "viewItem == session.archived || viewItem == session.userArchived",
           "group": "4_archive@1"
         },
         {
           "command": "chatwizard.addTagFromTree",
-          "when": "viewItem == session || viewItem == session.pinned || viewItem == session.archived",
+          "when": "viewItem == session || viewItem == session.pinned || viewItem == session.archived || viewItem == session.userArchived",
           "group": "5_tags@1"
         },
         {
           "command": "chatwizard.removeTagFromTree",
-          "when": "viewItem == session || viewItem == session.pinned || viewItem == session.archived",
+          "when": "viewItem == session || viewItem == session.pinned || viewItem == session.archived || viewItem == session.userArchived",
           "group": "5_tags@2"
         },
         {
@@ -1186,10 +1182,6 @@
           {
             "name": "removeTags",
             "description": "Remove tags from the active chat session (e.g. /removeTags #bugfix, topic:auth)"
-          },
-          {
-            "name": "analyzePrompt",
-            "description": "Analyze a draft prompt for token count, estimated cost, and quality tips"
           }
         ]
       }
@@ -1485,7 +1477,8 @@
     "rebuild:native": "node scripts/rebuild-native.js",
     "bundle": "esbuild src/extension.ts --bundle --platform=node --external:vscode --external:better-sqlite3 --external:@xenova/transformers --outfile=dist/extension.js",
     "bundle:watch": "esbuild src/extension.ts --bundle --platform=node --external:vscode --external:better-sqlite3 --external:@xenova/transformers --outfile=dist/extension.js --sourcemap --watch",
-    "test:coverage": "vscode-test --coverage --coverage-reporter lcov --coverage-reporter text --coverage-reporter json-summary && node -e \"const s=require('./coverage/coverage-summary.json'),T=90,EXCL=['fileWatcher.ts','sessionWebviewPanel.ts','analyticsPanel.ts','codeBlocksPanel.ts','mcpServer.ts','chatParticipant.ts','configPaths.ts','timelineViewProvider.ts','getContextTool.ts','cursor.ts','copilot.ts','antigravity.ts','copilotWorkspace.ts','sessionTreeProvider.ts','summaryGenerator.ts','amazonQWorkspace.ts','continueWorkspace.ts','geminiCodeAssistWorkspace.ts','sourceBrandIcons.ts','fileAnchorResolver.ts','promptLibraryPanel.ts','semanticSearchPanel.ts'];function adj(k){let tot=s.total[k].total,cov=s.total[k].covered;for(const[f,d]of Object.entries(s)){if(f==='total')continue;const n=f.split(/[/\\\\\\\\]/).pop();if(EXCL.includes(n)){tot-=d[k].total;cov-=d[k].covered;}}return tot>0?cov/tot*100:100;}const f=['branches','functions','lines','statements'].filter(k=>adj(k)<T);if(f.length){console.error('\\nCoverage below '+T+'%: '+f.map(k=>k+' '+adj(k).toFixed(2)+'%').join(', '));process.exit(1);}console.log('Coverage OK (>='+T+'%)')\"",
+    "pretest:coverage": "npm run compile",
+    "test:coverage": "vscode-test --coverage --coverage-reporter lcov --coverage-reporter text --coverage-reporter json-summary && node -e \"const s=require('./coverage/coverage-summary.json'),T=90,EXCL=['fileWatcher.ts','sessionWebviewPanel.ts','analyticsPanel.ts','codeBlocksPanel.ts','mcpServer.ts','chatParticipant.ts','configPaths.ts','timelineViewProvider.ts','getContextTool.ts','cursor.ts','copilot.ts','antigravity.ts','copilotWorkspace.ts','sessionTreeProvider.ts','summaryGenerator.ts','amazonQWorkspace.ts','continueWorkspace.ts','geminiCodeAssistWorkspace.ts','sourceBrandIcons.ts','fileAnchorResolver.ts','promptLibraryPanel.ts','semanticSearchPanel.ts','semanticWiring.test.ts','semanticIndexer.test.ts'];function adj(k){let tot=s.total[k].total,cov=s.total[k].covered;for(const[f,d]of Object.entries(s)){if(f==='total')continue;const n=f.split(/[/\\\\\\\\]/).pop();if(EXCL.includes(n)){tot-=d[k].total;cov-=d[k].covered;}}return tot>0?cov/tot*100:100;}const f=['branches','functions','lines','statements'].filter(k=>adj(k)<T);if(f.length){console.error('\\nCoverage below '+T+'%: '+f.map(k=>k+' '+adj(k).toFixed(2)+'%').join(', '));process.exit(1);}console.log('Coverage OK (>='+T+'%)')\"",
     "test:flaky": "node scripts/detect-flaky.mjs",
     "smoke": "tsx scripts/smoke-test-mcp-server.ts && tsx scripts/smoke-test-phase4.ts",
     "e2e:mcp": "tsx scripts/e2e-mcp-scenarios.ts",
