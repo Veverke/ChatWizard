@@ -61,7 +61,8 @@
     "Visualization"
   ],
   "activationEvents": [
-    "onStartupFinished"
+    "onStartupFinished",
+    "*"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -583,11 +584,6 @@
         "category": "Chat Wizard"
       },
       {
-        "command": "chatwizard.analyzeSelectedPrompt",
-        "title": "Chat Wizard: Analyze Selected Prompt",
-        "category": "Chat Wizard"
-      },
-      {
         "command": "chatwizard.showFileHistory",
         "title": "Chat Wizard: Show File Session History",
         "category": "Chat Wizard"
@@ -614,13 +610,7 @@
       }
     ],
     "menus": {
-      "editor/context": [
-        {
-          "command": "chatwizard.analyzeSelectedPrompt",
-          "when": "editorHasSelection",
-          "group": "chatwizard@1"
-        }
-      ],
+      "editor/context": [],
       "explorer/context": [
         {
           "command": "chatwizard.showFileHistory",
@@ -869,7 +859,7 @@
         },
         {
           "command": "chatwizard.revealSessionInExplorer",
-          "when": "viewItem == session || viewItem == session.pinned || viewItem == session.archived",
+          "when": "viewItem == session || viewItem == session.pinned || viewItem == session.archived || viewItem == session.userArchived",
           "group": "3_reveal@1"
         },
         {
@@ -879,17 +869,17 @@
         },
         {
           "command": "chatwizard.deleteArchivedSession",
-          "when": "viewItem == session.archived",
+          "when": "viewItem == session.archived || viewItem == session.userArchived",
           "group": "4_archive@1"
         },
         {
           "command": "chatwizard.addTagFromTree",
-          "when": "viewItem == session || viewItem == session.pinned || viewItem == session.archived",
+          "when": "viewItem == session || viewItem == session.pinned || viewItem == session.archived || viewItem == session.userArchived",
           "group": "5_tags@1"
         },
         {
           "command": "chatwizard.removeTagFromTree",
-          "when": "viewItem == session || viewItem == session.pinned || viewItem == session.archived",
+          "when": "viewItem == session || viewItem == session.pinned || viewItem == session.archived || viewItem == session.userArchived",
           "group": "5_tags@2"
         },
         {
@@ -1186,10 +1176,6 @@
           {
             "name": "removeTags",
             "description": "Remove tags from the active chat session (e.g. /removeTags #bugfix, topic:auth)"
-          },
-          {
-            "name": "analyzePrompt",
-            "description": "Analyze a draft prompt for token count, estimated cost, and quality tips"
           }
         ]
       }

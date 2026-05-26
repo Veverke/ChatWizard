@@ -106,9 +106,8 @@ Instead of asking the same question twice, search your Chat Wizard history. Find
 - **Branch & Work Item Grouping** — group sessions by git branch or extracted work-item ID (Jira, GitHub Issues, Azure DevOps)
 - **AI Session Summaries** _(Beta)_ — auto-generated one-line summaries for every session (Chronicle data first, then VS Code LM API, then offline TF-IDF)
 - **Entity Extraction** _(Beta)_ — automatic extraction of file paths, function names, error codes, and decision phrases; filterable chips in the session reader
-- **Prompt Cost Analysis** — offline token count, estimated cost, quality tips, and past-session similarity check for any draft prompt
 - **MCP Server** — expose your full chat history to Claude Desktop, Cursor, Continue, and Copilot agent mode via the Model Context Protocol (**11 tools**)
-- **`@chatwizard` Copilot Chat Participant** — `/queryHistory`, `/continueFromHistory`, `/tag`, `/referMessage`, and `/analyzePrompt` directly in Copilot Chat, no MCP server required
+- **`@chatwizard` Copilot Chat Participant** — `/queryHistory`, `/continueFromHistory`, `/tag`, and `/referMessage` directly in Copilot Chat, no MCP server required
 - **Live Indexing** — file watcher keeps all views up-to-date as new sessions are written, with no manual refresh needed
 - **100% local** — no network calls, no account, read-only access to your existing session files
 
@@ -134,7 +133,6 @@ Capabilities not available in the built-in GitHub Copilot Chat panel or the Clau
 | AI-generated one-line session summaries _(Beta)_ | ✅ | ❌ | ❌ |
 | Auto-extract entities (files, functions, errors, decisions) _(Beta)_ | ✅ | ❌ | ❌ |
 | "N sessions touched this file" in status bar & CodeLens | ✅ | ❌ | ❌ |
-| Analyze draft prompt for cost, quality & past-query similarity | ✅ | ❌ | ❌ |
 | Export conversations to Markdown | ✅ | ❌ | ❌ |
 | Export a message excerpt (selected turns only) | ✅ | ❌ | ❌ |
 | Export to Obsidian vault (YAML frontmatter + wikilinks) | ✅ | ❌ | ❌ |
@@ -242,7 +240,6 @@ See the **[User Guide → Commands Reference](docs/user-guide.md#15-commands-ref
 - **Session Tagging** — right-click Add/Remove Tag; tag chips in tree and reader; tag filter; `Tag Active Session` command and status bar button; `@chatwizard /tag` and `/removeTags` chat commands.
 - **AI Session Summaries** _(Beta)_ — background generation via Chronicle → LM API → TF-IDF fallback; shown in tree tooltip and reader header; `Regenerate Summary` context menu.
 - **Entity Extraction** _(Beta)_ — auto-extracted file paths, function names, errors, and decisions; entity chips in session reader; `chatwizard_search` entity filter parameters.
-- **Prompt Cost Analysis** — `@chatwizard /analyzePrompt`; `ChatWizard: Analyze Selected Prompt` editor command; offline token count, cost estimate, quality flags, and similarity check.
 - **Obsidian & Notion export** — `ChatWizard: Export Sessions to Obsidian` (YAML frontmatter + wikilinks); `ChatWizard: Export Sessions to Notion` (Notion API; key in SecretStorage).
 - **`@chatwizard` new commands** — `/referMessage` (quote a turn by P/R label); clickable file pills in `/continueFromHistory`.
 - **MCP Server** — 3 new tools (total: **11**); optional TF-IDF reranker for `chatwizard_get_context` (`chatwizard.mcp.reranker.enabled`).

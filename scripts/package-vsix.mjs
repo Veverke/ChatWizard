@@ -62,10 +62,32 @@ const vsixName = `chatwizard-${platform}.vsix`;
 // without touching the root node_modules.
 
 // onnxruntime-web, sharp  — statically imported but never called in the Node.js extension host.
-// @huggingface/jinja       — statically imported by tokenizers.js; only used for apply_chat_template
-//                            which ChatWizard never invokes (text embeddings only).
+// @huggingface/jinja       — statically imported by tokenizers.js (`import { Template } from ...`);
+//                            only used for apply_chat_template which ChatWizard never invokes.
+//                            The stub MUST export `Template` as a named CJS export so that
+//                            Node.js CJS→ESM interop can satisfy the static named import.
 const STUBS = ['onnxruntime-web', 'sharp', '@huggingface/jinja'];
 const XENOVA_NM = join(ROOT, 'node_modules', '@xenova', 'transformers', 'node_modules');
+
+/** Per-stub CJS content. Falls back to an empty export for unspecified stubs. */
+const STUB_CONTENT = {
+    '@huggingface/jinja':
+        '// stub: exports named symbols required by @xenova/transformers tokenizers.js\n' +
+        '// Template is never called; this satisfies the static ESM import { Template } from ...\n' +
+        'class Template { render() { return ""; } }\n' +
+        'class Environment {}\n' +
+        'class Interpreter {}\n' +
+        'function parse() { return null; }\n' +
+        'function tokenize() { return []; }\n' +
+        'exports.Template = Template;\n' +
+        'exports.Environment = Environment;\n' +
+        'exports.Interpreter = Interpreter;\n' +
+        'exports.parse = parse;\n' +
+        'exports.tokenize = tokenize;\n',
+};
+
+const DEFAULT_STUB_CONTENT =
+    '// stub: satisfies static ESM import; never called in Node.js extension host\nmodule.exports = {};\n';
 
 function createStubs() {
     mkdirSync(XENOVA_NM, { recursive: true });
@@ -84,7 +106,7 @@ function createStubs() {
         );
         writeFileSync(
             join(dir, 'index.js'),
-            '// stub: satisfies static ESM import; never called in Node.js extension host\nmodule.exports = {};\n',
+            STUB_CONTENT[name] ?? DEFAULT_STUB_CONTENT,
         );
     }
     console.log(`  ✅ stubs created: ${STUBS.join(', ')}`);
@@ -126,6 +148,9 @@ function patchVscodeignore() {
         '!node_modules/onnxruntime-node/dist/**',
         '!node_modules/onnxruntime-node/package.json',
         `!node_modules/onnxruntime-node/bin/napi-v3/${binPath}/**`,
+        '# onnxruntime-common: peer dep of onnxruntime-node; required at runtime.',
+        '!node_modules/onnxruntime-common/dist/**',
+        '!node_modules/onnxruntime-common/package.json',
     ].join('\n') + '\n';
     writeFileSync(VSCODEIGNORE_PATH, originalVscodeignore + patch);
     console.log(`  ✅ .vscodeignore patched for ${platform} (onnxruntime-node/bin/napi-v3/${binPath})`);
@@ -150,7 +175,7 @@ patchVscodeignore();
 
 try {
     execSync(
-        `npx @vscode/vsce package --target ${platform} --out ${vsixName}`,
+        `npx @vscode/vsce package --target ${platform} --out ${vsixName} --allow-star-activation`,
         { cwd: ROOT, stdio: 'inherit' },
     );
 } finally {

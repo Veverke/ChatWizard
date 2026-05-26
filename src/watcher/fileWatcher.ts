@@ -428,7 +428,7 @@ this.index.remove(taskId);
         await vscode.window.withProgress(
             {
                 location: vscode.ProgressLocation.Window,
-                title: 'Chat Wizard: indexing sessions…',
+                title: 'Chat Wizard: parsing session files…',
                 cancellable: false,
             },
             async (progress) => {
@@ -537,7 +537,9 @@ this.index.remove(taskId);
             const total = fileLists.reduce((s, { files }) => s + files.length, 0);
             let current = 0;
 
-            // Parse each directory's files in parallel across directories
+            // Parse each directory's files in parallel across directories.
+            // parseFile uses readFileSync, so we add a setImmediate yield after each file
+            // to give VS Code a chance to flush queued progress.report IPC messages.
             const dirResults = await Promise.all(fileLists.map(async ({ projectPath, files }) => {
                 const dirSessions: Session[] = [];
                 for (const file of files) {
@@ -553,6 +555,8 @@ this.index.remove(taskId);
                     if (session) { dirSessions.push(session); }
                     current++;
                     onProgress?.(current, total);
+                    // Yield to the event loop so VS Code can render queued progress updates.
+                    await new Promise<void>(r => setImmediate(r));
                 }
                 return dirSessions;
             }));
@@ -591,7 +595,9 @@ this.index.remove(taskId);
             const total = fileListsPerWorkspace.reduce((s, files) => s + files.length, 0);
             let current = 0;
 
-            // Parse each workspace's files in parallel
+            // Parse each workspace's files in parallel.
+            // parseFile uses readFileSync, so we add a setImmediate yield after each file
+            // to give VS Code a chance to flush queued progress.report IPC messages.
             const wsResults = await Promise.all(workspaces.map(async (workspace, idx) => {
                 const files = fileListsPerWorkspace[idx];
                 const wsSessions: Session[] = [];
@@ -608,6 +614,8 @@ this.index.remove(taskId);
                     if (session) { wsSessions.push(session); }
                     current++;
                     onProgress?.(current, total);
+                    // Yield to the event loop so VS Code can render queued progress updates.
+                    await new Promise<void>(r => setImmediate(r));
                 }
                 return wsSessions;
             }));

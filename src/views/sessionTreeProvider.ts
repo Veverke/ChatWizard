@@ -44,7 +44,11 @@ export class SessionTreeItem extends vscode.TreeItem {
             ? `${(summary.fileSizeBytes / 1024).toFixed(1)} KB`
             : undefined;
 
-        const archivedPrefix = summary.archived ? '🗂️ archived  ·  ' : '';
+        const archivedPrefix = summary.userArchived
+            ? '📁 archived (by you)  ·  '
+            : summary.archived
+                ? '📂 archived (auto)  ·  '
+                : '';
         const tagsSuffix = tags && tags.length > 0 ? `  ·  ${tags.map(t => `${tagColorEmoji(t)} #${t}`).join(' ')}` : '';
         this.description = sizeKb
             ? `${archivedPrefix}${workspaceName} · ${date} · ${msgCount} msgs · ${sizeKb}${tagsSuffix}`
@@ -54,7 +58,11 @@ export class SessionTreeItem extends vscode.TreeItem {
         const modelLine = summary.model ? `\n\n**Model:** ${summary.model}` : '';
         const sizeLine = sizeKb ? `\n\n**Size:** ${msgCount} messages · ${sizeKb}` : `\n\n**Size:** ${msgCount} messages`;
         const pinnedLine = pinned ? `\n\n📌 *Pinned*` : '';
-        const archivedLine = summary.archived ? `\n\n🗂️ *Archived — original source file deleted*` : '';
+        const archivedLine = summary.userArchived
+            ? `\n\n📁 *Archived by you — original source file deleted, ChatWizard copy retained*`
+            : summary.archived
+                ? `\n\n📂 *Auto-archived — source file was pruned by the AI tool, ChatWizard copy retained*`
+                : '';
         const tagsLine = tags && tags.length > 0 ? `\n\n**Tags:** ${tags.map(t => `\`#${t}\``).join(' ')}` : '';
         const summaryLine = summaryText ? `\n\n**Summary:** ${summaryText}` : '';
         const interruptedLine = summary.interrupted ? `\n\n⚠ *Response not available — cancelled or incomplete*` : '';
@@ -94,6 +102,12 @@ export class SessionTreeItem extends vscode.TreeItem {
 
         if (pinned) {
             this.iconPath = new vscode.ThemeIcon('pinned');
+        } else if (summary.userArchived) {
+            // User explicitly archived — blue folder
+            this.iconPath = new vscode.ThemeIcon('folder', new vscode.ThemeColor('charts.blue'));
+        } else if (summary.archived) {
+            // Auto-archived (pruned by AI tool) — yellow folder
+            this.iconPath = new vscode.ThemeIcon('folder', new vscode.ThemeColor('charts.yellow'));
         } else if (extensionUri && sourceBrandIconUris(summary.source, extensionUri)) {
             // Prefer bundled brand SVGs (Cursor, Cline, …) even when interrupted / parse warnings —
             // codicon fallbacks like $(edit) are misleading for product identity.
@@ -115,7 +129,7 @@ export class SessionTreeItem extends vscode.TreeItem {
             this.resourceUri = vscode.Uri.from({ scheme: 'chatwizard-warn', path: '/' + summary.id });
         }
 
-        this.contextValue = pinned ? 'session.pinned' : summary.archived ? 'session.archived' : 'session';
+        this.contextValue = pinned ? 'session.pinned' : summary.userArchived ? 'session.userArchived' : summary.archived ? 'session.archived' : 'session';
 
         this.command = {
             command: 'chatwizard.openSession',
@@ -294,6 +308,8 @@ export interface SessionFilter {
     hideInterrupted?: boolean;   // when true, hide sessions whose last message has no assistant reply
     onlyWithWarnings?: boolean;  // when true, show only sessions that have parse errors / skipped turns
     tags?: string[];             // when set, show only sessions tagged with any of these tags (OR)
+    archivedOnly?: boolean;      // when true, show only sessions served from the ChatWizard archive
+    liveOnly?: boolean;          // when true, hide sessions served from the ChatWizard archive
 }
 
 // ---------------------------------------------------------------------------
@@ -489,7 +505,8 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
         const f = this._filter;
         return !!(f.title || f.dateFrom || f.dateTo || f.model || f.source ||
                   f.minMessages !== undefined || f.maxMessages !== undefined ||
-                  f.hideInterrupted || f.onlyWithWarnings || (f.tags && f.tags.length > 0));
+                  f.hideInterrupted || f.onlyWithWarnings || (f.tags && f.tags.length > 0) ||
+                  f.archivedOnly || f.liveOnly);
     }
 
     private _matchesFilter(s: SessionSummary): boolean {
@@ -510,6 +527,8 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
             const sessionTags = this.index.getSidecarMeta(s.id)?.tags ?? [];
             if (!f.tags.some(t => sessionTags.includes(t))) { return false; }
         }
+        if (f.archivedOnly && !s.archived) { return false; }
+        if (f.liveOnly && s.archived) { return false; }
         return true;
     }
 
@@ -525,8 +544,8 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
         }
         if (f.hideInterrupted) { parts.push('hide:interrupted'); }
         if (f.onlyWithWarnings) { parts.push('warnings only'); }
-        if (f.tags && f.tags.length > 0) { parts.push(`tags:${f.tags.map(t => `#${t}`).join(',')}`); }
-        return parts.length > 0 ? `⊘ ${parts.join(' · ')}` : '';
+        if (f.tags && f.tags.length > 0) { parts.push(`tags:${f.tags.map(t => `#${t}`).join(',')}`); }        if (f.archivedOnly) { parts.push('archived only'); }
+        if (f.liveOnly) { parts.push('live only'); }        return parts.length > 0 ? `⊘ ${parts.join(' · ')}` : '';
     }
 
     // ------------------------------------------------------------------

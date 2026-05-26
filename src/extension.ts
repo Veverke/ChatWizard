@@ -1045,7 +1045,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 return;
             }
             try {
-                await archive.save(session.id, session.source, JSON.stringify(session));
+                // Mark as userArchived in the stored copy so the flag survives restore.
+                await archive.save(session.id, session.source, JSON.stringify({ ...session, userArchived: true }));
             } catch (err) {
                 vscode.window.showErrorMessage(`Failed to write to archive: ${err}`);
                 return;
@@ -2016,9 +2017,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         const activeSessionTagBtn = new ActiveSessionTagButton(liveTracker);
         context.subscriptions.push(activeSessionTagBtn);
 
-        // ── Feature 20-J: Session Cost Advisor ───────────────────────────────
-        const costAdvisorNotifier = new SessionCostAdvisorNotifier(liveTracker, index);
-        context.subscriptions.push(costAdvisorNotifier);
+        // ── Feature 20-J: Session Cost Advisor (disabled for 1.5.0 — testing deferred to P3) ──
+        // const costAdvisorNotifier = new SessionCostAdvisorNotifier(liveTracker, index);
+        // context.subscriptions.push(costAdvisorNotifier);
 
         context.subscriptions.push(
             vscode.commands.registerCommand('chatwizard.tagActiveSession', async () => {
@@ -2253,39 +2254,39 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             }),
         );
 
-        // ── Feature 20-D: Analyze Selected Prompt command ─────────────────────
-        context.subscriptions.push(
-            vscode.commands.registerCommand('chatwizard.analyzeSelectedPrompt', async () => {
-                const editor = vscode.window.activeTextEditor;
-                const selection = editor?.selection;
-                const text = editor?.document.getText(selection);
-                if (!text?.trim()) {
-                    void vscode.window.showInformationMessage('Select some text first to analyze as a prompt.');
-                    return;
-                }
-                const analyzer = new PromptAnalyzer();
-                const analysis = await analyzer.analyze(text);
-                const detail = [
-                    `Tokens: ~${analysis.tokenCount.toLocaleString()}`,
-                    analysis.costEstimates.length > 0
-                        ? `Est. cost: ${analysis.costEstimates.map(c => `${c.model}: $${c.estimate.totalUsd.toFixed(4)}`).join(' | ')}`
-                        : '',
-                    analysis.verbosityFlags.length > 0
-                        ? `Flags: ${analysis.verbosityFlags.map(f => f.description).join('; ')}`
-                        : 'No verbosity issues.',
-                ].filter(Boolean).join('\n');
-                const choice = await vscode.window.showInformationMessage(analysis.summary, 'View Details');
-                if (choice === 'View Details') {
-                    const panel = vscode.window.createWebviewPanel(
-                        'chatwizard.promptAnalysis',
-                        'Prompt Analysis',
-                        vscode.ViewColumn.Beside,
-                        {},
-                    );
-                    panel.webview.html = `<!DOCTYPE html><html><body><pre style="font-family:monospace;padding:16px;">${detail.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</pre></body></html>`;
-                }
-            }),
-        );
+        // ── Feature 20-D: Analyze Selected Prompt command (disabled for 1.5.0 — testing deferred to P3) ──
+        // context.subscriptions.push(
+        //     vscode.commands.registerCommand('chatwizard.analyzeSelectedPrompt', async () => {
+        //         const editor = vscode.window.activeTextEditor;
+        //         const selection = editor?.selection;
+        //         const text = editor?.document.getText(selection);
+        //         if (!text?.trim()) {
+        //             void vscode.window.showInformationMessage('Select some text first to analyze as a prompt.');
+        //             return;
+        //         }
+        //         const analyzer = new PromptAnalyzer();
+        //         const analysis = await analyzer.analyze(text);
+        //         const detail = [
+        //             `Tokens: ~${analysis.tokenCount.toLocaleString()}`,
+        //             analysis.costEstimates.length > 0
+        //                 ? `Est. cost: ${analysis.costEstimates.map(c => `${c.model}: $${c.estimate.totalUsd.toFixed(4)}`).join(' | ')}`
+        //                 : '',
+        //             analysis.verbosityFlags.length > 0
+        //                 ? `Flags: ${analysis.verbosityFlags.map(f => f.description).join('; ')}`
+        //                 : 'No verbosity issues.',
+        //         ].filter(Boolean).join('\n');
+        //         const choice = await vscode.window.showInformationMessage(analysis.summary, 'View Details');
+        //         if (choice === 'View Details') {
+        //             const panel = vscode.window.createWebviewPanel(
+        //                 'chatwizard.promptAnalysis',
+        //                 'Prompt Analysis',
+        //                 vscode.ViewColumn.Beside,
+        //                 {},
+        //             );
+        //             panel.webview.html = `<!DOCTYPE html><html><body><pre style="font-family:monospace;padding:16px;">${detail.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</pre></body></html>`;
+        //         }
+        //     }),
+        // );
 
         // ── Feature 22: Export commands ───────────────────────────────────────
         context.subscriptions.push(
