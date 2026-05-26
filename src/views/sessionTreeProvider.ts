@@ -45,9 +45,9 @@ export class SessionTreeItem extends vscode.TreeItem {
             : undefined;
 
         const archivedPrefix = summary.userArchived
-            ? '📁 archived (by you)  ·  '
+            ? '🧊 archived (by you)  ·  '
             : summary.archived
-                ? '📂 archived (auto)  ·  '
+                ? '📦 archived (auto)  ·  '
                 : '';
         const tagsSuffix = tags && tags.length > 0 ? `  ·  ${tags.map(t => `${tagColorEmoji(t)} #${t}`).join(' ')}` : '';
         this.description = sizeKb
@@ -59,9 +59,9 @@ export class SessionTreeItem extends vscode.TreeItem {
         const sizeLine = sizeKb ? `\n\n**Size:** ${msgCount} messages · ${sizeKb}` : `\n\n**Size:** ${msgCount} messages`;
         const pinnedLine = pinned ? `\n\n📌 *Pinned*` : '';
         const archivedLine = summary.userArchived
-            ? `\n\n📁 *Archived by you — original source file deleted, ChatWizard copy retained*`
+            ? `\n\n🧊 *Archived by you — original source file deleted, ChatWizard copy retained*`
             : summary.archived
-                ? `\n\n📂 *Auto-archived — source file was pruned by the AI tool, ChatWizard copy retained*`
+                ? `\n\n📦 *Auto-archived — source file was pruned by the AI tool, ChatWizard copy retained*`
                 : '';
         const tagsLine = tags && tags.length > 0 ? `\n\n**Tags:** ${tags.map(t => `\`#${t}\``).join(' ')}` : '';
         const summaryLine = summaryText ? `\n\n**Summary:** ${summaryText}` : '';
@@ -102,12 +102,6 @@ export class SessionTreeItem extends vscode.TreeItem {
 
         if (pinned) {
             this.iconPath = new vscode.ThemeIcon('pinned');
-        } else if (summary.userArchived) {
-            // User explicitly archived — blue folder
-            this.iconPath = new vscode.ThemeIcon('folder', new vscode.ThemeColor('charts.blue'));
-        } else if (summary.archived) {
-            // Auto-archived (pruned by AI tool) — yellow folder
-            this.iconPath = new vscode.ThemeIcon('folder', new vscode.ThemeColor('charts.yellow'));
         } else if (extensionUri && sourceBrandIconUris(summary.source, extensionUri)) {
             // Prefer bundled brand SVGs (Cursor, Cline, …) even when interrupted / parse warnings —
             // codicon fallbacks like $(edit) are misleading for product identity.
