@@ -276,6 +276,12 @@ export class SemanticIndexer implements ISemanticIndexer {
         if (this.index.has(session.id)) {
             return;
         }
+        // Skip if this session is already queued but not yet processed — avoids
+        // enqueuing duplicate work and inflating _totalSessionsQueued when repeated
+        // upsert events fire for the same session.
+        if (this._pendingBySession.has(session.id)) {
+            return;
+        }
 
         let added = 0;
 
@@ -438,9 +444,14 @@ export class SemanticIndexer implements ISemanticIndexer {
                 // Calling report() once per session means VS Code renders a meaningful
                 // "N / total" update for each session instead of hundreds of identical
                 // "0 / total" calls that get throttled away.
-                this._pendingBySession.delete(currentSessionId);
-                this._totalSessionsCompleted++;
-                report(this._totalSessionsCompleted, this._totalSessionsQueued);
+                // Guard: only count the session once — if it somehow appears in a second
+                // block (e.g. a race between scheduleSession and _runQueue), skip the
+                // counter update so the session is never double-counted.
+                if (this._pendingBySession.has(currentSessionId)) {
+                    this._pendingBySession.delete(currentSessionId);
+                    this._totalSessionsCompleted++;
+                    report(this._totalSessionsCompleted, this._totalSessionsQueued);
+                }
 
                 // Yield to the event loop so VS Code can render the progress update
                 // before the next session's embeddings begin.

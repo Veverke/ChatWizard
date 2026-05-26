@@ -544,8 +544,10 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
         }
         if (f.hideInterrupted) { parts.push('hide:interrupted'); }
         if (f.onlyWithWarnings) { parts.push('warnings only'); }
-        if (f.tags && f.tags.length > 0) { parts.push(`tags:${f.tags.map(t => `#${t}`).join(',')}`); }        if (f.archivedOnly) { parts.push('archived only'); }
-        if (f.liveOnly) { parts.push('live only'); }        return parts.length > 0 ? `⊘ ${parts.join(' · ')}` : '';
+        if (f.tags && f.tags.length > 0) { parts.push(`tags:${f.tags.map(t => `#${t}`).join(',')}`); }
+        if (f.archivedOnly) { parts.push('archived only'); }
+        if (f.liveOnly) { parts.push('live only'); }
+        return parts.length > 0 ? `⊘ ${parts.join(' · ')}` : '';
     }
 
     // ------------------------------------------------------------------

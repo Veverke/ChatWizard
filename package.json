@@ -62,7 +62,13 @@
   ],
   "activationEvents": [
     "onStartupFinished",
-    "*"
+    "onView:chatwizardSessions",
+    "onView:chatwizardPromptLibrary",
+    "onView:chatwizardCodeBlocks",
+    "onView:chatwizardAnalytics",
+    "onView:chatwizardModelUsage",
+    "onView:chatwizardTimeline",
+    "onChatParticipant:Veverke.chatwizard"
   ],
   "main": "./dist/extension.js",
   "contributes": {

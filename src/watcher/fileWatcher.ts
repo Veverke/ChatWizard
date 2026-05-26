@@ -538,8 +538,9 @@ this.index.remove(taskId);
             let current = 0;
 
             // Parse each directory's files in parallel across directories.
-            // parseFile uses readFileSync, so we add a setImmediate yield after each file
-            // to give VS Code a chance to flush queued progress.report IPC messages.
+            // parseFile uses readFileSync, so we yield every 10 files (when a progress
+            // callback is active) to let VS Code flush queued progress.report IPC messages
+            // without adding per-file scheduling overhead.
             const dirResults = await Promise.all(fileLists.map(async ({ projectPath, files }) => {
                 const dirSessions: Session[] = [];
                 for (const file of files) {
@@ -555,8 +556,11 @@ this.index.remove(taskId);
                     if (session) { dirSessions.push(session); }
                     current++;
                     onProgress?.(current, total);
-                    // Yield to the event loop so VS Code can render queued progress updates.
-                    await new Promise<void>(r => setImmediate(r));
+                    // Yield to the event loop every 10 files (only when progress is active)
+                    // to keep UI responsive without adding scheduling overhead per file.
+                    if (onProgress && current % 10 === 0) {
+                        await new Promise<void>(r => setImmediate(r));
+                    }
                 }
                 return dirSessions;
             }));
@@ -596,8 +600,9 @@ this.index.remove(taskId);
             let current = 0;
 
             // Parse each workspace's files in parallel.
-            // parseFile uses readFileSync, so we add a setImmediate yield after each file
-            // to give VS Code a chance to flush queued progress.report IPC messages.
+            // parseFile uses readFileSync, so we yield every 10 files (when a progress
+            // callback is active) to let VS Code flush queued progress.report IPC messages
+            // without adding per-file scheduling overhead.
             const wsResults = await Promise.all(workspaces.map(async (workspace, idx) => {
                 const files = fileListsPerWorkspace[idx];
                 const wsSessions: Session[] = [];
@@ -614,8 +619,11 @@ this.index.remove(taskId);
                     if (session) { wsSessions.push(session); }
                     current++;
                     onProgress?.(current, total);
-                    // Yield to the event loop so VS Code can render queued progress updates.
-                    await new Promise<void>(r => setImmediate(r));
+                    // Yield to the event loop every 10 files (only when progress is active)
+                    // to keep UI responsive without adding scheduling overhead per file.
+                    if (onProgress && current % 10 === 0) {
+                        await new Promise<void>(r => setImmediate(r));
+                    }
                 }
                 return wsSessions;
             }));
