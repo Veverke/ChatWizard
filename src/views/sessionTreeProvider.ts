@@ -372,8 +372,16 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
     /** Full display order set by drag-and-drop; empty means use sort stack */
     private _manualOrder: string[] = [];
     private _sortedCache: SessionSummary[] | null = null;
+    /**
+     * Filtered (but not yet sorted) result of applying `_filter` to all summaries.
+     * Invalidated only when filter settings or underlying data change — not on sort-only changes.
+     * This avoids O(n) re-filter work for sort-only interactions (Item 9).
+     */
+    private _filteredCache: SessionSummary[] | null = null;
     private _visibleCount = 200;
     private _filterDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+    /** Debounce handle for change-listener — coalesces rapid live-watch upserts (Item 9). */
+    private _changeDebounceTimer: ReturnType<typeof setTimeout> | null = null;
     /** True until the first change event fires (initial batch index complete) */
     private _loading = true;
     /** Group mode — on by default */
@@ -387,8 +395,14 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
         }
         index.addChangeListener(() => {
             this._loading = false;
+            // Coalesce rapid sequential upserts (live-watch) into one tree refresh (Item 9).
+            this._filteredCache = null;
             this._sortedCache = null;
-            this.refresh();
+            if (this._changeDebounceTimer !== null) { return; }
+            this._changeDebounceTimer = setTimeout(() => {
+                this._changeDebounceTimer = null;
+                this.refresh();
+            }, 100);
         });
     }
 
@@ -456,7 +470,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
     }
 
     setSortStack(stack: SortStack): void {
-        if (stack.length > 0) { this.sortStack = stack; this._manualOrder = []; this.invalidateSortCache(); }
+        if (stack.length > 0) { this.sortStack = stack; this._manualOrder = []; this._invalidateSortOnly(); }
     }
 
     getSortStack(): SortStack {
@@ -464,7 +478,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
     }
 
     setSortMode(mode: SortMode): void {
-        this.invalidateSortCache();
+        this._invalidateSortOnly();
         this._manualOrder = [];
         if (this.sortStack[0]?.key === mode) {
             const cur = this.sortStack[0].direction;
@@ -485,12 +499,12 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
 
     setFilter(filter: SessionFilter): void {
         this._filter = filter;
-        this.invalidateSortCache();
+        this._invalidateFilterAndSort();
     }
 
     clearFilter(): void {
         this._filter = {};
-        this.invalidateSortCache();
+        this._invalidateFilterAndSort();
     }
 
     getFilter(): SessionFilter { return { ...this._filter }; }
@@ -563,9 +577,22 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
     // Cache management
     // ------------------------------------------------------------------
 
-    private invalidateSortCache(): void {
+    /** Invalidate only the sort cache — filtered list stays valid (sort-only change). */
+    private _invalidateSortOnly(): void {
         this._sortedCache = null;
         this._visibleCount = 200;
+    }
+
+    /** Invalidate both filter and sort caches (data or filter change). */
+    private _invalidateFilterAndSort(): void {
+        this._filteredCache = null;
+        this._sortedCache = null;
+        this._visibleCount = 200;
+    }
+
+    /** @deprecated Use _invalidateSortOnly or _invalidateFilterAndSort */
+    private invalidateSortCache(): void {
+        this._invalidateFilterAndSort();
     }
 
     loadMore(): void {
@@ -575,7 +602,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
 
     setFilterDebounced(filter: SessionFilter): void {
         this._filter = filter;
-        this.invalidateSortCache();
+        this._invalidateFilterAndSort();
         if (this._filterDebounceTimer) { clearTimeout(this._filterDebounceTimer); }
         this._filterDebounceTimer = setTimeout(() => {
             this._filterDebounceTimer = null;
@@ -626,10 +653,14 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
             return this._sortedCache;
         }
 
-        let summaries = this.index.getAllSummaries();
-        if (this.hasActiveFilter()) {
-            summaries = summaries.filter(s => this._matchesFilter(s));
+        // Use cached filtered list when only sort changed (Item 9).
+        if (this._filteredCache === null) {
+            const all = this.index.getAllSummaries();
+            this._filteredCache = this.hasActiveFilter()
+                ? all.filter(s => this._matchesFilter(s))
+                : all;
         }
+        let summaries = this._filteredCache;
 
         // If the user has manually reordered via drag-and-drop, honour that order.
         if (this._manualOrder.length > 0) {

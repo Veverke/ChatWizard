@@ -52,6 +52,9 @@ function parseKey(key: string): { sessionId: string; role: 'user' | 'assistant';
 export class SemanticIndex implements ISemanticIndex {
     private readonly _store = new Map<string, Float32Array>();
 
+    /** O(1) session presence check — updated in sync with _store */
+    private readonly _indexedSessions = new Set<string>();
+
     // ── size ───────────────────────────────────────────────────────────────
 
     get size(): number {
@@ -62,23 +65,22 @@ export class SemanticIndex implements ISemanticIndex {
 
     add(sessionId: string, role: 'user' | 'assistant', messageIndex: number, paragraphIndex: number, embedding: Float32Array): void {
         this._store.set(makeKey(sessionId, role, messageIndex, paragraphIndex), embedding);
+        this._indexedSessions.add(sessionId);
     }
 
     remove(sessionId: string): void {
+        if (!this._indexedSessions.has(sessionId)) { return; }
         const prefix = `${sessionId}::`;
         for (const key of this._store.keys()) {
             if (key.startsWith(prefix)) {
                 this._store.delete(key);
             }
         }
+        this._indexedSessions.delete(sessionId);
     }
 
     has(sessionId: string): boolean {
-        const prefix = `${sessionId}::`;
-        for (const key of this._store.keys()) {
-            if (key.startsWith(prefix)) { return true; }
-        }
-        return false;
+        return this._indexedSessions.has(sessionId);
     }
 
     // ── Search ─────────────────────────────────────────────────────────────
@@ -195,6 +197,7 @@ export class SemanticIndex implements ISemanticIndex {
             const N = raw.readUInt32LE(offset); offset += 4;
 
             this._store.clear();
+            this._indexedSessions.clear();
 
             for (let i = 0; i < N; i++) {
                 if (offset + 4 > raw.byteLength) {
@@ -218,6 +221,9 @@ export class SemanticIndex implements ISemanticIndex {
                 }
 
                 this._store.set(key, embedding);
+                // Rebuild _indexedSessions from loaded keys
+                const parsed = parseKey(key);
+                if (parsed) { this._indexedSessions.add(parsed.sessionId); }
             }
         } catch (err) {
             console.warn(
@@ -225,6 +231,7 @@ export class SemanticIndex implements ISemanticIndex {
                 `${(err as Error).message}. Starting with empty index.`
             );
             this._store.clear();
+            this._indexedSessions.clear();
         }
     }
 }

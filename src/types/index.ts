@@ -175,6 +175,10 @@ export interface SessionSummary {
     archived?: boolean;
     /** True when the user explicitly archived this session via the context menu (vs. auto-archived due to source tool pruning) */
     userArchived?: boolean;
+    /** Pre-computed token estimate for all user messages (word-count / 4). Populated by toSummary(). */
+    userTokens?: number;
+    /** Pre-computed token estimate for all assistant messages (word-count / 4). Populated by toSummary(). */
+    assistantTokens?: number;
 }
 
 /** Per-assistant request count within a WorkspaceUsage */

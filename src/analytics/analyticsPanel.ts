@@ -67,10 +67,12 @@ export class AnalyticsPanel {
     }
 
     static build(index: SessionIndex): AnalyticsData {
-        const allSessions = index.getAllSummaries()
+        const allSummaries = index.getAllSummaries();
+        const allSessions = allSummaries
             .map(s => index.get(s.id)!)
             .filter(s => s !== null);
-        return computeAnalytics(allSessions, countTokens);
+        // Pass summaries so computeAnalytics can use pre-computed token counts (Item 6)
+        return computeAnalytics(allSessions, countTokens, allSummaries);
     }
 
     private static _escapeHtml(text: string): string {

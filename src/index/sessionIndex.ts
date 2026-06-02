@@ -13,9 +13,36 @@ export type SessionIndexEvent =
  * Convert a full Session to a lightweight SessionSummary.
  * Counts are computed from the messages array; message content is not retained.
  */
+/** Lightweight token estimate: word count divided by 4 (GPT-style approximation). */
+function estimateTokens(text: string): number {
+    // Split on whitespace — fast and allocation-minimal
+    let count = 0;
+    let inWord = false;
+    for (let i = 0; i < text.length; i++) {
+        const ch = text.charCodeAt(i);
+        const ws = ch === 32 || ch === 9 || ch === 10 || ch === 13;
+        if (!ws && !inWord) { count++; inWord = true; }
+        else if (ws) { inWord = false; }
+    }
+    return Math.ceil(count / 4);
+}
+
 export function toSummary(session: Session): SessionSummary {
-    const userMessageCount = session.messages.filter(m => m.role === 'user').length;
-    const assistantMessageCount = session.messages.filter(m => m.role === 'assistant').length;
+    let userMessageCount = 0;
+    let assistantMessageCount = 0;
+    let userTokens = 0;
+    let assistantTokens = 0;
+
+    for (const m of session.messages) {
+        if (m.role === 'user') {
+            userMessageCount++;
+            userTokens += estimateTokens(m.content);
+        } else {
+            assistantMessageCount++;
+            assistantTokens += estimateTokens(m.content);
+        }
+    }
+
     const lastMsg = session.messages[session.messages.length - 1];
     const interrupted = lastMsg?.role === 'user' ? true : undefined;
 
@@ -37,6 +64,8 @@ export function toSummary(session: Session): SessionSummary {
         hasParseErrors: (session.parseErrors?.length ?? 0) > 0 || undefined,
         archived: session.archived || undefined,
         userArchived: session.userArchived || undefined,
+        userTokens,
+        assistantTokens,
     };
 }
 
@@ -63,6 +92,8 @@ export class SessionIndex {
     /** Preloaded sidecar metadata — set by `setSidecarCache()` after async load */
     private _sidecarCache: Map<string, SessionMetadata> | null = null;
     private _sidecarStore: SidecarMetadataStore | null = null;
+    /** Debounce handle — plain change listeners are coalesced within a 0 ms task boundary. */
+    private _notifyDebounce: ReturnType<typeof setTimeout> | null = null;
 
     constructor() {
         this.sessions = new Map();
@@ -131,6 +162,7 @@ export class SessionIndex {
     private _notifyListeners(): void {
         for (const fn of this._changeListeners) { fn(); }
     }
+
 
     private _notifyTyped(event: SessionIndexEvent): void {
         for (const fn of this._typedChangeListeners) { fn(event); }

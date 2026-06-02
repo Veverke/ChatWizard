@@ -40,8 +40,23 @@ interface PanelMsgState {
 export class SessionWebviewPanel {
     static readonly _panels = new Map<string, vscode.WebviewPanel>();
 
+    /** Maximum number of sessions kept in the render cache. Oldest entry evicted when full. */
+    static readonly RENDER_CACHE_MAX = 50;
+
     /** Cache: `sessionId::updatedAt` → rendered HTML per visible message (null = not yet rendered) */
     static readonly _renderCache = new Map<string, (string | null)[]>();
+
+    /** Inserts an entry into _renderCache, evicting the oldest when capacity is reached. */
+    static _renderCacheSet(key: string, value: (string | null)[]): void {
+        if (SessionWebviewPanel._renderCache.size >= SessionWebviewPanel.RENDER_CACHE_MAX) {
+            // Map preserves insertion order — first key is the oldest entry.
+            const oldest = SessionWebviewPanel._renderCache.keys().next().value;
+            if (oldest !== undefined) {
+                SessionWebviewPanel._renderCache.delete(oldest);
+            }
+        }
+        SessionWebviewPanel._renderCache.set(key, value);
+    }
 
     /** Per-panel window / streaming state */
     static readonly _panelState = new Map<string, PanelMsgState>();
@@ -101,7 +116,7 @@ export class SessionWebviewPanel {
         let renderedMessages = SessionWebviewPanel._renderCache.get(cacheKey);
         if (!renderedMessages) {
             renderedMessages = new Array<string | null>(total).fill(null);
-            SessionWebviewPanel._renderCache.set(cacheKey, renderedMessages);
+            SessionWebviewPanel._renderCacheSet(cacheKey, renderedMessages);
         }
 
         const scrollInit: ScrollInit = {

@@ -57,6 +57,7 @@ import { ListSourcesTool } from './mcp/tools/listSourcesTool';
 import { ServerInfoTool } from './mcp/tools/serverInfoTool';
 import { QueryHistoryPrompt, ContinueFromHistoryPrompt, GetPromptsPrompt } from './mcp/prompts/contextPrompts';
 import { isNewerVersion } from './utils/semver';
+import { loadUiState, saveUiState } from './utils/persistedUiState';
 import { registerChatParticipant } from './mcp/chatParticipant';
 import { NullSemanticIndexer, ISemanticIndexer } from './search/semanticContracts';
 import { SidecarMetadataStore } from './index/sidecarMetadataStore';
@@ -442,44 +443,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     const provider = new SessionTreeProvider(index, context.extensionUri);
 
-    // Restore persisted sort stack
-    const savedStackJson = context.globalState.get<string>('sortStack');
-    if (savedStackJson) {
-        try {
-            const saved = JSON.parse(savedStackJson) as SortStack;
-            provider.restoreStack(saved);
-        } catch { /* ignore corrupt state */ }
-    }
-
-    // Restore persisted session group mode (default: 'date' — matches provider default)
-    const savedSessionGroupMode = context.globalState.get<string>('sessionGroupMode') as GroupMode | undefined;
-    if (savedSessionGroupMode === 'none' || savedSessionGroupMode === 'date' ||
-        savedSessionGroupMode === 'branch' || savedSessionGroupMode === 'workItem' ||
-        savedSessionGroupMode === 'tag') {
-        provider.setGroupMode(savedSessionGroupMode);
-    }
-
-    // Restore persisted code block group mode (default: 'language' — matches provider default)
-    const savedCbGroupMode = context.globalState.get<string>('cbGroupMode') as CbGroupMode | undefined;
-    if (savedCbGroupMode === 'none' || savedCbGroupMode === 'language') {
-        codeBlockProvider.setGroupMode(savedCbGroupMode);
-    }
-
-    // Restore persisted pinned IDs
-    const savedPinnedJson = context.globalState.get<string>('pinnedIds');
-    if (savedPinnedJson) {
-        try {
-            provider.setPinnedIds(JSON.parse(savedPinnedJson) as string[]);
-        } catch { /* ignore corrupt state */ }
-    }
-
-    // Restore persisted manual order (from drag-and-drop)
-    const savedManualOrderJson = context.globalState.get<string>('manualOrder');
-    if (savedManualOrderJson) {
-        try {
-            provider.setManualOrder(JSON.parse(savedManualOrderJson) as string[]);
-        } catch { /* ignore corrupt state */ }
-    }
+    // Restore consolidated UI state (Item 10) — single globalState read instead of 5.
+    const uiState = loadUiState(context);
+    if (uiState.sortStack.length > 0) { provider.restoreStack(uiState.sortStack); }
+    if (uiState.pinnedIds.length > 0) { provider.setPinnedIds(uiState.pinnedIds); }
+    if (uiState.manualOrder.length > 0) { provider.setManualOrder(uiState.manualOrder); }
+    provider.setGroupMode(uiState.sessionGroupMode);
+    codeBlockProvider.setGroupMode(uiState.cbGroupMode);
 
     // Push current sort state to VS Code context (drives toolbar icon when clauses)
     function syncContext(): void {
@@ -497,10 +467,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
     syncCbGroupContext();
 
-    function savePins(): void {
-        void context.globalState.update('pinnedIds', JSON.stringify(provider.getPinnedIds()));
-        void context.globalState.update('manualOrder', JSON.stringify(provider.getManualOrder()));
+    /** Persist all UI state in a single globalState write (Item 10). */
+    function saveUiStateNow(): void {
+        saveUiState(context, {
+            sortStack: provider.getSortStack(),
+            pinnedIds: provider.getPinnedIds(),
+            manualOrder: provider.getManualOrder(),
+            sessionGroupMode: provider.getGroupMode(),
+            cbGroupMode: codeBlockProvider.getGroupMode(),
+        });
     }
+    function savePins(): void { saveUiStateNow(); }
 
     // Drag-and-drop controller for reordering tree items
     const dragDropController: vscode.TreeDragAndDropController<SessionTreeItem> = {
@@ -551,16 +528,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // to avoid accessing the const before its declaration (TDZ ReferenceError).
     let _prevCodeBlockCount = 0;
     const codeBlockListener = index.addChangeListener(() => {
-        const allBlocks = index.getAllCodeBlocks();
-        codeBlockEngine.index(allBlocks);
+        const blocks = index.getAllCodeBlocks(); // single allocation per event
+        codeBlockEngine.index(blocks);
         CodeBlocksPanel.refresh(index, codeBlockEngine);
         codeBlockTreeView.description = codeBlockProvider.getDescription();
-        codeBlockTreeView.message = allBlocks.length === 0 ? makeEmptyStateMsg('code blocks') : undefined;
-        if (allBlocks.length > _prevCodeBlockCount) {
-            const added = allBlocks.length - _prevCodeBlockCount;
+        codeBlockTreeView.message = blocks.length === 0 ? makeEmptyStateMsg('code blocks') : undefined;
+        if (blocks.length > _prevCodeBlockCount) {
+            const added = blocks.length - _prevCodeBlockCount;
             brandingBar.notify(`${added} new code block${added === 1 ? '' : 's'} extracted`, 'chatwizard.showCodeBlocks');
         }
-        _prevCodeBlockCount = allBlocks.length;
+        _prevCodeBlockCount = blocks.length;
     });
     context.subscriptions.push(codeBlockListener);
 
@@ -570,7 +547,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         treeView.description = provider.getDescription();
         provider.refresh();
         syncContext();
-        void context.globalState.update('sortStack', JSON.stringify(provider.getSortStack()));
+        saveUiStateNow();
     }
 
     /** Apply a full sort stack (from the sort builder). */
@@ -579,7 +556,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         treeView.description = provider.getDescription();
         provider.refresh();
         syncContext();
-        void context.globalState.update('sortStack', JSON.stringify(provider.getSortStack()));
+        saveUiStateNow();
     }
 
     /** Push current code block sort state to VS Code context (drives Code Blocks toolbar). */
