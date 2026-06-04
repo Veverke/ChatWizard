@@ -6,7 +6,7 @@
 //   - dispose() cleans up all watchers
 
 import * as assert from 'assert';
-import { ISourceWatcher, SourceWatcherDeps } from '../../src/watcher/ISourceWatcher';
+import { ISourceWatcher } from '../../src/watcher/ISourceWatcher';
 import { Session } from '../../src/types/index';
 
 // ---- helpers ----------------------------------------------------------------

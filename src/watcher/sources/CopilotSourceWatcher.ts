@@ -29,9 +29,9 @@ export class CopilotSourceWatcher implements ISourceWatcher {
         const { channel, onProgress, selectedIds } = this._deps;
         try {
             const all = await discoverCopilotWorkspacesAsync();
-            const workspaces = selectedIds.length > 0
-                ? all.filter(ws => selectedIds.includes(ws.workspaceId))
-                : all;
+            // Empty selectedIds means "scope to nothing" — respect that contract.
+            if (selectedIds.length === 0) { return []; }
+            const workspaces = all.filter(ws => selectedIds.includes(ws.workspaceId));
 
             if (selectedIds.length > 0 && workspaces.length === 0 && all.length > 0) {
                 channel.appendLine(

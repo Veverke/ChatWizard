@@ -35,9 +35,9 @@ export class ClaudeSourceWatcher implements ISourceWatcher {
             const resolvedBase = await fs.promises.realpath(claudeProjectsDir).catch(() => claudeProjectsDir);
             const projectDirEntries = await fs.promises.readdir(claudeProjectsDir, { withFileTypes: true });
             const allDirEntries = projectDirEntries.filter(d => d.isDirectory());
-            const dirEntries = selectedIds.length > 0
-                ? allDirEntries.filter(d => selectedIds.includes(d.name))
-                : allDirEntries;
+            // Empty selectedIds means "scope to nothing" — respect that contract.
+            if (selectedIds.length === 0) { return []; }
+            const dirEntries = allDirEntries.filter(d => selectedIds.includes(d.name));
 
             const fileLists = await Promise.all(dirEntries.map(async (d) => {
                 const projectPath = path.join(claudeProjectsDir, d.name);

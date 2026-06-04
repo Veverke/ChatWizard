@@ -72,7 +72,9 @@ export class WindsurfSourceWatcher implements ISourceWatcher {
     private _onFileChanged(uri: vscode.Uri): void {
         const { index, channel } = this._deps;
         const vscdbPath = uri.fsPath;
-        void parseWindsurfWorkspace(vscdbPath, '', undefined).then((results) => {
+        // Derive a stable workspaceId from the parent directory name (same as buildIndex).
+        const workspaceId = path.basename(path.dirname(vscdbPath));
+        void parseWindsurfWorkspace(vscdbPath, workspaceId, undefined).then((results) => {
             for (const result of results) {
                 if (result.session.messages.length > 0) {
                     index.upsert(result.session);

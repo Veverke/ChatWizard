@@ -30,22 +30,31 @@ const DEFAULTS: PersistedUiState = {
  * Gracefully handles missing or corrupt data by returning defaults.
  */
 export function loadUiState(context: vscode.ExtensionContext): PersistedUiState {
+    const VALID_GROUP_MODES: GroupMode[] = ['none', 'date', 'branch', 'workItem', 'tag'];
+    const VALID_CB_GROUP_MODES: CbGroupMode[] = ['none', 'language'];
     try {
         const raw = context.globalState.get<string>(STORAGE_KEY);
         if (raw) {
             const parsed = JSON.parse(raw) as Partial<PersistedUiState>;
+            const sessionGroupMode: GroupMode = VALID_GROUP_MODES.includes(parsed.sessionGroupMode as GroupMode)
+                ? parsed.sessionGroupMode as GroupMode
+                : DEFAULTS.sessionGroupMode;
+            const cbGroupMode: CbGroupMode = VALID_CB_GROUP_MODES.includes(parsed.cbGroupMode as CbGroupMode)
+                ? parsed.cbGroupMode as CbGroupMode
+                : DEFAULTS.cbGroupMode;
             return {
-                sortStack: parsed.sortStack?.length ? parsed.sortStack : DEFAULTS.sortStack,
+                // Spread-copy the sortStack so callers can't mutate DEFAULTS.
+                sortStack: parsed.sortStack?.length ? [...parsed.sortStack] : [...DEFAULTS.sortStack],
                 pinnedIds: Array.isArray(parsed.pinnedIds) ? parsed.pinnedIds : [],
                 manualOrder: Array.isArray(parsed.manualOrder) ? parsed.manualOrder : [],
-                sessionGroupMode: parsed.sessionGroupMode ?? DEFAULTS.sessionGroupMode,
-                cbGroupMode: parsed.cbGroupMode ?? DEFAULTS.cbGroupMode,
+                sessionGroupMode,
+                cbGroupMode,
             };
         }
     } catch {
         // Fall through to defaults
     }
-    return { ...DEFAULTS };
+    return { ...DEFAULTS, sortStack: [...DEFAULTS.sortStack] };
 }
 
 /**

@@ -152,7 +152,13 @@ export class FullTextSearchEngine {
         // Skip re-tokenization when content is unchanged (only metadata like title changed).
         // Include a lightweight content hash so re-indexing the same session with
         // different message content (same updatedAt + same count) forces re-tokenization.
-        const contentHash = session.messages.reduce((acc, m) => acc + m.content.length, 0);
+        // XOR-fold a simple djb2-style hash over each character to detect content changes
+        // that share the same total byte count (avoids false-unchanged on transpositions/swaps).
+        const contentHash = session.messages.reduce((acc, m) => {
+            let h = acc;
+            for (let i = 0; i < m.content.length; i++) { h = (Math.imul(h, 33) ^ m.content.charCodeAt(i)) >>> 0; }
+            return h;
+        }, 0);
         const fingerprint = `${session.updatedAt}:${session.messages.length}:${contentHash}`;
         if (this.sessions.has(session.id) && this._contentVersions.get(session.id) === fingerprint) {
             // Content identical — just update the stored session reference (title may have changed)

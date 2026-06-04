@@ -111,11 +111,20 @@ export class CursorSourceWatcher implements ISourceWatcher {
     private _onFileChanged(uri: vscode.Uri): void {
         const { index, channel } = this._deps;
         const vscdbPath = uri.fsPath;
-        void parseCursorWorkspace(vscdbPath, '', undefined).then((results) => {
+        // Derive a stable workspaceId from the parent directory name (same as buildIndex).
+        const workspaceId = path.basename(path.dirname(vscdbPath));
+        void parseCursorWorkspace(vscdbPath, workspaceId, undefined).then((results) => {
             for (const result of results) {
-                if (result.session.messages.length > 0) {
-                    index.upsert(result.session);
+                const s = result.session;
+                if (s.messages.length === 0) { continue; }
+                // Preserve a richer existing session (more messages) to avoid clobbering
+                // data merged from the global DB during the initial index build.
+                const existing = index.get(s.id);
+                if (existing && existing.workspaceId && !s.workspaceId &&
+                    existing.messages.length >= s.messages.length) {
+                    continue;
                 }
+                index.upsert(s);
             }
             channel.appendLine(`[live] cursor re-indexed ${vscdbPath}`);
         }).catch((err) => {

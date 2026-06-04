@@ -48,7 +48,11 @@ export class SessionWebviewPanel {
 
     /** Inserts an entry into _renderCache, evicting the oldest when capacity is reached. */
     static _renderCacheSet(key: string, value: (string | null)[]): void {
-        if (SessionWebviewPanel._renderCache.size >= SessionWebviewPanel.RENDER_CACHE_MAX) {
+        const isUpdate = SessionWebviewPanel._renderCache.has(key);
+        if (isUpdate) {
+            // Delete first so the re-insertion below moves it to the end (LRU refresh).
+            SessionWebviewPanel._renderCache.delete(key);
+        } else if (SessionWebviewPanel._renderCache.size >= SessionWebviewPanel.RENDER_CACHE_MAX) {
             // Map preserves insertion order — first key is the oldest entry.
             const oldest = SessionWebviewPanel._renderCache.keys().next().value;
             if (oldest !== undefined) {
