@@ -96,6 +96,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     const index = new SessionIndex();
 
+    // Feature 43: Apply session retention days from config (0 = no limit)
+    const retentionDays = vscode.workspace.getConfiguration('chatwizard').get<number>('sessionRetentionDays', 0);
+    if (retentionDays > 0) {
+        index.setRetentionDays(retentionDays);
+    }
+
     // Branding status-bar item — created early so all listeners below can call brandingBar.notify()
     const version = String(context.extension.packageJSON.version ?? '0.0.0');
     const brandingBar = new BrandingStatusBarItem(version);
@@ -1994,9 +2000,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         const activeSessionTagBtn = new ActiveSessionTagButton(liveTracker);
         context.subscriptions.push(activeSessionTagBtn);
 
-        // ── Feature 20-J: Session Cost Advisor (disabled for 1.5.0 — testing deferred to P3) ──
-        // const costAdvisorNotifier = new SessionCostAdvisorNotifier(liveTracker, index);
-        // context.subscriptions.push(costAdvisorNotifier);
+        // ── Feature 20-J / 37: Session Cost Advisor (Feature 37 — re-enabled in P3) ──
+        const costAdvisorNotifier = new SessionCostAdvisorNotifier(liveTracker, index);
+        context.subscriptions.push(costAdvisorNotifier);
 
         context.subscriptions.push(
             vscode.commands.registerCommand('chatwizard.tagActiveSession', async () => {

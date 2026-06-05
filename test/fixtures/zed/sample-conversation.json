@@ -1,0 +1,32 @@
+{
+  "id": "zed-conv-abc123",
+  "zed": "assistant",
+  "version": "0.1.0",
+  "title": "Implementing a binary search tree",
+  "messages": [
+    {
+      "id": "msg-001",
+      "role": "user",
+      "content": "How do I implement a binary search tree in Rust?",
+      "timestamp": "2026-06-01T10:00:00.000Z"
+    },
+    {
+      "id": "msg-002",
+      "role": "assistant",
+      "content": "Here's a basic binary search tree in Rust:\n\n```rust\nstruct Node {\n    value: i32,\n    left: Option<Box<Node>>,\n    right: Option<Box<Node>>,\n}\n```\n\nThis uses `Option<Box<Node>>` for nullable child pointers.",
+      "timestamp": "2026-06-01T10:00:30.000Z"
+    },
+    {
+      "id": "msg-003",
+      "role": "user",
+      "content": "How do I insert a value?",
+      "timestamp": "2026-06-01T10:01:00.000Z"
+    },
+    {
+      "id": "msg-004",
+      "role": "assistant",
+      "content": "To insert a value, you recurse left if the value is smaller, or right if larger.",
+      "timestamp": "2026-06-01T10:01:30.000Z"
+    }
+  ]
+}

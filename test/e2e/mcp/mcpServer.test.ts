@@ -226,10 +226,10 @@ suite('McpServer — /mcp-config endpoint', () => {
         await server.stop();
     });
 
-    test('responds 200 with JSON content-type', async () => {
+    test('responds 200 with JSON content-type when authenticated', async () => {
         // Directly fetch via http.get to capture headers
         const result = await new Promise<{ status: number; contentType: string; body: string }>((resolve, reject) => {
-            http.get(`http://localhost:${port}/mcp-config`, (res) => {
+            http.get(`http://localhost:${port}/mcp-config`, { headers: { Authorization: `Bearer ${TOKEN}` } }, (res) => {
                 let body = '';
                 res.on('data', (c: Buffer) => { body += c; });
                 res.on('end', () => resolve({
@@ -245,26 +245,41 @@ suite('McpServer — /mcp-config endpoint', () => {
     });
 
     test('response body includes the correct URL and port', async () => {
-        const { body } = await httpGet(`http://localhost:${port}/mcp-config`);
+        const { body } = await httpGet(`http://localhost:${port}/mcp-config`, { Authorization: `Bearer ${TOKEN}` });
         const json = JSON.parse(body);
         assert.ok(json.url.includes(`localhost:${port}`), `url should include port ${port}`);
     });
 
     test('response body includes the bearer token', async () => {
-        const { body } = await httpGet(`http://localhost:${port}/mcp-config`);
+        const { body } = await httpGet(`http://localhost:${port}/mcp-config`, { Authorization: `Bearer ${TOKEN}` });
         const json = JSON.parse(body);
         assert.ok(json.authorization.includes(TOKEN), `authorization should include the token`);
     });
 
     test('response body includes SSE and messages endpoint paths', async () => {
-        const { body } = await httpGet(`http://localhost:${port}/mcp-config`);
+        const { body } = await httpGet(`http://localhost:${port}/mcp-config`, { Authorization: `Bearer ${TOKEN}` });
         const json = JSON.parse(body);
         assert.ok(json.endpoints?.sse, 'should include sse endpoint');
         assert.ok(json.endpoints?.messages, 'should include messages endpoint');
     });
 
-    test('/mcp-config is accessible without a bearer token', async () => {
+    // Feature 39: /mcp-config now requires authentication
+    test('GET /mcp-config without Authorization header returns 401', async () => {
         const { status } = await httpGet(`http://localhost:${port}/mcp-config`);
+        assert.strictEqual(status, 401);
+    });
+
+    test('GET /mcp-config with wrong token returns 401', async () => {
+        const { status } = await httpGet(`http://localhost:${port}/mcp-config`, {
+            Authorization: 'Bearer wrong-token',
+        });
+        assert.strictEqual(status, 401);
+    });
+
+    test('GET /mcp-config with valid token returns 200', async () => {
+        const { status } = await httpGet(`http://localhost:${port}/mcp-config`, {
+            Authorization: `Bearer ${TOKEN}`,
+        });
         assert.strictEqual(status, 200);
     });
 });

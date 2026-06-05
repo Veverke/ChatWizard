@@ -95,8 +95,33 @@ export class SessionIndex {
     /** Debounce handle — plain change listeners are coalesced within a 0 ms task boundary. */
     private _notifyDebounce: ReturnType<typeof setTimeout> | null = null;
 
+    /** Session retention: suppress sessions older than this many days (0 = no limit) */
+    private _retentionDays = 0;
+
     constructor() {
         this.sessions = new Map();
+    }
+
+    /**
+     * Set the session retention window (days). When > 0, sessions older than
+     * this number of days are excluded from getAllSummaries(), search, and analytics.
+     * Source files are never touched. Pass 0 to disable filtering.
+     */
+    setRetentionDays(days: number): void {
+        const prev = this._retentionDays;
+        this._retentionDays = Math.max(0, Math.round(days));
+        if (prev !== this._retentionDays) {
+            this._invalidateCaches();
+            this._notifyListeners();
+        }
+    }
+
+    /** Returns true when a session falls within the current retention window. */
+    private _isWithinRetention(updatedAt: string): boolean {
+        if (this._retentionDays === 0) { return true; }
+        const cutoff = Date.now() - this._retentionDays * 86_400_000;
+        const sessionTime = new Date(updatedAt).getTime();
+        return !isNaN(sessionTime) && sessionTime >= cutoff;
     }
 
     /** Monotonically-increasing counter — incremented on every upsert, remove, or batchUpsert. */
@@ -261,6 +286,7 @@ export class SessionIndex {
     /** Build (or rebuild) the sorted summary cache from current sessions. */
     private _buildSummaryCache(): void {
         this._summaryCache = Array.from(this.sessions.values())
+            .filter(s => this._isWithinRetention(s.updatedAt))
             .map(s => {
                 const summary = toSummary(s);
                 const custom = this._sidecarCache?.get(s.id)?.customTitle;
@@ -394,6 +420,11 @@ export class SessionIndex {
         const results: SessionSummary[] = [];
 
         for (const session of this.sessions.values()) {
+            // Apply retention filter
+            if (!this._isWithinRetention(session.updatedAt)) {
+                continue;
+            }
+
             if (sourceFilter !== undefined && session.source !== sourceFilter) {
                 continue;
             }

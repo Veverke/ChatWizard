@@ -1429,6 +1429,23 @@
         }
       },
       {
+        "title": "Chat Wizard: Retention",
+        "properties": {
+          "chatwizard.semanticIndexMaxAgeDays": {
+            "type": "number",
+            "default": 365,
+            "minimum": 0,
+            "description": "Exclude sessions older than this many days from the semantic (embedding) index. They remain in full-text search and the session tree. 0 = no age limit."
+          },
+          "chatwizard.sessionRetentionDays": {
+            "type": "number",
+            "default": 0,
+            "minimum": 0,
+            "description": "Suppress sessions older than this many days from all UI surfaces (tree, search, analytics). 0 = no limit. Source files are never deleted."
+          }
+        }
+      },
+      {
         "title": "Chat Wizard: Appearance",
         "properties": {
           "chatwizard.userMessageColor": {

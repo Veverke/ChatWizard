@@ -329,6 +329,11 @@ export function parseClaudeSession(filePath: string, maxLineChars = DEFAULT_MAX_
             fileSizeBytes,
             createdAt: createdAt ?? fallbackTime ?? new Date(0).toISOString(),
             updatedAt: updatedAt ?? fallbackTime ?? new Date(0).toISOString(),
+            // Feature 45: compacted session detection
+            ...(summaryText !== undefined ? {
+                isCompacted: true,
+                compactionSummary: summaryText,
+            } : {}),
         },
         errors,
     };

@@ -14,6 +14,8 @@ export function friendlySourceName(source: SessionSource): string {
         case 'continue':          return 'Continue.dev';
         case 'amazonq':           return 'Amazon Q';
         case 'geminiCodeAssist':  return 'Gemini Code Assist';
+        case 'zed':               return 'Zed';
+        case 'tabnine':           return 'Tabnine';
     }
 }
 
@@ -34,6 +36,8 @@ export function sourceCodiconId(source: SessionSource): string {
         case 'continue':          return 'play-circle';
         case 'amazonq':           return 'aws';
         case 'geminiCodeAssist':  return 'star';
+        case 'zed':               return 'zap';
+        case 'tabnine':           return 'symbol-keyword';
     }
 }
 
@@ -53,6 +57,8 @@ export const SOURCE_BADGE_CLASS: Record<string, string> = {
     continue:         'cw-badge-continue',
     amazonq:          'cw-badge-amazonq',
     geminiCodeAssist: 'cw-badge-geminiCodeAssist',
+    zed:              'cw-badge-zed',
+    tabnine:          'cw-badge-tabnine',
 };
 
 /** Returns the CSS badge class for a source, falling back to cw-badge-claude for unknowns. */

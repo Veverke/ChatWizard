@@ -1,0 +1,31 @@
+{
+  "id": "tabnine-chat-xyz789",
+  "title": "Async/await error handling in Python",
+  "createdAt": 1748764800000,
+  "messages": [
+    {
+      "id": "msg-t001",
+      "type": "user",
+      "text": "How do I handle errors with async/await in Python?",
+      "timestamp": 1748764800000
+    },
+    {
+      "id": "msg-t002",
+      "type": "bot",
+      "text": "You can use try/except blocks with async functions:\n\n```python\nasync def fetch_data():\n    try:\n        result = await some_async_operation()\n        return result\n    except Exception as e:\n        print(f'Error: {e}')\n        return None\n```\n\nThis pattern works well for most async error scenarios.",
+      "timestamp": 1748764830000
+    },
+    {
+      "id": "msg-t003",
+      "type": "user",
+      "text": "What about asyncio.gather with multiple tasks?",
+      "timestamp": 1748764860000
+    },
+    {
+      "id": "msg-t004",
+      "type": "bot",
+      "text": "Use return_exceptions=True with asyncio.gather to collect errors instead of raising them.",
+      "timestamp": 1748764890000
+    }
+  ]
+}

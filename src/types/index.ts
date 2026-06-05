@@ -1,7 +1,7 @@
 // src/types/index.ts
 
 /** Which AI chat extension produced the session */
-export type SessionSource = 'copilot' | 'claude' | 'cline' | 'roocode' | 'cursor' | 'windsurf' | 'aider' | 'antigravity' | 'continue' | 'amazonq' | 'geminiCodeAssist';
+export type SessionSource = 'copilot' | 'claude' | 'cline' | 'roocode' | 'cursor' | 'windsurf' | 'aider' | 'antigravity' | 'continue' | 'amazonq' | 'geminiCodeAssist' | 'zed' | 'tabnine';
 
 /** Role of a message participant */
 export type MessageRole = 'user' | 'assistant';
@@ -94,6 +94,16 @@ export interface Session {
      * Chronicle `checkpoints.important_files` (Feature 14).
      */
     importantFiles?: string[];
+    /**
+     * True when the Claude Code JSONL contains a `"type":"summary"` compaction entry,
+     * meaning earlier turns were compacted and are no longer available (Feature 45).
+     */
+    isCompacted?: boolean;
+    /**
+     * The prose summary text from the `"type":"summary"` compaction entry (Feature 45).
+     * Rendered as a "Context summary from earlier conversation" block at the top of the reader.
+     */
+    compactionSummary?: string;
 }
 
 /** Copilot Chronicle checkpoint summary attached to a Copilot session */
@@ -339,6 +349,51 @@ export interface SessionAnnotation {
     /** ISO-8601 */
     createdAt: string;
 }
+
+// ─── P3 Feature types ─────────────────────────────────────────────────────────
+
+/** Feature 30 — Inline annotation attached to a specific message (P3, richer version of SessionAnnotation) */
+export interface MessageAnnotation {
+    messageIndex: number;
+    text: string;
+    createdAt: string;      // ISO-8601
+    updatedAt?: string;
+}
+
+/** Feature 29 — Bookmark pointing to a specific message within a session */
+export interface SessionBookmark {
+    /** 0-based index into session.messages */
+    messageIndex: number;
+    note?: string;
+    /** ISO-8601 */
+    createdAt: string;
+}
+
+/** Feature 32 — Per-response rating (thumbs up/down) */
+export interface MessageRating {
+    messageIndex: number;
+    rating: 1 | -1;     // 1 = thumbs up, -1 = thumbs down
+    createdAt: string;
+}
+
+/** Feature 34 — Action item extracted from or manually added to a session */
+export interface ActionItem {
+    id: string;
+    text: string;
+    done: boolean;
+    createdAt: string;
+    source: 'extracted' | 'manual';
+}
+
+/** Feature 25 — Git context captured at session-open time */
+export interface GitContext {
+    branch: string;
+    headCommit?: string;   // short SHA (7 chars)
+    repoRoot?: string;
+}
+
+// Add gitContext to Session is done below (see Session interface)
+// This type lives here so it can be imported independently.
 
 /** Structured entities extracted from session content (Feature 19) */
 export interface ExtractedEntities {

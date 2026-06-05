@@ -6,6 +6,7 @@ import { SearchTool } from './searchTool';
 import { SessionIndex } from '../../index/sessionIndex';
 import { tokenizeQuery } from '../../search/fullTextEngine';
 import { IReranker, TfIdfReranker } from '../../search/reranker';
+import { stripCodeBlocks } from '../../utils/contentFilter';
 
 const DEFAULT_LIMIT = 5;
 const MIN_LIMIT = 1;
@@ -82,6 +83,10 @@ export class GetContextTool implements IMcpTool {
                 type: 'number',
                 description: `Maximum sessions to include (1–${MAX_LIMIT}, default ${DEFAULT_LIMIT}).`,
             },
+            includeCode: {
+                type: 'boolean',
+                description: 'When false, strips fenced code blocks from returned passages to reduce token usage (default: true).',
+            },
         },
         required: ['topic'],
     };
@@ -102,6 +107,8 @@ export class GetContextTool implements IMcpTool {
                 isError: true,
             };
         }
+
+        const includeCode = input['includeCode'] !== false; // default true
 
         const rawLimit = input['limit'];
         const limit = clamp(
@@ -279,7 +286,8 @@ export class GetContextTool implements IMcpTool {
             const session = this.sessionIndex.get(sessionId);
             if (!session) { continue; }
 
-            const passage = bestMatchingPassage(session.messages, keywordTokens, PASSAGE_MAX_CHARS);
+            const rawPassage = bestMatchingPassage(session.messages, keywordTokens, PASSAGE_MAX_CHARS);
+            const passage = includeCode ? rawPassage : stripCodeBlocks(rawPassage);
 
             lines.push(
                 `[Session: ${session.title}] | Source: ${session.source} | Date: ${session.updatedAt}`,
