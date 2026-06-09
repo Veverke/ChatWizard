@@ -7,7 +7,7 @@ import * as os from 'os';
 import * as fs from 'fs';
 import { parseClaudeSession } from '../../src/parsers/claude';
 
-const FIXTURE_DIR = path.join(__dirname, '..', 'fixtures', 'claude');
+const FIXTURE_DIR = path.resolve(__dirname, '../../..', 'test', 'fixtures', 'claude');
 const COMPACTED_FIXTURE = path.join(FIXTURE_DIR, 'compacted-session.jsonl');
 const SAMPLE_FIXTURE = path.join(FIXTURE_DIR, 'sample-session.jsonl');
 

@@ -8,6 +8,21 @@ import * as path from 'path';
 import * as childProcess from 'child_process';
 import { readGitContextAsync, GitContextCache } from '../../src/utils/gitContextReader';
 
+/** Retry fs.rmSync up to 5 times on Windows (EPERM workaround) */
+function rmRetry(dir: string): void {
+    for (let i = 0; i < 5; i++) {
+        try {
+            fs.rmSync(dir, { recursive: true, force: true });
+            return;
+        } catch (err: any) {
+            if (i === 4) throw err;
+            // Wait and retry — Windows may still hold file handles from git
+            const start = Date.now();
+            while (Date.now() - start < 200) { /* busy-wait 200ms */ }
+        }
+    }
+}
+
 /** Create a temp git repo with one commit and return its path */
 function createTempRepo(): string {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cw-git-test-'));

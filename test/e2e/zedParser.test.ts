@@ -8,7 +8,7 @@ import * as path from 'path';
 import { parseZedConversation } from '../../src/parsers/zed';
 import { discoverZedConversationsAsync } from '../../src/readers/zedWorkspace';
 
-const FIXTURE = path.join(__dirname, '..', 'fixtures', 'zed', 'sample-conversation.json');
+const FIXTURE = path.resolve(__dirname, '../../..', 'test', 'fixtures', 'zed', 'sample-conversation.json');
 
 suite('Feature 41 — Zed Parser', () => {
     test('parses fixture file with correct message count', () => {

@@ -8,7 +8,7 @@ import * as path from 'path';
 import { parseTabnineConversation } from '../../src/parsers/tabnine';
 import { discoverTabnineConversationsAsync } from '../../src/readers/tabnineWorkspace';
 
-const FIXTURE = path.join(__dirname, '..', 'fixtures', 'tabnine', 'sample-chat.json');
+const FIXTURE = path.resolve(__dirname, '../../..', 'test', 'fixtures', 'tabnine', 'sample-chat.json');
 
 suite('Feature 42 — Tabnine Parser', () => {
     test('parses fixture file with correct message count', () => {
