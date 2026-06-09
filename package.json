@@ -1486,7 +1486,7 @@
     "vscode:prepublish": "npm run rebuild:native && npm run bundle && npm run validate:release",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "pretest": "npm run compile && npm run lint",
+    "pretest": "npm run compile && npm run lint && node test/copy-fixtures.mjs",
     "lint": "eslint \"src/**/*.ts\"",
     "test": "vscode-test",
     "pretest:integration": "npm run compile",
