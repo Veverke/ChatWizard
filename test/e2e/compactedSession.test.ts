@@ -30,11 +30,21 @@ suite('Feature 45 — Compacted session detection', () => {
     });
 
     test('parser leaves isCompacted undefined for a non-compacted session', () => {
-        const { session } = parseClaudeSession(SAMPLE_FIXTURE);
-        assert.strictEqual(session.isCompacted, undefined,
-            'isCompacted should be undefined for non-compacted sessions');
-        assert.strictEqual(session.compactionSummary, undefined,
-            'compactionSummary should be undefined for non-compacted sessions');
+        const tmpFile = path.join(os.tmpdir(), `cw-test-noncompact-${Date.now()}.jsonl`);
+        try {
+            fs.writeFileSync(tmpFile,
+                '{"type":"human","message":{"role":"user","content":[{"type":"text","text":"Hello"}]},"timestamp":"2024-01-15T10:00:01.000Z","uuid":"uuid-human-001","sessionId":"session-noncompact-001"}\n' +
+                '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Hi there!"}]},"timestamp":"2024-01-15T10:00:05.000Z","uuid":"uuid-asst-001","sessionId":"session-noncompact-001"}\n',
+                'utf8'
+            );
+            const { session } = parseClaudeSession(tmpFile);
+            assert.strictEqual(session.isCompacted, undefined,
+                'isCompacted should be undefined for non-compacted sessions');
+            assert.strictEqual(session.compactionSummary, undefined,
+                'compactionSummary should be undefined for non-compacted sessions');
+        } finally {
+            fs.rmSync(tmpFile, { force: true });
+        }
     });
 
     test('compacted session still has subsequent messages parsed correctly', () => {

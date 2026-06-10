@@ -2278,7 +2278,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                     canSelectFolders: true, canSelectFiles: false, openLabel: 'Select Obsidian vault folder',
                 });
                 if (!uri?.[0]) { return; }
-                const sessions = index.getAllSummaries().map(s => index.get(s.id)).filter((s): s is NonNullable<typeof s> => s != null);
+                const sessions = index.getAllSummaries().map(s => index.get(s.id)).filter((s): s is NonNullable<typeof s> => s !== null);
                 const exporter = new ObsidianExporter();
                 const result = await exporter.export(sessions, { targetDir: uri[0].fsPath, overwrite: false }, async (id) => {
                     return await sidecarStore.get(id) ?? undefined;
@@ -2298,7 +2298,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 }
                 const databaseId = await vscode.window.showInputBox({ prompt: 'Enter Notion database ID' });
                 if (!databaseId) { return; }
-                const sessions = index.getAllSummaries().map(s => index.get(s.id)).filter((s): s is NonNullable<typeof s> => s != null);
+                const sessions = index.getAllSummaries().map(s => index.get(s.id)).filter((s): s is NonNullable<typeof s> => s !== null);
                 const exporter = new NotionExporter();
                 void vscode.window.showInformationMessage(`Exporting ${sessions.length} sessions to Notion…`);
                 const result = await exporter.export(sessions, { databaseId, apiKey });

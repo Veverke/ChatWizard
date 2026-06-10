@@ -6,19 +6,30 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as childProcess from 'child_process';
+import { execFileSync } from 'child_process';
 import { readGitContextAsync, GitContextCache } from '../../src/utils/gitContextReader';
 
-/** Retry fs.rmSync up to 5 times on Windows (EPERM workaround) */
+/** Retry fs.rmSync up to 10 times on Windows (EPERM workaround) */
+
 function rmRetry(dir: string): void {
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 10; i++) {
         try {
-            fs.rmSync(dir, { recursive: true, force: true });
+            fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
             return;
         } catch (err: any) {
-            if (i === 4) throw err;
-            // Wait and retry — Windows may still hold file handles from git
+            if (i === 9) {
+                // Last resort: use cmd.exe to force delete
+                try {
+                    execFileSync('cmd.exe', ['/c', 'rmdir', '/s', '/q', dir], { timeout: 5000, stdio: 'ignore' });
+                    // Verify it's gone
+                    if (!fs.existsSync(dir)) return;
+                } catch (_) { /* noop */ }
+                // If we're here, everything failed. Just rename so next run isn't polluted.
+                try { fs.renameSync(dir, dir + '.orphaned'); } catch (_) { /* noop */ }
+                return; // Don't throw - this is cleanup only
+            }
             const start = Date.now();
-            while (Date.now() - start < 200) { /* busy-wait 200ms */ }
+            while (Date.now() - start < 300) { /* busy-wait 300ms */ }
         }
     }
 }
@@ -43,7 +54,7 @@ suite('Feature 25 — Git Context Reader', () => {
     });
 
     suiteTeardown(() => {
-        fs.rmSync(repoDir, { recursive: true, force: true });
+        rmRetry(repoDir);
     });
 
     test('returns correct branch for a valid git repo', async () => {
@@ -65,7 +76,7 @@ suite('Feature 25 — Git Context Reader', () => {
             const ctx = await readGitContextAsync(tmpDir);
             assert.strictEqual(ctx, undefined, 'should return undefined for non-git directory');
         } finally {
-            fs.rmSync(tmpDir, { recursive: true, force: true });
+            rmRetry(tmpDir);
         }
     });
 
@@ -88,7 +99,7 @@ suite('Feature 25 — Git Context Cache', () => {
     });
 
     suiteTeardown(() => {
-        fs.rmSync(repoDir, { recursive: true, force: true });
+        rmRetry(repoDir);
     });
 
     test('caches results and returns same object on second call', async () => {

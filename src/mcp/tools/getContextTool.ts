@@ -275,7 +275,7 @@ export class GetContextTool implements IMcpTool {
         if (rerankerEnabled && this.reranker.isReady()) {
             const candidates = filteredIds
                 .map(id => ({ id, session: this.sessionIndex.get(id)! }))
-                .filter(c => c.session != null);
+                .filter(c => c.session !== null);
             const reranked = this.reranker.rerank(topic, candidates);
             finalIds = reranked.map(r => r.id);
         }
