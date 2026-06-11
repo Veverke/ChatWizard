@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
-import { Session, ExtractedEntities } from '../types/index';
+import { Session, ExtractedEntities, SessionBookmark } from '../types/index';
+import type { SidecarMetadataStore } from '../index/sidecarMetadataStore';
 import { cwThemeCss, syntaxHighlighterCss, cwInteractiveJs } from '../webview/cwTheme';
 import { friendlyModelName } from '../analytics/modelNames';
 import { friendlySourceName } from '../ui/sourceUi';
@@ -68,6 +69,9 @@ export class SessionWebviewPanel {
     /** Output channel for surfacing silent errors */
     static _channel: vscode.OutputChannel | undefined;
 
+    /** Sidecar metadata store — set from extension.ts for bookmark/annotation persistence */
+    static _sidecarStore: SidecarMetadataStore | undefined;
+
     // ── Public entry point ────────────────────────────────────────────────────
 
     static show(
@@ -82,6 +86,7 @@ export class SessionWebviewPanel {
         tags?: string[],
         entities?: ExtractedEntities,
         summary?: string,
+        bookmarks?: SessionBookmark[],
     ): void {
         const config = vscode.workspace.getConfiguration('chatwizard');
         const userColor = config.get<string>('userMessageColor', '#007acc') || '#007acc';
@@ -192,6 +197,9 @@ export class SessionWebviewPanel {
                     console.error(errMsg);
                 } else if (msg.type === 'revealInTree') {
                     void vscode.commands.executeCommand('chatwizard.revealInSessionsTree', session.id);
+                } else if ((msg as any).type === 'bookmarkMessage') {
+                    const m = msg as any;
+                    void SessionWebviewPanel._toggleBookmark(session.id, m.messageIndex as number);
                 }
             },
             undefined,
@@ -667,6 +675,37 @@ export class SessionWebviewPanel {
     }
     .cw-filter-label:hover { opacity: 1; }
     .cw-filter-label input { margin: 0; cursor: pointer; }
+    /* Bookmark button styles */
+    .cw-bookmark-btn {
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 1px 4px;
+      font-size: 0.9em;
+      color: inherit;
+      opacity: 0;
+      transition: opacity 0.15s, color 0.15s;
+      border-radius: 3px;
+      line-height: 1;
+    }
+    .message:hover .cw-bookmark-btn { opacity: 0.4; }
+    .cw-bookmark-btn:hover { opacity: 1 !important; background: var(--cw-surface-subtle); }
+    .cw-bookmark-btn.cw-active { opacity: 1; color: var(--cw-accent, #f0c040); }
+    /* Bookmarks jump list */
+    #bookmarks-section { display: none; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--vscode-textBlockQuote-background, #444); }
+    #bookmarks-section summary { cursor: pointer; opacity: 0.65; user-select: none; font-size: 0.82em; }
+    #bookmarks-section summary:hover { opacity: 1; }
+    #bookmarks-list { padding: 4px 0; display: flex; flex-direction: column; gap: 3px; }
+    .bookmark-item {
+      display: flex; align-items: center; gap: 6px;
+      padding: 3px 6px; border-radius: 3px;
+      cursor: pointer; font-size: 0.82em;
+      transition: background 0.12s;
+    }
+    .bookmark-item:hover { background: var(--cw-surface-subtle); }
+    .bookmark-item .bm-marker { color: var(--cw-accent, #f0c040); font-size: 0.85em; }
+    .bookmark-item .bm-note { opacity: 0.7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .bookmark-item .bm-date { opacity: 0.45; font-size: 0.85em; margin-left: auto; white-space: nowrap; }
   </style>
 </head>
 <body>
@@ -731,6 +770,7 @@ ${cwInteractiveJs()}
   // ── State ──────────────────────────────────────────────────────────────────
   var _hasMore     = false;
   var _loadingMore = false;
+  var _bookmarks   = [];  // Array<{ messageIndex: number, note: string|null, createdAt: string }>
 
   // ── Tag color palette (matches tree view emoji palette) ───────────────────
   var _CW_TAG_PALETTE = ['#f47067','#f0883e','#e3b341','#56d364','#58a6ff','#bc8cff','#c29070'];
@@ -1367,6 +1407,29 @@ ${cwInteractiveJs()}
 </script>
 </body>
 </html>`;
+    }
+
+    // ── Bookmark toggle handler ──────────────────────────────────────────────
+
+    static async _toggleBookmark(sessionId: string, messageIndex: number): Promise<void> {
+        const store = SessionWebviewPanel._sidecarStore;
+        if (!store) { return; }
+
+        await store.toggleBookmark(sessionId, messageIndex);
+
+        // Send updated bookmarks list to all panels for this session
+        const panel = SessionWebviewPanel._panels.get(sessionId);
+        if (panel) {
+            const bookmarks = await store.getBookmarks(sessionId);
+            void panel.webview.postMessage({
+                type: 'bookmarkUpdated',
+                bookmarks: bookmarks.map(b => ({
+                    messageIndex: b.messageIndex,
+                    note: b.note || null,
+                    createdAt: b.createdAt,
+                })),
+            });
+        }
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

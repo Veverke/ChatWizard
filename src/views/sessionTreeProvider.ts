@@ -30,7 +30,7 @@ export class SessionTreeItem extends vscode.TreeItem {
     readonly summary: SessionSummary;
     readonly pinned: boolean;
 
-    constructor(summary: SessionSummary, pinned = false, extensionUri?: vscode.Uri, tags?: string[], summaryText?: string) {
+    constructor(summary: SessionSummary, pinned = false, extensionUri?: vscode.Uri, tags?: string[], summaryText?: string, public readonly status?: 'open' | 'resolved' | 'revisit') {
         super(summary.title || 'Untitled Session', vscode.TreeItemCollapsibleState.None);
 
         this.id      = summary.id;   // stable identity → enables treeView.reveal()
@@ -123,7 +123,14 @@ export class SessionTreeItem extends vscode.TreeItem {
             this.resourceUri = vscode.Uri.from({ scheme: 'chatwizard-warn', path: '/' + summary.id });
         }
 
-        this.contextValue = pinned ? 'session.pinned' : summary.userArchived ? 'session.userArchived' : summary.archived ? 'session.archived' : 'session';
+        const statusSuffix = status ? `.${status}` : '';
+        this.contextValue = pinned
+            ? `session.pinned${statusSuffix}`
+            : summary.userArchived
+                ? `session.userArchived${statusSuffix}`
+                : summary.archived
+                    ? `session.archived${statusSuffix}`
+                    : `session${statusSuffix}`;
 
         this.command = {
             command: 'chatwizard.openSession',
@@ -297,6 +304,7 @@ export interface SessionFilter {
     dateTo?: string;       // YYYY-MM-DD upper bound (inclusive)
     model?: string;        // case-insensitive substring
     source?: SessionSource; // exact source to show
+    status?: 'open' | 'resolved' | 'revisit'; // filter by feature-28 status
     minMessages?: number;
     maxMessages?: number;
     hideInterrupted?: boolean;   // when true, hide sessions whose last message has no assistant reply
@@ -511,7 +519,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
 
     hasActiveFilter(): boolean {
         const f = this._filter;
-        return !!(f.title || f.dateFrom || f.dateTo || f.model || f.source ||
+        return !!(f.title || f.dateFrom || f.dateTo || f.model || f.source || f.status ||
                   f.minMessages !== undefined || f.maxMessages !== undefined ||
                   f.hideInterrupted || f.onlyWithWarnings || (f.tags && f.tags.length > 0) ||
                   f.archivedOnly || f.liveOnly);
@@ -527,6 +535,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
             if (!(s.model ?? '').toLowerCase().includes(f.model.toLowerCase())) { return false; }
         }
         if (f.source && s.source !== f.source) { return false; }
+        if (f.status && this.index.getSidecarMeta(s.id)?.status !== f.status) { return false; }
         if (f.minMessages !== undefined && s.messageCount < f.minMessages) { return false; }
         if (f.maxMessages !== undefined && s.messageCount > f.maxMessages) { return false; }
         if (f.hideInterrupted && s.interrupted) { return false; }

@@ -40,6 +40,7 @@ import { TimelineViewProvider } from './timeline/timelineViewProvider';
 import { TelemetryRecorder } from './telemetry/telemetryRecorder';
 import { registerManageWorkspacesCommand } from './commands/manageWorkspaces';
 import { registerPaletteCommands } from './commands/paletteCommands';
+import { registerSessionLifecycleCommands } from './commands/sessionLifecycleCommands';
 import { SemanticIndexer, defaultVsCodeApi } from './search/semanticIndexer';
 import { EmbeddingEngine } from './search/embeddingEngine';
 import { SemanticIndex } from './search/semanticIndex';
@@ -114,6 +115,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     void sidecarStore.load().then(cache => {
         index.setSidecarStore(sidecarStore, cache);
     });
+    // Wire the sidecar store into SessionWebviewPanel so bookmark/annotation toggles work.
+    SessionWebviewPanel._sidecarStore = sidecarStore;
 
     // Migrate legacy pin state from globalState → sidecarStore (run once, version-gated).
     if (context.globalState.get<string>('chatwizard.sidecarMigrationVersion') !== '1') {
@@ -513,6 +516,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     });
     treeView.description = provider.getDescription();
     context.subscriptions.push(treeView);
+
+    // ── Register session lifecycle commands (Features 28-32, 35) ──────────
+    registerSessionLifecycleCommands(context, sidecarStore, index, provider, treeView as vscode.TreeView<SessionTreeItem>);
 
     // Keep treeView description (session count + sort) fresh when index changes
     const sessionDescListener = index.addChangeListener(() => {

@@ -167,4 +167,93 @@ suite('SidecarMetadataStore', () => {
         const meta = await store.get('sess-sum');
         assert.strictEqual(meta?.summary, 'This is a summary.');
     });
+
+    // ── Feature 29: Bookmarks ─────────────────────────────────────────────────
+
+    test('addBookmark creates a bookmark with correct messageIndex', async () => {
+        const bm = { messageIndex: 5, createdAt: new Date().toISOString() };
+        await store.addBookmark('bm-sess', bm);
+        const bookmarks = await store.getBookmarks('bm-sess');
+        assert.strictEqual(bookmarks.length, 1);
+        assert.strictEqual(bookmarks[0].messageIndex, 5);
+        assert.ok(bookmarks[0].createdAt);
+    });
+
+    test('toggleBookmark off removes the bookmark', async () => {
+        const bm = { messageIndex: 3, note: 'Important', createdAt: new Date().toISOString() };
+        await store.addBookmark('bm-sess2', bm);
+        let bookmarks = await store.getBookmarks('bm-sess2');
+        assert.strictEqual(bookmarks.length, 1);
+
+        // Toggle off (removes)
+        const added = await store.toggleBookmark('bm-sess2', 3);
+        assert.strictEqual(added, false); // false = removed
+        bookmarks = await store.getBookmarks('bm-sess2');
+        assert.strictEqual(bookmarks.length, 0);
+    });
+
+    test('toggleBookmark on adds the bookmark', async () => {
+        // Toggle on (adds)
+        const added = await store.toggleBookmark('bm-sess3', 7, 'My note');
+        assert.strictEqual(added, true);
+        const bookmarks = await store.getBookmarks('bm-sess3');
+        assert.strictEqual(bookmarks.length, 1);
+        assert.strictEqual(bookmarks[0].messageIndex, 7);
+        assert.strictEqual(bookmarks[0].note, 'My note');
+    });
+
+    test('bookmarks survive serialization round-trip via sidecar JSON', async () => {
+        const createdAt = '2026-06-01T10:00:00.000Z';
+        await store.addBookmark('bm-roundtrip', { messageIndex: 2, note: 'Test note', createdAt });
+
+        // Read back
+        let bookmarks = await store.getBookmarks('bm-roundtrip');
+        assert.strictEqual(bookmarks.length, 1);
+        assert.strictEqual(bookmarks[0].messageIndex, 2);
+        assert.strictEqual(bookmarks[0].note, 'Test note');
+        assert.strictEqual(bookmarks[0].createdAt, createdAt);
+
+        // Simulate re-load from disk (new store instance)
+        const store2 = new (require('../../src/index/sidecarMetadataStore').SidecarMetadataStore)(tmpDir);
+        bookmarks = await store2.getBookmarks('bm-roundtrip');
+        assert.strictEqual(bookmarks.length, 1);
+        assert.strictEqual(bookmarks[0].messageIndex, 2);
+        assert.strictEqual(bookmarks[0].note, 'Test note');
+        assert.strictEqual(bookmarks[0].createdAt, createdAt);
+    });
+
+    test('removeBookmark removes bookmark for a given messageIndex', async () => {
+        await store.addBookmark('bm-sess4', { messageIndex: 1, createdAt: new Date().toISOString() });
+        await store.addBookmark('bm-sess4', { messageIndex: 2, createdAt: new Date().toISOString() });
+        let bookmarks = await store.getBookmarks('bm-sess4');
+        assert.strictEqual(bookmarks.length, 2);
+
+        await store.removeBookmark('bm-sess4', 1);
+        bookmarks = await store.getBookmarks('bm-sess4');
+        assert.strictEqual(bookmarks.length, 1);
+        assert.strictEqual(bookmarks[0].messageIndex, 2);
+    });
+
+    test('removeBookmark is a no-op for nonexistent messageIndex', async () => {
+        await store.addBookmark('bm-sess5', { messageIndex: 10, createdAt: new Date().toISOString() });
+        // Should not throw
+        await store.removeBookmark('bm-sess5', 999);
+        const bookmarks = await store.getBookmarks('bm-sess5');
+        assert.strictEqual(bookmarks.length, 1);
+    });
+
+    test('getBookmarks returns empty array for session with no bookmarks', async () => {
+        const bookmarks = await store.getBookmarks('nonexistent-bm');
+        assert.deepStrictEqual(bookmarks, []);
+    });
+
+    test('addBookmark replaces existing bookmark for the same messageIndex', async () => {
+        const createdAt1 = '2026-01-01T00:00:00.000Z';
+        const createdAt2 = '2026-06-01T00:00:00.000Z';
+        await store.addBookmark('bm-sess6', { messageIndex: 0, note: 'Old note', createdAt: createdAt1 });
+        await store.addBookmark('bm-sess6', { messageIndex: 0, note: 'New note', createdAt: createdAt2 });
+        const bookmarks = await store.getBookmarks('bm-sess6');
+        assert.strictEqual(bookmarks.length, 1); // replaced, not duplicated
+        assert.strictEqual(bookmarks[0].note, 'New note');
+    });
 });

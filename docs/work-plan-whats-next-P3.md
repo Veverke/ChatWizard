@@ -28,7 +28,7 @@ whether it (or a significant part of it) is already implemented.
 | 25 | Git/branch linkage | ⬜ Not started | `activeBranch.branchName` is parsed from Cursor's `state.vscdb` (`src/parsers/cursor.ts`) but is never stored on `Session`, surfaced in the tree, or used for grouping. No git HEAD polling exists. |
 | 26 | Workspace Digest / Standup Reports | ⬜ Not started | No command, no report generator found. |
 | 27 | Cloud sync (opt-in) | ⬜ Not started | No S3/Azure Blob/GitHub Gist integration anywhere in the codebase. |
-| 28 | Session status lifecycle | ⬜ Not started | No `status` field on `Session`; no open/resolved/revisit UI. |
+| 28 | Session status lifecycle | ✅ Implemented | Status picker, filter by status, context value, tree item display |
 | 29 | Bookmarks within a session | ⬜ Not started | No bookmark model or reader jump-to support. |
 | 30 | Inline annotations | ⬜ Not started | No annotation model or reader rendering. |
 | 31 | Session linking | ⚠️ Stub only | `linkedSessionIds?: string[]` exists in `src/types/index.ts` but is never populated, persisted, or surfaced in the UI. The MCP tool `chatwizard_get_linked` does not exist. Full implementation required. |
@@ -66,7 +66,7 @@ whether it (or a significant part of it) is already implemented.
 | [25](#feature-25--gitbranch-linkage) | Git/branch linkage | M | ⬜ |
 | [26](#feature-26--workspace-digest--standup-reports) | Workspace Digest / Standup Reports | M | ⬜ |
 | [27](#feature-27--cloud-sync-opt-in) | Cloud sync (opt-in) | L | ⬜ |
-| [28](#feature-28--session-status-lifecycle) | Session status lifecycle | S | ⬜ |
+| [28](#feature-28--session-status-lifecycle) | Session status lifecycle | S | ✅ |
 | [29](#feature-29--bookmarks-within-a-session) | Bookmarks within a session | S | ⬜ |
 | [30](#feature-30--inline-annotations) | Inline annotations | S | ⬜ |
 | [31](#feature-31--session-linking) | Session linking | M | ⚠️ Stub |
@@ -74,7 +74,7 @@ whether it (or a significant part of it) is already implemented.
 | [33](#feature-33--duplicate--related-session-detection) | Duplicate / related session detection | M | ⬜ |
 | [34](#feature-34--outcome--follow-up-tracking) | Outcome / follow-up tracking | S | ⬜ |
 | [35](#feature-35--keyboard-only-navigation) | Keyboard-only navigation | S | ⬜ |
-| [36](#feature-36--session-sharing) | Session sharing | M | ⬜ |
+| [36](#feature-36--session-sharing) | Session sharing | M | ⬜ |V
 | [37](#feature-37--post-session-cost-tips--analytics) | Post-session cost tips & analytics | S | ⚠️ Re-enable only |
 | [38](#feature-38--mcp-tools-includecode-flag) | MCP tools: `includeCode` flag | S | ⬜ |
 | [39](#feature-39--mcp-mcp-config-auth-hardening) | MCP `/mcp-config` auth hardening | XS | ⚠️ Partial |
@@ -2591,6 +2591,65 @@ If Claude Code sessions exist with compaction:
 - [ ] **Feature 45 complete.**
 
 ---
+
+---
+
+## Appendix A — Infrastructure Fixes (Completed)
+
+These fixes were applied before feature implementation began and must remain functional.
+
+### Fixture Paths
+
+- ✅ Zed parser tests — fixtures now use correct path `test/fixtures/zed/`
+- ✅ Tabnine parser tests — fixtures now use correct path `test/fixtures/tabnine/`
+- ✅ Compacted session tests — fixtures now use correct path `test/fixtures/compacted/`
+- ✅ Build pipeline — `pretest` script runs `node test/copy-fixtures.mjs` to copy `test/fixtures/` → `out/test/fixtures/` automatically
+
+### EPERM on Windows (gitContextReader)
+
+- ✅ Added `rmRetry()` wrapper that retries `fs.rmSync` up to 5 times with 200ms busy-wait, working around Windows file handle locking after `git` commands
+
+### better-sqlite3 Native Module
+
+The module `better-sqlite3` requires compilation for VS Code's Electron version:
+- **VS Code test version**: 1.123.0 / 1.123.1 → **Electron 42.2.0** (Node ABI 146)
+- **Problem**: `node-gyp` rebuild requires Python (✓ available 3.12.10) **and** Visual Studio Build Tools with C++ workload (not installed)
+- **Impact**: 77 tests blocked (windsurfWorkspaceDiscovery, cursorWorkspaceDiscovery, chronicle tests)
+- **Fix**: Install **"Visual Studio Build Tools 2022"** with **"Desktop development with C++"** workload, then run `npm run rebuild:native`
+
+---
+
+## Appendix B — Type Definitions Status
+
+All P3 feature types are already defined in `src/types/index.ts`:
+- `SessionBookmark` — Feature 29
+- `MessageAnnotation` — Feature 30
+- `MessageRating` — Feature 32
+- `ActionItem` — Feature 34
+- `GitContext` — Feature 25
+- `status` field on `SessionMetadata` — Feature 28
+- `linkedSessionIds`, `annotations` fields on `SessionMetadata` — Features 28, 29, 30, 31
+
+---
+
+## Appendix C — Manual Testing Checklist
+
+Run these after each feature implementation to verify no regressions:
+
+- [ ] Open session viewer — verify rendering for all 14 sources
+- [ ] Session tree — sort, filter, group, search
+- [ ] Code Blocks view — list, filter, sort, open session
+- [ ] Prompt Library — browse and copy prompts
+- [ ] Analytics dashboard — verify charts and tables
+- [ ] Timeline view — scroll through chronological view
+- [ ] MCP server — start, verify tools, stop
+- [ ] Archive — archive and restore sessions
+- [ ] Tags — add/remove/filter by tags
+- [ ] Export — single session, batch, Obsidian
+- [ ] Semantic search — verify topic search results
+- [ ] Chronicle — verify checkpoint summaries load
+- [ ] Copilot integration — verify session discovery
+- [ ] Settings — verify all configuration options
 
 ---
 

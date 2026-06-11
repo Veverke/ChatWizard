@@ -339,6 +339,12 @@ export interface SessionMetadata {
     entities?: ExtractedEntities;
     /** Version of the entity extractor that produced `entities` (bump to invalidate cache) */
     entitiesVersion?: number;
+    /** Feature 29 — Bookmarks pointing to specific messages within a session */
+    bookmarks?: SessionBookmark[];
+    /** Feature 32 — Per-response ratings (thumbs up/down) */
+    ratings?: MessageRating[];
+    /** Feature 34 — Action items extracted from or manually added to a session */
+    actionItems?: ActionItem[];
 }
 
 /** An in-line annotation attached to a specific message in a session */
