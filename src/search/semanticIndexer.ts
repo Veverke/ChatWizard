@@ -415,38 +415,33 @@ export class SemanticIndexer implements ISemanticIndexer {
         this._queueRunning = true;
 
         await this.vsCodeApi.runIndexingProgress(async (report) => {
-            // Show the current cumulative state immediately when the notification opens
-            // (important for the archive-restore second pass, which starts at e.g. "89/109").
             report(this._totalSessionsCompleted, this._totalSessionsQueued);
 
             while (this._queue.length > 0 && !this._disposed) {
                 // Collect all entries for the session at the front of the queue.
-                // scheduleSession() appends a session's entries contiguously, so entries
-                // for the same session are always grouped together at the queue head.
                 const currentSessionId = this._queue[0].sessionId;
                 const sessionEntries: QueueEntry[] = [];
                 while (this._queue.length > 0 && this._queue[0].sessionId === currentSessionId) {
                     sessionEntries.push(this._queue.shift()!);
                 }
 
-                // Embed every text chunk for this session.
-                for (const entry of sessionEntries) {
-                    try {
-                        const embedding = await this.engine.embed(entry.text);
-                        this.index.add(entry.sessionId, entry.role, entry.messageIndex, entry.paragraphIndex, embedding);
-                        this._scheduleSave();
-                    } catch {
-                        // Skip failed embeddings — don't crash the queue.
+                // Embed all text chunks for this session in a single pipeline call.
+                const texts = sessionEntries.map(e => e.text);
+                try {
+                    const embeddings = await this.engine.embedBatch(texts);
+                    for (let i = 0; i < sessionEntries.length; i++) {
+                        const entry = sessionEntries[i];
+                        const embedding = embeddings[i];
+                        if (embedding) {
+                            this.index.add(entry.sessionId, entry.role, entry.messageIndex, entry.paragraphIndex, embedding);
+                        }
                     }
+                    this._scheduleSave();
+                } catch {
+                    // Skip failed embeddings — don't crash the queue.
                 }
 
                 // Session complete: update counters and report ONCE (not once per chunk).
-                // Calling report() once per session means VS Code renders a meaningful
-                // "N / total" update for each session instead of hundreds of identical
-                // "0 / total" calls that get throttled away.
-                // Guard: only count the session once — if it somehow appears in a second
-                // block (e.g. a race between scheduleSession and _runQueue), skip the
-                // counter update so the session is never double-counted.
                 if (this._pendingBySession.has(currentSessionId)) {
                     this._pendingBySession.delete(currentSessionId);
                     this._totalSessionsCompleted++;
@@ -454,17 +449,25 @@ export class SemanticIndexer implements ISemanticIndexer {
                 }
 
                 // Yield to the event loop so VS Code can render the progress update
-                // before the next session's embeddings begin.
                 await new Promise<void>(r => setImmediate(r));
             }
         });
 
         this._queueRunning = false;
 
+        // If more sessions were added while we were running (e.g. archive-restore batch),
+        // restart the queue seamlessly — same progress notification, no new bar.
+        if (!this._disposed && this._queue.length > 0) {
+            this._queueRunning = true;
+            setImmediate(() => {
+                if (!this._disposed && this._queue.length > 0) {
+                    this._runQueue().catch(() => { /* ignore */ });
+                }
+            });
+            return;
+        }
+
         if (!this._disposed && this._totalSessionsCompleted > 0) {
-            // Debounce: the archive-restore batch fires a second _runQueue() run a few
-            // hundred ms after the first completes.  Wait before showing the notification
-            // so both runs are reported as a single final count.
             if (this._indexingCompleteTimer !== undefined) {
                 clearTimeout(this._indexingCompleteTimer);
             }

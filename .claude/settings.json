@@ -1,7 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(ls /c/Repos/Personal/ChatWizard/.vscode-test*)"
-    ]
-  }
-}

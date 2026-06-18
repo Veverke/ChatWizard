@@ -39,3 +39,9 @@ node_modules/**
 
 # scripts dir: not needed in the extension package
 scripts/**
+
+# Temp / debug artifacts — never ship these
+temp_commands.txt
+chatwizard_tmp.zip
+vsix_check/
+vsix_tmp/

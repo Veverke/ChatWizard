@@ -109,4 +109,34 @@ export class EmbeddingEngine implements IEmbeddingEngine {
         }
         return result;
     }
+
+    /**
+     * Embeds multiple texts in a single pipeline call.
+     * The @xenova/transformers feature-extraction pipeline accepts an array of strings
+     * and returns a single tensor with shape [batch, dims].
+     * Throws if the engine is not ready.
+     */
+    async embedBatch(texts: string[]): Promise<Float32Array[]> {
+        if (!this._isReady || !this.pipelineFn) {
+            throw new Error('EmbeddingEngine is not ready. Call load() first.');
+        }
+        if (texts.length === 0) { return []; }
+        if (texts.length === 1) { return [await this.embed(texts[0])]; }
+
+        const output = await this.pipelineFn(texts, { pooling: 'mean', normalize: true });
+        // The pipeline returns a single tensor with shape [batch, dims].
+        // output.data is a flat Float32Array of length batch * dims.
+        const flat = output.data;
+        const batchSize = texts.length;
+        const dims = SEMANTIC_DIMS;
+        const expectedLen = batchSize * dims;
+        if (flat.length !== expectedLen) {
+            throw new Error(`Expected batch embedding length ${expectedLen}, got ${flat.length}`);
+        }
+        const results: Float32Array[] = [];
+        for (let i = 0; i < batchSize; i++) {
+            results.push(new Float32Array(flat.slice(i * dims, (i + 1) * dims)));
+        }
+        return results;
+    }
 }

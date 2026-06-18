@@ -149,7 +149,11 @@ export class SemanticIndex implements ISemanticIndex {
             }
         }
 
-        await fs.promises.writeFile(filePath, buf);
+        // Atomic write: write to a temp file first, then rename.
+        // This prevents partial/corrupt files when VS Code shuts down mid-write.
+        const tmpPath = filePath + '.tmp';
+        await fs.promises.writeFile(tmpPath, buf);
+        await fs.promises.rename(tmpPath, filePath);
     }
 
     async load(filePath: string): Promise<void> {
@@ -232,6 +236,12 @@ export class SemanticIndex implements ISemanticIndex {
             );
             this._store.clear();
             this._indexedSessions.clear();
+            // Delete the corrupt file so the next startup regenerates it instead of failing again.
+            try {
+                await fs.promises.unlink(filePath);
+            } catch {
+                // Ignore — the file may not exist or may be locked; a fresh start will still work.
+            }
         }
     }
 }

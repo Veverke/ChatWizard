@@ -1264,12 +1264,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
 
     context.subscriptions.push(
-        vscode.commands.registerCommand('chatwizard.focusSessionTree', () => {
-            void vscode.commands.executeCommand('chatwizardSessions.focus');
-        })
-    );
-
-    context.subscriptions.push(
         vscode.commands.registerCommand('chatwizard.revealInSessionsTree', async (sessionId: string) => {
             const summary = index.getAllSummaries().find(s => s.id === sessionId);
             if (!summary) { return; }

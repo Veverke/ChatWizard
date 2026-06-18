@@ -8,7 +8,9 @@
  *   2. Query the downloaded VS Code binary via ELECTRON_RUN_AS_NODE=1 — works
  *      for both stable and insiders because it reads process.versions.electron
  *      from the actual binary rather than the VS Code version string.
- *   3. Hard-coded fallback constant below (update when VS Code ships a new Electron)
+ *   3. Read from resources/app/product.json (electronVersion field) — the
+ *      canonical source in VS Code release archives.
+ *   4. Hard-coded fallback constant below (update when VS Code ships a new Electron)
  *
  * This script must run on the target OS because better-sqlite3 compiles
  * a platform-specific native binary.  Do NOT cross-compile.
@@ -27,7 +29,7 @@ const path = require('path');
 // ── Fallback Electron version ────────────────────────────────────────────────
 // Keep this in sync with the Electron version shipped in the minimum required
 // VS Code stable release.  Check: https://github.com/microsoft/vscode/blob/main/cgmanifest.json
-const FALLBACK_ELECTRON_VERSION = '39.8.8';
+const FALLBACK_ELECTRON_VERSION = '42.2.0';
 
 // ── Resolve Electron version ─────────────────────────────────────────────────
 
