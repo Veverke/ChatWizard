@@ -31,7 +31,8 @@ export class SessionTreeItem extends vscode.TreeItem {
     readonly pinned: boolean;
 
     constructor(summary: SessionSummary, pinned = false, extensionUri?: vscode.Uri, tags?: string[], summaryText?: string, public readonly status?: 'open' | 'resolved' | 'revisit') {
-        super(summary.title || 'Untitled Session', vscode.TreeItemCollapsibleState.None);
+        const statusBadge = status === 'resolved' ? '✓ ' : status === 'revisit' ? '⟲ ' : '';
+        super(`${statusBadge}${summary.title || 'Untitled Session'}`, vscode.TreeItemCollapsibleState.None);
 
         this.id      = summary.id;   // stable identity → enables treeView.reveal()
         this.summary = summary;
@@ -823,7 +824,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
             const pinnedInBucket   = bucketItems.filter(s =>  pinnedSet.has(s.id));
             const unpinnedInBucket = bucketItems.filter(s => !pinnedSet.has(s.id));
             return [...pinnedInBucket, ...unpinnedInBucket]
-                .map(s => new SessionTreeItem(s, pinnedSet.has(s.id), this.extensionUri, this.index.getSidecarMeta(s.id)?.tags, this.index.getSidecarMeta(s.id)?.summary));
+                .map(s => new SessionTreeItem(s, pinnedSet.has(s.id), this.extensionUri, this.index.getSidecarMeta(s.id)?.tags, this.index.getSidecarMeta(s.id)?.summary, this.index.getSidecarMeta(s.id)?.status));
         }
 
         // When a ContextGroupTreeItem is expanded, return matching session children
@@ -851,7 +852,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
                         : keys.includes(element.groupKey);
                 }
             });
-            return matched.map(s => new SessionTreeItem(s, pinnedSet.has(s.id), this.extensionUri, this.index.getSidecarMeta(s.id)?.tags, this.index.getSidecarMeta(s.id)?.summary));
+            return matched.map(s => new SessionTreeItem(s, pinnedSet.has(s.id), this.extensionUri, this.index.getSidecarMeta(s.id)?.tags, this.index.getSidecarMeta(s.id)?.summary, this.index.getSidecarMeta(s.id)?.status));
         }
 
         if (element) { return []; }
@@ -876,7 +877,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
 
         // Flat view (original behaviour with pagination)
         const visible = all.slice(0, this._visibleCount);
-        const items: SessionTreeNode[] = visible.map(s => new SessionTreeItem(s, pinnedSet.has(s.id), this.extensionUri, this.index.getSidecarMeta(s.id)?.tags, this.index.getSidecarMeta(s.id)?.summary));
+        const items: SessionTreeNode[] = visible.map(s => new SessionTreeItem(s, pinnedSet.has(s.id), this.extensionUri, this.index.getSidecarMeta(s.id)?.tags, this.index.getSidecarMeta(s.id)?.summary, this.index.getSidecarMeta(s.id)?.status));
         const remaining = all.length - visible.length;
         if (remaining > 0) {
             items.push(new LoadMoreTreeItem(remaining));

@@ -613,6 +613,30 @@
         "command": "chatwizard.forgetNotionApiKey",
         "title": "Chat Wizard: Forget Notion API Key",
         "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.setSessionStatus",
+        "title": "Chat Wizard: Set Session Status…",
+        "category": "Chat Wizard",
+        "icon": "$(symbol-misc)"
+      },
+      {
+        "command": "chatwizard.filterByStatus",
+        "title": "Chat Wizard: Filter by Status…",
+        "category": "Chat Wizard",
+        "icon": "$(filter)"
+      },
+      {
+        "command": "chatwizard.addBookmark",
+        "title": "Chat Wizard: Add Bookmark…",
+        "category": "Chat Wizard",
+        "icon": "$(bookmark)"
+      },
+      {
+        "command": "chatwizard.removeBookmark",
+        "title": "Chat Wizard: Remove Bookmark…",
+        "category": "Chat Wizard",
+        "icon": "$(bookmark)"
       }
     ],
     "menus": {
@@ -902,6 +926,26 @@
           "command": "chatwizard.regenerateTitlesInGroup",
           "when": "viewItem == dateGroup",
           "group": "session@1"
+        },
+        {
+          "command": "chatwizard.setSessionStatus",
+          "when": "viewItem == session || viewItem == session.pinned || viewItem == session.archived || viewItem == session.userArchived",
+          "group": "6_status@1"
+        },
+        {
+          "command": "chatwizard.filterByStatus",
+          "when": "view == chatwizardSessions",
+          "group": "navigation@0"
+        },
+        {
+          "command": "chatwizard.addBookmark",
+          "when": "viewItem == session || viewItem == session.pinned || viewItem == session.archived || viewItem == session.userArchived",
+          "group": "6_status@2"
+        },
+        {
+          "command": "chatwizard.removeBookmark",
+          "when": "viewItem == session || viewItem == session.pinned || viewItem == session.archived || viewItem == session.userArchived",
+          "group": "6_status@3"
         }
       ],
       "commandPalette": [

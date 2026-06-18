@@ -74,6 +74,13 @@ function makeEngineStub(opts: {
             if (opts.embedError) { throw opts.embedError; }
             return opts.embedResult ?? new Float32Array(SEMANTIC_DIMS).fill(0.1);
         },
+        async embedBatch(texts: string[]): Promise<Float32Array[]> {
+            state.embedCallCount += texts.length;
+            state.lastEmbedText = texts[texts.length - 1];
+            if (opts.embedError) { throw opts.embedError; }
+            const base = opts.embedResult ?? new Float32Array(SEMANTIC_DIMS).fill(0.1);
+            return texts.map(() => new Float32Array(base));
+        },
         get loadCallCount() { return state.loadCallCount; },
         get embedCallCount() { return state.embedCallCount; },
         get lastEmbedText() { return state.lastEmbedText; },

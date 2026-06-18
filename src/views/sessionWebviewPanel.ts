@@ -35,6 +35,8 @@ interface PanelMsgState {
     tags?:            string[];
     entities?:        ExtractedEntities;
     summary?:         string;
+    status?:          string;
+    bookmarks?:       SessionBookmark[];
     panel:            vscode.WebviewPanel;
 }
 
@@ -86,6 +88,7 @@ export class SessionWebviewPanel {
         tags?: string[],
         entities?: ExtractedEntities,
         summary?: string,
+        status?: string,
         bookmarks?: SessionBookmark[],
     ): void {
         const config = vscode.workspace.getConfiguration('chatwizard');
@@ -147,7 +150,7 @@ export class SessionWebviewPanel {
                 session, visibleMessages, renderedMessages,
                 windowStart, windowEnd: initialWindowEnd,
                 streamVersion: newVersion,
-                assistantLabel, tags, entities, summary, panel: existing,
+                assistantLabel, tags, entities, summary, status, bookmarks, panel: existing,
             });
             void SessionWebviewPanel._startStream(
                 session.id, newVersion, userColor, searchTerm, scrollInit, highlightContainer
@@ -169,6 +172,7 @@ export class SessionWebviewPanel {
             windowStart, windowEnd: initialWindowEnd,
             streamVersion: 0,
             assistantLabel, tags, entities, summary, panel,
+            status, bookmarks,
         });
         SessionWebviewPanel._panels.set(session.id, panel);
 
@@ -278,6 +282,12 @@ export class SessionWebviewPanel {
             tags:             state.tags ?? [],
             entities:         state.entities ?? null,
             summary:          state.summary ?? null,
+            status:           state.status ?? null,
+            bookmarks:        state.bookmarks?.map(b => ({
+                messageIndex: b.messageIndex,
+                note: b.note || null,
+                createdAt: b.createdAt,
+            })) ?? [],
         });
 
         // ── Stream remaining initial window via setImmediate ──────────────────
@@ -716,11 +726,17 @@ export class SessionWebviewPanel {
     <span id="session-model-field" style="display:none">Model: <span id="session-model"></span></span>
     <span class="meta-sep" id="session-meta-sep" style="display:none"> &nbsp;·&nbsp; </span>
     <span id="session-req-field" style="display:none">User Requests: <span id="session-user-req"></span></span>
+    <span class="meta-sep" style="display:none" id="session-status-sep"> &nbsp;·&nbsp; </span>
+    <span id="session-status" style="display:none"></span>
   </div>
   <details id="session-entities" style="display:none">
     <summary class="cw-entities-summary">&#128269; Entities</summary>
     <div id="session-entities-body"></div>
   </details>
+  <div id="bookmarks-section">
+    <summary style="cursor:pointer;opacity:0.65;user-select:none;font-size:0.82em;">&#9733; Bookmarks</summary>
+    <div id="bookmarks-list"></div>
+  </div>
   <div class="toolbar">
     <div class="search-group">
       <input id="search-input" type="text" placeholder="Search in messages&#8230;" autocomplete="off" aria-label="Search within session messages" />
@@ -884,8 +900,58 @@ ${cwInteractiveJs()}
     hideMenu();
   });
 
-  // ── Turn reference copy button ──────────────────────────────────────────
+  // ── Update bookmarks UI ─────────────────────────────────────────────────
+  function updateBookmarksUI() {
+    var sectionEl = document.getElementById('bookmarks-section');
+    var listEl = document.getElementById('bookmarks-list');
+    if (!listEl || !sectionEl) { return; }
+    if (!_bookmarks || _bookmarks.length === 0) {
+      sectionEl.style.display = 'none';
+      return;
+    }
+    sectionEl.style.display = 'block';
+    // Mark bookmarked messages in the DOM
+    document.querySelectorAll('.message').forEach(function(msgEl) {
+      var msgIdx = parseInt(msgEl.getAttribute('data-msg-idx') || '-1', 10);
+      var bmBtn = msgEl.querySelector('.cw-bookmark-btn');
+      if (bmBtn) {
+        var isBookmarked = _bookmarks.some(function(b) { return b.messageIndex === msgIdx; });
+        bmBtn.textContent = isBookmarked ? '\u2605' : '\u2606';
+        bmBtn.classList.toggle('cw-active', isBookmarked);
+      }
+    });
+    // Populate jump list
+    listEl.innerHTML = _bookmarks.map(function(bm, i) {
+      var dateStr = bm.createdAt ? bm.createdAt.slice(0, 16).replace('T', ' ') : '';
+      var noteHtml = bm.note ? escH(bm.note) : '';
+      return '<div class="bookmark-item" data-bm-idx="' + i + '" data-bm-msg-idx="' + bm.messageIndex + '">' +
+        '<span class="bm-marker">\u2605</span>' +
+        '<span class="bm-note">#' + bm.messageIndex + (noteHtml ? ' &mdash; ' + noteHtml : '') + '</span>' +
+        '<span class="bm-date">' + dateStr + '</span>' +
+        '</div>';
+    }).join('');
+    // Click handler for jump list items
+    listEl.querySelectorAll('.bookmark-item').forEach(function(item) {
+      item.addEventListener('click', function() {
+        var msgIdx = parseInt(item.getAttribute('data-bm-msg-idx') || '-1', 10);
+        if (msgIdx >= 0) {
+          vscode.postMessage({ type: 'bookmarkJumped', messageIndex: msgIdx });
+        }
+      });
+    });
+  }
+
+  // ── Bookmark button click handler (delegated) ────────────────────────
   document.addEventListener('click', function(e) {
+    var bmBtn = e.target && e.target.closest ? e.target.closest('.cw-bookmark-btn') : null;
+    if (bmBtn) {
+      var msgEl = bmBtn.closest('.message');
+      if (msgEl) {
+        var msgIdx = parseInt(bmBtn.getAttribute('data-msg-orig-idx') || msgEl.getAttribute('data-msg-idx') || '-1', 10);
+        if (msgIdx >= 0) { vscode.postMessage({ type: 'bookmarkMessage', messageIndex: msgIdx }); }
+      }
+      return;
+    }
     var btn = e.target && e.target.closest ? e.target.closest('.cw-copy-ref-btn') : null;
     if (!btn) { return; }
     e.stopPropagation();
@@ -1191,6 +1257,7 @@ ${cwInteractiveJs()}
     while (tmp.firstChild) { container.appendChild(tmp.firstChild); }
     highlightAll();
     applyRoleFilter();
+    updateBookmarksUI();
   }
 
   // Try to find and highlight the pending prompt in the DOM.
@@ -1318,6 +1385,17 @@ ${cwInteractiveJs()}
           entitiesEl.style.display = 'none';
         }
       }
+      // Status chip
+      var statusEl = document.getElementById('session-status');
+      if (data.status) {
+        var statusLabel = data.status === 'resolved' ? '\u2713 Resolved' : data.status === 'revisit' ? '\u27F2 Revisit' : '\u25CB Open';
+        if (statusEl) { statusEl.textContent = statusLabel; statusEl.style.display = 'inline'; }
+      } else if (statusEl) {
+        statusEl.style.display = 'none';
+      }
+      // Initialize bookmarks UI
+      if (data.bookmarks) { _bookmarks = data.bookmarks; }
+      updateBookmarksUI();
       container.innerHTML = data.messagesHtml;
 
       // Informational source notes (e.g. Cursor aiService-only recovery) — not parse failures
@@ -1387,6 +1465,16 @@ ${cwInteractiveJs()}
       updateLoadMoreButton();
       // Re-try pending highlight after new messages are in DOM
       if (_pendingHighlight) { tryHighlightMsg(); }
+    }
+
+    if (data.type === 'bookmarkUpdated') {
+      _bookmarks = data.bookmarks || [];
+      updateBookmarksUI();
+    }
+
+    if (data.type === 'bookmarkJumped') {
+      var jumpMsgEl = document.querySelector('[data-msg-idx="' + data.messageIndex + '"]');
+      if (jumpMsgEl) { cwScrollTo(jumpMsgEl); }
     }
 
     if (data.type === 'cwScroll') {

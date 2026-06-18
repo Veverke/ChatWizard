@@ -57,6 +57,10 @@ function makeEngineStub(): IEmbeddingEngine & { calls: EmbedCall[] } {
             calls.push({ text });
             return new Float32Array(SEMANTIC_DIMS).fill(0.1);
         },
+        async embedBatch(texts: string[]) {
+            for (const text of texts) { calls.push({ text }); }
+            return texts.map(() => new Float32Array(SEMANTIC_DIMS).fill(0.1));
+        },
         calls,
     };
 }

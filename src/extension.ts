@@ -727,6 +727,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                     description: current.onlyWithWarnings ? 'currently active' : undefined,
                 },
                 {
+                    id: 'status',
+                    label: '$(symbol-misc)  Session Status…',
+                    description: current.status
+                        ? `current: ${current.status}`
+                        : undefined,
+                },
+                {
                     id: 'tags',
                     label: '$(tag)  Tags…',
                     description: current.tags && current.tags.length > 0
@@ -836,6 +843,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
             } else if (pick.id === 'onlyWithWarnings') {
                 newFilter.onlyWithWarnings = !current.onlyWithWarnings || undefined;
+
+            } else if (pick.id === 'status') {
+                type StatusItem = vscode.QuickPickItem & { value: 'open' | 'resolved' | 'revisit' | undefined };
+                const statusItems: StatusItem[] = [
+                    { label: '$(circle)  Open', value: 'open', description: current.status === 'open' ? 'current' : undefined },
+                    { label: '$(check)  Resolved', value: 'resolved', description: current.status === 'resolved' ? 'current' : undefined },
+                    { label: '$(refresh)  Revisit', value: 'revisit', description: current.status === 'revisit' ? 'current' : undefined },
+                    { label: '$(close)  Clear filter', value: undefined },
+                ];
+                const chosen = await vscode.window.showQuickPick(statusItems, {
+                    title: 'Filter by Session Status',
+                    placeHolder: 'Choose a status',
+                });
+                if (chosen === undefined) { return; }
+                newFilter.status = chosen.value;
 
             } else if (pick.id === 'tags') {
                 const allTags = await sidecarStore.getAllTags();
@@ -1191,7 +1213,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 return;
             }
             telemetry.record('session.opened', { source: session.source });
-            SessionWebviewPanel.show(context, session, searchTerm, false, undefined, undefined, undefined, highlightContainer, index.getSidecarMeta(session.id)?.tags, index.getSidecarMeta(session.id)?.entities, index.getSidecarMeta(session.id)?.summary);
+            const meta = index.getSidecarMeta(session.id);
+            SessionWebviewPanel.show(context, session, searchTerm, false, undefined, undefined, undefined, highlightContainer, meta?.tags, meta?.entities, meta?.summary, meta?.status, meta?.bookmarks);
         })
     );
 
@@ -1208,7 +1231,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             const isLeaf = ref.blocks.length === 1;
             const targetMsgIdx = isLeaf ? ref.blocks[0].messageIndex : undefined;
             const targetBlockIdx = isLeaf ? (ref.blocks[0].blockIndexInMessage ?? 0) : undefined;
-            SessionWebviewPanel.show(context, session, undefined, isLeaf, targetMsgIdx, undefined, targetBlockIdx, undefined, index.getSidecarMeta(session.id)?.tags, index.getSidecarMeta(session.id)?.entities, index.getSidecarMeta(session.id)?.summary);
+            const meta2 = index.getSidecarMeta(session.id);
+            SessionWebviewPanel.show(context, session, undefined, isLeaf, targetMsgIdx, undefined, targetBlockIdx, undefined, meta2?.tags, meta2?.entities, meta2?.summary, meta2?.status, meta2?.bookmarks);
         })
     );
 

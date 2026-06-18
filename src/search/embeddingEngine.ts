@@ -3,7 +3,10 @@
 import { IEmbeddingEngine, SEMANTIC_DIMS } from './semanticContracts';
 
 /** Minimal callable shape returned by @xenova/transformers pipeline() */
-type PipelineCallable = (text: string, options: Record<string, unknown>) => Promise<{ data: ArrayLike<number> }>;
+type PipelineCallable = {
+    (text: string, options: Record<string, unknown>): Promise<{ data: ArrayLike<number> }>;
+    (texts: string[], options: Record<string, unknown>): Promise<{ data: ArrayLike<number> }>;
+};
 
 /**
  * Injectable factory that loads the feature-extraction pipeline.
@@ -133,9 +136,11 @@ export class EmbeddingEngine implements IEmbeddingEngine {
         if (flat.length !== expectedLen) {
             throw new Error(`Expected batch embedding length ${expectedLen}, got ${flat.length}`);
         }
+        // Convert ArrayLike to a proper array so we can slice per-row.
+        const arr = Array.from(flat);
         const results: Float32Array[] = [];
         for (let i = 0; i < batchSize; i++) {
-            results.push(new Float32Array(flat.slice(i * dims, (i + 1) * dims)));
+            results.push(new Float32Array(arr.slice(i * dims, (i + 1) * dims)));
         }
         return results;
     }
