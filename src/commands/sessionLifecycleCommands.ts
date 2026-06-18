@@ -157,7 +157,7 @@ export function registerSessionLifecycleCommands(
                 noteText: text,
                 createdAt: new Date().toISOString(),
             };
-            await metaStore.addAnnotation(sessionId, annotation);
+            await metaStore.upsertAnnotation(sessionId, annotation as any);
             vscode.window.showInformationMessage('Annotation added.');
         })
     );

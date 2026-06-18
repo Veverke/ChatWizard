@@ -324,7 +324,7 @@ export interface SessionMetadata {
     status?: 'open' | 'resolved' | 'revisit';
     /** Pinned to top of tree view */
     isPinned?: boolean;
-    annotations?: SessionAnnotation[];
+    annotations?: MessageAnnotation[];
     /** Explicit forward/backward session links */
     linkedSessionIds?: string[];
     /** Sub-source discriminator (e.g. 'brain' | 'conversations' for Antigravity) */
