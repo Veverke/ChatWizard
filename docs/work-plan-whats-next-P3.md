@@ -29,7 +29,7 @@ whether it (or a significant part of it) is already implemented.
 | 26 | Workspace Digest / Standup Reports | ⬜ Not started | No command, no report generator found. |
 | 27 | Cloud sync (opt-in) | ⬜ Not started | No S3/Azure Blob/GitHub Gist integration anywhere in the codebase. |
 | 28 | Session status lifecycle | ✅ Implemented | Status picker, filter by status, context value, tree item display |
-| 29 | Bookmarks within a session | ⬜ Not started | No bookmark model or reader jump-to support. |
+| 29 | Bookmarks within a session | ✅ Implemented | No bookmark model or reader jump-to support. |
 | 30 | Inline annotations | ⬜ Not started | No annotation model or reader rendering. |
 | 31 | Session linking | ⚠️ Stub only | `linkedSessionIds?: string[]` exists in `src/types/index.ts` but is never populated, persisted, or surfaced in the UI. The MCP tool `chatwizard_get_linked` does not exist. Full implementation required. |
 | 32 | Response rating | ⬜ Not started | No thumbs-up/down model or UI. |

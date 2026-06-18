@@ -181,9 +181,10 @@ export function renderMessage(
     const renderedContent = markdownToHtml(msg.content);
 
     const bookmarkBtn = `<button class="cw-bookmark-btn" data-msg-orig-idx="${origIdx}" title="Bookmark this message">&#9733;</button>`;
+    const annotationBtn = `<button class="cw-annotation-btn" data-msg-orig-idx="${origIdx}" title="Add note">&#128221;</button>`;
     let html = `<div class="message ${roleClass} cw-fade-item"${fadeStyle} data-msg-idx="${origIdx}" id="cw-msg-${turnLabel}">
   <div class="message-header">
-    <span class="role-label">${label}</span><span class="cw-turn-label">${turnLabel}</span>${timestamp}${bookmarkBtn}<button class="cw-copy-ref-btn" data-turn="${turnLabel}" title="Copy as reference (${turnLabel})">&#10697;</button>
+    <span class="role-label">${label}</span><span class="cw-turn-label">${turnLabel}</span>${timestamp}${bookmarkBtn}${annotationBtn}<button class="cw-copy-ref-btn" data-turn="${turnLabel}" title="Copy as reference (${turnLabel})">&#10697;</button>
   </div>
   <div class="message-body" data-raw="${escapeHtml(msg.content)}">${renderedContent}</div>
 </div>`;

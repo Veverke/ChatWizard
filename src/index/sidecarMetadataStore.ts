@@ -237,12 +237,34 @@ export class SidecarMetadataStore {
         await this.patch(sessionId, { bookmarks } as import('../types/index').SessionMetadata);
     }
 
-    /** Adds an in-line annotation to a specific message. */
-    async addAnnotation(sessionId: string, annotation: import('../types/index').SessionAnnotation): Promise<void> {
+    /** Returns all annotations for a session, or an empty array if none exist. */
+    async getAnnotations(sessionId: string): Promise<import('../types/index').MessageAnnotation[]> {
+        const map = this.cache ?? await this.load();
+        const existing = map.get(sessionId);
+        return existing?.annotations ?? [];
+    }
+
+    /**
+     * Upserts an annotation for a specific message.
+     * If an annotation for the same messageIndex already exists, it is replaced (updatedAt set).
+     * Otherwise a new annotation is added.
+     */
+    async upsertAnnotation(sessionId: string, annotation: import('../types/index').MessageAnnotation): Promise<void> {
         const map = this.cache ?? await this.load();
         const existing = map.get(sessionId) ?? { sessionId };
-        const annotations = existing.annotations ?? [];
-        annotations.push(annotation);
+        const annotations: import('../types/index').MessageAnnotation[] = existing.annotations ? [...existing.annotations] : [];
+        const idx = annotations.findIndex((a: import('../types/index').MessageAnnotation) => a.messageIndex === annotation.messageIndex);
+        if (idx >= 0) {
+            // Update existing: preserve createdAt, set updatedAt
+            annotations[idx] = {
+                ...annotation,
+                createdAt: annotations[idx].createdAt,
+                updatedAt: new Date().toISOString(),
+            };
+        } else {
+            // Add new
+            annotations.push(annotation);
+        }
         await this.patch(sessionId, { annotations });
     }
 

@@ -204,6 +204,12 @@ export class SessionWebviewPanel {
                 } else if ((msg as any).type === 'bookmarkMessage') {
                     const m = msg as any;
                     void SessionWebviewPanel._toggleBookmark(session.id, m.messageIndex as number);
+                } else if ((msg as any).type === 'saveAnnotation') {
+                    const m = msg as any;
+                    void SessionWebviewPanel._saveAnnotation(session.id, m.messageIndex as number, m.text as string);
+                } else if ((msg as any).type === 'deleteAnnotation') {
+                    const m = msg as any;
+                    void SessionWebviewPanel._deleteAnnotation(session.id, m.messageIndex as number);
                 }
             },
             undefined,
@@ -685,6 +691,105 @@ export class SessionWebviewPanel {
     }
     .cw-filter-label:hover { opacity: 1; }
     .cw-filter-label input { margin: 0; cursor: pointer; }
+    /* Annotation button styles */
+    .cw-annotation-btn {
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 1px 4px;
+      font-size: 0.9em;
+      color: inherit;
+      opacity: 0;
+      transition: opacity 0.15s, color 0.15s;
+      border-radius: 3px;
+      line-height: 1;
+    }
+    .message:hover .cw-annotation-btn { opacity: 0.4; }
+    .cw-annotation-btn:hover { opacity: 1 !important; background: var(--cw-surface-subtle); }
+    .cw-annotation-btn.cw-active { opacity: 1; color: var(--cw-accent, #f0c040); }
+    /* Annotation block styles */
+    .cw-annotation-block {
+      margin: 6px 0 0;
+      padding: 8px 12px;
+      background: rgba(200, 200, 0, 0.06);
+      border-left: 3px solid rgba(200, 200, 0, 0.4);
+      border-radius: 3px;
+      font-size: 0.88em;
+    }
+    .cw-annotation-block .cw-annotation-meta {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 4px;
+    }
+    .cw-annotation-block .cw-annotation-label {
+      font-weight: 600;
+      opacity: 0.6;
+      font-size: 0.82em;
+    }
+    .cw-annotation-block .cw-annotation-date {
+      opacity: 0.45;
+      font-size: 0.78em;
+    }
+    .cw-annotation-block .cw-annotation-text {
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+    .cw-annotation-block .cw-annotation-actions {
+      display: flex;
+      gap: 4px;
+      margin-top: 4px;
+    }
+    .cw-annotation-block .cw-annotation-actions button {
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-size: 0.78em;
+      opacity: 0.5;
+      padding: 1px 6px;
+      border-radius: 3px;
+      color: inherit;
+    }
+    .cw-annotation-block .cw-annotation-actions button:hover { opacity: 1; background: var(--cw-surface-subtle); }
+    /* Inline annotation editor */
+    .cw-annotation-editor {
+      margin: 6px 0 0;
+      padding: 0;
+    }
+    .cw-annotation-editor textarea {
+      width: 100%;
+      min-height: 48px;
+      font-family: var(--vscode-font-family, sans-serif);
+      font-size: var(--vscode-font-size, 13px);
+      background: var(--vscode-input-background, #3c3c3c);
+      color: var(--vscode-input-foreground, #cccccc);
+      border: 1px solid var(--vscode-input-border, #555);
+      border-radius: 3px;
+      padding: 6px 8px;
+      resize: vertical;
+      box-sizing: border-box;
+    }
+    .cw-annotation-editor textarea:focus { border-color: var(--vscode-focusBorder, #007fd4); outline: none; }
+    .cw-annotation-editor .cw-annotation-editor-actions {
+      display: flex;
+      gap: 4px;
+      margin-top: 4px;
+    }
+    .cw-annotation-editor .cw-annotation-editor-actions button {
+      background: var(--cw-surface-subtle);
+      color: inherit;
+      border: 1px solid var(--cw-border-strong);
+      padding: 2px 10px;
+      border-radius: var(--cw-radius-xs);
+      cursor: pointer;
+      font-size: 0.82em;
+      font-family: var(--vscode-font-family, sans-serif);
+    }
+    .cw-annotation-editor .cw-annotation-editor-actions button:hover {
+      background: var(--cw-accent);
+      color: var(--cw-accent-text);
+      border-color: var(--cw-accent);
+    }
     /* Bookmark button styles */
     .cw-bookmark-btn {
       background: none;
@@ -787,6 +892,65 @@ ${cwInteractiveJs()}
   var _hasMore     = false;
   var _loadingMore = false;
   var _bookmarks   = [];  // Array<{ messageIndex: number, note: string|null, createdAt: string }>
+  var _annotations = [];  // Array<{ messageIndex: number, text: string, createdAt: string, updatedAt: string|null }>
+
+  // ── Annotation helpers ─────────────────────────────────────────────────────
+  function renderAnnotationBlock(a) {
+    var date = new Date(a.createdAt).toLocaleDateString();
+    var updatedLabel = a.updatedAt ? ' (edited ' + new Date(a.updatedAt).toLocaleDateString() + ')' : '';
+    return '<div class="cw-annotation-block" data-annotation-msg-idx="' + a.messageIndex + '">' +
+      '<div class="cw-annotation-meta">' +
+        '<span class="cw-annotation-label">&#128221; Note</span>' +
+        '<span class="cw-annotation-date">' + date + updatedLabel + '</span>' +
+      '</div>' +
+      '<div class="cw-annotation-text">' + escH(a.text) + '</div>' +
+      '<div class="cw-annotation-actions">' +
+        '<button class="cw-annotation-edit-btn" data-msg-idx="' + a.messageIndex + '">Edit</button>' +
+        '<button class="cw-annotation-delete-btn" data-msg-idx="' + a.messageIndex + '">Delete</button>' +
+      '</div>' +
+    '</div>';
+  }
+
+  function openAnnotationEditor(msgIdx, existingText) {
+    // Close any existing editor first
+    var existing = document.querySelector('.cw-annotation-editor');
+    if (existing) { existing.remove(); }
+    // Find the message element
+    var msgEl = document.querySelector('[data-msg-idx="' + msgIdx + '"]');
+    if (!msgEl) { return; }
+    // Remove existing annotation block for this message if editing
+    var existingBlock = msgEl.querySelector('.cw-annotation-block[data-annotation-msg-idx="' + msgIdx + '"]');
+    if (existingBlock) { existingBlock.style.display = 'none'; }
+    // Create editor
+    var editor = document.createElement('div');
+    editor.className = 'cw-annotation-editor';
+    var textarea = document.createElement('textarea');
+    textarea.value = existingText || '';
+    textarea.placeholder = 'Add your note here…';
+    var actions = document.createElement('div');
+    actions.className = 'cw-annotation-editor-actions';
+    var saveBtn = document.createElement('button');
+    saveBtn.textContent = existingText ? 'Update' : 'Save';
+    var cancelBtn = document.createElement('button');
+    cancelBtn.textContent = 'Cancel';
+    actions.appendChild(saveBtn);
+    actions.appendChild(cancelBtn);
+    editor.appendChild(textarea);
+    editor.appendChild(actions);
+    msgEl.appendChild(editor);
+    textarea.focus();
+    textarea.select();
+    saveBtn.addEventListener('click', function() {
+      var text = textarea.value.trim();
+      if (!text) { editor.remove(); if (existingBlock) { existingBlock.style.display = ''; } return; }
+      vscode.postMessage({ type: 'saveAnnotation', messageIndex: msgIdx, text: text });
+      editor.remove();
+    });
+    cancelBtn.addEventListener('click', function() {
+      editor.remove();
+      if (existingBlock) { existingBlock.style.display = ''; }
+    });
+  }
 
   // ── Tag color palette (matches tree view emoji palette) ───────────────────
   var _CW_TAG_PALETTE = ['#f47067','#f0883e','#e3b341','#56d364','#58a6ff','#bc8cff','#c29070'];
@@ -1467,14 +1631,49 @@ ${cwInteractiveJs()}
       if (_pendingHighlight) { tryHighlightMsg(); }
     }
 
-    if (data.type === 'bookmarkUpdated') {
-      _bookmarks = data.bookmarks || [];
-      updateBookmarksUI();
+    if (data.type === 'annotationUpdated') {
+      _annotations = data.annotations || [];
+      // Render annotation blocks
+      _annotations.forEach(function(a) {
+        var msgEl = document.querySelector('[data-msg-idx="' + a.messageIndex + '"]');
+        if (!msgEl) { return; }
+        // Remove existing block if any
+        var existingBlock = msgEl.querySelector('.cw-annotation-block');
+        if (existingBlock) { existingBlock.remove(); }
+        // Remove any open editor
+        var editor = msgEl.querySelector('.cw-annotation-editor');
+        if (editor) { editor.remove(); }
+        // Insert new block
+        var tmp = document.createElement('div');
+        tmp.innerHTML = renderAnnotationBlock(a);
+        while (tmp.firstChild) { msgEl.appendChild(tmp.firstChild); }
+      });
     }
 
-    if (data.type === 'bookmarkJumped') {
-      var jumpMsgEl = document.querySelector('[data-msg-idx="' + data.messageIndex + '"]');
-      if (jumpMsgEl) { cwScrollTo(jumpMsgEl); }
+    if (data.type === 'bookmarkUpdated') {
+      _bookmarks = data.bookmarks || [];
+      // Update bookmark button states
+      document.querySelectorAll('.cw-bookmark-btn').forEach(function(btn) {
+        var idx = parseInt(btn.dataset.msgOrigIdx);
+        var isBookmarked = _bookmarks.some(function(b) { return b.messageIndex === idx; });
+        btn.classList.toggle('cw-active', isBookmarked);
+      });
+      // Update bookmarks section
+      var bmSection = document.getElementById('bookmarks-section');
+      if (_bookmarks.length > 0) {
+        var list = document.getElementById('bookmarks-list');
+        list.innerHTML = _bookmarks.map(function(b) {
+          var label = b.note ? escH(b.note) : 'Message #' + b.messageIndex;
+          return '<div class="bookmark-item" data-bm-idx="' + b.messageIndex + '">' +
+            '<span class="bm-marker">&#9733;</span>' +
+            '<span class="bm-note">' + label + '</span>' +
+            '<span class="bm-date">' + new Date(b.createdAt).toLocaleDateString() + '</span>' +
+          '</div>';
+        }).join('');
+        bmSection.style.display = 'block';
+      } else {
+        bmSection.style.display = 'none';
+      }
     }
 
     if (data.type === 'cwScroll') {
@@ -1483,6 +1682,45 @@ ${cwInteractiveJs()}
       requestAnimationFrame(function() {
         requestAnimationFrame(function() { cwDoScroll(data); });
       });
+    }
+  });
+
+  // ── Click delegation for annotation buttons ────────────────────────────
+  document.addEventListener('click', function(e) {
+    // Annotation add button
+    var addBtn = e.target && e.target.closest ? e.target.closest('.cw-annotation-btn') : null;
+    if (addBtn) {
+      e.stopPropagation();
+      var msgIdx = parseInt(addBtn.dataset.msgOrigIdx);
+      // Check if annotation already exists
+      var existingAn = _annotations.find(function(a) { return a.messageIndex === msgIdx; });
+      openAnnotationEditor(msgIdx, existingAn ? existingAn.text : '');
+      return;
+    }
+    // Annotation edit button
+    var editBtn = e.target && e.target.closest ? e.target.closest('.cw-annotation-edit-btn') : null;
+    if (editBtn) {
+      e.stopPropagation();
+      var msgIdx2 = parseInt(editBtn.dataset.msgIdx);
+      var existingAn2 = _annotations.find(function(a) { return a.messageIndex === msgIdx2; });
+      openAnnotationEditor(msgIdx2, existingAn2 ? existingAn2.text : '');
+      return;
+    }
+    // Annotation delete button
+    var delBtn = e.target && e.target.closest ? e.target.closest('.cw-annotation-delete-btn') : null;
+    if (delBtn) {
+      e.stopPropagation();
+      var msgIdx3 = parseInt(delBtn.dataset.msgIdx);
+      vscode.postMessage({ type: 'deleteAnnotation', messageIndex: msgIdx3 });
+      return;
+    }
+    // Bookmark button
+    var bmBtn = e.target && e.target.closest ? e.target.closest('.cw-bookmark-btn') : null;
+    if (bmBtn) {
+      e.stopPropagation();
+      var bmIdx = parseInt(bmBtn.dataset.msgOrigIdx);
+      vscode.postMessage({ type: 'bookmarkMessage', messageIndex: bmIdx });
+      return;
     }
   });
 
@@ -1515,6 +1753,56 @@ ${cwInteractiveJs()}
                     messageIndex: b.messageIndex,
                     note: b.note || null,
                     createdAt: b.createdAt,
+                })),
+            });
+        }
+    }
+
+    // ── Annotation handlers ──────────────────────────────────────────────────
+
+    static async _saveAnnotation(sessionId: string, messageIndex: number, text: string): Promise<void> {
+        const store = SessionWebviewPanel._sidecarStore;
+        if (!store) { return; }
+
+        const annotation: import('../types/index').MessageAnnotation = {
+            messageIndex,
+            text,
+            createdAt: new Date().toISOString(),
+        };
+        await store.upsertAnnotation(sessionId, annotation);
+
+        // Send updated annotation state to all panels for this session
+        const panel = SessionWebviewPanel._panels.get(sessionId);
+        if (panel) {
+            const annotations = await store.getAnnotations(sessionId);
+            void panel.webview.postMessage({
+                type: 'annotationUpdated',
+                annotations: annotations.map(a => ({
+                    messageIndex: a.messageIndex,
+                    text: a.text,
+                    createdAt: a.createdAt,
+                    updatedAt: a.updatedAt || null,
+                })),
+            });
+        }
+    }
+
+    static async _deleteAnnotation(sessionId: string, messageIndex: number): Promise<void> {
+        const store = SessionWebviewPanel._sidecarStore;
+        if (!store) { return; }
+
+        await store.removeAnnotation(sessionId, messageIndex);
+
+        const panel = SessionWebviewPanel._panels.get(sessionId);
+        if (panel) {
+            const annotations = await store.getAnnotations(sessionId);
+            void panel.webview.postMessage({
+                type: 'annotationUpdated',
+                annotations: annotations.map(a => ({
+                    messageIndex: a.messageIndex,
+                    text: a.text,
+                    createdAt: a.createdAt,
+                    updatedAt: a.updatedAt || null,
                 })),
             });
         }
