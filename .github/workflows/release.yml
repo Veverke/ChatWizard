@@ -63,6 +63,10 @@ jobs:
       - name: Download VS Code Insiders
         run: node -e "require('@vscode/test-electron').downloadAndUnzipVSCode('insiders')"
 
+      - name: Set up MSVC dev command prompt (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
       - name: Rebuild native modules for VS Code's Electron
         run: npm run rebuild:native
 
@@ -94,6 +98,10 @@ jobs:
 
       - name: Set up git hooks (husky)
         run: npx husky
+
+      - name: Set up MSVC dev command prompt (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
 
       - name: Rebuild native modules for VS Code Electron
         run: npm run rebuild:native
