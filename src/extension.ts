@@ -2082,15 +2082,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
         // ── Chronicle integration (branch + checkpoint data for branch grouping) ──
         // 1. Optionally enable Copilot's local index so sessions.branch gets populated.
+        //    Gracefully skip if the config key is not registered (e.g. Copilot not installed).
         const cwCfg = vscode.workspace.getConfiguration('chatwizard');
         if (cwCfg.get<boolean>('chronicle.enableLocalIndex', true)) {
             const currentValue = vscode.workspace.getConfiguration().get<boolean>('chat.localIndex.enabled');
             if (currentValue !== true) {
-                void vscode.workspace.getConfiguration().update(
+                vscode.workspace.getConfiguration().update(
                     'chat.localIndex.enabled',
                     true,
                     vscode.ConfigurationTarget.Global,
-                );
+                ).then(undefined, () => {
+                    // Setting may not be registered (e.g. Copilot not installed) — non-fatal.
+                });
             }
         }
 
