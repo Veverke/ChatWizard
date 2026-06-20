@@ -25,6 +25,7 @@
 const { execSync } = require('child_process');
 const fs   = require('fs');
 const path = require('path');
+const os   = require('os');
 
 // ── Fallback Electron version ────────────────────────────────────────────────
 // Keep this in sync with the Electron version shipped in the minimum required
@@ -167,7 +168,7 @@ function findVSCodeBinary(installDir) {
         try { apps = fs.readdirSync(installDir).filter(e => e.endsWith('.app')); }
         catch { apps = []; }
         for (const app of apps) {
-            const p = path.join(installDir, app, 'Contents', 'MacOS', 'Electron');
+            const p = path.join(app, 'Contents', 'MacOS', 'Electron');
             if (fs.existsSync(p)) { return p; }
         }
     } else {
@@ -180,9 +181,89 @@ function findVSCodeBinary(installDir) {
     return null;
 }
 
+// ── Patch Electron headers for MSVC compatibility ────────────────────────────
+
+/**
+ * Electron 42's cppgc/heap.h uses __builtin_frame_address() which is a
+ * GCC/Clang built-in not available in MSVC.  This function patches the header
+ * to provide a MSVC-compatible fallback _before_ node-gyp tries to compile.
+ *
+ * The Electron headers live under ~/.electron-gyp/<version>/include/node/.
+ */
+function patchElectronHeadersForMSVC(version) {
+    if (process.platform !== 'win32') {
+        return; // MSVC is Windows-only; nothing to patch on macOS or Linux.
+    }
+
+    const headersDir = path.join(
+        os.homedir(),
+        '.electron-gyp',
+        version,
+        'include',
+        'node'
+    );
+    const heapHPath = path.join(headersDir, 'cppgc', 'heap.h');
+
+    if (!fs.existsSync(heapHPath)) {
+        console.log(`[rebuild-native] heap.h not found at ${heapHPath} — skipping patch`);
+        return;
+    }
+
+    // Read the current content and check if it already has the workaround.
+    let content = fs.readFileSync(heapHPath, 'utf8');
+    if (content.includes('__builtin_frame_address_workaround')) {
+        console.log('[rebuild-native] heap.h already patched — skipping');
+        return;
+    }
+
+    if (!content.includes('__builtin_frame_address')) {
+        console.log('[rebuild-native] heap.h does not contain __builtin_frame_address — skipping');
+        return;
+    }
+
+    // Insert a MSVC compatibility block right after the include guards / top of file.
+    // The fix uses _AddressOfReturnAddress() on MSVC, which serves the same purpose
+    // as __builtin_frame_address(0) — getting the return address of the current function.
+    const patchBlock = `
+// ── MSVC compatibility patch (applied by rebuild-native.js) ──────────────────
+// __builtin_frame_address is a GCC/Clang built-in not available in MSVC.
+// _AddressOfReturnAddress() is the MSVC equivalent for frame address level 0,
+// which is the only use case in this header.
+#if defined(_MSC_VER) && !defined(__builtin_frame_address)
+  #define __builtin_frame_address(level) _AddressOfReturnAddress()
+  #pragma message("heap.h: __builtin_frame_address patched via _AddressOfReturnAddress()")
+#endif
+// ── End of MSVC compatibility patch ──────────────────────────────────────────
+
+`;
+
+    // Insert after the first line (which is typically a comment or include guard).
+    const lines = content.split('\n');
+    // Find a good insertion point: after the first #define line if it's an include guard,
+    // otherwise after the first blank line following the initial block.
+    let insertIdx = 0;
+    for (let i = 0; i < Math.min(lines.length, 10); i++) {
+        if (lines[i].startsWith('#define') || (lines[i].trim() === '' && i > 2)) {
+            insertIdx = i + 1;
+            break;
+        }
+    }
+    if (insertIdx === 0) {
+        // Fallback: insert after the first few lines.
+        insertIdx = Math.min(lines.length, 5);
+    }
+
+    lines.splice(insertIdx, 0, patchBlock);
+    fs.writeFileSync(heapHPath, lines.join('\n'), 'utf8');
+    console.log(`[rebuild-native] Patched ${heapHPath} for MSVC compatibility`);
+}
+
 // ── Run electron-rebuild ──────────────────────────────────────────────────────
 
 console.log(`[rebuild-native] Rebuilding native modules for Electron ${electronVersion} (${process.platform}/${process.arch})`);
+
+// Patch Electron headers before rebuilding (fixes MSVC build on Windows CI).
+patchElectronHeadersForMSVC(electronVersion);
 
 const repoRoot = path.resolve(__dirname, '..');
 execSync(
