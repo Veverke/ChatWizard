@@ -27,8 +27,11 @@ jobs:
           node-version: 20
           cache: npm
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Install dependencies (skip native builds — rebuilt later for Electron)
+        run: npm ci --ignore-scripts
+
+      - name: Set up git hooks (husky)
+        run: npx husky
 
       - name: Compile & lint
         run: npm run compile && npm run lint

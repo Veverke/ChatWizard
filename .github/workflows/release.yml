@@ -54,8 +54,11 @@ jobs:
         with:
           node-version: 20
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Install dependencies (skip native builds — rebuilt later for Electron)
+        run: npm ci --ignore-scripts
+
+      - name: Set up git hooks (husky)
+        run: npx husky
 
       - name: Download VS Code Insiders
         run: node -e "require('@vscode/test-electron').downloadAndUnzipVSCode('insiders')"
@@ -86,8 +89,11 @@ jobs:
         with:
           node-version: 20
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Install dependencies (skip native builds — rebuilt later for Electron)
+        run: npm ci --ignore-scripts
+
+      - name: Set up git hooks (husky)
+        run: npx husky
 
       - name: Rebuild native modules for VS Code Electron
         run: npm run rebuild:native
