@@ -351,12 +351,12 @@ suite('SemanticIndexer.scheduleSession', () => {
     test('continues processing queue after a single embed failure', async () => {
         let callCount = 0;
         const engine = makeEngineStub();
-        const originalEmbed = engine.embed.bind(engine);
-        // Make the first embed call throw, subsequent calls succeed
-        (engine as { embed: (text: string) => Promise<Float32Array> }).embed = async (text: string) => {
+        const originalEmbedBatch = engine.embedBatch.bind(engine);
+        // Make the first embedBatch call throw, subsequent calls succeed
+        (engine as { embedBatch: (texts: string[]) => Promise<Float32Array[]> }).embedBatch = async (texts: string[]) => {
             callCount++;
             if (callCount === 1) { throw new Error('transient error'); }
-            return originalEmbed(text);
+            return originalEmbedBatch(texts);
         };
         const index = makeIndexStub();
         const api = makeVsCodeApiStub({ isFirstUse: false });
