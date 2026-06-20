@@ -6,6 +6,9 @@
 //   - Atomic writes (tmp + rename) to prevent partial files.
 //   - In-memory manifest for O(1) has() checks without directory scans.
 //   - Pruning by age and/or total size (oldest-first).
+//   - Safe concurrent access: saveManifest() uses a per-process mutex to
+//     prevent EPERM rename collisions when multiple sessions are archived
+//     concurrently (e.g. via Promise.all in the batch listener).
 
 import * as fs from 'fs';
 import * as path from 'path';
@@ -41,17 +44,47 @@ interface ManifestEntry {
     sizeBytes: number;
 }
 
+// ─── Simple per-process mutex ─────────────────────────────────────────────────
+// Prevents concurrent rename() operations on the same manifest.tmp file,
+// which would cause EPERM on Windows.
+
+class Mutex {
+    private _locked = false;
+    private _queue: Array<() => void> = [];
+
+    async acquire(): Promise<void> {
+        if (!this._locked) {
+            this._locked = true;
+            return;
+        }
+        return new Promise<void>(resolve => {
+            this._queue.push(resolve);
+        });
+    }
+
+    release(): void {
+        const next = this._queue.shift();
+        if (next) {
+            next();
+        } else {
+            this._locked = false;
+        }
+    }
+}
+
 // ─── SessionArchive ───────────────────────────────────────────────────────────
 
 /**
  * Manages the on-disk archive of session content.
  * All methods are safe to call concurrently from a single Node.js process
- * (in-memory manifest acts as a lock-free coordination layer).
+ * (in-memory manifest acts as a lock-free coordination layer; saveManifest()
+ * uses an internal mutex to avoid EPERM rename collisions).
  */
 export class SessionArchive {
     private readonly archiveRoot: string;
     private readonly manifestPath: string;
     private manifest: Map<string, ManifestEntry> | null = null;
+    private readonly _manifestMutex = new Mutex();
 
     constructor(storageDir: string) {
         this.archiveRoot = path.join(storageDir, 'archive');
@@ -84,6 +117,7 @@ export class SessionArchive {
 
     private async saveManifest(): Promise<void> {
         if (!this.manifest) { return; }
+        await this._manifestMutex.acquire();
         try {
             await fs.promises.mkdir(this.archiveRoot, { recursive: true });
             const arr = Array.from(this.manifest.values());
@@ -93,6 +127,8 @@ export class SessionArchive {
             await fs.promises.rename(tmp, this.manifestPath);
         } catch (err) {
             console.error('[chatwizard] SessionArchive.saveManifest() failed:', err);
+        } finally {
+            this._manifestMutex.release();
         }
     }
 
@@ -115,6 +151,7 @@ export class SessionArchive {
     /**
      * Saves raw session content to the archive (atomic write).
      * Overwrites any previously archived version for the same session ID.
+     * Safe to call concurrently from multiple async contexts.
      */
     async save(sessionId: string, source: string, rawContent: string | Buffer): Promise<void> {
         const manifest = await this.ensureManifest();
