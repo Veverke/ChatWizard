@@ -169,6 +169,19 @@ export class SessionIndex {
         return this._sidecarCache?.get(sessionId);
     }
 
+    /**
+     * Refreshes a single sidecar metadata entry from the store into the cache.
+     * Call this after modifying bookmarks, annotations, ratings, etc. so that
+     * subsequent getSidecarMeta() calls return the latest data.
+     */
+    async refreshSidecarMeta(sessionId: string): Promise<void> {
+        if (!this._sidecarStore) { return; }
+        const meta = await this._sidecarStore.get(sessionId);
+        if (meta && this._sidecarCache) {
+            this._sidecarCache.set(sessionId, meta);
+        }
+    }
+
     /** Exposes the sidecar store for commands that need to write metadata. */
     get sidecarStore(): SidecarMetadataStore | null {
         return this._sidecarStore;

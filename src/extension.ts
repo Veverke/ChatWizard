@@ -80,6 +80,9 @@ import { SessionCostAdvisorNotifier } from './ui/sessionCostAdvisorNotifier';
 import { LiveSessionTracker } from './utils/liveSessionTracker';
 import { PromptAnalyzer } from './analytics/promptAnalyzer';
 import { readChronicleCheckpoints, readChronicleSessions } from './parsers/chronicle';
+import { CacheIntegration } from './cache/cacheIntegration';
+import { RestApiServer } from './api/restApiServer';
+import { CloudSyncManager } from './cloud/cloudSyncManager';
 
 let watcher: ChatWizardWatcher | undefined;
 
@@ -103,6 +106,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         index.setRetentionDays(retentionDays);
     }
 
+    // ── Feature 24: SQLite Persistent Cache ──────────────────────────────────
+    const enableCache = vscode.workspace.getConfiguration('chatwizard').get<boolean>('enablePersistentCache', true);
+    let cacheIntegration: CacheIntegration | undefined;
+    if (enableCache) {
+        cacheIntegration = new CacheIntegration(context.globalStorageUri.fsPath);
+        channel.appendLine('[Chat Wizard] SQLite persistent cache initialised.');
+    }
+
     // Branding status-bar item — created early so all listeners below can call brandingBar.notify()
     const version = String(context.extension.packageJSON.version ?? '0.0.0');
     const brandingBar = new BrandingStatusBarItem(version);
@@ -117,6 +128,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     });
     // Wire the sidecar store into SessionWebviewPanel so bookmark/annotation toggles work.
     SessionWebviewPanel._sidecarStore = sidecarStore;
+    // Refresh the index sidecar cache after bookmark/annotation changes so re-opened sessions see the latest data.
+    SessionWebviewPanel._onSidecarChanged = async (sessionId: string) => {
+        await index.refreshSidecarMeta(sessionId);
+    };
 
     // Migrate legacy pin state from globalState → sidecarStore (run once, version-gated).
     if (context.globalState.get<string>('chatwizard.sidecarMigrationVersion') !== '1') {
@@ -232,6 +247,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             () => new SemanticIndex(),
             defaultVsCodeApi(context.globalState),
         );
+        // Feature 43: Apply semantic index max age from config
+        const maxAgeDays = vscode.workspace.getConfiguration('chatwizard').get<number>('semanticIndexMaxAgeDays', 365);
+        if (maxAgeDays > 0) {
+            indexer.setMaxAgeDays(maxAgeDays);
+        }
         semanticIndexer = indexer;
         void indexer.initialize().then(() => {
             // Schedule sessions already loaded into the main index (runtime-enable case)
@@ -449,6 +469,25 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         }
     });
     context.subscriptions.push(archiveListener);
+
+    // ── Feature 24: Cache listener — persist sessions to SQLite ──────────────
+    if (cacheIntegration) {
+        const cacheListener = index.addTypedChangeListener((event) => {
+            if (event.type === 'batch') {
+                cacheIntegration.ingestSessions(index, event.sessions);
+            } else if (event.type === 'upsert') {
+                cacheIntegration.ingestSessions(index, [event.session]);
+            } else if (event.type === 'remove') {
+                cacheIntegration.removeSession(event.sessionId);
+            } else if (event.type === 'clear') {
+                channel.appendLine('[Chat Wizard] Cache cleared due to index clear.');
+            }
+        });
+        context.subscriptions.push(cacheListener);
+
+        // Register dispose for cache on deactivation
+        context.subscriptions.push({ dispose: () => cacheIntegration.dispose() });
+    }
 
     const provider = new SessionTreeProvider(index, context.extensionUri);
 
@@ -1214,7 +1253,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             }
             telemetry.record('session.opened', { source: session.source });
             const meta = index.getSidecarMeta(session.id);
-            SessionWebviewPanel.show(context, session, searchTerm, false, undefined, undefined, undefined, highlightContainer, meta?.tags, meta?.entities, meta?.summary, meta?.status, meta?.bookmarks);
+            SessionWebviewPanel.show(context, session, searchTerm, false, undefined, undefined, undefined, highlightContainer, meta?.tags, meta?.entities, meta?.summary, meta?.status, meta?.bookmarks, meta?.annotations);
         })
     );
 
@@ -1232,7 +1271,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             const targetMsgIdx = isLeaf ? ref.blocks[0].messageIndex : undefined;
             const targetBlockIdx = isLeaf ? (ref.blocks[0].blockIndexInMessage ?? 0) : undefined;
             const meta2 = index.getSidecarMeta(session.id);
-            SessionWebviewPanel.show(context, session, undefined, isLeaf, targetMsgIdx, undefined, targetBlockIdx, undefined, meta2?.tags, meta2?.entities, meta2?.summary, meta2?.status, meta2?.bookmarks);
+            SessionWebviewPanel.show(context, session, undefined, isLeaf, targetMsgIdx, undefined, targetBlockIdx, undefined, meta2?.tags, meta2?.entities, meta2?.summary, meta2?.status, meta2?.bookmarks, meta2?.annotations);
         })
     );
 
@@ -2014,7 +2053,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             `[Chat Wizard] Workspace scope initialised — ${selectedIds.length} workspace(s) selected: ${selectedIds.join(', ')}`
         );
 
-        const w = await startWatcher(index, channel, scopeManager);
+        // ── Feature 24: Try to load sessions from SQLite cache first ────────
+        if (cacheIntegration) {
+            const cachedCount = cacheIntegration.cacheManager.getSessionCount();
+            if (cachedCount > 0) {
+                channel.appendLine(`[Chat Wizard] Loading ${cachedCount} sessions from SQLite cache…`);
+                await cacheIntegration.loadIntoIndex(index);
+                channel.appendLine(`[Chat Wizard] Loaded ${cachedCount} cached sessions — only changed files will be re-parsed.`);
+            } else {
+                channel.appendLine('[Chat Wizard] Empty cache — will re-parse all source files.');
+            }
+        }
+
+        const w = await startWatcher(index, channel, scopeManager, cacheIntegration?.cacheManager);
         watcher = w;
         watcherRef.current = w;
         context.subscriptions.push(w);
@@ -2347,6 +2398,50 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 );
             }),
         );
+
+        // ── Feature 44: REST API Server ───────────────────────────────────────
+        const restCfg = vscode.workspace.getConfiguration('chatwizard');
+        const restApiEnabled = restCfg.get<boolean>('restApi.enabled', false);
+        let restApiServer: RestApiServer | undefined;
+        if (restApiEnabled) {
+            const restApiPort = restCfg.get<number>('restApi.port', 6790);
+            const restApiDocs = restCfg.get<boolean>('restApi.enableDocs', true);
+            restApiServer = new RestApiServer(
+                {
+                    enabled: true,
+                    port: restApiPort,
+                    tokenPath: mcpTokenPath,
+                    enableApiDocs: restApiDocs,
+                },
+                index,
+                extensionVersion,
+                (msg) => channel.appendLine(msg),
+            );
+            void restApiServer.start().catch((err: unknown) => {
+                channel.appendLine(`[Chat Wizard] REST API server failed to start: ${String(err)}`);
+            });
+            context.subscriptions.push({ dispose: () => void restApiServer?.stop() });
+            channel.appendLine(`[Chat Wizard] REST API server configured on port ${restApiPort}`);
+        }
+
+        // ── Feature 27: Cloud Sync (opt-in) ───────────────────────────────────
+        const cloudCfg = vscode.workspace.getConfiguration('chatwizard');
+        const cloudSyncEnabled = cloudCfg.get<boolean>('cloudSync.enabled', false);
+        let cloudSync: CloudSyncManager | undefined;
+        if (cloudSyncEnabled && cacheIntegration) {
+            const cloudSyncType = cloudCfg.get<string>('cloudSync.type', 'gist');
+            cloudSync = new CloudSyncManager(
+                index,
+                context.globalStorageUri.fsPath,
+                cloudSyncType,
+                (msg) => channel.appendLine(msg),
+            );
+            void cloudSync.initialize().catch((err: unknown) => {
+                channel.appendLine(`[Chat Wizard] Cloud sync init failed: ${String(err)}`);
+            });
+            context.subscriptions.push({ dispose: () => cloudSync?.dispose() });
+            channel.appendLine(`[Chat Wizard] Cloud sync (${cloudSyncType}) initialised.`);
+        }
     })().catch(err => channel.appendLine(`[error] Watcher init failed: ${err}`));
 }
 

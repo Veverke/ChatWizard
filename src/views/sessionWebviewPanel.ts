@@ -37,6 +37,7 @@ interface PanelMsgState {
     summary?:         string;
     status?:          string;
     bookmarks?:       SessionBookmark[];
+    annotations?:     import('../types/index').MessageAnnotation[];
     panel:            vscode.WebviewPanel;
 }
 
@@ -73,6 +74,8 @@ export class SessionWebviewPanel {
 
     /** Sidecar metadata store — set from extension.ts for bookmark/annotation persistence */
     static _sidecarStore: SidecarMetadataStore | undefined;
+    /** Callback invoked after bookmark/annotation/rating changes to refresh the index sidecar cache. */
+    static _onSidecarChanged: ((sessionId: string) => void) | undefined;
 
     // ── Public entry point ────────────────────────────────────────────────────
 
@@ -90,6 +93,7 @@ export class SessionWebviewPanel {
         summary?: string,
         status?: string,
         bookmarks?: SessionBookmark[],
+        annotations?: import('../types/index').MessageAnnotation[],
     ): void {
         const config = vscode.workspace.getConfiguration('chatwizard');
         const userColor = config.get<string>('userMessageColor', '#007acc') || '#007acc';
@@ -150,7 +154,7 @@ export class SessionWebviewPanel {
                 session, visibleMessages, renderedMessages,
                 windowStart, windowEnd: initialWindowEnd,
                 streamVersion: newVersion,
-                assistantLabel, tags, entities, summary, status, bookmarks, panel: existing,
+                assistantLabel, tags, entities, summary, status, bookmarks, annotations, panel: existing,
             });
             void SessionWebviewPanel._startStream(
                 session.id, newVersion, userColor, searchTerm, scrollInit, highlightContainer
@@ -171,8 +175,8 @@ export class SessionWebviewPanel {
             session, visibleMessages, renderedMessages,
             windowStart, windowEnd: initialWindowEnd,
             streamVersion: 0,
-            assistantLabel, tags, entities, summary, panel,
-            status, bookmarks,
+                assistantLabel, tags, entities, summary, panel,
+            status, bookmarks, annotations,
         });
         SessionWebviewPanel._panels.set(session.id, panel);
 
@@ -293,6 +297,12 @@ export class SessionWebviewPanel {
                 messageIndex: b.messageIndex,
                 note: b.note || null,
                 createdAt: b.createdAt,
+            })) ?? [],
+            annotations:      state.annotations?.map(a => ({
+                messageIndex: a.messageIndex,
+                text: a.text,
+                createdAt: a.createdAt,
+                updatedAt: a.updatedAt || null,
             })) ?? [],
         });
 
@@ -1557,10 +1567,22 @@ ${cwInteractiveJs()}
       } else if (statusEl) {
         statusEl.style.display = 'none';
       }
-      // Initialize bookmarks UI
+      // Initialize bookmarks and annotations
       if (data.bookmarks) { _bookmarks = data.bookmarks; }
-      updateBookmarksUI();
+      if (data.annotations) { _annotations = data.annotations; }
       container.innerHTML = data.messagesHtml;
+      updateBookmarksUI();
+      // Render annotations for bookmarked messages
+      _annotations.forEach(function(a) {
+        var msgEl = document.querySelector('[data-msg-idx="' + a.messageIndex + '"]');
+        if (!msgEl) { return; }
+        // Remove existing block if any
+        var existingBlock = msgEl.querySelector('.cw-annotation-block');
+        if (existingBlock) { existingBlock.remove(); }
+        var tmp = document.createElement('div');
+        tmp.innerHTML = renderAnnotationBlock(a);
+        while (tmp.firstChild) { msgEl.appendChild(tmp.firstChild); }
+      });
 
       // Informational source notes (e.g. Cursor aiService-only recovery) — not parse failures
       if (data.sourceNotes && data.sourceNotes.length > 0) {
@@ -1743,6 +1765,9 @@ ${cwInteractiveJs()}
 
         await store.toggleBookmark(sessionId, messageIndex);
 
+        // Notify the index to refresh its sidecar cache
+        SessionWebviewPanel._onSidecarChanged?.(sessionId);
+
         // Send updated bookmarks list to all panels for this session
         const panel = SessionWebviewPanel._panels.get(sessionId);
         if (panel) {
@@ -1771,6 +1796,9 @@ ${cwInteractiveJs()}
         };
         await store.upsertAnnotation(sessionId, annotation);
 
+        // Notify the index to refresh its sidecar cache
+        SessionWebviewPanel._onSidecarChanged?.(sessionId);
+
         // Send updated annotation state to all panels for this session
         const panel = SessionWebviewPanel._panels.get(sessionId);
         if (panel) {
@@ -1792,6 +1820,9 @@ ${cwInteractiveJs()}
         if (!store) { return; }
 
         await store.removeAnnotation(sessionId, messageIndex);
+
+        // Notify the index to refresh its sidecar cache
+        SessionWebviewPanel._onSidecarChanged?.(sessionId);
 
         const panel = SessionWebviewPanel._panels.get(sessionId);
         if (panel) {

@@ -2,7 +2,7 @@
   "name": "chatwizard",
   "displayName": "Chat Wizard",
   "description": "Browse, search, and analyze AI coding-assistant conversation history from GitHub Copilot, Claude Code, Cline, Roo Code, Cursor, Windsurf, Aider, and Google Antigravity. Chat history viewer, prompt library, code block browser, token analytics, and timeline — all in one extension.",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "publisher": "Veverke",
   "icon": "images/icon.png",
   "license": "SEE LICENSE IN LICENSE",
@@ -1268,6 +1268,11 @@
             "default": 1000000,
             "minimum": 10000,
             "description": "Maximum character length of a single JSONL line when parsing Claude sessions. Lines exceeding this limit are shown as a notice placeholder in the session viewer instead of being silently dropped. Increase this if large messages are being truncated; lower it to reduce memory usage when indexing."
+          },
+          "chatwizard.enablePersistentCache": {
+            "type": "boolean",
+            "default": true,
+            "description": "Enable the SQLite persistent cache (chatwizard-cache.db). When enabled, sessions are stored in a local SQLite database and loaded from it on startup — only changed source files are re-parsed. Disable to force full re-parsing on every activation."
           }
         }
       },
@@ -1490,6 +1495,44 @@
         }
       },
       {
+        "title": "Chat Wizard: API",
+        "properties": {
+          "chatwizard.restApi.enabled": {
+            "type": "boolean",
+            "default": false,
+            "description": "Enable the read-only REST API server. When enabled, a local HTTP server providing JSON access to the session index is started on the configured port."
+          },
+          "chatwizard.restApi.port": {
+            "type": "integer",
+            "default": 6790,
+            "minimum": 1024,
+            "maximum": 65535,
+            "description": "Port for the REST API server. Must differ from the MCP server port."
+          },
+          "chatwizard.restApi.enableDocs": {
+            "type": "boolean",
+            "default": true,
+            "description": "Enable the API documentation endpoint (/) at the REST API root."
+          },
+          "chatwizard.cloudSync.enabled": {
+            "type": "boolean",
+            "default": false,
+            "description": "Enable encrypted cloud sync of the session index to user's own storage (S3/Azure Blob/GitHub Gist). Keys managed locally."
+          },
+          "chatwizard.cloudSync.type": {
+            "type": "string",
+            "default": "gist",
+            "enum": ["gist", "s3", "azure"],
+            "enumDescriptions": [
+              "GitHub Gist (requires GitHub token)",
+              "Amazon S3 (requires AWS credentials)",
+              "Azure Blob Storage (requires Azure connection string)"
+            ],
+            "description": "Cloud storage backend for session sync."
+          }
+        }
+      },
+      {
         "title": "Chat Wizard: Appearance",
         "properties": {
           "chatwizard.userMessageColor": {
@@ -1530,7 +1573,7 @@
     "vscode:prepublish": "npm run rebuild:native && npm run bundle && npm run validate:release",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "pretest": "npm run compile && npm run lint && node test/copy-fixtures.mjs",
+    "pretest": "npm run compile && npm run lint && node test/copy-fixtures.mjs && npm run rebuild:native",
     "lint": "eslint \"src/**/*.ts\"",
     "test": "vscode-test",
     "pretest:integration": "npm run compile",

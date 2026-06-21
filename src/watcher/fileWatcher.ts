@@ -35,6 +35,9 @@ import { LiveSessionTracker } from '../utils/liveSessionTracker';
 import { parseAmazonQSession } from '../parsers/amazonQ';
 import { discoverGeminiCodeAssistSessionFilesAsync } from '../readers/geminiCodeAssistWorkspace';
 import { parseGeminiCodeAssistSession } from '../parsers/geminiCodeAssist';
+import { discoverTabnineConversationsAsync } from '../readers/tabnineWorkspace';
+import { parseTabnineConversation } from '../parsers/tabnine';
+import type { ICacheManager } from '../cache/cacheManager';
 
 export class ChatWizardWatcher implements vscode.Disposable {
     private disposables: vscode.Disposable[] = [];
@@ -49,6 +52,8 @@ export class ChatWizardWatcher implements vscode.Disposable {
     private _loggedParseWarnings = new Set<string>();
     /** Optional live session tracker — fed by every live (non-batch) upsert. */
     private _liveTracker: LiveSessionTracker | undefined;
+    /** Feature 24: Optional cache manager for incremental parsing. */
+    private _cacheManager: ICacheManager | undefined;
 
     constructor(index: SessionIndex, channel: vscode.OutputChannel, scopeManager: WorkspaceScopeManager) {
         this.index = index;
@@ -97,6 +102,7 @@ export class ChatWizardWatcher implements vscode.Disposable {
         const indexContinue  = cfg.get<boolean>('indexContinue', true);
         const indexAmazonQ   = cfg.get<boolean>('indexAmazonQ', true);
         const indexGemini    = cfg.get<boolean>('indexGeminiCodeAssist', true);
+        const indexTabnine   = cfg.get<boolean>('indexTabnine', true);
 
         if (!enabled) {
             this.channel.appendLine('[Chat Wizard] Extension disabled via chatwizard.enabled setting — skipping indexing and file watching.');
@@ -105,7 +111,7 @@ export class ChatWizardWatcher implements vscode.Disposable {
             return;
         }
 
-        await this.buildInitialIndex(indexClaude, indexCopilot, indexCline, indexRooCode, indexCursor, indexWindsurf, indexAider, indexAntigravity, indexChronicle, indexContinue, indexAmazonQ, indexGemini);
+        await this.buildInitialIndex(indexClaude, indexCopilot, indexCline, indexRooCode, indexCursor, indexWindsurf, indexAider, indexAntigravity, indexChronicle, indexContinue, indexAmazonQ, indexGemini, indexTabnine);
 
         if (indexClaude) {
             // Watch Claude sessions
@@ -423,7 +429,7 @@ this.index.remove(taskId);
         }
     }
 
-    private async buildInitialIndex(indexClaude: boolean, indexCopilot: boolean, indexCline: boolean, indexRooCode: boolean = true, indexCursor: boolean = true, indexWindsurf: boolean = true, indexAider: boolean = true, indexAntigravity: boolean = true, indexChronicle: boolean = true, indexContinue: boolean = true, indexAmazonQ: boolean = true, indexGemini: boolean = true): Promise<void> {
+    private async buildInitialIndex(indexClaude: boolean, indexCopilot: boolean, indexCline: boolean, indexRooCode: boolean = true, indexCursor: boolean = true, indexWindsurf: boolean = true, indexAider: boolean = true, indexAntigravity: boolean = true, indexChronicle: boolean = true, indexContinue: boolean = true, indexAmazonQ: boolean = true, indexGemini: boolean = true, indexTabnine: boolean = true): Promise<void> {
         this.channel.appendLine('[Chat Wizard] buildInitialIndex() started');
         await vscode.window.withProgress(
             {
@@ -463,7 +469,7 @@ this.index.remove(taskId);
                 } else {
                     this.channel.appendLine(`[Chat Wizard] Building index with scope filter: [${selectedIds.join(', ')}]`);
                 }
-                const [claudeSessions, copilotSessions, clineSessions, rooCodeSessions, cursorSessions, windsurfSessions, aiderSessions, antigravitySessions, antigravityJsonSessions, continueSessions, amazonQSessions, geminiSessions] = await Promise.all([
+                const [claudeSessions, copilotSessions, clineSessions, rooCodeSessions, cursorSessions, windsurfSessions, aiderSessions, antigravitySessions, antigravityJsonSessions, continueSessions, amazonQSessions, geminiSessions, tabnineSessions] = await Promise.all([
                     // Always pass selectedIds (even empty array) — empty = index nothing, no fallback to all.
                     indexClaude       ? this.collectClaudeSessionsAsync(makeProgress('claude'),      selectedIds)  : Promise.resolve([]),
                     indexCopilot      ? this.collectCopilotSessionsAsync(makeProgress('copilot'),    selectedIds)  : Promise.resolve([]),
@@ -476,7 +482,8 @@ this.index.remove(taskId);
                     indexAntigravity  ? this.collectAntigravityJsonSessionsAsync()                                 : Promise.resolve([]),
                     indexContinue     ? this.collectContinueSessionsAsync()                                        : Promise.resolve([]),
                     indexAmazonQ      ? this.collectAmazonQSessionsAsync()                                         : Promise.resolve([]),
-                    indexGemini       ? this.collectGeminiSessionsAsync()                                          : Promise.resolve([]),
+                indexGemini       ? this.collectGeminiSessionsAsync()                                          : Promise.resolve([]),
+                    indexTabnine      ? this.collectTabnineSessionsAsync()                                        : Promise.resolve([]),
                 ]);
 
                 // Deduplicate: if a conversation UUID was already indexed from brain/, skip JSON version.
@@ -484,7 +491,7 @@ this.index.remove(taskId);
                 const deduplicatedJsonSessions = antigravityJsonSessions.filter(s => !brainIds.has(s.id));
 
                 const cfg = vscode.workspace.getConfiguration('chatwizard');
-                const all = applySessionFilters([...claudeSessions, ...copilotSessions, ...clineSessions, ...rooCodeSessions, ...cursorSessions, ...windsurfSessions, ...aiderSessions, ...antigravitySessions, ...deduplicatedJsonSessions, ...continueSessions, ...amazonQSessions, ...geminiSessions], cfg, this.channel);
+                const all = applySessionFilters([...claudeSessions, ...copilotSessions, ...clineSessions, ...rooCodeSessions, ...cursorSessions, ...windsurfSessions, ...aiderSessions, ...antigravitySessions, ...deduplicatedJsonSessions, ...continueSessions, ...amazonQSessions, ...geminiSessions, ...tabnineSessions], cfg, this.channel);
                 this.index.batchUpsert(all);
                 this.channel.appendLine(`[init] Batch indexed ${all.length} sessions`);
 
@@ -982,6 +989,29 @@ this.index.remove(taskId);
         }
     }
 
+    async collectTabnineSessionsAsync(): Promise<Session[]> {
+        try {
+            const files = await discoverTabnineConversationsAsync();
+            const sessions: Session[] = [];
+            for (const filePath of files) {
+                try {
+                    const result = parseTabnineConversation(filePath);
+                    if (result.errors.length > 0) {
+                        this.channel.appendLine(`[tabnine] Parse errors for ${filePath}: ${result.errors.join('; ')}`);
+                    }
+                    if (result.session.messages.length > 0) { sessions.push(result.session); }
+                } catch (err) {
+                    this.channel.appendLine(`[tabnine] Failed to parse ${filePath}: ${err}`);
+                }
+            }
+            this.channel.appendLine(`[tabnine] Indexed ${sessions.length} session(s)`);
+            return sessions;
+        } catch (err) {
+            this.channel.appendLine(`[error] Failed to collect Tabnine sessions: ${err}`);
+            return [];
+        }
+    }
+
     async collectGeminiSessionsAsync(): Promise<Session[]> {
         try {
             const files = await discoverGeminiCodeAssistSessionFilesAsync();
@@ -1187,6 +1217,47 @@ this.index.remove(taskId);
     /** Wires in a live session tracker that gets notified on every non-batch upsert. */
     public setLiveTracker(tracker: LiveSessionTracker): void {
         this._liveTracker = tracker;
+    }
+
+    /** Feature 24: Set the cache manager for incremental parsing. */
+    setCacheManager(cm: ICacheManager | undefined): void {
+        this._cacheManager = cm;
+    }
+
+    /**
+     * Feature 24: Check if a file has changed since last parse using the cache's parse_state.
+     * Returns true when the file is unchanged and can be skipped (session is already in index).
+     */
+    private _isFileUnchanged(filePath: string): boolean {
+        if (!this._cacheManager) { return false; }
+        try {
+            const stat = fs.statSync(filePath);
+            const state = this._cacheManager.getParseState(filePath);
+            if (!state) { return false; }
+            // Compare mtime and size — if both match, the file hasn't changed
+            const mtimeMs = stat.mtimeMs;
+            const size = stat.size;
+            return Math.abs(state.lastMtime - mtimeMs) < 100 && state.lastSize === size;
+        } catch {
+            return false;
+        }
+    }
+
+    /**
+     * Feature 24: After parsing a file successfully, update the parse state in the cache.
+     */
+    private _updateParseState(filePath: string, source: string): void {
+        if (!this._cacheManager) { return; }
+        try {
+            const stat = fs.statSync(filePath);
+            this._cacheManager.setParseState(filePath, {
+                filePath,
+                source,
+                lastMtime: stat.mtimeMs,
+                lastSize: stat.size,
+                lastOffset: stat.size, // For JSONL: full file parsed
+            });
+        } catch { /* ignore */ }
     }
 
     /**
@@ -1528,7 +1599,8 @@ function applySessionFilters(
 export async function startWatcher(
     index: SessionIndex,
     channel?: vscode.OutputChannel,
-    scopeManager?: WorkspaceScopeManager
+    scopeManager?: WorkspaceScopeManager,
+    cacheManager?: ICacheManager
 ): Promise<ChatWizardWatcher> {
     const ch = channel ?? vscode.window.createOutputChannel('Chat Wizard');
     // When no scope manager is provided (legacy / tests), create a no-op instance
@@ -1540,6 +1612,7 @@ export async function startWatcher(
         },
     });
     const watcher = new ChatWizardWatcher(index, ch, mgr);
+    watcher.setCacheManager(cacheManager);
     await watcher.start();
     return watcher;
 }

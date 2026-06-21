@@ -348,7 +348,7 @@ suite('SemanticIndexer.scheduleSession', () => {
         indexer.dispose();
     });
 
-    test('continues processing queue after a single embed failure', async () => {
+    test('retries on transient embed failure and eventually indexes all sessions', async () => {
         let callCount = 0;
         const engine = makeEngineStub();
         const originalEmbedBatch = engine.embedBatch.bind(engine);
@@ -363,20 +363,22 @@ suite('SemanticIndexer.scheduleSession', () => {
         const indexer = new SemanticIndexer('/storage', () => engine, () => index, api, 0);
         await indexer.initialize();
 
-        // Use sessions with no title so each session produces exactly 1 embed entry;
-        // this ensures the single failing call fully prevents s1 from being indexed.
+        // Use sessions with no title so each session produces exactly 1 embed entry.
         const s1: Session = { id: 's1', title: '', source: 'copilot', workspaceId: 'ws',
-            messages: [{ id: 'm1', role: 'user', content: 'will fail', codeBlocks: [] }],
+            messages: [{ id: 'm1', role: 'user', content: 'will fail then retry', codeBlocks: [] }],
             filePath: '/fake/s1.jsonl', createdAt: '2025-01-01T00:00:00.000Z', updatedAt: '2025-01-01T00:00:00.000Z' };
         const s2: Session = { id: 's2', title: '', source: 'copilot', workspaceId: 'ws',
-            messages: [{ id: 'm2', role: 'user', content: 'will succeed', codeBlocks: [] }],
+            messages: [{ id: 'm2', role: 'user', content: 'will succeed on retry', codeBlocks: [] }],
             filePath: '/fake/s2.jsonl', createdAt: '2025-01-01T00:00:00.000Z', updatedAt: '2025-01-01T00:00:00.000Z' };
         indexer.scheduleSession(s1);
         indexer.scheduleSession(s2);
         await new Promise(r => setTimeout(r, 50));
 
-        assert.ok(!index.has('s1'), 's1 should not be in index after failed embed');
-        assert.ok(index.has('s2'), 's2 should be indexed after queue continues');
+        // With the batch-parallel approach, all sessions' entries are sent in a
+        // single embedBatch call. On transient failure the batch stays in the queue;
+        // on retry (second call) it succeeds, so both sessions get indexed.
+        assert.ok(index.has('s1'), 's1 should be indexed after retry');
+        assert.ok(index.has('s2'), 's2 should be indexed after retry');
         indexer.dispose();
     });
 

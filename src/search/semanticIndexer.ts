@@ -173,6 +173,9 @@ export class SemanticIndexer implements ISemanticIndexer {
     /** Remaining queue entries per session; deleted when the session reaches 0. */
     private _pendingBySession = new Map<string, number>();
 
+    /** Feature 43: Max age in days for sessions to be included in the semantic index. 0 = no limit. */
+    private _maxAgeDays: number = 0;
+
     // Status bar for indexing progress
     // (progress is surfaced via vsCodeApi.runIndexingProgress — no local status bar item)
 
@@ -204,6 +207,15 @@ export class SemanticIndexer implements ISemanticIndexer {
         this.index = indexFactory();
         this.vsCodeApi = vsCodeApi ?? defaultVsCodeApi();
         this._queueStartDebounceMs = queueStartDebounceMs ?? QUEUE_START_DEBOUNCE_MS;
+    }
+
+    /**
+     * Feature 43: Set the maximum age (in days) for sessions to be included in the semantic index.
+     * Sessions older than this threshold will be skipped during scheduleSession().
+     * @param days Max age in days. 0 or negative = no limit.
+     */
+    setMaxAgeDays(days: number): void {
+        this._maxAgeDays = days > 0 ? days : 0;
     }
 
     // ── Getters ─────────────────────────────────────────────────────────────
@@ -281,6 +293,17 @@ export class SemanticIndexer implements ISemanticIndexer {
         // upsert events fire for the same session.
         if (this._pendingBySession.has(session.id)) {
             return;
+        }
+
+        // Feature 43: Skip sessions older than the configured max age.
+        if (this._maxAgeDays > 0) {
+            const updatedAt = new Date(session.updatedAt).getTime();
+            if (!isNaN(updatedAt)) {
+                const cutoff = Date.now() - this._maxAgeDays * 24 * 60 * 60 * 1000;
+                if (updatedAt < cutoff) {
+                    return;
+                }
+            }
         }
 
         let added = 0;
@@ -411,59 +434,45 @@ export class SemanticIndexer implements ISemanticIndexer {
 
     // ── Private helpers ──────────────────────────────────────────────────────
 
+    /** Max sessions to embed per batch iteration. */
+    private static readonly _MAX_CONCURRENT_SESSIONS = 16;
+
     private async _runQueue(): Promise<void> {
         this._queueRunning = true;
 
         await this.vsCodeApi.runIndexingProgress(async (report) => {
-            report(this._totalSessionsCompleted, this._totalSessionsQueued);
-
+            // Process the queue in a loop, continuing until it's empty and no
+            // new sessions arrive. This avoids creating a second progress notification
+            // when archive-restore sessions arrive mid-run.
+            let iterationsSinceLastDrain = 0;
             while (this._queue.length > 0 && !this._disposed) {
-                // Collect all entries for the session at the front of the queue.
-                const currentSessionId = this._queue[0].sessionId;
-                const sessionEntries: QueueEntry[] = [];
-                while (this._queue.length > 0 && this._queue[0].sessionId === currentSessionId) {
-                    sessionEntries.push(this._queue.shift()!);
-                }
-
-                // Embed all text chunks for this session in a single pipeline call.
-                const texts = sessionEntries.map(e => e.text);
-                try {
-                    const embeddings = await this.engine.embedBatch(texts);
-                    for (let i = 0; i < sessionEntries.length; i++) {
-                        const entry = sessionEntries[i];
-                        const embedding = embeddings[i];
-                        if (embedding) {
-                            this.index.add(entry.sessionId, entry.role, entry.messageIndex, entry.paragraphIndex, embedding);
-                        }
-                    }
-                    this._scheduleSave();
-                } catch {
-                    // Skip failed embeddings — don't crash the queue.
-                }
-
-                // Session complete: update counters and report ONCE (not once per chunk).
-                if (this._pendingBySession.has(currentSessionId)) {
-                    this._pendingBySession.delete(currentSessionId);
-                    this._totalSessionsCompleted++;
-                    report(this._totalSessionsCompleted, this._totalSessionsQueued);
-                }
+                await this._processQueueBatch(report);
 
                 // Yield to the event loop so VS Code can render the progress update
                 await new Promise<void>(r => setImmediate(r));
+
+                // Safety valve: if the queue hasn't been fully drained after several
+                // iterations (new sessions keep arriving), exit and let the debounce
+                // timer handle the rest to avoid an infinite busy-loop.
+                iterationsSinceLastDrain++;
+                if (iterationsSinceLastDrain > 10) {
+                    break;
+                }
             }
         });
 
         this._queueRunning = false;
 
-        // If more sessions were added while we were running (e.g. archive-restore batch),
-        // restart the queue seamlessly — same progress notification, no new bar.
+        // If more sessions were added while we were wrapping up (race with the break
+        // guard above), schedule a new queue run via the debounce timer so it shows
+        // a single fresh progress bar.
         if (!this._disposed && this._queue.length > 0) {
-            this._queueRunning = true;
-            setImmediate(() => {
-                if (!this._disposed && this._queue.length > 0) {
-                    this._runQueue().catch(() => { /* ignore */ });
+            this._queueStartTimer = setTimeout(() => {
+                this._queueStartTimer = undefined;
+                if (!this._queueRunning && this._queue.length > 0 && !this._disposed) {
+                    this._runQueue();
                 }
-            });
+            }, this._queueStartDebounceMs);
             return;
         }
 
@@ -478,6 +487,81 @@ export class SemanticIndexer implements ISemanticIndexer {
                 }
             }, 5_000);
         }
+    }
+
+    /**
+     * Process one batch of up to MAX_CONCURRENT_SESSIONS worth of queue entries.
+     * Extracted so the progress wrapper in _runQueue() is entered only once.
+     *
+     * Unlike the old approach (one embedBatch call per session via Promise.all,
+     * which the ONNX runtime serialises on the same underlying model), this
+     * flattens ALL entries from ALL selected sessions into a SINGLE embedBatch
+     * call. The ONNX runtime parallelises inference across the batch dimension
+     * internally, which is significantly faster than sequential per-session calls.
+     *
+     * Entries are NOT removed from the queue until embedding succeeds, so a
+     * transient failure is retried on the next iteration.
+     */
+    private async _processQueueBatch(report: (completed: number, total: number) => void): Promise<void> {
+        report(this._totalSessionsCompleted, this._totalSessionsQueued);
+
+        // Identify the sessions to process this iteration (up to MAX_CONCURRENT_SESSIONS).
+        const selectedSessions = new Set<string>();
+        for (const entry of this._queue) {
+            if (selectedSessions.has(entry.sessionId)) { continue; }
+            if (selectedSessions.size >= SemanticIndexer._MAX_CONCURRENT_SESSIONS) { break; }
+            selectedSessions.add(entry.sessionId);
+        }
+
+        if (selectedSessions.size === 0) { return; }
+
+        // Flatten all entries from selected sessions into a single embedBatch call.
+        // This lets the ONNX runtime parallelise inference across the full batch
+        // dimension internally, rather than serialising per-session calls.
+        const allEntries: { sessionId: string; entry: QueueEntry }[] = [];
+        for (const entry of this._queue) {
+            if (selectedSessions.has(entry.sessionId)) {
+                allEntries.push({ sessionId: entry.sessionId, entry });
+            }
+        }
+
+        let success = false;
+        try {
+            const texts = allEntries.map(e => e.entry.text);
+            const embeddings = await this.engine.embedBatch(texts);
+            for (let i = 0; i < allEntries.length; i++) {
+                const { sessionId, entry } = allEntries[i];
+                const embedding = embeddings[i];
+                if (embedding) {
+                    this.index.add(sessionId, entry.role, entry.messageIndex, entry.paragraphIndex, embedding);
+                }
+            }
+            this._scheduleSave();
+            success = true;
+        } catch {
+            // Embedding failed for the entire batch — entries stay in the queue
+            // and will be retried on the next iteration.
+        }
+
+        // On success, remove the processed entries from the queue and bump counters.
+        if (success) {
+            const remaining: QueueEntry[] = [];
+            for (const entry of this._queue) {
+                if (!selectedSessions.has(entry.sessionId)) {
+                    remaining.push(entry);
+                }
+            }
+            this._queue = remaining;
+
+            for (const sid of selectedSessions) {
+                if (this._pendingBySession.has(sid)) {
+                    this._pendingBySession.delete(sid);
+                    this._totalSessionsCompleted++;
+                }
+            }
+        }
+
+        report(this._totalSessionsCompleted, this._totalSessionsQueued);
     }
 
     private _scheduleSave(): void {
