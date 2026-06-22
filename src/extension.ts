@@ -235,7 +235,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     context.subscriptions.push(brandingSessionListener);
 
     // ── Semantic search ──────────────────────────────────────────────────────────
-    // Instantiated only when chatwizard.enableSemanticSearch is true.
+    // Instantiated only when chatwizard.enableSemanticSearch is true (default).
     // The typed change listener below keeps it in sync with the main session index.
     const semanticEmbeddingsUri = vscode.Uri.joinPath(context.globalStorageUri, 'semantic-embeddings.bin');
     let semanticIndexer: SemanticIndexer | null = null;
@@ -268,7 +268,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         });
     }
 
-    if (vscode.workspace.getConfiguration('chatwizard').get<boolean>('enableSemanticSearch') ?? false) {
+    if (vscode.workspace.getConfiguration('chatwizard').get<boolean>('enableSemanticSearch') ?? true) {
         createAndInitSemanticIndexer();
     }
 
@@ -290,7 +290,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             semanticIndexer.dispose();
             semanticIndexer = null;
             void vscode.workspace.fs.delete(semanticEmbeddingsUri).then(undefined, () => { /* ignore missing file */ });
-            if (vscode.workspace.getConfiguration('chatwizard').get<boolean>('enableSemanticSearch') ?? false) {
+            if (vscode.workspace.getConfiguration('chatwizard').get<boolean>('enableSemanticSearch') ?? true) {
                 createAndInitSemanticIndexer();
             }
         }
@@ -1514,18 +1514,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 channel.appendLine('[Chat Wizard] Data path setting changed (' + pathKeys.join(', ') + ') — re-discovering workspaces and restarting index...');
                 void (async () => {
                     // Re-discover available workspaces under the new paths.
+                    channel.appendLine('[Chat Wizard] Re-discovering workspaces after path change…');
                     const [copilotWs, claudeWs, cursorWs, windsurfWs] = await Promise.all([
-                        discoverCopilotWorkspacesAsync().then(list =>
-                            list.map(ws => ({
-                                id: ws.workspaceId,
-                                source: 'copilot' as const,
-                                workspacePath: ws.workspacePath,
-                                storageDir: ws.storageDir,
-                            }) satisfies ScopedWorkspace)
+                        withTimeout(
+                            discoverCopilotWorkspacesAsync().then(list =>
+                                list.map(ws => ({
+                                    id: ws.workspaceId,
+                                    source: 'copilot' as const,
+                                    workspacePath: ws.workspacePath,
+                                    storageDir: ws.storageDir,
+                                }) satisfies ScopedWorkspace)
+                            ),
+                            15_000
                         ).catch(() => [] as ScopedWorkspace[]),
-                        discoverClaudeWorkspacesAsync().catch(() => [] as ScopedWorkspace[]),
-                        discoverCursorWorkspacesAsync().catch(() => [] as ScopedWorkspace[]),
-                        discoverWindsurfWorkspacesAsync().catch(() => [] as ScopedWorkspace[]),
+                        withTimeout(discoverClaudeWorkspacesAsync(), 15_000).catch(() => [] as ScopedWorkspace[]),
+                        withTimeout(discoverCursorWorkspacesAsync(), 15_000).catch(() => [] as ScopedWorkspace[]),
+                        withTimeout(discoverWindsurfWorkspacesAsync(), 15_000).catch(() => [] as ScopedWorkspace[]),
                     ]);
                     const allAvailable: ScopedWorkspace[] = [...copilotWs, ...claudeWs, ...cursorWs, ...windsurfWs];
 
@@ -2027,19 +2031,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // registered (empty) and will populate when batchUpsert() fires the change listeners.
     await new Promise<void>(resolve => setTimeout(resolve, 200));
     void (async () => {
+        channel.appendLine('[Chat Wizard] Starting workspace discovery…');
         // Discover all available workspaces to initialise the default scope.
         const [copilotWs, claudeWs, cursorWs, windsurfWs] = await Promise.all([
-            discoverCopilotWorkspacesAsync().then(list =>
-                list.map(ws => ({
-                    id: ws.workspaceId,
-                    source: 'copilot' as const,
-                    workspacePath: ws.workspacePath,
-                    storageDir: ws.storageDir,
-                }) satisfies ScopedWorkspace)
+            withTimeout(
+                discoverCopilotWorkspacesAsync().then(list =>
+                    list.map(ws => ({
+                        id: ws.workspaceId,
+                        source: 'copilot' as const,
+                        workspacePath: ws.workspacePath,
+                        storageDir: ws.storageDir,
+                    }) satisfies ScopedWorkspace)
+                ),
+                15_000
             ).catch(() => [] as ScopedWorkspace[]),
-            discoverClaudeWorkspacesAsync().catch(() => [] as ScopedWorkspace[]),
-            discoverCursorWorkspacesAsync().catch(() => [] as ScopedWorkspace[]),
-            discoverWindsurfWorkspacesAsync().catch(() => [] as ScopedWorkspace[]),
+            withTimeout(discoverClaudeWorkspacesAsync(), 15_000).catch(() => [] as ScopedWorkspace[]),
+            withTimeout(discoverCursorWorkspacesAsync(), 15_000).catch(() => [] as ScopedWorkspace[]),
+            withTimeout(discoverWindsurfWorkspacesAsync(), 15_000).catch(() => [] as ScopedWorkspace[]),
         ]);
         const allAvailable: ScopedWorkspace[] = [...copilotWs, ...claudeWs, ...cursorWs, ...windsurfWs];
         channel.appendLine(
@@ -2442,7 +2450,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             context.subscriptions.push({ dispose: () => cloudSync?.dispose() });
             channel.appendLine(`[Chat Wizard] Cloud sync (${cloudSyncType}) initialised.`);
         }
-    })().catch(err => channel.appendLine(`[error] Watcher init failed: ${err}`));
+    })().catch(err => {
+        channel.appendLine(`[error] Watcher init failed: ${err}`);
+        // Fire an empty batch to clear the loading spinner in the tree view.
+        index.batchUpsert([]);
+    });
 }
 
 export function deactivate(): void {
@@ -2452,6 +2464,20 @@ export function deactivate(): void {
 
 function capitalise(s: string): string {
     return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/**
+ * Returns a promise that resolves with the given promise's value, or rejects
+ * with a TimeoutError after `ms` milliseconds — whichever comes first.
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`Timed out after ${ms}ms`)), ms);
+        promise.then(
+            (v) => { clearTimeout(timer); resolve(v); },
+            (e) => { clearTimeout(timer); reject(e); },
+        );
+    });
 }
 
 /** Quick-pick helper for tag/session commands that need a session ID. */

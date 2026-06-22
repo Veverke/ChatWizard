@@ -393,6 +393,8 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
     private _changeDebounceTimer: ReturnType<typeof setTimeout> | null = null;
     /** True until the first change event fires (initial batch index complete) */
     private _loading = true;
+    /** Safety timeout handle — clears _loading if no change arrives within 30 s */
+    private _loadingTimeout: ReturnType<typeof setTimeout> | null = null;
     /** Group mode — on by default */
     private _groupMode: GroupMode = 'date';
 
@@ -401,9 +403,23 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
         // before the provider is constructed), skip the loading state immediately.
         if (index.getAllSummaries().length > 0) {
             this._loading = false;
+        } else {
+            // Safety timeout: if no change event fires within 30 s, clear the loading
+            // spinner so the tree shows empty-state UI instead of spinning forever.
+            this._loadingTimeout = setTimeout(() => {
+                if (this._loading) {
+                    this._loading = false;
+                    this.refresh();
+                }
+                this._loadingTimeout = null;
+            }, 30_000);
         }
         index.addChangeListener(() => {
             this._loading = false;
+            if (this._loadingTimeout !== null) {
+                clearTimeout(this._loadingTimeout);
+                this._loadingTimeout = null;
+            }
             // Coalesce rapid sequential upserts (live-watch) into one tree refresh (Item 9).
             this._filteredCache = null;
             this._sortedCache = null;
