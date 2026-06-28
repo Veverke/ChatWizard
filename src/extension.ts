@@ -89,6 +89,7 @@ let watcher: ChatWizardWatcher | undefined;
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
     const channel = vscode.window.createOutputChannel('Chat Wizard');
     context.subscriptions.push(channel);
+    channel.appendLine('[Chat Wizard] activate() started.');
 
     // Local telemetry recorder (opt-in, no external calls)
     const telemetry = new TelemetryRecorder(context.globalStorageUri.fsPath);
@@ -107,11 +108,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
 
     // ── Feature 24: SQLite Persistent Cache ──────────────────────────────────
+    // Wrap in try/catch so a corrupt/unreadable DB does not block the entire
+    // extension startup — the extension can still function without the cache.
     const enableCache = vscode.workspace.getConfiguration('chatwizard').get<boolean>('enablePersistentCache', true);
     let cacheIntegration: CacheIntegration | undefined;
     if (enableCache) {
-        cacheIntegration = new CacheIntegration(context.globalStorageUri.fsPath);
-        channel.appendLine('[Chat Wizard] SQLite persistent cache initialised.');
+        channel.appendLine('[Chat Wizard] Initialising SQLite persistent cache…');
+        try {
+            cacheIntegration = new CacheIntegration(context.globalStorageUri.fsPath);
+            channel.appendLine('[Chat Wizard] SQLite persistent cache initialised.');
+        } catch (err) {
+            channel.appendLine(`[Chat Wizard] SQLite cache init failed (continuing without cache): ${err}`);
+        }
     }
 
     // Branding status-bar item — created early so all listeners below can call brandingBar.notify()
@@ -241,31 +249,41 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     let semanticIndexer: SemanticIndexer | null = null;
 
     function createAndInitSemanticIndexer(): void {
-        const indexer = new SemanticIndexer(
-            context.globalStorageUri.fsPath,
-            (cacheDir) => new EmbeddingEngine(cacheDir),
-            () => new SemanticIndex(),
-            defaultVsCodeApi(context.globalState),
-        );
-        // Feature 43: Apply semantic index max age from config
-        const maxAgeDays = vscode.workspace.getConfiguration('chatwizard').get<number>('semanticIndexMaxAgeDays', 365);
-        if (maxAgeDays > 0) {
-            indexer.setMaxAgeDays(maxAgeDays);
-        }
-        semanticIndexer = indexer;
-        void indexer.initialize().then(() => {
-            // Schedule sessions already loaded into the main index (runtime-enable case)
-            for (const summary of index.getAllSummaries()) {
-                const session = index.get(summary.id);
-                if (session) {
-                    indexer.scheduleSession(session);
-                }
-            }
-        }).catch((err: unknown) => {
-            void vscode.window.showErrorMessage(
-                `Chat Wizard: Failed to initialize semantic search — ${String(err)}. Reload VS Code to retry.`
+        try {
+            const indexer = new SemanticIndexer(
+                context.globalStorageUri.fsPath,
+                (cacheDir) => new EmbeddingEngine(cacheDir),
+                () => new SemanticIndex(),
+                defaultVsCodeApi(context.globalState),
             );
-        });
+            channel.appendLine('[Chat Wizard] SemanticIndexer constructed.');
+            // Feature 43: Apply semantic index max age from config
+            const maxAgeDays = vscode.workspace.getConfiguration('chatwizard').get<number>('semanticIndexMaxAgeDays', 365);
+            if (maxAgeDays > 0) {
+                indexer.setMaxAgeDays(maxAgeDays);
+                channel.appendLine(`[Chat Wizard] Semantic index max age set to ${maxAgeDays} days.`);
+            }
+            semanticIndexer = indexer;
+            void indexer.initialize().then(() => {
+                // Schedule sessions already loaded into the main index (runtime-enable case)
+                const summaries = index.getAllSummaries();
+                channel.appendLine(`[Chat Wizard] Semantic indexer ready — scheduling ${summaries.length} existing session(s).`);
+                for (const summary of summaries) {
+                    const session = index.get(summary.id);
+                    if (session) {
+                        indexer.scheduleSession(session);
+                    }
+                }
+            }).catch((err: unknown) => {
+                channel.appendLine(`[Chat Wizard] Semantic indexer init failed: ${err}`);
+                void vscode.window.showErrorMessage(
+                    `Chat Wizard: Failed to initialize semantic search — ${String(err)}. Reload VS Code to retry.`
+                );
+            });
+        } catch (err) {
+            channel.appendLine(`[Chat Wizard] Failed to construct SemanticIndexer: ${err}`);
+            // Don't throw — the extension can still function without semantic search.
+        }
     }
 
     if (vscode.workspace.getConfiguration('chatwizard').get<boolean>('enableSemanticSearch') ?? true) {

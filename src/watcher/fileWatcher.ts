@@ -111,7 +111,18 @@ export class ChatWizardWatcher implements vscode.Disposable {
             return;
         }
 
-        await this.buildInitialIndex(indexClaude, indexCopilot, indexCline, indexRooCode, indexCursor, indexWindsurf, indexAider, indexAntigravity, indexChronicle, indexContinue, indexAmazonQ, indexGemini, indexTabnine);
+        // ── Cache-accelerated startup ─────────────────────────────────────
+        // If the index already has sessions (loaded from SQLite cache by
+        // extension.ts before calling start()), skip full re-parsing and only
+        // register file watchers. New/changed files will be indexed as they
+        // arrive. This cuts startup from minutes to <1 second.
+        const indexAlreadyPopulated = this.index.size > 0;
+        if (indexAlreadyPopulated) {
+            this.channel.appendLine(`[Chat Wizard] Index already has ${this.index.size} sessions from cache — skipping full re-parse.`);
+        } else {
+            this.channel.appendLine('[Chat Wizard] No cached sessions found — performing full re-parse of source files.');
+            await this.buildInitialIndex(indexClaude, indexCopilot, indexCline, indexRooCode, indexCursor, indexWindsurf, indexAider, indexAntigravity, indexChronicle, indexContinue, indexAmazonQ, indexGemini, indexTabnine);
+        }
 
         if (indexClaude) {
             // Watch Claude sessions

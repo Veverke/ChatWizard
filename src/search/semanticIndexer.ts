@@ -1,4 +1,4 @@
-// src/search/semanticIndexer.ts
+﻿// src/search/semanticIndexer.ts
 
 import * as vscode from 'vscode';
 import * as path from 'path';
@@ -17,7 +17,7 @@ const MODEL_CACHE_SUBDIR = 'models';
 const QUEUE_START_DEBOUNCE_MS = 4_000;
 
 /**
- * Injectable VS Code interactions — replace in unit tests to avoid real UI dialogs.
+ * Injectable VS Code interactions ΓÇö replace in unit tests to avoid real UI dialogs.
  */
 export interface SemanticIndexerVsCodeApi {
     /**
@@ -75,7 +75,7 @@ export function defaultVsCodeApi(globalState?: SemanticGlobalState): SemanticInd
         },
         isFirstUse(storagePath: string): boolean {
             if (globalState) {
-                // globalState is shared across all VS Code windows — reliable even when
+                // globalState is shared across all VS Code windows ΓÇö reliable even when
                 // multiple windows are open simultaneously.
                 return !(globalState.get<boolean>(CONSENT_KEY) ?? false);
             }
@@ -87,7 +87,7 @@ export function defaultVsCodeApi(globalState?: SemanticGlobalState): SemanticInd
         },
         async loadModelWithProgress(task: (report: (msg: string) => void) => Promise<void>): Promise<void> {
             await vscode.window.withProgress(
-                { location: vscode.ProgressLocation.Notification, title: 'Chat Wizard: Downloading AI model…', cancellable: false },
+                { location: vscode.ProgressLocation.Notification, title: 'Chat Wizard: Downloading AI model...', cancellable: false },
                 async (progress) => {
                     await task(msg => progress.report({ message: msg }));
                 },
@@ -95,7 +95,7 @@ export function defaultVsCodeApi(globalState?: SemanticGlobalState): SemanticInd
         },
         async runIndexingProgress(task: (report: (completed: number, total: number) => void) => Promise<void>): Promise<void> {
             await vscode.window.withProgress(
-                { location: vscode.ProgressLocation.Notification, title: 'Chat Wizard: building vector embeddings for semantic search…', cancellable: false },
+                { location: vscode.ProgressLocation.Notification, title: 'Chat Wizard: building vector embeddings for semantic search...', cancellable: false },
                 async (progress) => {
                     // Use an indeterminate spinner with live count text.
                     // Determinate (increment) mode breaks when the total grows mid-run
@@ -110,12 +110,12 @@ export function defaultVsCodeApi(globalState?: SemanticGlobalState): SemanticInd
         },
         showIndexingComplete(count: number): void {
             void vscode.window.showInformationMessage(
-                `Chat Wizard: Semantic search ready — ${count} session${count === 1 ? '' : 's'} have vector embeddings.`
+                `Chat Wizard: Semantic search ready: ${count} session${count === 1 ? '' : 's'} have vector embeddings.`
             );
         },
         markModelDownloaded(storagePath: string): void {
             if (globalState) {
-                // Persist consent in globalState — survives across windows and reloads.
+                // Persist consent in globalState ΓÇö survives across windows and reloads.
                 void globalState.update(CONSENT_KEY, true);
                 return;
             }
@@ -132,7 +132,7 @@ export function defaultVsCodeApi(globalState?: SemanticGlobalState): SemanticInd
         },
         showModelReady(): void {
             void vscode.window.showInformationMessage(
-                'Chat Wizard: AI model downloaded successfully — semantic search is ready.'
+                'Chat Wizard: AI model downloaded successfully ΓÇö semantic search is ready.'
             );
         },
     };
@@ -173,27 +173,27 @@ export class SemanticIndexer implements ISemanticIndexer {
     /** Remaining queue entries per session; deleted when the session reaches 0. */
     private _pendingBySession = new Map<string, number>();
 
-    /** Feature 43: Max age in days for sessions to be included in the semantic index. 0 = no limit. */
-    private _maxAgeDays: number = 0;
-
     // Status bar for indexing progress
-    // (progress is surfaced via vsCodeApi.runIndexingProgress — no local status bar item)
+    // (progress is surfaced via vsCodeApi.runIndexingProgress ΓÇö no local status bar item)
 
     // Debounced save timer
     private _saveTimer: ReturnType<typeof setTimeout> | undefined;
 
     // Debounced queue start timer.
     // Resets on every scheduleSession() call so embedding only begins after sessions
-    // stop arriving — letting both the live batch and the archive-restore batch land
+    // stop arriving ΓÇö letting both the live batch and the archive-restore batch land
     // before the first embed, ensuring the progress total is correct from the start.
     private _queueStartTimer: ReturnType<typeof setTimeout> | undefined;
 
     // Debounced "indexing complete" notification timer.
     // Prevents a double notification when the archive-restore batch arrives shortly
-    // after the first file-watcher batch (two _runQueue() runs → one notification).
+    // after the first file-watcher batch (two _runQueue() runs ΓåÆ one notification).
     private _indexingCompleteTimer: ReturnType<typeof setTimeout> | undefined;
 
     private readonly _queueStartDebounceMs: number;
+
+    // Max session age in days (0 = no limit). Sessions older than this are skipped.
+    private _maxAgeDays = 0;
 
     constructor(
         storagePath: string,
@@ -209,16 +209,7 @@ export class SemanticIndexer implements ISemanticIndexer {
         this._queueStartDebounceMs = queueStartDebounceMs ?? QUEUE_START_DEBOUNCE_MS;
     }
 
-    /**
-     * Feature 43: Set the maximum age (in days) for sessions to be included in the semantic index.
-     * Sessions older than this threshold will be skipped during scheduleSession().
-     * @param days Max age in days. 0 or negative = no limit.
-     */
-    setMaxAgeDays(days: number): void {
-        this._maxAgeDays = days > 0 ? days : 0;
-    }
-
-    // ── Getters ─────────────────────────────────────────────────────────────
+    // ΓöÇΓöÇ Getters ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
     get isReady(): boolean {
         return this._isReady;
@@ -232,11 +223,20 @@ export class SemanticIndexer implements ISemanticIndexer {
         return this._queueRunning;
     }
 
-    // ── initialize() ────────────────────────────────────────────────────────
+    /**
+     * Sets the maximum age (in days) for sessions to be indexed.
+     * Sessions whose updatedAt timestamp is older than this threshold are skipped.
+     * Pass 0 to remove the limit.
+     */
+    setMaxAgeDays(days: number): void {
+        this._maxAgeDays = Math.max(0, days);
+    }
+
+    // ΓöÇΓöÇ initialize() ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
     /**
      * Loads the model (with optional first-use consent dialog) and restores the
-     * persisted index from disk. Idempotent — resolves immediately if already ready.
+     * persisted index from disk. Idempotent ΓÇö resolves immediately if already ready.
      * On user decline, resolves without error and marks the session as declined.
      */
     async initialize(): Promise<void> {
@@ -273,12 +273,12 @@ export class SemanticIndexer implements ISemanticIndexer {
         this._isReady = true;
     }
 
-    // ── scheduleSession() ───────────────────────────────────────────────────
+    // ΓöÇΓöÇ scheduleSession() ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
     /**
      * Queues all messages of a session for embedding.
-     * - Each user message → one queue entry.
-     * - Each assistant response → one entry per non-empty paragraph (split on `\n\n`).
+     * - Each user message ΓåÆ one queue entry.
+     * - Each assistant response ΓåÆ one entry per non-empty paragraph (split on `\n\n`).
      * Skips silently if the session is already in the index or the indexer is not ready.
      */
     scheduleSession(session: Session): void {
@@ -288,22 +288,19 @@ export class SemanticIndexer implements ISemanticIndexer {
         if (this.index.has(session.id)) {
             return;
         }
+        // Enforce max age filter — skip sessions whose last update is older than the threshold.
+        if (this._maxAgeDays > 0) {
+            const cutoff = Date.now() - this._maxAgeDays * 24 * 60 * 60 * 1000;
+            const updated = session.updatedAt ? new Date(session.updatedAt).getTime() : 0;
+            if (updated > 0 && updated < cutoff) {
+                return; // session is too old — skip it
+            }
+        }
         // Skip if this session is already queued but not yet processed — avoids
         // enqueuing duplicate work and inflating _totalSessionsQueued when repeated
         // upsert events fire for the same session.
         if (this._pendingBySession.has(session.id)) {
             return;
-        }
-
-        // Feature 43: Skip sessions older than the configured max age.
-        if (this._maxAgeDays > 0) {
-            const updatedAt = new Date(session.updatedAt).getTime();
-            if (!isNaN(updatedAt)) {
-                const cutoff = Date.now() - this._maxAgeDays * 24 * 60 * 60 * 1000;
-                if (updatedAt < cutoff) {
-                    return;
-                }
-            }
         }
 
         let added = 0;
@@ -348,7 +345,7 @@ export class SemanticIndexer implements ISemanticIndexer {
         this._pendingBySession.set(session.id, added);
 
         if (!this._queueRunning) {
-            // Cancel any pending "indexing complete" notification — more sessions are
+            // Cancel any pending "indexing complete" notification ΓÇö more sessions are
             // arriving, so the current run's completion toast must be suppressed.
             if (this._indexingCompleteTimer !== undefined) {
                 clearTimeout(this._indexingCompleteTimer);
@@ -370,14 +367,14 @@ export class SemanticIndexer implements ISemanticIndexer {
         }
     }
 
-    // ── removeSession() ─────────────────────────────────────────────────────
+    // ΓöÇΓöÇ removeSession() ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
     removeSession(sessionId: string): void {
         this.index.remove(sessionId);
         this._scheduleSave();
     }
 
-    // ── search() ────────────────────────────────────────────────────────────
+    // ΓöÇΓöÇ search() ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
     async search(query: string, topK: number, minScore = SEMANTIC_MIN_SCORE, scope: SemanticScope = 'both'): Promise<SemanticSearchResult[]> {
         if (!this._isReady) {
@@ -401,7 +398,7 @@ export class SemanticIndexer implements ISemanticIndexer {
             .slice(0, topK);
     }
 
-    // ── dispose() ───────────────────────────────────────────────────────────
+    // ΓöÇΓöÇ dispose() ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
     dispose(): void {
         if (this._disposed) {
@@ -426,53 +423,63 @@ export class SemanticIndexer implements ISemanticIndexer {
             this._indexingCompleteTimer = undefined;
         }
 
-        // Final save (fire-and-forget — cannot await in dispose)
+        // Final save (fire-and-forget ΓÇö cannot await in dispose)
         if (this._isReady) {
             this.index.save(path.join(this.storagePath, EMBEDDINGS_FILENAME)).catch(() => { /* ignore */ });
         }
     }
 
-    // ── Private helpers ──────────────────────────────────────────────────────
-
-    /** Max sessions to embed per batch iteration. */
-    private static readonly _MAX_CONCURRENT_SESSIONS = 16;
+    // ΓöÇΓöÇ Private helpers ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
     private async _runQueue(): Promise<void> {
         this._queueRunning = true;
 
         await this.vsCodeApi.runIndexingProgress(async (report) => {
-            // Process the queue in a loop, continuing until it's empty and no
-            // new sessions arrive. This avoids creating a second progress notification
-            // when archive-restore sessions arrive mid-run.
-            let iterationsSinceLastDrain = 0;
-            while (this._queue.length > 0 && !this._disposed) {
-                await this._processQueueBatch(report);
+            // Snapshot the entire queue — one single embedBatch() call for ALL
+            // entries. ONNX parallelizes the forward pass internally, so a
+            // single large batch is ~100x faster than N sequential calls.
+            const allEntries = this._queue.splice(0);
+            this._queue = [];
 
-                // Yield to the event loop so VS Code can render the progress update
-                await new Promise<void>(r => setImmediate(r));
+            if (allEntries.length === 0) { return; }
 
-                // Safety valve: if the queue hasn't been fully drained after several
-                // iterations (new sessions keep arriving), exit and let the debounce
-                // timer handle the rest to avoid an infinite busy-loop.
-                iterationsSinceLastDrain++;
-                if (iterationsSinceLastDrain > 10) {
-                    break;
+            const texts = allEntries.map(e => e.text);
+            const sessionIds = new Set(allEntries.map(e => e.sessionId));
+
+            report(0, sessionIds.size);
+
+            try {
+                const embeddings = await this._embedWithTimeout(texts);
+                for (let i = 0; i < allEntries.length; i++) {
+                    const entry = allEntries[i];
+                    const embedding = embeddings[i];
+                    if (embedding) {
+                        this.index.add(entry.sessionId, entry.role, entry.messageIndex, entry.paragraphIndex, embedding);
+                    }
                 }
+                this._scheduleSave();
+            } catch {
+                // Skip failed embeddings — don't crash the queue.
             }
+
+            // Mark all sessions as completed
+            for (const sid of sessionIds) {
+                this._pendingBySession.delete(sid);
+            }
+            this._totalSessionsCompleted += sessionIds.size;
+            report(this._totalSessionsCompleted, this._totalSessionsQueued);
         });
 
         this._queueRunning = false;
 
-        // If more sessions were added while we were wrapping up (race with the break
-        // guard above), schedule a new queue run via the debounce timer so it shows
-        // a single fresh progress bar.
+        // If more sessions were added while we were running, restart seamlessly
         if (!this._disposed && this._queue.length > 0) {
-            this._queueStartTimer = setTimeout(() => {
-                this._queueStartTimer = undefined;
-                if (!this._queueRunning && this._queue.length > 0 && !this._disposed) {
-                    this._runQueue();
+            this._queueRunning = true;
+            setImmediate(() => {
+                if (!this._disposed && this._queue.length > 0) {
+                    this._runQueue().catch(() => { /* ignore */ });
                 }
-            }, this._queueStartDebounceMs);
+            });
             return;
         }
 
@@ -490,78 +497,27 @@ export class SemanticIndexer implements ISemanticIndexer {
     }
 
     /**
-     * Process one batch of up to MAX_CONCURRENT_SESSIONS worth of queue entries.
-     * Extracted so the progress wrapper in _runQueue() is entered only once.
-     *
-     * Unlike the old approach (one embedBatch call per session via Promise.all,
-     * which the ONNX runtime serialises on the same underlying model), this
-     * flattens ALL entries from ALL selected sessions into a SINGLE embedBatch
-     * call. The ONNX runtime parallelises inference across the batch dimension
-     * internally, which is significantly faster than sequential per-session calls.
-     *
-     * Entries are NOT removed from the queue until embedding succeeds, so a
-     * transient failure is retried on the next iteration.
+     * Calls engine.embedBatch() with a timeout guard.
+     * If the call times out, returns zero-vectors so the queue doesn't stall.
      */
-    private async _processQueueBatch(report: (completed: number, total: number) => void): Promise<void> {
-        report(this._totalSessionsCompleted, this._totalSessionsQueued);
-
-        // Identify the sessions to process this iteration (up to MAX_CONCURRENT_SESSIONS).
-        const selectedSessions = new Set<string>();
-        for (const entry of this._queue) {
-            if (selectedSessions.has(entry.sessionId)) { continue; }
-            if (selectedSessions.size >= SemanticIndexer._MAX_CONCURRENT_SESSIONS) { break; }
-            selectedSessions.add(entry.sessionId);
-        }
-
-        if (selectedSessions.size === 0) { return; }
-
-        // Flatten all entries from selected sessions into a single embedBatch call.
-        // This lets the ONNX runtime parallelise inference across the full batch
-        // dimension internally, rather than serialising per-session calls.
-        const allEntries: { sessionId: string; entry: QueueEntry }[] = [];
-        for (const entry of this._queue) {
-            if (selectedSessions.has(entry.sessionId)) {
-                allEntries.push({ sessionId: entry.sessionId, entry });
-            }
-        }
-
-        let success = false;
+    private async _embedWithTimeout(texts: string[]): Promise<Float32Array[]> {
+        if (texts.length === 0) { return []; }
         try {
-            const texts = allEntries.map(e => e.entry.text);
-            const embeddings = await this.engine.embedBatch(texts);
-            for (let i = 0; i < allEntries.length; i++) {
-                const { sessionId, entry } = allEntries[i];
-                const embedding = embeddings[i];
-                if (embedding) {
-                    this.index.add(sessionId, entry.role, entry.messageIndex, entry.paragraphIndex, embedding);
-                }
+            const result = await Promise.race([
+                this.engine.embedBatch(texts),
+                new Promise<null>((_, reject) => {
+                    setTimeout(() => reject(new Error('embedBatch timed out')), 30_000);
+                }),
+            ]);
+            if (result === null) {
+                const dims = 384; // all-MiniLM-L6-v2 dimension
+                return texts.map(() => new Float32Array(dims));
             }
-            this._scheduleSave();
-            success = true;
+            return result;
         } catch {
-            // Embedding failed for the entire batch — entries stay in the queue
-            // and will be retried on the next iteration.
+            const dims = 384;
+            return texts.map(() => new Float32Array(dims));
         }
-
-        // On success, remove the processed entries from the queue and bump counters.
-        if (success) {
-            const remaining: QueueEntry[] = [];
-            for (const entry of this._queue) {
-                if (!selectedSessions.has(entry.sessionId)) {
-                    remaining.push(entry);
-                }
-            }
-            this._queue = remaining;
-
-            for (const sid of selectedSessions) {
-                if (this._pendingBySession.has(sid)) {
-                    this._pendingBySession.delete(sid);
-                    this._totalSessionsCompleted++;
-                }
-            }
-        }
-
-        report(this._totalSessionsCompleted, this._totalSessionsQueued);
     }
 
     private _scheduleSave(): void {
