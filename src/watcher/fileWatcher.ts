@@ -441,6 +441,7 @@ this.index.remove(taskId);
     }
 
     private async buildInitialIndex(indexClaude: boolean, indexCopilot: boolean, indexCline: boolean, indexRooCode: boolean = true, indexCursor: boolean = true, indexWindsurf: boolean = true, indexAider: boolean = true, indexAntigravity: boolean = true, indexChronicle: boolean = true, indexContinue: boolean = true, indexAmazonQ: boolean = true, indexGemini: boolean = true, indexTabnine: boolean = true): Promise<void> {
+        const startTime = Date.now();
         this.channel.appendLine('[Chat Wizard] buildInitialIndex() started');
         await vscode.window.withProgress(
             {
@@ -503,8 +504,17 @@ this.index.remove(taskId);
 
                 const cfg = vscode.workspace.getConfiguration('chatwizard');
                 const all = applySessionFilters([...claudeSessions, ...copilotSessions, ...clineSessions, ...rooCodeSessions, ...cursorSessions, ...windsurfSessions, ...aiderSessions, ...antigravitySessions, ...deduplicatedJsonSessions, ...continueSessions, ...amazonQSessions, ...geminiSessions, ...tabnineSessions], cfg, this.channel);
+                this.channel.appendLine(
+                    `[init] Discovered — Claude: ${claudeSessions.length}, ` +
+                    `Copilot: ${copilotSessions.length}, Cline: ${clineSessions.length}, ` +
+                    `Roo: ${rooCodeSessions.length}, Cursor: ${cursorSessions.length}, ` +
+                    `Windsurf: ${windsurfSessions.length}, Aider: ${aiderSessions.length}, ` +
+                    `Antigravity: ${antigravitySessions.length + deduplicatedJsonSessions.length}, ` +
+                    `Continue: ${continueSessions.length}, AmazonQ: ${amazonQSessions.length}, ` +
+                    `Gemini: ${geminiSessions.length}, Tabnine: ${tabnineSessions.length}`
+                );
                 this.index.batchUpsert(all);
-                this.channel.appendLine(`[init] Batch indexed ${all.length} sessions`);
+                this.channel.appendLine(`[init] Batch indexed ${all.length} sessions in ${Date.now() - startTime}ms`);
 
                 // Merge Chronicle checkpoint data for Copilot sessions (best-effort, non-blocking).
                 if (indexCopilot && indexChronicle) {

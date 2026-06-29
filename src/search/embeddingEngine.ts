@@ -1,6 +1,10 @@
 // src/search/embeddingEngine.ts
 
 import { IEmbeddingEngine, SEMANTIC_DIMS } from './semanticContracts';
+import { withTimeout } from '../utils/logger';
+
+/** How long (ms) before we give up on downloading the ONNX model. */
+const DOWNLOAD_TIMEOUT_MS = 300_000; // 5 minutes
 
 /** Minimal callable shape returned by @xenova/transformers pipeline() */
 type PipelineCallable = {
@@ -44,10 +48,14 @@ async function defaultPipelineFactory(
           }
         : undefined;
 
-    const extractor = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', {
-        cache_dir: cacheDir,
-        progress_callback: progressCallback,
-    });
+    const extractor = await withTimeout(
+        pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', {
+            cache_dir: cacheDir,
+            progress_callback: progressCallback,
+        }),
+        DOWNLOAD_TIMEOUT_MS,
+        'ONNX model download / load',
+    );
 
     return extractor as unknown as PipelineCallable;
 }

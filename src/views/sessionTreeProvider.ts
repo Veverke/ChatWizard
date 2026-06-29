@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { SessionIndex } from '../index/sessionIndex';
-import { Session, SessionSummary, SessionSource } from '../types/index';
+import { Session, SessionSummary, SessionSource, SessionFolder, FolderStats } from '../types/index';
+import { FolderStore } from '../index/folderStore';
 import { extractWorkItemsFromSession } from '../utils/workItemExtractor';
 import { friendlySourceName, sourceCodiconId } from '../ui/sourceUi';
 import { sourceBrandIconUris } from '../ui/sourceBrandIcons';
@@ -153,7 +154,7 @@ export class LoadingTreeItem extends vscode.TreeItem {
 // Date grouping
 // ---------------------------------------------------------------------------
 
-export type GroupMode = 'none' | 'date' | 'branch' | 'workItem' | 'tag';
+export type GroupMode = 'none' | 'date' | 'branch' | 'workItem' | 'tag' | 'folder';
 
 /**
  * Returns a bucket label for a given ISO date string.
@@ -236,6 +237,52 @@ export class ContextGroupTreeItem extends vscode.TreeItem {
             mode === 'branch' ? 'git-branch' : mode === 'tag' ? 'bookmark' : 'tag'
         );
         this.contextValue = 'contextGroup';
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Folder group tree item
+// ---------------------------------------------------------------------------
+
+export class FolderGroupTreeItem extends vscode.TreeItem {
+    readonly folder: SessionFolder;
+    readonly stats: FolderStats;
+    readonly index: SessionIndex;
+
+    constructor(folder: SessionFolder, stats: FolderStats, index: SessionIndex, allSummaries: SessionSummary[]) {
+        const childSessionCount = folder.sessionIds.length;
+        const subfolderCount = folder.childFolderIds.length;
+        const parts: string[] = [];
+        if (subfolderCount > 0) { parts.push(`${subfolderCount} folder${subfolderCount === 1 ? '' : 's'}`); }
+        if (childSessionCount > 0) { parts.push(`${childSessionCount} session${childSessionCount === 1 ? '' : 's'}`); }
+
+        super(folder.name, subfolderCount > 0 || childSessionCount > 0
+            ? vscode.TreeItemCollapsibleState.Collapsed
+            : vscode.TreeItemCollapsibleState.None);
+
+        this.folder = folder;
+        this.stats = stats;
+        this.index = index;
+        this.id = `folder:${folder.id}`;
+        this.description = parts.length > 0 ? parts.join(' · ') : 'empty';
+        this.iconPath = new vscode.ThemeIcon('folder');
+        this.contextValue = 'sessionFolder';
+
+        // Build tooltip with hover stats overlay
+        this.tooltip = this._buildTooltip(stats);
+    }
+
+    private _buildTooltip(stats: FolderStats): vscode.MarkdownString {
+        const lines: string[] = [];
+        lines.push(`**📁 ${this.folder.name}**`);
+        lines.push('');
+        lines.push(`**Total Chats:** ${stats.totalChats}`);
+        lines.push(`**Total Size:** ${stats.totalSizeFormatted}`);
+        lines.push(`**Sources:** ${stats.sources.length > 0 ? stats.sources.join(', ') : '—'}`);
+        lines.push(`**Models:** ${stats.models.length > 0 ? stats.models.join(', ') : '—'}`);
+        const md = new vscode.MarkdownString(lines.join('\n'));
+        md.isTrusted = true;
+        return md;
     }
 }
 
@@ -368,7 +415,7 @@ export class SessionParseWarningDecorationProvider implements vscode.FileDecorat
 // Provider
 // ---------------------------------------------------------------------------
 
-export type SessionTreeNode = SessionTreeItem | DateGroupTreeItem | ContextGroupTreeItem | LoadMoreTreeItem | LoadingTreeItem;
+export type SessionTreeNode = SessionTreeItem | DateGroupTreeItem | ContextGroupTreeItem | FolderGroupTreeItem | LoadMoreTreeItem | LoadingTreeItem;
 
 export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeNode> {
     private _onDidChangeTreeData = new vscode.EventEmitter<SessionTreeNode | undefined | void>();
@@ -397,6 +444,8 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
     private _loadingTimeout: ReturnType<typeof setTimeout> | null = null;
     /** Group mode — on by default */
     private _groupMode: GroupMode = 'date';
+    /** Folder store — set externally after construction */
+    private _folderStore: FolderStore | null = null;
 
     constructor(private readonly index: SessionIndex, private readonly extensionUri?: vscode.Uri) {
         // If the index already has data (e.g. in tests where sessions are upserted
@@ -452,6 +501,17 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
     getManualOrder(): string[] { return [...this._manualOrder]; }
 
     setManualOrder(order: string[]): void { this._manualOrder = order; }
+
+    // ------------------------------------------------------------------
+    // Folder store
+    // ------------------------------------------------------------------
+
+    /** Attach a FolderStore to this provider. Must be called before groupMode='folder'. */
+    setFolderStore(store: FolderStore): void {
+        this._folderStore = store;
+    }
+
+    getFolderStore(): FolderStore | null { return this._folderStore; }
 
     // ------------------------------------------------------------------
     // Group mode
@@ -645,7 +705,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
     getTreeItem(element: SessionTreeNode): vscode.TreeItem { return element; }
 
     // Required by VS Code for treeView.reveal() to work.
-    getParent(element: SessionTreeNode): DateGroupTreeItem | ContextGroupTreeItem | undefined {
+    getParent(element: SessionTreeNode): DateGroupTreeItem | ContextGroupTreeItem | FolderGroupTreeItem | undefined {
         // When grouping is active, SessionTreeItems are nested under a group header.
         if (element instanceof SessionTreeItem) {
             if (this._groupMode === 'date') {
@@ -669,9 +729,75 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
                 const tags = this.index.getSidecarMeta(element.summary.id)?.tags ?? [];
                 const key = tags.length > 0 ? tags[0] : '(untagged)';
                 return new ContextGroupTreeItem(key, 0, 'tag');
+            } else if (this._groupMode === 'folder') {
+                // Find the parent folder for this session
+                return this._getParentFolderForSession(element.summary.id);
+            }
+        }
+        if (element instanceof FolderGroupTreeItem && element.folder.parentId) {
+            // Return the parent FolderGroupTreeItem for a subfolder
+            return this._getParentFolderGroup(element.folder.parentId);
+        }
+        return undefined;
+    }
+
+    /** Finds the FolderGroupTreeItem that contains a given session. */
+    private _getParentFolderForSession(sessionId: string): FolderGroupTreeItem | undefined {
+        const folders = this._folderStore?.getCached();
+        if (!folders) { return undefined; }
+        const all = this._buildOrderedSummaries();
+        for (const folder of folders.values()) {
+            if (folder.sessionIds.includes(sessionId)) {
+                const descendantIds = this._collectDescendantFolderSessionIds(folder.id, folders, new Set());
+                const idSet = new Set(descendantIds);
+                const relevant = all.filter(s => idSet.has(s.id));
+                let totalSizeBytes = 0;
+                const sources = new Set<string>();
+                const models = new Set<string>();
+                for (const s of relevant) {
+                    if (s.fileSizeBytes !== undefined) { totalSizeBytes += s.fileSizeBytes; }
+                    sources.add(s.source);
+                    if (s.model) { models.add(s.model); }
+                }
+                const stats: FolderStats = {
+                    totalChats: relevant.length,
+                    totalSizeBytes,
+                    totalSizeFormatted: this._formatBytes(totalSizeBytes),
+                    sources: Array.from(sources).sort(),
+                    models: Array.from(models).sort(),
+                };
+                return new FolderGroupTreeItem(folder, stats, this.index, all);
             }
         }
         return undefined;
+    }
+
+    /** Builds a FolderGroupTreeItem for a given folder ID. */
+    private _getParentFolderGroup(folderId: string): FolderGroupTreeItem | undefined {
+        const folders = this._folderStore?.getCached();
+        if (!folders) { return undefined; }
+        const folder = folders.get(folderId);
+        if (!folder) { return undefined; }
+        const all = this._buildOrderedSummaries();
+        const descendantIds = this._collectDescendantFolderSessionIds(folder.id, folders, new Set());
+        const idSet = new Set(descendantIds);
+        const relevant = all.filter(s => idSet.has(s.id));
+        let totalSizeBytes = 0;
+        const sources = new Set<string>();
+        const models = new Set<string>();
+        for (const s of relevant) {
+            if (s.fileSizeBytes !== undefined) { totalSizeBytes += s.fileSizeBytes; }
+            sources.add(s.source);
+            if (s.model) { models.add(s.model); }
+        }
+        const stats: FolderStats = {
+            totalChats: relevant.length,
+            totalSizeBytes,
+            totalSizeFormatted: this._formatBytes(totalSizeBytes),
+            sources: Array.from(sources).sort(),
+            models: Array.from(models).sort(),
+        };
+        return new FolderGroupTreeItem(folder, stats, this.index, all);
     }
 
     private _buildOrderedSummaries(): SessionSummary[] {
@@ -799,6 +925,98 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
             .map(([key, count]) => new ContextGroupTreeItem(key, count, 'tag'));
     }
 
+    /** Builds folder group tree items. Root-level folders with stats. */
+    private _buildFolderGroups(summaries: SessionSummary[]): FolderGroupTreeItem[] {
+        if (!this._folderStore) { return []; }
+        const folders = this._folderStore.getCached();
+        if (!folders) { return []; }
+
+        const rootFolders = Array.from(folders.values())
+            .filter(f => f.parentId === null)
+            .sort((a, b) => a.name.localeCompare(b.name));
+
+        // Collect session IDs that are already assigned to any folder
+        const assignedIds = new Set<string>();
+        for (const f of folders.values()) {
+            for (const sid of f.sessionIds) {
+                assignedIds.add(sid);
+            }
+        }
+
+        const items = rootFolders.map(f => {
+            // Compute stats asynchronously — but for sync rendering use synchronous best-effort
+            const descendantIds = this._collectDescendantFolderSessionIds(f.id, folders, new Set());
+            const idSet = new Set(descendantIds);
+            const relevant = summaries.filter(s => idSet.has(s.id));
+            let totalSizeBytes = 0;
+            const sources = new Set<string>();
+            const models = new Set<string>();
+            for (const s of relevant) {
+                if (s.fileSizeBytes !== undefined) { totalSizeBytes += s.fileSizeBytes; }
+                sources.add(s.source);
+                if (s.model) { models.add(s.model); }
+            }
+            const stats: FolderStats = {
+                totalChats: relevant.length,
+                totalSizeBytes,
+                totalSizeFormatted: this._formatBytes(totalSizeBytes),
+                sources: Array.from(sources).sort(),
+                models: Array.from(models).sort(),
+            };
+            return new FolderGroupTreeItem(f, stats, this.index, summaries);
+        });
+
+        // Add uncategorized group at the end
+        const uncategorized = summaries.filter(s => !assignedIds.has(s.id));
+        if (uncategorized.length > 0) {
+            const tooltip = new vscode.MarkdownString(
+                `**📁 Uncategorized**\n\n${uncategorized.length} session${uncategorized.length === 1 ? '' : 's'} not assigned to any folder.`
+            );
+            tooltip.isTrusted = true;
+            const item = new vscode.TreeItem(
+                '(uncategorized)',
+                vscode.TreeItemCollapsibleState.Expanded
+            );
+            item.id = 'folder:__uncategorized__';
+            item.description = `${uncategorized.length} session${uncategorized.length === 1 ? '' : 's'}`;
+            item.iconPath = new vscode.ThemeIcon('folder-library');
+            item.contextValue = 'folderUncategorized';
+            item.tooltip = tooltip;
+
+            // We can't easily mix TreeItem with FolderGroupTreeItem in the same array type,
+            // so we push a plain TreeItem — getChildren handles the rendering.
+            items.push(item as unknown as FolderGroupTreeItem);
+        }
+
+        return items;
+    }
+
+    /** Recursively collects all descendant session IDs for a folder. Synchronous version. */
+    private _collectDescendantFolderSessionIds(
+        folderId: string,
+        map: Map<string, SessionFolder>,
+        visited: Set<string>
+    ): string[] {
+        if (visited.has(folderId)) { return []; }
+        visited.add(folderId);
+        const folder = map.get(folderId);
+        if (!folder) { return []; }
+        const result = [...folder.sessionIds];
+        for (const childId of folder.childFolderIds) {
+            result.push(...this._collectDescendantFolderSessionIds(childId, map, visited));
+        }
+        return result;
+    }
+
+    /** Formats bytes to a human-readable string. */
+    private _formatBytes(bytes: number): string {
+        if (bytes === 0) { return '0 B'; }
+        const units = ['B', 'KB', 'MB', 'GB'];
+        const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+        const val = bytes / Math.pow(1024, i);
+        return `${val.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+    }
+
     /** True if at least one session has Chronicle branch data. */
     hasBranchData(): boolean {
         for (const s of this.index.getAllSummaries()) {
@@ -825,6 +1043,56 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
             if (tags && tags.length > 0) { return true; }
         }
         return false;
+    }
+
+    /** Returns child items for a folder: subfolder groups + session items. */
+    private _getFolderChildren(element: FolderGroupTreeItem): SessionTreeNode[] {
+        const all = this._buildOrderedSummaries();
+        const pinnedSet = new Set(this._pinnedIds);
+        const result: SessionTreeNode[] = [];
+
+        const folders = this._folderStore?.getCached();
+        if (!folders) { return []; }
+
+        // Add subfolder items first
+        const subfolders = element.folder.childFolderIds
+            .map(id => folders.get(id))
+            .filter((f): f is SessionFolder => f !== undefined)
+            .sort((a, b) => a.name.localeCompare(b.name));
+
+        for (const sub of subfolders) {
+            const descendantIds = this._collectDescendantFolderSessionIds(sub.id, folders, new Set());
+            const idSet = new Set(descendantIds);
+            const relevant = all.filter(s => idSet.has(s.id));
+            let totalSizeBytes = 0;
+            const sources = new Set<string>();
+            const models = new Set<string>();
+            for (const s of relevant) {
+                if (s.fileSizeBytes !== undefined) { totalSizeBytes += s.fileSizeBytes; }
+                sources.add(s.source);
+                if (s.model) { models.add(s.model); }
+            }
+            const stats: FolderStats = {
+                totalChats: relevant.length,
+                totalSizeBytes,
+                totalSizeFormatted: this._formatBytes(totalSizeBytes),
+                sources: Array.from(sources).sort(),
+                models: Array.from(models).sort(),
+            };
+            result.push(new FolderGroupTreeItem(sub, stats, this.index, all));
+        }
+
+        // Add session items directly in this folder
+        const sessionIdsInFolder = new Set(element.folder.sessionIds);
+        const sessions = all.filter(s => sessionIdsInFolder.has(s.id));
+        for (const s of sessions) {
+            result.push(new SessionTreeItem(s, pinnedSet.has(s.id), this.extensionUri,
+                this.index.getSidecarMeta(s.id)?.tags,
+                this.index.getSidecarMeta(s.id)?.summary,
+                this.index.getSidecarMeta(s.id)?.status));
+        }
+
+        return result;
     }
 
     getChildren(element?: SessionTreeNode): SessionTreeNode[] {
@@ -871,6 +1139,11 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
             return matched.map(s => new SessionTreeItem(s, pinnedSet.has(s.id), this.extensionUri, this.index.getSidecarMeta(s.id)?.tags, this.index.getSidecarMeta(s.id)?.summary, this.index.getSidecarMeta(s.id)?.status));
         }
 
+        // When a FolderGroupTreeItem is expanded, return subfolder items + session children
+        if (element instanceof FolderGroupTreeItem) {
+            return this._getFolderChildren(element);
+        }
+
         if (element) { return []; }
 
         const pinnedSet = new Set(this._pinnedIds);
@@ -889,6 +1162,9 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
         }
         if (this._groupMode === 'tag') {
             return this._buildTagGroups(all);
+        }
+        if (this._groupMode === 'folder') {
+            return this._buildFolderGroups(all);
         }
 
         // Flat view (original behaviour with pagination)

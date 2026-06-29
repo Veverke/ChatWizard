@@ -30,7 +30,7 @@ const DEFAULTS: PersistedUiState = {
  * Gracefully handles missing or corrupt data by returning defaults.
  */
 export function loadUiState(context: vscode.ExtensionContext): PersistedUiState {
-    const VALID_GROUP_MODES: GroupMode[] = ['none', 'date', 'branch', 'workItem', 'tag'];
+    const VALID_GROUP_MODES: GroupMode[] = ['none', 'date', 'branch', 'workItem', 'tag', 'folder'];
     const VALID_CB_GROUP_MODES: CbGroupMode[] = ['none', 'language'];
     try {
         const raw = context.globalState.get<string>(STORAGE_KEY);

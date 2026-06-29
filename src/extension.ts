@@ -13,6 +13,7 @@ import {
     SessionTreeItem,
     DateGroupTreeItem,
     ContextGroupTreeItem,
+    FolderGroupTreeItem,
     LoadMoreTreeItem,
     SortMode,
     SortKey,
@@ -58,10 +59,12 @@ import { ListSourcesTool } from './mcp/tools/listSourcesTool';
 import { ServerInfoTool } from './mcp/tools/serverInfoTool';
 import { QueryHistoryPrompt, ContinueFromHistoryPrompt, GetPromptsPrompt } from './mcp/prompts/contextPrompts';
 import { isNewerVersion } from './utils/semver';
+import { createLogger, type BoundLogger } from './utils/logger';
 import { loadUiState, saveUiState } from './utils/persistedUiState';
 import { registerChatParticipant } from './mcp/chatParticipant';
 import { NullSemanticIndexer, ISemanticIndexer } from './search/semanticContracts';
 import { SidecarMetadataStore } from './index/sidecarMetadataStore';
+import { FolderStore } from './index/folderStore';
 import { SessionArchive } from './archive/sessionArchive';
 import { SummaryGenerator, runSummaryBackgroundJob } from './analytics/summaryGenerator';
 import { runEntityExtractionJob } from './analytics/entityExtractor';
@@ -87,9 +90,22 @@ import { CloudSyncManager } from './cloud/cloudSyncManager';
 let watcher: ChatWizardWatcher | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+    const startedAt = Date.now();
+
     const channel = vscode.window.createOutputChannel('Chat Wizard');
     context.subscriptions.push(channel);
     channel.appendLine('[Chat Wizard] activate() started.');
+
+    const log = createLogger(channel).withContext('Activate');
+    log.info('Extension activation started');
+
+    // Log all chatwizard.* config settings at startup
+    const cfg = vscode.workspace.getConfiguration('chatwizard');
+    const allCfg = cfg.inspect<unknown>('');
+    log.info('Configuration: enableSemanticSearch=%s logLevel=%s enableTelemetry=%s',
+        cfg.get('enableSemanticSearch', true),
+        cfg.get('logLevel', 'INFO'),
+        cfg.get('enableTelemetry', false));
 
     // Local telemetry recorder (opt-in, no external calls)
     const telemetry = new TelemetryRecorder(context.globalStorageUri.fsPath);
@@ -517,6 +533,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     provider.setGroupMode(uiState.sessionGroupMode);
     codeBlockProvider.setGroupMode(uiState.cbGroupMode);
 
+    // ── Feature: Folder store ────────────────────────────────────────────
+    const folderStore = new FolderStore(context.globalStorageUri.fsPath);
+    // Best-effort load so the in-memory cache is warm before folder tree render.
+    void folderStore.load().then(() => {
+        provider.setFolderStore(folderStore);
+    });
+    // If the store was already loaded (cache warm), attach immediately.
+    if (folderStore.getCached()) {
+        provider.setFolderStore(folderStore);
+    }
+
     // Push current sort state to VS Code context (drives toolbar icon when clauses)
     function syncContext(): void {
         const primary = provider.getPrimary();
@@ -545,21 +572,69 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
     function savePins(): void { saveUiStateNow(); }
 
-    // Drag-and-drop controller for reordering tree items
-    const dragDropController: vscode.TreeDragAndDropController<SessionTreeItem> = {
-        dragMimeTypes: ['application/vnd.chatwizard.session'],
-        dropMimeTypes: ['application/vnd.chatwizard.session'],
+    // Drag-and-drop controller for reordering tree items and folder assignment
+    const dragDropController: vscode.TreeDragAndDropController<SessionTreeItem | FolderGroupTreeItem> = {
+        dragMimeTypes: ['application/vnd.chatwizard.session', 'application/vnd.chatwizard.folder'],
+        dropMimeTypes: ['application/vnd.chatwizard.session', 'application/vnd.chatwizard.folder'],
         handleDrag(items, dataTransfer) {
-            dataTransfer.set(
-                'application/vnd.chatwizard.session',
-                new vscode.DataTransferItem(items.map(i => i.summary.id))
-            );
+            const sessionIds: string[] = [];
+            const folderIds: string[] = [];
+            for (const item of items) {
+                if (item instanceof FolderGroupTreeItem) {
+                    folderIds.push(item.folder.id);
+                } else {
+                    sessionIds.push(item.summary.id);
+                }
+            }
+            if (sessionIds.length > 0) {
+                dataTransfer.set(
+                    'application/vnd.chatwizard.session',
+                    new vscode.DataTransferItem(sessionIds)
+                );
+            }
+            if (folderIds.length > 0) {
+                dataTransfer.set(
+                    'application/vnd.chatwizard.folder',
+                    new vscode.DataTransferItem(folderIds)
+                );
+            }
         },
         async handleDrop(target, dataTransfer) {
+            // Dropping session(s) onto a folder → move to folder
+            const draggedSessions = dataTransfer.get('application/vnd.chatwizard.session');
+            if (draggedSessions && target instanceof FolderGroupTreeItem) {
+                const ids = draggedSessions.value as string[];
+                for (const id of ids) {
+                    await folderStore.moveSessionToFolder(id, target.folder.id);
+                }
+                provider.refresh();
+                treeView.description = provider.getDescription();
+                return;
+            }
+
+            // Dropping folder(s) onto a folder → make subfolder
+            const draggedFolders = dataTransfer.get('application/vnd.chatwizard.folder');
+            if (draggedFolders && target instanceof FolderGroupTreeItem) {
+                const ids = draggedFolders.value as string[];
+                for (const id of ids) {
+                    try {
+                        await folderStore.moveFolder(id, target.folder.id);
+                    } catch (err) {
+                        void vscode.window.showErrorMessage(`Failed to move folder: ${err}`);
+                    }
+                }
+                provider.refresh();
+                treeView.description = provider.getDescription();
+                return;
+            }
+
+            // Default: reorder sessions in flat/grouped list
             const dragged = dataTransfer.get('application/vnd.chatwizard.session');
             if (!dragged) { return; }
             const ids = dragged.value as string[];
-            provider.reorder(ids, target?.summary.id);
+            if (target && 'summary' in target) {
+                provider.reorder(ids, (target as SessionTreeItem).summary.id);
+            }
             treeView.description = provider.getDescription();
             provider.refresh();
             savePins();
@@ -1172,6 +1247,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             const hasBranch = provider.hasBranchData();
             const hasWorkItems = provider.hasWorkItems();
             const hasTags = provider.hasTags();
+            const hasFolders = folderStore.getCached() !== null && folderStore.getCached()!.size > 0;
             const current = provider.getGroupMode();
             const workItemPattern = vscode.workspace.getConfiguration('chatwizard').get<string>('workItemPattern', '');
 
@@ -1182,6 +1258,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 { label: `$(bookmark) Group by Tag${!hasTags ? '  \u2014 tag sessions to populate' : ''}`, mode: 'tag' },
                 ...(workItemPattern ? [{ label: '$(tag) Group by Work Item', mode: 'workItem' as GroupMode,
                   description: hasWorkItems ? undefined : 'No work items found in sessions' }] : []),
+                { label: `$(folder) Group by Folder${!hasFolders ? '  \u2014 create folders to organize' : ''}`, mode: 'folder' as GroupMode },
             ];
 
             const activeLabel = {
@@ -1190,6 +1267,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 branch: `$(git-branch) Group by Branch${!hasBranch ? '  \u2014 open chats to populate' : ''}`,
                 tag: `$(bookmark) Group by Tag${!hasTags ? '  \u2014 tag sessions to populate' : ''}`,
                 workItem: workItemPattern ? '$(tag) Group by Work Item' : undefined,
+                folder: `$(folder) Group by Folder${!hasFolders ? '  \u2014 create folders to organize' : ''}`,
             }[current];
 
             const picked = await vscode.window.showQuickPick(
@@ -1230,6 +1308,144 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             treeView.description = provider.getDescription();
             void context.globalState.update('sessionGroupMode', 'none');
             syncContext();
+        })
+    );
+
+    // ------------------------------------------------------------------
+    // Folder management commands
+    // ------------------------------------------------------------------
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.createFolder', async () => {
+            const name = await vscode.window.showInputBox({
+                title: 'Create New Folder',
+                placeHolder: 'Folder name',
+                prompt: 'Enter a name for the new folder',
+                validateInput: v => v && v.trim().length > 0 ? undefined : 'Name is required',
+            });
+            if (!name) { return; }
+            try {
+                const folder = await folderStore.createFolder(name);
+                // If folder store wasn't attached yet, attach it
+                if (!provider.getFolderStore()) {
+                    provider.setFolderStore(folderStore);
+                }
+                // Auto-switch to folder group mode
+                if (provider.getGroupMode() !== 'folder') {
+                    provider.setGroupMode('folder');
+                    void context.globalState.update('sessionGroupMode', 'folder');
+                    syncContext();
+                }
+                provider.refresh();
+                treeView.description = provider.getDescription();
+            } catch (err) {
+                void vscode.window.showErrorMessage(`Failed to create folder: ${err}`);
+            }
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.createSubfolder', async (item: FolderGroupTreeItem) => {
+            const name = await vscode.window.showInputBox({
+                title: 'Create Subfolder',
+                placeHolder: 'Subfolder name',
+                prompt: `Enter a name for the new subfolder under "${item.folder.name}"`,
+                validateInput: v => v && v.trim().length > 0 ? undefined : 'Name is required',
+            });
+            if (!name || !item.folder) { return; }
+            try {
+                const folder = await folderStore.createFolder(name, item.folder.id);
+                provider.refresh();
+                treeView.description = provider.getDescription();
+            } catch (err) {
+                void vscode.window.showErrorMessage(`Failed to create subfolder: ${err}`);
+            }
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.renameFolder', async (item: FolderGroupTreeItem) => {
+            if (!item.folder) { return; }
+            const name = await vscode.window.showInputBox({
+                title: 'Rename Folder',
+                placeHolder: 'New folder name',
+                value: item.folder.name,
+                validateInput: v => v && v.trim().length > 0 ? undefined : 'Name is required',
+            });
+            if (!name) { return; }
+            try {
+                await folderStore.renameFolder(item.folder.id, name);
+                provider.refresh();
+                treeView.description = provider.getDescription();
+            } catch (err) {
+                void vscode.window.showErrorMessage(`Failed to rename folder: ${err}`);
+            }
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.deleteFolder', async (item: FolderGroupTreeItem) => {
+            if (!item.folder) { return; }
+            const confirm = await vscode.window.showWarningMessage(
+                `Delete folder "${item.folder.name}"?\n\n` +
+                `Sessions inside the folder will be moved to (uncategorized). ` +
+                `Subfolders will also be removed. This cannot be undone.`,
+                { modal: true },
+                'Delete'
+            );
+            if (confirm !== 'Delete') { return; }
+            try {
+                await folderStore.deleteFolder(item.folder.id);
+                provider.refresh();
+                treeView.description = provider.getDescription();
+            } catch (err) {
+                void vscode.window.showErrorMessage(`Failed to delete folder: ${err}`);
+            }
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.moveSessionToFolder', async (item: SessionTreeItem) => {
+            const allFolders = await folderStore.getAll();
+            if (allFolders.size === 0) {
+                void vscode.window.showInformationMessage('No folders exist. Create one first.');
+                return;
+            }
+            const currentFolderId = await folderStore.getSessionFolderId(item.summary.id);
+            const picks = Array.from(allFolders.values())
+                .sort((a, b) => a.name.localeCompare(b.name))
+                .map(f => ({
+                    label: `${f.parentId ? '  ' : ''}📁 ${f.name}`,
+                    description: currentFolderId === f.id ? 'current' : undefined,
+                    folderId: f.id,
+                }));
+            picks.unshift({ label: '$(close) Remove from folder', description: currentFolderId ? undefined : 'current', folderId: '__none__' });
+
+            const chosen = await vscode.window.showQuickPick(picks, {
+                title: `Move "${item.summary.title}" to folder`,
+                placeHolder: 'Choose a folder',
+            });
+            if (!chosen) { return; }
+            try {
+                await folderStore.moveSessionToFolder(item.summary.id, chosen.folderId === '__none__' ? undefined : chosen.folderId);
+                provider.refresh();
+                treeView.description = provider.getDescription();
+            } catch (err) {
+                void vscode.window.showErrorMessage(`Failed to move session: ${err}`);
+            }
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.addSessionToFolder', async (item: SessionTreeItem, folderId?: string) => {
+            if (!folderId) { return; }
+            try {
+                await folderStore.moveSessionToFolder(item.summary.id, folderId);
+                provider.refresh();
+                treeView.description = provider.getDescription();
+            } catch (err) {
+                void vscode.window.showErrorMessage(`Failed to add session to folder: ${err}`);
+            }
         })
     );
 
@@ -2132,6 +2348,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         channel.appendLine(
             `Chat Wizard activated — ${index.size} sessions indexed (${copilotCount} Copilot, ${claudeCount} Claude)`
         );
+        log.info('Activation complete — %d sessions in %dms', index.size, Date.now() - startedAt);
         telemetry.record('extension.activated', { sessionCount: index.size });
 
         // ── Feature 18: AI summaries background job ───────────────────────────

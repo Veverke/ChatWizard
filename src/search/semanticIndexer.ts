@@ -6,6 +6,7 @@ import * as fs from 'fs';
 import { ISemanticIndexer, IEmbeddingEngine, ISemanticIndex, SemanticScope, SEMANTIC_MIN_SCORE } from './semanticContracts';
 import { SemanticSearchResult } from './types';
 import { Session } from '../types/index';
+import { createLogger, type BoundLogger, withTimeout } from '../utils/logger';
 
 const EMBEDDINGS_FILENAME = 'semantic-embeddings.bin';
 const SAVE_DEBOUNCE_MS = 5_000;
@@ -15,7 +16,18 @@ const MODEL_CACHE_SUBDIR = 'models';
 // initial file-watcher batch) be collected before the queue runs, so the progress
 // bar shows the correct total from the very first update.
 const QUEUE_START_DEBOUNCE_MS = 4_000;
-
+/** Max time to wait for the ONNX model to download / load before showing an error. */
+const MODEL_LOAD_TIMEOUT_MS = 120_000;
+/** Max time to wait for embedBatch() before falling back to zero-vectors. */
+const EMBED_TIMEOUT_MS = 60_000;
+/**
+ * Max quiet period between progress reports before the queue is considered
+ * stalled. If no progress is reported within this window, a stall-timeout is
+ * logged and the queue is restarted to recover from a stuck ONNX call.
+ */
+const STALL_TIMEOUT_MS = 120_000;
+/** Max texts per single embedBatch call — keeps the event loop responsive. */
+const EMBED_CHUNK_SIZE = 5;
 /**
  * Injectable VS Code interactions ΓÇö replace in unit tests to avoid real UI dialogs.
  */
@@ -95,15 +107,21 @@ export function defaultVsCodeApi(globalState?: SemanticGlobalState): SemanticInd
         },
         async runIndexingProgress(task: (report: (completed: number, total: number) => void) => Promise<void>): Promise<void> {
             await vscode.window.withProgress(
-                { location: vscode.ProgressLocation.Notification, title: 'Chat Wizard: building vector embeddings for semantic search...', cancellable: false },
+                {
+                    location: vscode.ProgressLocation.Notification,
+                    title: 'Chat Wizard: building vector embeddings for semantic search...',
+                    cancellable: false,
+                },
                 async (progress) => {
-                    // Use an indeterminate spinner with live count text.
-                    // Determinate (increment) mode breaks when the total grows mid-run
-                    // (archive restore adds sessions after the first batch starts), causing
-                    // the percentage to go backwards and the bar to stall.
+                    // Use a numeric (determinate) progress bar so the user sees
+                    // concrete progress. If the total grows mid-run (archive-restore
+                    // batch arriving after the first batch), the percentage may dip
+                    // briefly — this is preferable to an indeterminate spinner that
+                    // offers no visual feedback at all.
                     await task((completed, total) => {
                         if (total === 0) { return; }
-                        progress.report({ message: `${completed} / ${total} sessions` });
+                        const pct = Math.min(100, Math.round((completed / total) * 100));
+                        progress.report({ message: `${completed} / ${total} sessions (${pct}%)`, increment: undefined });
                     });
                 },
             );
@@ -160,6 +178,7 @@ export class SemanticIndexer implements ISemanticIndexer {
     private readonly engine: IEmbeddingEngine;
     private readonly index: ISemanticIndex;
     private readonly vsCodeApi: SemanticIndexerVsCodeApi;
+    private readonly log: BoundLogger;
 
     private _isReady = false;
     private _declined = false;
@@ -172,6 +191,10 @@ export class SemanticIndexer implements ISemanticIndexer {
     private _totalSessionsCompleted = 0;
     /** Remaining queue entries per session; deleted when the session reaches 0. */
     private _pendingBySession = new Map<string, number>();
+    /** Tracks last progress report timestamp for stall detection. */
+    private _lastProgressTs = 0;
+    /** Stall watchdog timer. */
+    private _stallTimer: ReturnType<typeof setTimeout> | undefined;
 
     // Status bar for indexing progress
     // (progress is surfaced via vsCodeApi.runIndexingProgress ΓÇö no local status bar item)
@@ -207,6 +230,8 @@ export class SemanticIndexer implements ISemanticIndexer {
         this.index = indexFactory();
         this.vsCodeApi = vsCodeApi ?? defaultVsCodeApi();
         this._queueStartDebounceMs = queueStartDebounceMs ?? QUEUE_START_DEBOUNCE_MS;
+        this.log = createLogger().withContext('SemanticIndexer');
+        this.log.debug('Constructed — storagePath=%s', storagePath);
     }
 
     // ΓöÇΓöÇ Getters ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
@@ -230,6 +255,7 @@ export class SemanticIndexer implements ISemanticIndexer {
      */
     setMaxAgeDays(days: number): void {
         this._maxAgeDays = Math.max(0, days);
+        this.log.info('Max age set to %d days', this._maxAgeDays);
     }
 
     // ΓöÇΓöÇ initialize() ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
@@ -241,36 +267,66 @@ export class SemanticIndexer implements ISemanticIndexer {
      */
     async initialize(): Promise<void> {
         if (this._isReady || this._declined || this._disposed) {
+            this.log.debug('initialize() skipped — ready=%s declined=%s disposed=%s',
+                this._isReady, this._declined, this._disposed);
             return;
         }
+
+        this.log.info('Initialize started');
 
         // First-use consent
         const isFirstDownload = this.vsCodeApi.isFirstUse(this.storagePath);
         if (isFirstDownload) {
+            this.log.info('First use detected — showing consent dialog');
             const consented = await this.vsCodeApi.showConsentDialog();
             if (!consented) {
                 this._declined = true;
+                this.log.info('User declined consent — semantic search disabled');
                 return;
             }
+            this.log.info('User granted consent — proceeding with model download');
+        } else {
+            this.log.debug('Already consented — skipping consent dialog');
         }
 
         // Load model, always wrapped in a progress indicator so the UI and tests
         // can observe the loading lifecycle regardless of whether it is a first download.
-        await this.vsCodeApi.loadModelWithProgress(async (report) => {
-            await this.engine.load(report);
-        });
+        try {
+            await this.vsCodeApi.loadModelWithProgress(async (report) => {
+                await withTimeout(
+                    this.engine.load(report),
+                    MODEL_LOAD_TIMEOUT_MS,
+                    'ONNX model download/load',
+                );
+            });
+            this.log.info('Model loaded successfully');
+        } catch (err) {
+            this.log.error('Model download/load failed after %dms: %s', MODEL_LOAD_TIMEOUT_MS, String(err));
+            throw err; // let caller handle the error
+        }
 
         // Persist the marker only after a successful download so that the popup
         // reappears if the download fails and the user opens VS Code again.
         if (isFirstDownload) {
             this.vsCodeApi.markModelDownloaded(this.storagePath);
             this.vsCodeApi.showModelReady();
+            this.log.info('Model download marker persisted');
         }
 
         // Restore persisted index
-        await this.index.load(path.join(this.storagePath, EMBEDDINGS_FILENAME));
+        try {
+            await withTimeout(
+                this.index.load(path.join(this.storagePath, EMBEDDINGS_FILENAME)),
+                10_000,
+                'embedding index load from disk',
+            );
+            this.log.info('Persisted index loaded — %d sessions restored', this.index.size);
+        } catch (err) {
+            this.log.warn('Could not load persisted index (will start fresh): %s', String(err));
+        }
 
         this._isReady = true;
+        this.log.info('SemanticIndexer is now ready');
     }
 
     // ΓöÇΓöÇ scheduleSession() ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
@@ -283,9 +339,11 @@ export class SemanticIndexer implements ISemanticIndexer {
      */
     scheduleSession(session: Session): void {
         if (!this._isReady || this._disposed) {
+            this.log.debug('scheduleSession skipped — ready=%s disposed=%s', this._isReady, this._disposed);
             return;
         }
         if (this.index.has(session.id)) {
+            this.log.debug('scheduleSession skipped — session %s already indexed', session.id);
             return;
         }
         // Enforce max age filter — skip sessions whose last update is older than the threshold.
@@ -293,6 +351,7 @@ export class SemanticIndexer implements ISemanticIndexer {
             const cutoff = Date.now() - this._maxAgeDays * 24 * 60 * 60 * 1000;
             const updated = session.updatedAt ? new Date(session.updatedAt).getTime() : 0;
             if (updated > 0 && updated < cutoff) {
+                this.log.debug('scheduleSession skipped — session %s is older than %d days', session.id, this._maxAgeDays);
                 return; // session is too old — skip it
             }
         }
@@ -300,6 +359,7 @@ export class SemanticIndexer implements ISemanticIndexer {
         // enqueuing duplicate work and inflating _totalSessionsQueued when repeated
         // upsert events fire for the same session.
         if (this._pendingBySession.has(session.id)) {
+            this.log.debug('scheduleSession skipped — session %s already queued', session.id);
             return;
         }
 
@@ -343,23 +403,19 @@ export class SemanticIndexer implements ISemanticIndexer {
 
         this._totalSessionsQueued++;
         this._pendingBySession.set(session.id, added);
+        this.log.debug('Queued session %s — %d entries (total queued: %d)', session.id, added, this._totalSessionsQueued);
 
         if (!this._queueRunning) {
-            // Cancel any pending "indexing complete" notification ΓÇö more sessions are
-            // arriving, so the current run's completion toast must be suppressed.
             if (this._indexingCompleteTimer !== undefined) {
                 clearTimeout(this._indexingCompleteTimer);
                 this._indexingCompleteTimer = undefined;
             }
-            // Debounce: reset the start timer on every new session so the queue only
-            // begins once sessions stop arriving. This ensures both the live batch (85)
-            // and the archive-restore batch (24 more) are collected before embedding
-            // starts, giving a stable total (109) from the very first progress report.
             if (this._queueStartTimer !== undefined) {
                 clearTimeout(this._queueStartTimer);
             }
             this._queueStartTimer = setTimeout(() => {
                 this._queueStartTimer = undefined;
+                this.log.debug('Queue start debounce elapsed — starting _runQueue (%d entries)', this._queue.length);
                 if (!this._queueRunning && this._queue.length > 0 && !this._disposed) {
                     this._runQueue();
                 }
@@ -372,6 +428,7 @@ export class SemanticIndexer implements ISemanticIndexer {
     removeSession(sessionId: string): void {
         this.index.remove(sessionId);
         this._scheduleSave();
+        this.log.debug('Removed session %s from semantic index', sessionId);
     }
 
     // ΓöÇΓöÇ search() ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
@@ -405,6 +462,7 @@ export class SemanticIndexer implements ISemanticIndexer {
             return;
         }
         this._disposed = true;
+        this.log.info('Dispose called');
 
         // Drain the queue without embedding remaining items
         this._queue = [];
@@ -422,62 +480,144 @@ export class SemanticIndexer implements ISemanticIndexer {
             clearTimeout(this._indexingCompleteTimer);
             this._indexingCompleteTimer = undefined;
         }
+        if (this._stallTimer !== undefined) {
+            clearTimeout(this._stallTimer);
+            this._stallTimer = undefined;
+        }
 
-        // Final save (fire-and-forget ΓÇö cannot await in dispose)
+        // Final save (fire-and-forget - cannot await in dispose)
         if (this._isReady) {
             this.index.save(path.join(this.storagePath, EMBEDDINGS_FILENAME)).catch(() => { /* ignore */ });
+            this.log.debug('Final save triggered');
         }
     }
 
-    // ΓöÇΓöÇ Private helpers ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // --- Private helpers --------------------------------------------------------
+
+    /**
+     * Starts a watchdog timer that fires if no progress report arrives within
+     * `STALL_TIMEOUT_MS`. The watchdog logs a warning but does not kill the queue
+     * (the embed timeout will eventually trigger).
+     */
+    private _startStallWatchdog(): void {
+        this._clearStallWatchdog();
+        this._stallTimer = setTimeout(() => {
+            const elapsed = Date.now() - this._lastProgressTs;
+            if (elapsed >= STALL_TIMEOUT_MS && this._queueRunning && !this._disposed) {
+                this.log.warn(
+                    'Queue appears stalled — no progress for %dms (timeout=%dms). ' +
+                    'The ONNX embedding call may be stuck. Waiting for embed timeout (%dms).',
+                    elapsed, STALL_TIMEOUT_MS, EMBED_TIMEOUT_MS,
+                );
+            }
+        }, STALL_TIMEOUT_MS);
+    }
+
+    private _clearStallWatchdog(): void {
+        if (this._stallTimer !== undefined) {
+            clearTimeout(this._stallTimer);
+            this._stallTimer = undefined;
+        }
+    }
 
     private async _runQueue(): Promise<void> {
         this._queueRunning = true;
+        this.log.info('Queue started — %d entries across %d sessions', this._queue.length, this._totalSessionsQueued);
+        this._lastProgressTs = Date.now();
+
+        // Start a stall watchdog: if no progress report arrives within STALL_TIMEOUT_MS,
+        // log a warning (the queue may be stuck on ONNX).
+        this._startStallWatchdog();
 
         await this.vsCodeApi.runIndexingProgress(async (report) => {
-            // Snapshot the entire queue — one single embedBatch() call for ALL
-            // entries. ONNX parallelizes the forward pass internally, so a
-            // single large batch is ~100x faster than N sequential calls.
+            // Work on a snapshot — new sessions arriving during processing stay
+            // in _queue and trigger a restart at the end.
             const allEntries = this._queue.splice(0);
             this._queue = [];
 
             if (allEntries.length === 0) { return; }
 
-            const texts = allEntries.map(e => e.text);
             const sessionIds = new Set(allEntries.map(e => e.sessionId));
+            const totalSessions = sessionIds.size;
+            this.log.info('Embedding %d text entries across %d sessions (chunk size=%d)',
+                allEntries.length, totalSessions, EMBED_CHUNK_SIZE);
 
-            report(0, sessionIds.size);
+            report(0, totalSessions);
+            this._lastProgressTs = Date.now();
 
-            try {
-                const embeddings = await this._embedWithTimeout(texts);
-                for (let i = 0; i < allEntries.length; i++) {
-                    const entry = allEntries[i];
+            // Process in small chunks so the event loop stays responsive
+            // and progress is visible. A single giant embedBatch() call can
+            // block the main thread for minutes with synchronous WASM.
+            let completedSessions = new Set<string>();
+            let failedChunks = 0;
+            let totalZeroVec = 0;
+
+            for (let offset = 0; offset < allEntries.length; offset += EMBED_CHUNK_SIZE) {
+                if (this._disposed) { break; }
+
+                // Yield to the event loop — lets VS Code paint UI, process
+                // timeouts, and handle user input between ONNX calls.
+                await new Promise<void>(r => setImmediate(r));
+
+                const chunk = allEntries.slice(offset, offset + EMBED_CHUNK_SIZE);
+                const chunkTexts = chunk.map(e => e.text);
+                this.log.debug('Embedding chunk %d/%d (%d texts)',
+                    Math.floor(offset / EMBED_CHUNK_SIZE) + 1,
+                    Math.ceil(allEntries.length / EMBED_CHUNK_SIZE),
+                    chunkTexts.length);
+
+                const embeddings = await this._embedWithTimeout(chunkTexts);
+
+                // Store results
+                let chunkZeroVec = 0;
+                for (let i = 0; i < chunk.length; i++) {
+                    const entry = chunk[i];
                     const embedding = embeddings[i];
                     if (embedding) {
                         this.index.add(entry.sessionId, entry.role, entry.messageIndex, entry.paragraphIndex, embedding);
+                        // Detect zero-vector (timeout fallback)
+                        let isZero = true;
+                        for (let j = 0; j < embedding.length; j++) {
+                            if (embedding[j] !== 0) { isZero = false; break; }
+                        }
+                        if (isZero) { chunkZeroVec++; totalZeroVec++; }
+                        completedSessions.add(entry.sessionId);
                     }
                 }
-                this._scheduleSave();
-            } catch {
-                // Skip failed embeddings — don't crash the queue.
+
+                // Report progress after every chunk so the user sees movement
+                const sessionsDone = completedSessions.size;
+                this._totalSessionsCompleted = sessionsDone;
+                report(sessionsDone, totalSessions);
+                this._lastProgressTs = Date.now();
+
+                if (chunkZeroVec > 0) {
+                    this.log.warn('Chunk had %d zero-vectors (timeout fallback)', chunkZeroVec);
+                }
             }
 
-            // Mark all sessions as completed
-            for (const sid of sessionIds) {
+            this._scheduleSave();
+
+            // Mark completed sessions (remove from pending)
+            for (const sid of completedSessions) {
                 this._pendingBySession.delete(sid);
             }
-            this._totalSessionsCompleted += sessionIds.size;
-            report(this._totalSessionsCompleted, this._totalSessionsQueued);
+
+            this.log.info('Embedding complete — %d sessions done, %d chunks failed, %d zero-vector fallbacks',
+                completedSessions.size, failedChunks, totalZeroVec);
         });
 
         this._queueRunning = false;
+        this._clearStallWatchdog();
+        this.log.info('Queue finished — %d sessions completed', this._totalSessionsCompleted);
 
         // If more sessions were added while we were running, restart seamlessly
         if (!this._disposed && this._queue.length > 0) {
+            this.log.debug('More sessions queued during run — restarting queue (%d remaining)', this._queue.length);
             this._queueRunning = true;
             setImmediate(() => {
                 if (!this._disposed && this._queue.length > 0) {
-                    this._runQueue().catch(() => { /* ignore */ });
+                    this._runQueue().catch((err) => { this.log.error('Queue restart failed: %s', String(err)); });
                 }
             });
             return;
@@ -490,6 +630,7 @@ export class SemanticIndexer implements ISemanticIndexer {
             this._indexingCompleteTimer = setTimeout(() => {
                 this._indexingCompleteTimer = undefined;
                 if (!this._disposed) {
+                    this.log.info('Showing indexing complete notification (%d sessions)', this._totalSessionsCompleted);
                     this.vsCodeApi.showIndexingComplete(this._totalSessionsCompleted);
                 }
             }, 5_000);
@@ -502,19 +643,26 @@ export class SemanticIndexer implements ISemanticIndexer {
      */
     private async _embedWithTimeout(texts: string[]): Promise<Float32Array[]> {
         if (texts.length === 0) { return []; }
+        this.log.debug('Embedding %d texts with timeout of %dms', texts.length, EMBED_TIMEOUT_MS);
+        const startTime = Date.now();
         try {
             const result = await Promise.race([
                 this.engine.embedBatch(texts),
                 new Promise<null>((_, reject) => {
-                    setTimeout(() => reject(new Error('embedBatch timed out')), 30_000);
+                    setTimeout(() => reject(new Error('embedBatch timed out')), EMBED_TIMEOUT_MS);
                 }),
             ]);
+            const elapsed = Date.now() - startTime;
+            this.log.debug('embedBatch succeeded in %dms', elapsed);
             if (result === null) {
-                const dims = 384; // all-MiniLM-L6-v2 dimension
+                this.log.warn('embedBatch returned null — using zero-vectors');
+                const dims = 384;
                 return texts.map(() => new Float32Array(dims));
             }
             return result;
-        } catch {
+        } catch (err) {
+            const elapsed = Date.now() - startTime;
+            this.log.warn('embedBatch failed after %dms: %s — falling back to zero-vectors', elapsed, String(err));
             const dims = 384;
             return texts.map(() => new Float32Array(dims));
         }
@@ -526,9 +674,11 @@ export class SemanticIndexer implements ISemanticIndexer {
         }
         this._saveTimer = setTimeout(() => {
             this._saveTimer = undefined;
+            this.log.debug('Saving embedding index to disk');
             this.index
                 .save(path.join(this.storagePath, EMBEDDINGS_FILENAME))
-                .catch(() => { /* ignore */ });
+                .then(() => this.log.debug('Embedding index saved successfully'))
+                .catch((err) => this.log.warn('Failed to save embedding index: %s', String(err)));
         }, SAVE_DEBOUNCE_MS);
     }
 }

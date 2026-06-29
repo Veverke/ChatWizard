@@ -637,6 +637,41 @@
         "title": "Chat Wizard: Remove Bookmark…",
         "category": "Chat Wizard",
         "icon": "$(bookmark)"
+      },
+      {
+        "command": "chatwizard.createFolder",
+        "title": "Chat Wizard: Create Folder",
+        "category": "Chat Wizard",
+        "icon": "$(new-folder)"
+      },
+      {
+        "command": "chatwizard.createSubfolder",
+        "title": "Chat Wizard: Create Subfolder",
+        "category": "Chat Wizard",
+        "icon": "$(new-folder)"
+      },
+      {
+        "command": "chatwizard.renameFolder",
+        "title": "Chat Wizard: Rename Folder",
+        "category": "Chat Wizard",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "chatwizard.deleteFolder",
+        "title": "Chat Wizard: Delete Folder",
+        "category": "Chat Wizard",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "chatwizard.moveSessionToFolder",
+        "title": "Chat Wizard: Move Session to Folder…",
+        "category": "Chat Wizard",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "chatwizard.addSessionToFolder",
+        "title": "Chat Wizard: Add Session to Folder",
+        "category": "Chat Wizard"
       }
     ],
     "menus": {
@@ -946,6 +981,26 @@
           "command": "chatwizard.removeBookmark",
           "when": "viewItem == session || viewItem == session.pinned || viewItem == session.archived || viewItem == session.userArchived",
           "group": "6_status@3"
+        },
+        {
+          "command": "chatwizard.createSubfolder",
+          "when": "viewItem == sessionFolder",
+          "group": "1_folder@1"
+        },
+        {
+          "command": "chatwizard.renameFolder",
+          "when": "viewItem == sessionFolder",
+          "group": "1_folder@2"
+        },
+        {
+          "command": "chatwizard.deleteFolder",
+          "when": "viewItem == sessionFolder",
+          "group": "1_folder@3"
+        },
+        {
+          "command": "chatwizard.moveSessionToFolder",
+          "when": "viewItem == session || viewItem == session.pinned",
+          "group": "7_folder@1"
         }
       ],
       "commandPalette": [
@@ -1192,6 +1247,26 @@
         {
           "command": "chatwizard.rotateMcpToken",
           "when": "true"
+        },
+        {
+          "command": "chatwizard.createSubfolder",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.renameFolder",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.deleteFolder",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.moveSessionToFolder",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.addSessionToFolder",
+          "when": "false"
         }
       ]
     },
@@ -1273,6 +1348,18 @@
             "type": "boolean",
             "default": true,
             "description": "Enable the SQLite persistent cache (chatwizard-cache.db). When enabled, sessions are stored in a local SQLite database and loaded from it on startup — only changed source files are re-parsed. Disable to force full re-parsing on every activation."
+          },
+          "chatwizard.logLevel": {
+            "type": "string",
+            "default": "INFO",
+            "enum": ["DEBUG", "INFO", "WARN", "ERROR"],
+            "enumDescriptions": [
+              "Verbose diagnostic logging — all steps, timings, and decisions",
+              "Normal operational messages and warnings",
+              "Only warnings and errors",
+              "Only errors"
+            ],
+            "description": "Minimum log level shown in the Chat Wizard output channel. Set to DEBUG when troubleshooting startup, indexing, or embedding issues."
           }
         }
       },

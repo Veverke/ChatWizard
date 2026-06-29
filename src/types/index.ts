@@ -191,6 +191,41 @@ export interface SessionSummary {
     assistantTokens?: number;
 }
 
+/**
+ * A folder node in the folder tree.
+ * Folders can be nested (parentId) and have an ordered list of session child IDs.
+ */
+export interface SessionFolder {
+    /** Unique identifier for the folder */
+    id: string;
+    /** Display name */
+    name: string;
+    /** Parent folder ID, or null for root-level folders */
+    parentId: string | null;
+    /** Ordered list of session IDs in this folder (not in subfolders) */
+    sessionIds: string[];
+    /** Ordered list of subfolder IDs */
+    childFolderIds: string[];
+    /** ISO timestamp of folder creation */
+    createdAt: string;
+    /** ISO timestamp of last modification */
+    updatedAt: string;
+}
+
+/** Computed stats for a folder, shown in the hover tooltip overlay. */
+export interface FolderStats {
+    /** Total number of session leaves at all nesting levels */
+    totalChats: number;
+    /** Sum of fileSizeBytes across all descendant sessions */
+    totalSizeBytes: number;
+    /** Formatted size string (e.g. "1.2 MB") */
+    totalSizeFormatted: string;
+    /** Unique source names across all descendant sessions */
+    sources: string[];
+    /** Unique model names across all descendant sessions */
+    models: string[];
+}
+
 /** Per-assistant request count within a WorkspaceUsage */
 export interface AssistantUsage {
     assistant: string;   // SessionSource value, e.g. 'claude', 'cline', 'copilot'
