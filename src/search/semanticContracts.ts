@@ -26,6 +26,8 @@ export interface IEmbeddingEngine {
     embed(text: string): Promise<Float32Array>;
     /** Embed multiple texts in a single pipeline call. Falls back to sequential embed() if batching fails. */
     embedBatch(texts: string[]): Promise<Float32Array[]>;
+    /** Release resources (e.g. terminate worker thread). */
+    dispose(): void;
 }
 
 /** In-memory vector store with binary file persistence */

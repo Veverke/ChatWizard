@@ -61,6 +61,7 @@ function makeEngineStub(): IEmbeddingEngine & { calls: EmbedCall[] } {
             for (const text of texts) { calls.push({ text }); }
             return texts.map(() => new Float32Array(SEMANTIC_DIMS).fill(0.1));
         },
+        dispose(): void { /* no-op */ },
         calls,
     };
 }

@@ -15,19 +15,19 @@ const MODEL_CACHE_SUBDIR = 'models';
 // This lets the archive-restore batch (which arrives a second or two after the
 // initial file-watcher batch) be collected before the queue runs, so the progress
 // bar shows the correct total from the very first update.
-const QUEUE_START_DEBOUNCE_MS = 4_000;
+const QUEUE_START_DEBOUNCE_MS = 1_500;
 /** Max time to wait for the ONNX model to download / load before showing an error. */
 const MODEL_LOAD_TIMEOUT_MS = 120_000;
 /** Max time to wait for embedBatch() before falling back to zero-vectors. */
-const EMBED_TIMEOUT_MS = 60_000;
+const EMBED_TIMEOUT_MS = 30_000;
 /**
  * Max quiet period between progress reports before the queue is considered
  * stalled. If no progress is reported within this window, a stall-timeout is
  * logged and the queue is restarted to recover from a stuck ONNX call.
  */
 const STALL_TIMEOUT_MS = 120_000;
-/** Max texts per single embedBatch call — keeps the event loop responsive. */
-const EMBED_CHUNK_SIZE = 5;
+/** Max texts per single embedBatch call. ONNX batch inference scales efficiently up to 50+. */
+const EMBED_CHUNK_SIZE = 30;
 /**
  * Injectable VS Code interactions ΓÇö replace in unit tests to avoid real UI dialogs.
  */
@@ -175,6 +175,7 @@ interface QueueEntry {
  */
 export class SemanticIndexer implements ISemanticIndexer {
     private readonly storagePath: string;
+    private readonly embeddingsPath: string;
     private readonly engine: IEmbeddingEngine;
     private readonly index: ISemanticIndex;
     private readonly vsCodeApi: SemanticIndexerVsCodeApi;
@@ -224,13 +225,16 @@ export class SemanticIndexer implements ISemanticIndexer {
         indexFactory: () => ISemanticIndex,
         vsCodeApi?: SemanticIndexerVsCodeApi,
         queueStartDebounceMs?: number,
+        parentLog?: BoundLogger,
+        embeddingsFilePath?: string,
     ) {
         this.storagePath = storagePath;
+        this.embeddingsPath = embeddingsFilePath ?? path.join(storagePath, EMBEDDINGS_FILENAME);
         this.engine = engineFactory(path.join(storagePath, MODEL_CACHE_SUBDIR));
         this.index = indexFactory();
         this.vsCodeApi = vsCodeApi ?? defaultVsCodeApi();
         this._queueStartDebounceMs = queueStartDebounceMs ?? QUEUE_START_DEBOUNCE_MS;
-        this.log = createLogger().withContext('SemanticIndexer');
+        this.log = parentLog?.withContext('SemanticIndexer') ?? createLogger().withContext('SemanticIndexer');
         this.log.debug('Constructed — storagePath=%s', storagePath);
     }
 
@@ -316,11 +320,11 @@ export class SemanticIndexer implements ISemanticIndexer {
         // Restore persisted index
         try {
             await withTimeout(
-                this.index.load(path.join(this.storagePath, EMBEDDINGS_FILENAME)),
+                this.index.load(this.embeddingsPath),
                 10_000,
                 'embedding index load from disk',
             );
-            this.log.info('Persisted index loaded — %d sessions restored', this.index.size);
+            this.log.info('Persisted index loaded from cache — %d sessions restored, new sessions will be indexed as they arrive', this.index.size);
         } catch (err) {
             this.log.warn('Could not load persisted index (will start fresh): %s', String(err));
         }
@@ -343,7 +347,7 @@ export class SemanticIndexer implements ISemanticIndexer {
             return;
         }
         if (this.index.has(session.id)) {
-            this.log.debug('scheduleSession skipped — session %s already indexed', session.id);
+            this.log.debug('scheduleSession skipped — session %s already indexed (restored from cache)', session.id);
             return;
         }
         // Enforce max age filter — skip sessions whose last update is older than the threshold.
@@ -487,8 +491,16 @@ export class SemanticIndexer implements ISemanticIndexer {
 
         // Final save (fire-and-forget - cannot await in dispose)
         if (this._isReady) {
-            this.index.save(path.join(this.storagePath, EMBEDDINGS_FILENAME)).catch(() => { /* ignore */ });
+            this.index.save(this.embeddingsPath).catch(() => { /* ignore */ });
             this.log.debug('Final save triggered');
+        }
+
+        // Terminate the embedding worker thread so ONNX inference stops immediately
+        try {
+            this.engine.dispose();
+            this.log.debug('Embedding engine disposed');
+        } catch {
+            // Non-critical
         }
     }
 
@@ -676,7 +688,7 @@ export class SemanticIndexer implements ISemanticIndexer {
             this._saveTimer = undefined;
             this.log.debug('Saving embedding index to disk');
             this.index
-                .save(path.join(this.storagePath, EMBEDDINGS_FILENAME))
+                .save(this.embeddingsPath)
                 .then(() => this.log.debug('Embedding index saved successfully'))
                 .catch((err) => this.log.warn('Failed to save embedding index: %s', String(err)));
         }, SAVE_DEBOUNCE_MS);

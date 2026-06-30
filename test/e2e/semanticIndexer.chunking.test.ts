@@ -68,6 +68,8 @@ class CallCountingEngine implements IEmbeddingEngine {
         await new Promise(r => setTimeout(r, 5));
         return texts.map(() => new Float32Array(SEMANTIC_DIMS).fill(0.1));
     }
+
+    dispose(): void { /* no-op */ }
 }
 
 /** Stub engine that always fails with an error. */
@@ -80,6 +82,8 @@ class FailingEngine implements IEmbeddingEngine {
     async embedBatch(_texts: string[]): Promise<Float32Array[]> {
         throw new Error('embedBatch failed');
     }
+
+    dispose(): void { /* no-op */ }
 }
 
 /** Collects progress reports for later inspection. */

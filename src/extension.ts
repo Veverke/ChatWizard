@@ -261,16 +261,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // ── Semantic search ──────────────────────────────────────────────────────────
     // Instantiated only when chatwizard.enableSemanticSearch is true (default).
     // The typed change listener below keeps it in sync with the main session index.
-    const semanticEmbeddingsUri = vscode.Uri.joinPath(context.globalStorageUri, 'semantic-embeddings.bin');
+    const semanticEmbeddingsUri = vscode.Uri.joinPath(context.storageUri ?? context.globalStorageUri, 'semantic-embeddings.bin');
     let semanticIndexer: SemanticIndexer | null = null;
 
     function createAndInitSemanticIndexer(): void {
         try {
+            const semanticLog = createLogger(channel).withContext('Semantic');
             const indexer = new SemanticIndexer(
-                context.globalStorageUri.fsPath,
-                (cacheDir) => new EmbeddingEngine(cacheDir),
+                context.globalStorageUri.fsPath, // model cache dir (shared across workspaces)
+                (cacheDir) => new EmbeddingEngine(cacheDir, undefined, semanticLog),
                 () => new SemanticIndex(),
                 defaultVsCodeApi(context.globalState),
+                undefined, /* queueStartDebounceMs */
+                semanticLog,
+                semanticEmbeddingsUri.fsPath, // embeddings file (per-workspace)
             );
             channel.appendLine('[Chat Wizard] SemanticIndexer constructed.');
             // Feature 43: Apply semantic index max age from config
@@ -284,11 +288,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 // Schedule sessions already loaded into the main index (runtime-enable case)
                 const summaries = index.getAllSummaries();
                 channel.appendLine(`[Chat Wizard] Semantic indexer ready — scheduling ${summaries.length} existing session(s).`);
+                let cachedCount = 0;
                 for (const summary of summaries) {
                     const session = index.get(summary.id);
                     if (session) {
                         indexer.scheduleSession(session);
                     }
+                }
+                // Notify user about cached embeddings (counted per-workspace)
+                cachedCount = indexer.indexedCount;
+                if (cachedCount > 0) {
+                    channel.appendLine(`[Chat Wizard] ${cachedCount} session(s) restored from cache for this workspace.`);
                 }
             }).catch((err: unknown) => {
                 channel.appendLine(`[Chat Wizard] Semantic indexer init failed: ${err}`);
