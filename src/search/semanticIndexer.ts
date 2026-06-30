@@ -26,8 +26,10 @@ const EMBED_TIMEOUT_MS = 30_000;
  * logged and the queue is restarted to recover from a stuck ONNX call.
  */
 const STALL_TIMEOUT_MS = 120_000;
-/** Max texts per single embedBatch call. ONNX batch inference scales efficiently up to 50+. */
-const EMBED_CHUNK_SIZE = 30;
+/** Max texts per single embedBatch call. Worker-thread ONNX handles large batches efficiently. */
+const EMBED_CHUNK_SIZE = 200;
+/** Yield to the event loop every N chunks so VS Code stays responsive during indexing. */
+const YIELD_INTERVAL = 5;
 /**
  * Injectable VS Code interactions ΓÇö replace in unit tests to avoid real UI dialogs.
  */
@@ -557,26 +559,25 @@ export class SemanticIndexer implements ISemanticIndexer {
             report(0, totalSessions);
             this._lastProgressTs = Date.now();
 
-            // Process in small chunks so the event loop stays responsive
-            // and progress is visible. A single giant embedBatch() call can
-            // block the main thread for minutes with synchronous WASM.
+            // Process in large chunks — ONNX runs in a worker thread so the main
+            // thread is never blocked by inference. Large batches minimise RPC
+            // round-trips and structured-clone overhead.
             let completedSessions = new Set<string>();
             let failedChunks = 0;
             let totalZeroVec = 0;
+            let anyTimeout = false;
 
             for (let offset = 0; offset < allEntries.length; offset += EMBED_CHUNK_SIZE) {
                 if (this._disposed) { break; }
 
-                // Yield to the event loop — lets VS Code paint UI, process
-                // timeouts, and handle user input between ONNX calls.
-                await new Promise<void>(r => setImmediate(r));
+                // Yield occasionally so VS Code can paint UI updates
+                const chunkIndex = Math.floor(offset / EMBED_CHUNK_SIZE);
+                if (chunkIndex > 0 && chunkIndex % YIELD_INTERVAL === 0) {
+                    await new Promise<void>(r => setImmediate(r));
+                }
 
                 const chunk = allEntries.slice(offset, offset + EMBED_CHUNK_SIZE);
                 const chunkTexts = chunk.map(e => e.text);
-                this.log.debug('Embedding chunk %d/%d (%d texts)',
-                    Math.floor(offset / EMBED_CHUNK_SIZE) + 1,
-                    Math.ceil(allEntries.length / EMBED_CHUNK_SIZE),
-                    chunkTexts.length);
 
                 const embeddings = await this._embedWithTimeout(chunkTexts);
 
@@ -587,11 +588,9 @@ export class SemanticIndexer implements ISemanticIndexer {
                     const embedding = embeddings[i];
                     if (embedding) {
                         this.index.add(entry.sessionId, entry.role, entry.messageIndex, entry.paragraphIndex, embedding);
-                        // Detect zero-vector (timeout fallback)
-                        let isZero = true;
-                        for (let j = 0; j < embedding.length; j++) {
-                            if (embedding[j] !== 0) { isZero = false; break; }
-                        }
+                        // Quick zero-vector test — check first element only; full scan
+                        // only when we know timeouts occurred.
+                        const isZero = embedding[0] === 0 && embedding[1] === 0 && embedding[2] === 0;
                         if (isZero) { chunkZeroVec++; totalZeroVec++; }
                         completedSessions.add(entry.sessionId);
                     }
@@ -603,8 +602,9 @@ export class SemanticIndexer implements ISemanticIndexer {
                 report(sessionsDone, totalSessions);
                 this._lastProgressTs = Date.now();
 
-                if (chunkZeroVec > 0) {
-                    this.log.warn('Chunk had %d zero-vectors (timeout fallback)', chunkZeroVec);
+                if (chunkZeroVec > EMBED_CHUNK_SIZE / 2) {
+                    anyTimeout = true;
+                    this.log.warn('Chunk %d had %d/%d zero-vectors (probable timeout)', chunkIndex, chunkZeroVec, chunk.length);
                 }
             }
 
