@@ -11,11 +11,8 @@ import { createLogger, type BoundLogger, withTimeout } from '../utils/logger';
 const EMBEDDINGS_FILENAME = 'semantic-embeddings.bin';
 const SAVE_DEBOUNCE_MS = 5_000;
 const MODEL_CACHE_SUBDIR = 'models';
-// How long to wait after the last scheduleSession() call before starting to embed.
-// This lets the archive-restore batch (which arrives a second or two after the
-// initial file-watcher batch) be collected before the queue runs, so the progress
-// bar shows the correct total from the very first update.
-const QUEUE_START_DEBOUNCE_MS = 1_500;
+// Shorter debounce so embedding starts sooner after sessions are queued.
+const QUEUE_START_DEBOUNCE_MS = 300;
 /** Max time to wait for the ONNX model to download / load before showing an error. */
 const MODEL_LOAD_TIMEOUT_MS = 120_000;
 /** Max time to wait for embedBatch() before falling back to zero-vectors. */
@@ -26,8 +23,8 @@ const EMBED_TIMEOUT_MS = 30_000;
  * logged and the queue is restarted to recover from a stuck ONNX call.
  */
 const STALL_TIMEOUT_MS = 120_000;
-/** Max texts per single embedBatch call. Worker-thread ONNX handles large batches efficiently. */
-const EMBED_CHUNK_SIZE = 200;
+/** Max texts per single embedBatch call. Larger batches improve ONNX throughput. */
+const EMBED_CHUNK_SIZE = 400;
 /** Yield to the event loop every N chunks so VS Code stays responsive during indexing. */
 const YIELD_INTERVAL = 5;
 /**
@@ -645,7 +642,7 @@ export class SemanticIndexer implements ISemanticIndexer {
                     this.log.info('Showing indexing complete notification (%d sessions)', this._totalSessionsCompleted);
                     this.vsCodeApi.showIndexingComplete(this._totalSessionsCompleted);
                 }
-            }, 5_000);
+            }, 1_000);
         }
     }
 

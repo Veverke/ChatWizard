@@ -456,13 +456,15 @@ export class CodeBlockTreeProvider implements vscode.TreeDataProvider<CodeBlockT
 
     getDescription(): string {
         const filtered = this._buildSortedGroups();
+        const totalSessions = this.index.size;
         const countPart = `${filtered.length} session${filtered.length === 1 ? '' : 's'}`;
+        const totalPart = `of ${totalSessions} total`;
         const dirArrow = this._sortDir === 'asc' ? '\u2191' : '\u2193';
         const sortPart = `${CB_SORT_KEY_LABELS[this._sortMode]} ${dirArrow}`;
         const filterPart = this._filterDescription();
         return filterPart
-            ? `${countPart}  \u00b7  ${sortPart}  \u00b7  ${filterPart}`
-            : `${countPart}  \u00b7  ${sortPart}`;
+            ? `${countPart} ${totalPart}  \u00b7  ${sortPart}  \u00b7  ${filterPart}`
+            : `${countPart} ${totalPart}  \u00b7  ${sortPart}`;
     }
 
     // ------------------------------------------------------------------

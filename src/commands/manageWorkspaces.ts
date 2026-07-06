@@ -186,10 +186,15 @@ export function registerManageWorkspacesCommand(
 
             const TITLE_BASE = 'Chat Wizard: Manage Watched Workspaces';
 
+            const TOTAL_INDEXED = index.size;
+
             function makeTitle(selectedItems: readonly WorkspaceItem[]): string {
                 const bytes = selectedItems.reduce((sum, item) => sum + item.totalBytes, 0);
                 const sessions = selectedItems.reduce((sum, item) => sum + item.sessionCount, 0);
-                return `${TITLE_BASE}  —  ${formatSize(bytes)}  /  ${sessions.toLocaleString()} session${sessions !== 1 ? 's' : ''} selected`;
+                const indexedPart = TOTAL_INDEXED > 0
+                    ? `  ·  ${TOTAL_INDEXED} total in index`
+                    : '';
+                return `${TITLE_BASE}  —  ${formatSize(bytes)}  /  ${sessions.toLocaleString()} session${sessions !== 1 ? 's' : ''} selected${indexedPart}`;
             }
 
             // 5. Show multi-select QuickPick.

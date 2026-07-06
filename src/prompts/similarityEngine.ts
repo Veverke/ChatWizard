@@ -241,19 +241,24 @@ export function clusterPromptsAsync(
     return new Promise<ClusterResult>((resolve) => {
         const truncated = entries.length > MAX_CLUSTER_ENTRIES;
         const workEntries = truncated ? entries.slice(0, MAX_CLUSTER_ENTRIES) : entries;
-        const trigramSets: Set<string>[] = workEntries.map(e => buildTrigramSet(e.text));
 
         const clusters: PromptCluster[] = [];
         const canonicalTrigramSets: Set<string>[] = [];
         const buckets = new Map<string, number[]>();
 
         let i = 0;
+        // Trigram sets built on demand inside the chunked loop to avoid a
+        // synchronous O(n) pre-computation that blocks the extension host.
+        const trigramSets: (Set<string> | null)[] = new Array(workEntries.length).fill(null);
 
         function processChunk(): void {
             const end = Math.min(i + ASYNC_CHUNK_SIZE, workEntries.length);
             while (i < end) {
+                if (trigramSets[i] === null) {
+                    trigramSets[i] = buildTrigramSet(workEntries[i].text);
+                }
                 _processEntry(
-                    workEntries[i], trigramSets[i],
+                    workEntries[i], trigramSets[i]!,
                     clusters, canonicalTrigramSets, buckets, threshold,
                 );
                 i++;
