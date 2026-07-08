@@ -21,6 +21,9 @@ import { parentPort } from 'worker_threads';
 
 const DOWNLOAD_TIMEOUT_MS = 300_000; // 5 minutes
 const SEMANTIC_DIMS = 384;
+/** Throttle progress messages to at most one per 200ms to avoid flooding
+ *  the main thread's message queue during model download. */
+const PROGRESS_THROTTLE_MS = 200;
 
 type PipelineCallable = {
     (texts: string[], options: Record<string, unknown>): Promise<{ data: ArrayLike<number> }>;
@@ -48,10 +51,16 @@ parentPort.on('message', async (msg: unknown) => {
 
                 env.cacheDir = cacheDir;
 
+                // Throttled progress callback — at most one postMessage per 200ms
+                // to prevent flooding the main thread during model download.
+                let lastProgressTs = 0;
                 const progressCallback = (progress: Record<string, unknown>) => {
                     const status = progress['status'];
                     const file = String(progress['file'] ?? '');
                     if (status === 'progress') {
+                        const now = Date.now();
+                        if (now - lastProgressTs < PROGRESS_THROTTLE_MS) { return; }
+                        lastProgressTs = now;
                         const pct = typeof progress['progress'] === 'number'
                             ? Math.round(progress['progress'] as number)
                             : 0;
@@ -116,11 +125,20 @@ parentPort.on('message', async (msg: unknown) => {
     }
 });
 
+/**
+ * Wraps a promise with a timeout. The timer is properly cleaned up when the
+ * promise settles, preventing the timer's closure from keeping memory alive
+ * for the full timeout duration.
+ */
 function withTimeout<T>(task: Promise<T>, ms: number, label: string): Promise<T> {
-    return Promise.race([
-        task,
-        new Promise<T>((_, reject) =>
-            setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
-        ),
-    ]);
+    return new Promise<T>((resolve, reject) => {
+        const timer = setTimeout(() => {
+            reject(new Error(`${label} timed out after ${ms}ms`));
+        }, ms);
+        timer.unref();
+        task.then(
+            (v) => { clearTimeout(timer); resolve(v); },
+            (e) => { clearTimeout(timer); reject(e); },
+        );
+    });
 }

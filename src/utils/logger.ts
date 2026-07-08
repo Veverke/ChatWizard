@@ -161,12 +161,15 @@ function sprintf(msg: string, ...args: unknown[]): string {
 
 /**
  * Decorates a Promise with a timeout that rejects after `ms` milliseconds.
+ * The timer is unref'd so it doesn't keep the Node.js process alive —
+ * preventing hidden process leaks in extension hosts.
  */
 export function withTimeout<T>(promise: Promise<T>, ms: number, label = 'operation'): Promise<T> {
     return new Promise<T>((resolve, reject) => {
         const timer = setTimeout(() => {
             reject(new Error(`Timed out after ${ms}ms: ${label}`));
         }, ms);
+        timer.unref();
         promise.then(
             (v) => { clearTimeout(timer); resolve(v); },
             (e) => { clearTimeout(timer); reject(e); },

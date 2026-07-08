@@ -15,6 +15,10 @@ const EMBED_RPC_TIMEOUT_MS = 120_000;
  *  model session, enabling true concurrent CPU utilization across cores. */
 const POOL_SIZE = 2;
 
+/** How long (ms) a worker sits idle before being terminated to free ~200 MB WASM memory.
+ *  Workers are re-spawned lazily on the next embed call. */
+const IDLE_TIMEOUT_MS = 300_000; // 5 minutes
+
 /** Minimal callable shape returned by @xenova/transformers pipeline() */
 type PipelineCallable = {
     (text: string, options: Record<string, unknown>): Promise<{ data: ArrayLike<number> }>;
@@ -121,10 +125,13 @@ async function defaultPipelineFactory(
         const callable = (texts: string[]): Promise<{ data: ArrayLike<number> }> => {
             const id = nextId++;
             return new Promise<{ data: ArrayLike<number> }>((resolve, reject) => {
+                // Unref'd timer so it doesn't keep the process alive if everything else
+                // is done — preventing a hidden Node.js process leak in VS Code.
                 const timer = setTimeout(() => {
                     pending.delete(id);
                     reject(new Error(`embedBatch RPC timed out after ${EMBED_RPC_TIMEOUT_MS}ms`));
                 }, EMBED_RPC_TIMEOUT_MS);
+                timer.unref();
                 pending.set(id, {
                     resolve: (dataBuffer: ArrayBuffer, dims: number) => {
                         const flat = new Float32Array(dataBuffer);
@@ -149,13 +156,88 @@ async function defaultPipelineFactory(
     // Round-robin index — only the first worker forwards progress to avoid duplicates
     let rrIndex = 0;
 
+    // Per-worker idle timers. When a worker has been idle for IDLE_TIMEOUT_MS,
+    // it gets terminated to free its ~200 MB WASM memory. It will be re-spawned
+    // lazily on the next invocation.
+    const idleTimers: (ReturnType<typeof setTimeout> | undefined)[] = [undefined, undefined];
+
+    function resetIdleTimer(index: number): void {
+        if (idleTimers[index] !== undefined) {
+            clearTimeout(idleTimers[index]!);
+            idleTimers[index] = undefined;
+        }
+    }
+
+    function scheduleIdleTimer(index: number): void {
+        resetIdleTimer(index);
+        if (handles[index].disposed) { return; }
+        idleTimers[index] = setTimeout(() => {
+            const handle = handles[index];
+            if (handle.disposed) { return; }
+            handle.disposed = true;
+            idleTimers[index] = undefined;
+            log.debug('Worker %d idle for %dms — terminating to free WASM memory', index, IDLE_TIMEOUT_MS);
+            for (const [, entry] of handle.pending) {
+                clearTimeout(entry.timer);
+            }
+            handle.pending.clear();
+            try { handle.worker.postMessage({ type: 'terminate' }); } catch { /* ignore */ }
+            setTimeout(() => {
+                try { handle.worker.terminate(); } catch { /* ignore */ }
+            }, 2_000).unref();
+        }, IDLE_TIMEOUT_MS);
+        idleTimers[index]!.unref();
+    }
+
     // The returned callable acts as a PipelineFactory pipeline: round-robins across workers
     const callable = async (textOrTexts: string | string[], options: Record<string, unknown>): Promise<{ data: ArrayLike<number> }> => {
         const texts = Array.isArray(textOrTexts) ? textOrTexts : [textOrTexts];
-        const handle = handles[rrIndex % POOL_SIZE];
-        rrIndex++;
-        return handle.callable(texts);
+
+        // Find the next available worker, re-spawning disposed ones lazily
+        for (let attempt = 0; attempt < POOL_SIZE; attempt++) {
+            const idx = rrIndex % POOL_SIZE;
+            const handle = handles[idx];
+
+            if (handle.disposed) {
+                // Lazy re-spawn
+                log.debug('Re-spawning disposed worker %d', idx);
+                try {
+                    const fresh = await spawnSingleWorker();
+                    handles[idx] = fresh;
+                    rrIndex++;
+                    await new Promise<void>(r => setImmediate(r));
+                    resetIdleTimer(idx);
+                    return fresh.callable(texts);
+                } catch (err) {
+                    log.warn('Failed to re-spawn worker %d: %s', idx, String(err));
+                    rrIndex++;
+                    continue;
+                }
+            }
+
+            rrIndex++;
+            resetIdleTimer(idx);
+            try {
+                const result = await handle.callable(texts);
+                scheduleIdleTimer(idx);
+                return result;
+            } catch (err) {
+                // On failure, mark as disposed so next call re-spawns
+                handle.disposed = true;
+                log.warn('Worker %d call failed — marking for re-spawn: %s', idx, String(err));
+                scheduleIdleTimer(idx);
+                throw err; // let the caller handle the error
+            }
+        }
+
+        // All workers failed
+        throw new Error('All embedding workers are unavailable');
     };
+
+    // Start idle timers after initial spawn
+    for (let i = 0; i < POOL_SIZE; i++) {
+        scheduleIdleTimer(i);
+    }
 
     // Hang dispose + handles on the callable for clean-up
     (callable as unknown as Record<string, unknown>)._handles = handles;
