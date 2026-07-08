@@ -16,10 +16,12 @@ const MODEL_CACHE_SUBDIR = 'models';
 // initial file-watcher batch) be collected before the queue runs, so the progress
 // bar shows the correct total from the very first update.
 const QUEUE_START_DEBOUNCE_MS = 1_500;
-/** Max texts per single embedBatch call. Worker-thread ONNX handles large batches efficiently. */
-const EMBED_CHUNK_SIZE = 200;
-/** Yield to the event loop every N chunks so VS Code stays responsive during indexing. */
-const YIELD_INTERVAL = 5;
+/** Max texts per single embedBatch call. 30 texts = ~3-4 sessions per chunk.
+ *  Small enough for frequent progress updates (~every 400-600ms), large enough
+ *  for efficient ONNX batch inference on CPU. */
+const EMBED_CHUNK_SIZE = 30;
+/** Yield to the event loop after every chunk so VS Code stays responsive and progress updates are immediate. */
+const YIELD_INTERVAL = 1;
 /** Max time to wait for embedBatch() before falling back to zero-vectors. */
 const EMBED_TIMEOUT_MS = 30_000;
 
@@ -591,7 +593,8 @@ export class SemanticIndexer implements ISemanticIndexer {
                 report(this._totalSessionsCompleted, this._totalSessionsQueued);
 
                 // Yield to the event loop every YIELD_INTERVAL chunks so VS Code stays
-                // responsive during indexing.
+                // responsive during indexing. With YIELD_INTERVAL=1, we yield after every chunk
+                // which gives the smoothest progress feedback.
                 if (chunkCount % YIELD_INTERVAL === 0) {
                     await new Promise<void>(r => setImmediate(r));
                 }
