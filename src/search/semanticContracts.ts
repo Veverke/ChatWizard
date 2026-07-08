@@ -38,6 +38,7 @@ export interface ISemanticIndex {
     has(sessionId: string): boolean;
     search(queryEmbedding: Float32Array, topK: number, minScore?: number, scope?: SemanticScope): SemanticMessageResult[];
     save(filePath: string): Promise<void>;
+    saveSync(filePath: string): void;
     load(filePath: string): Promise<void>;
 }
 

@@ -1,4 +1,4 @@
-﻿// src/search/semanticIndexer.ts
+// src/search/semanticIndexer.ts
 
 import * as vscode from 'vscode';
 import * as path from 'path';
@@ -11,24 +11,14 @@ import { createLogger, type BoundLogger, withTimeout } from '../utils/logger';
 const EMBEDDINGS_FILENAME = 'semantic-embeddings.bin';
 const SAVE_DEBOUNCE_MS = 5_000;
 const MODEL_CACHE_SUBDIR = 'models';
-// Shorter debounce so embedding starts sooner after sessions are queued.
-const QUEUE_START_DEBOUNCE_MS = 300;
-/** Max time to wait for the ONNX model to download / load before showing an error. */
-const MODEL_LOAD_TIMEOUT_MS = 120_000;
-/** Max time to wait for embedBatch() before falling back to zero-vectors. */
-const EMBED_TIMEOUT_MS = 30_000;
+// How long to wait after the last scheduleSession() call before starting to embed.
+// This lets the archive-restore batch (which arrives a second or two after the
+// initial file-watcher batch) be collected before the queue runs, so the progress
+// bar shows the correct total from the very first update.
+const QUEUE_START_DEBOUNCE_MS = 4_000;
+
 /**
- * Max quiet period between progress reports before the queue is considered
- * stalled. If no progress is reported within this window, a stall-timeout is
- * logged and the queue is restarted to recover from a stuck ONNX call.
- */
-const STALL_TIMEOUT_MS = 120_000;
-/** Max texts per single embedBatch call. Larger batches improve ONNX throughput. */
-const EMBED_CHUNK_SIZE = 400;
-/** Yield to the event loop every N chunks so VS Code stays responsive during indexing. */
-const YIELD_INTERVAL = 5;
-/**
- * Injectable VS Code interactions ΓÇö replace in unit tests to avoid real UI dialogs.
+ * Injectable VS Code interactions — replace in unit tests to avoid real UI dialogs.
  */
 export interface SemanticIndexerVsCodeApi {
     /**
@@ -86,7 +76,7 @@ export function defaultVsCodeApi(globalState?: SemanticGlobalState): SemanticInd
         },
         isFirstUse(storagePath: string): boolean {
             if (globalState) {
-                // globalState is shared across all VS Code windows ΓÇö reliable even when
+                // globalState is shared across all VS Code windows — reliable even when
                 // multiple windows are open simultaneously.
                 return !(globalState.get<boolean>(CONSENT_KEY) ?? false);
             }
@@ -98,7 +88,7 @@ export function defaultVsCodeApi(globalState?: SemanticGlobalState): SemanticInd
         },
         async loadModelWithProgress(task: (report: (msg: string) => void) => Promise<void>): Promise<void> {
             await vscode.window.withProgress(
-                { location: vscode.ProgressLocation.Notification, title: 'Chat Wizard: Downloading AI model...', cancellable: false },
+                { location: vscode.ProgressLocation.Notification, title: 'Chat Wizard: Downloading AI model…', cancellable: false },
                 async (progress) => {
                     await task(msg => progress.report({ message: msg }));
                 },
@@ -106,33 +96,27 @@ export function defaultVsCodeApi(globalState?: SemanticGlobalState): SemanticInd
         },
         async runIndexingProgress(task: (report: (completed: number, total: number) => void) => Promise<void>): Promise<void> {
             await vscode.window.withProgress(
-                {
-                    location: vscode.ProgressLocation.Notification,
-                    title: 'Chat Wizard: building vector embeddings for semantic search...',
-                    cancellable: false,
-                },
+                { location: vscode.ProgressLocation.Notification, title: 'Chat Wizard: building vector embeddings for semantic search…', cancellable: false },
                 async (progress) => {
-                    // Use a numeric (determinate) progress bar so the user sees
-                    // concrete progress. If the total grows mid-run (archive-restore
-                    // batch arriving after the first batch), the percentage may dip
-                    // briefly — this is preferable to an indeterminate spinner that
-                    // offers no visual feedback at all.
+                    // Use an indeterminate spinner with live count text.
+                    // Determinate (increment) mode breaks when the total grows mid-run
+                    // (archive restore adds sessions after the first batch starts), causing
+                    // the percentage to go backwards and the bar to stall.
                     await task((completed, total) => {
                         if (total === 0) { return; }
-                        const pct = Math.min(100, Math.round((completed / total) * 100));
-                        progress.report({ message: `${completed} / ${total} sessions (${pct}%)`, increment: undefined });
+                        progress.report({ message: `${completed} / ${total} sessions` });
                     });
                 },
             );
         },
         showIndexingComplete(count: number): void {
             void vscode.window.showInformationMessage(
-                `Chat Wizard: Semantic search ready: ${count} session${count === 1 ? '' : 's'} have vector embeddings.`
+                `Chat Wizard: Semantic search ready — ${count} session${count === 1 ? '' : 's'} have vector embeddings.`
             );
         },
         markModelDownloaded(storagePath: string): void {
             if (globalState) {
-                // Persist consent in globalState ΓÇö survives across windows and reloads.
+                // Persist consent in globalState — survives across windows and reloads.
                 void globalState.update(CONSENT_KEY, true);
                 return;
             }
@@ -149,7 +133,7 @@ export function defaultVsCodeApi(globalState?: SemanticGlobalState): SemanticInd
         },
         showModelReady(): void {
             void vscode.window.showInformationMessage(
-                'Chat Wizard: AI model downloaded successfully ΓÇö semantic search is ready.'
+                'Chat Wizard: AI model downloaded successfully — semantic search is ready.'
             );
         },
     };
@@ -174,7 +158,6 @@ interface QueueEntry {
  */
 export class SemanticIndexer implements ISemanticIndexer {
     private readonly storagePath: string;
-    private readonly embeddingsPath: string;
     private readonly engine: IEmbeddingEngine;
     private readonly index: ISemanticIndex;
     private readonly vsCodeApi: SemanticIndexerVsCodeApi;
@@ -191,32 +174,29 @@ export class SemanticIndexer implements ISemanticIndexer {
     private _totalSessionsCompleted = 0;
     /** Remaining queue entries per session; deleted when the session reaches 0. */
     private _pendingBySession = new Map<string, number>();
-    /** Tracks last progress report timestamp for stall detection. */
-    private _lastProgressTs = 0;
-    /** Stall watchdog timer. */
-    private _stallTimer: ReturnType<typeof setTimeout> | undefined;
+
+    /** Feature 43: Max age in days for sessions to be included in the semantic index. 0 = no limit. */
+    private _maxAgeDays: number = 0;
 
     // Status bar for indexing progress
-    // (progress is surfaced via vsCodeApi.runIndexingProgress ΓÇö no local status bar item)
+    // (progress is surfaced via vsCodeApi.runIndexingProgress — no local status bar item)
 
     // Debounced save timer
     private _saveTimer: ReturnType<typeof setTimeout> | undefined;
 
     // Debounced queue start timer.
     // Resets on every scheduleSession() call so embedding only begins after sessions
-    // stop arriving ΓÇö letting both the live batch and the archive-restore batch land
+    // stop arriving — letting both the live batch and the archive-restore batch land
     // before the first embed, ensuring the progress total is correct from the start.
     private _queueStartTimer: ReturnType<typeof setTimeout> | undefined;
 
     // Debounced "indexing complete" notification timer.
     // Prevents a double notification when the archive-restore batch arrives shortly
-    // after the first file-watcher batch (two _runQueue() runs ΓåÆ one notification).
+    // after the first file-watcher batch (two _runQueue() runs → one notification).
     private _indexingCompleteTimer: ReturnType<typeof setTimeout> | undefined;
 
     private readonly _queueStartDebounceMs: number;
-
-    // Max session age in days (0 = no limit). Sessions older than this are skipped.
-    private _maxAgeDays = 0;
+    private readonly embeddingsPath: string;
 
     constructor(
         storagePath: string,
@@ -227,17 +207,25 @@ export class SemanticIndexer implements ISemanticIndexer {
         parentLog?: BoundLogger,
         embeddingsFilePath?: string,
     ) {
-        this.storagePath = storagePath;
         this.embeddingsPath = embeddingsFilePath ?? path.join(storagePath, EMBEDDINGS_FILENAME);
+        this.storagePath = storagePath;
         this.engine = engineFactory(path.join(storagePath, MODEL_CACHE_SUBDIR));
         this.index = indexFactory();
         this.vsCodeApi = vsCodeApi ?? defaultVsCodeApi();
         this._queueStartDebounceMs = queueStartDebounceMs ?? QUEUE_START_DEBOUNCE_MS;
         this.log = parentLog?.withContext('SemanticIndexer') ?? createLogger().withContext('SemanticIndexer');
-        this.log.debug('Constructed — storagePath=%s', storagePath);
     }
 
-    // ΓöÇΓöÇ Getters ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    /**
+     * Feature 43: Set the maximum age (in days) for sessions to be included in the semantic index.
+     * Sessions older than this threshold will be skipped during scheduleSession().
+     * @param days Max age in days. 0 or negative = no limit.
+     */
+    setMaxAgeDays(days: number): void {
+        this._maxAgeDays = days > 0 ? days : 0;
+    }
+
+    // ── Getters ─────────────────────────────────────────────────────────────
 
     get isReady(): boolean {
         return this._isReady;
@@ -251,61 +239,37 @@ export class SemanticIndexer implements ISemanticIndexer {
         return this._queueRunning;
     }
 
-    /**
-     * Sets the maximum age (in days) for sessions to be indexed.
-     * Sessions whose updatedAt timestamp is older than this threshold are skipped.
-     * Pass 0 to remove the limit.
-     */
-    setMaxAgeDays(days: number): void {
-        this._maxAgeDays = Math.max(0, days);
-        this.log.info('Max age set to %d days', this._maxAgeDays);
-    }
-
-    // ΓöÇΓöÇ initialize() ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ── initialize() ────────────────────────────────────────────────────────
 
     /**
      * Loads the model (with optional first-use consent dialog) and restores the
-     * persisted index from disk. Idempotent ΓÇö resolves immediately if already ready.
+     * persisted index from disk. Idempotent — resolves immediately if already ready.
      * On user decline, resolves without error and marks the session as declined.
      */
     async initialize(): Promise<void> {
         if (this._isReady || this._declined || this._disposed) {
-            this.log.debug('initialize() skipped — ready=%s declined=%s disposed=%s',
-                this._isReady, this._declined, this._disposed);
             return;
         }
-
-        this.log.info('Initialize started');
 
         // First-use consent
         const isFirstDownload = this.vsCodeApi.isFirstUse(this.storagePath);
         if (isFirstDownload) {
-            this.log.info('First use detected — showing consent dialog');
             const consented = await this.vsCodeApi.showConsentDialog();
             if (!consented) {
                 this._declined = true;
-                this.log.info('User declined consent — semantic search disabled');
                 return;
             }
-            this.log.info('User granted consent — proceeding with model download');
-        } else {
-            this.log.debug('Already consented — skipping consent dialog');
         }
 
-        // Load model, always wrapped in a progress indicator so the UI and tests
-        // can observe the loading lifecycle regardless of whether it is a first download.
-        try {
+        // Load model — only show the progress indicator on first download.
+        // On subsequent reloads the model is cached locally, so a notification
+        // would be misleading ("Downloading" = already on disk) and visually noisy.
+        if (isFirstDownload) {
             await this.vsCodeApi.loadModelWithProgress(async (report) => {
-                await withTimeout(
-                    this.engine.load(report),
-                    MODEL_LOAD_TIMEOUT_MS,
-                    'ONNX model download/load',
-                );
+                await this.engine.load(report);
             });
-            this.log.info('Model loaded successfully');
-        } catch (err) {
-            this.log.error('Model download/load failed after %dms: %s', MODEL_LOAD_TIMEOUT_MS, String(err));
-            throw err; // let caller handle the error
+        } else {
+            await this.engine.load();
         }
 
         // Persist the marker only after a successful download so that the popup
@@ -313,57 +277,45 @@ export class SemanticIndexer implements ISemanticIndexer {
         if (isFirstDownload) {
             this.vsCodeApi.markModelDownloaded(this.storagePath);
             this.vsCodeApi.showModelReady();
-            this.log.info('Model download marker persisted');
         }
 
         // Restore persisted index
-        try {
-            await withTimeout(
-                this.index.load(this.embeddingsPath),
-                10_000,
-                'embedding index load from disk',
-            );
-            this.log.info('Persisted index loaded from cache — %d sessions restored, new sessions will be indexed as they arrive', this.index.size);
-        } catch (err) {
-            this.log.warn('Could not load persisted index (will start fresh): %s', String(err));
-        }
+        await this.index.load(this.embeddingsPath);
 
         this._isReady = true;
-        this.log.info('SemanticIndexer is now ready');
     }
 
-    // ΓöÇΓöÇ scheduleSession() ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ── scheduleSession() ───────────────────────────────────────────────────
 
     /**
      * Queues all messages of a session for embedding.
-     * - Each user message ΓåÆ one queue entry.
-     * - Each assistant response ΓåÆ one entry per non-empty paragraph (split on `\n\n`).
+     * - Each user message → one queue entry.
+     * - Each assistant response → one entry per non-empty paragraph (split on `\n\n`).
      * Skips silently if the session is already in the index or the indexer is not ready.
      */
     scheduleSession(session: Session): void {
         if (!this._isReady || this._disposed) {
-            this.log.debug('scheduleSession skipped — ready=%s disposed=%s', this._isReady, this._disposed);
             return;
         }
         if (this.index.has(session.id)) {
-            this.log.debug('scheduleSession skipped — session %s already indexed (restored from cache)', session.id);
             return;
-        }
-        // Enforce max age filter — skip sessions whose last update is older than the threshold.
-        if (this._maxAgeDays > 0) {
-            const cutoff = Date.now() - this._maxAgeDays * 24 * 60 * 60 * 1000;
-            const updated = session.updatedAt ? new Date(session.updatedAt).getTime() : 0;
-            if (updated > 0 && updated < cutoff) {
-                this.log.debug('scheduleSession skipped — session %s is older than %d days', session.id, this._maxAgeDays);
-                return; // session is too old — skip it
-            }
         }
         // Skip if this session is already queued but not yet processed — avoids
         // enqueuing duplicate work and inflating _totalSessionsQueued when repeated
         // upsert events fire for the same session.
         if (this._pendingBySession.has(session.id)) {
-            this.log.debug('scheduleSession skipped — session %s already queued', session.id);
             return;
+        }
+
+        // Feature 43: Skip sessions older than the configured max age.
+        if (this._maxAgeDays > 0) {
+            const updatedAt = new Date(session.updatedAt).getTime();
+            if (!isNaN(updatedAt)) {
+                const cutoff = Date.now() - this._maxAgeDays * 24 * 60 * 60 * 1000;
+                if (updatedAt < cutoff) {
+                    return;
+                }
+            }
         }
 
         let added = 0;
@@ -406,19 +358,23 @@ export class SemanticIndexer implements ISemanticIndexer {
 
         this._totalSessionsQueued++;
         this._pendingBySession.set(session.id, added);
-        this.log.debug('Queued session %s — %d entries (total queued: %d)', session.id, added, this._totalSessionsQueued);
 
         if (!this._queueRunning) {
+            // Cancel any pending "indexing complete" notification — more sessions are
+            // arriving, so the current run's completion toast must be suppressed.
             if (this._indexingCompleteTimer !== undefined) {
                 clearTimeout(this._indexingCompleteTimer);
                 this._indexingCompleteTimer = undefined;
             }
+            // Debounce: reset the start timer on every new session so the queue only
+            // begins once sessions stop arriving. This ensures both the live batch (85)
+            // and the archive-restore batch (24 more) are collected before embedding
+            // starts, giving a stable total (109) from the very first progress report.
             if (this._queueStartTimer !== undefined) {
                 clearTimeout(this._queueStartTimer);
             }
             this._queueStartTimer = setTimeout(() => {
                 this._queueStartTimer = undefined;
-                this.log.debug('Queue start debounce elapsed — starting _runQueue (%d entries)', this._queue.length);
                 if (!this._queueRunning && this._queue.length > 0 && !this._disposed) {
                     this._runQueue();
                 }
@@ -426,15 +382,14 @@ export class SemanticIndexer implements ISemanticIndexer {
         }
     }
 
-    // ΓöÇΓöÇ removeSession() ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ── removeSession() ─────────────────────────────────────────────────────
 
     removeSession(sessionId: string): void {
         this.index.remove(sessionId);
         this._scheduleSave();
-        this.log.debug('Removed session %s from semantic index', sessionId);
     }
 
-    // ΓöÇΓöÇ search() ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ── search() ────────────────────────────────────────────────────────────
 
     async search(query: string, topK: number, minScore = SEMANTIC_MIN_SCORE, scope: SemanticScope = 'both'): Promise<SemanticSearchResult[]> {
         if (!this._isReady) {
@@ -458,14 +413,13 @@ export class SemanticIndexer implements ISemanticIndexer {
             .slice(0, topK);
     }
 
-    // ΓöÇΓöÇ dispose() ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ── dispose() ───────────────────────────────────────────────────────────
 
     dispose(): void {
         if (this._disposed) {
             return;
         }
         this._disposed = true;
-        this.log.info('Dispose called');
 
         // Drain the queue without embedding remaining items
         this._queue = [];
@@ -483,152 +437,59 @@ export class SemanticIndexer implements ISemanticIndexer {
             clearTimeout(this._indexingCompleteTimer);
             this._indexingCompleteTimer = undefined;
         }
-        if (this._stallTimer !== undefined) {
-            clearTimeout(this._stallTimer);
-            this._stallTimer = undefined;
-        }
 
-        // Final save (fire-and-forget - cannot await in dispose)
+        // Synchronous final save — must complete before the process exits
         if (this._isReady) {
-            this.index.save(this.embeddingsPath).catch(() => { /* ignore */ });
-            this.log.debug('Final save triggered');
-        }
-
-        // Terminate the embedding worker thread so ONNX inference stops immediately
-        try {
-            this.engine.dispose();
-            this.log.debug('Embedding engine disposed');
-        } catch {
-            // Non-critical
-        }
-    }
-
-    // --- Private helpers --------------------------------------------------------
-
-    /**
-     * Starts a watchdog timer that fires if no progress report arrives within
-     * `STALL_TIMEOUT_MS`. The watchdog logs a warning but does not kill the queue
-     * (the embed timeout will eventually trigger).
-     */
-    private _startStallWatchdog(): void {
-        this._clearStallWatchdog();
-        this._stallTimer = setTimeout(() => {
-            const elapsed = Date.now() - this._lastProgressTs;
-            if (elapsed >= STALL_TIMEOUT_MS && this._queueRunning && !this._disposed) {
-                this.log.warn(
-                    'Queue appears stalled — no progress for %dms (timeout=%dms). ' +
-                    'The ONNX embedding call may be stuck. Waiting for embed timeout (%dms).',
-                    elapsed, STALL_TIMEOUT_MS, EMBED_TIMEOUT_MS,
-                );
+            try {
+                this.index.saveSync(this.embeddingsPath);
+                this.log.debug('Final save complete');
+            } catch (err) {
+                this.log.warn('Final save failed: %s', String(err));
             }
-        }, STALL_TIMEOUT_MS);
-    }
-
-    private _clearStallWatchdog(): void {
-        if (this._stallTimer !== undefined) {
-            clearTimeout(this._stallTimer);
-            this._stallTimer = undefined;
         }
     }
+
+    // ── Private helpers ──────────────────────────────────────────────────────
+
+    /** Max sessions to embed per batch iteration. */
+    private static readonly _MAX_CONCURRENT_SESSIONS = 16;
 
     private async _runQueue(): Promise<void> {
         this._queueRunning = true;
-        this.log.info('Queue started — %d entries across %d sessions', this._queue.length, this._totalSessionsQueued);
-        this._lastProgressTs = Date.now();
-
-        // Start a stall watchdog: if no progress report arrives within STALL_TIMEOUT_MS,
-        // log a warning (the queue may be stuck on ONNX).
-        this._startStallWatchdog();
 
         await this.vsCodeApi.runIndexingProgress(async (report) => {
-            // Work on a snapshot — new sessions arriving during processing stay
-            // in _queue and trigger a restart at the end.
-            const allEntries = this._queue.splice(0);
-            this._queue = [];
+            // Process the queue in a loop, continuing until it's empty and no
+            // new sessions arrive. This avoids creating a second progress notification
+            // when archive-restore sessions arrive mid-run.
+            let iterationsSinceLastDrain = 0;
+            while (this._queue.length > 0 && !this._disposed) {
+                await this._processQueueBatch(report);
 
-            if (allEntries.length === 0) { return; }
+                // Yield to the event loop so VS Code can render the progress update
+                await new Promise<void>(r => setImmediate(r));
 
-            const sessionIds = new Set(allEntries.map(e => e.sessionId));
-            const totalSessions = sessionIds.size;
-            this.log.info('Embedding %d text entries across %d sessions (chunk size=%d)',
-                allEntries.length, totalSessions, EMBED_CHUNK_SIZE);
-
-            report(0, totalSessions);
-            this._lastProgressTs = Date.now();
-
-            // Process in large chunks — ONNX runs in a worker thread so the main
-            // thread is never blocked by inference. Large batches minimise RPC
-            // round-trips and structured-clone overhead.
-            let completedSessions = new Set<string>();
-            let failedChunks = 0;
-            let totalZeroVec = 0;
-            let anyTimeout = false;
-
-            for (let offset = 0; offset < allEntries.length; offset += EMBED_CHUNK_SIZE) {
-                if (this._disposed) { break; }
-
-                // Yield occasionally so VS Code can paint UI updates
-                const chunkIndex = Math.floor(offset / EMBED_CHUNK_SIZE);
-                if (chunkIndex > 0 && chunkIndex % YIELD_INTERVAL === 0) {
-                    await new Promise<void>(r => setImmediate(r));
-                }
-
-                const chunk = allEntries.slice(offset, offset + EMBED_CHUNK_SIZE);
-                const chunkTexts = chunk.map(e => e.text);
-
-                const embeddings = await this._embedWithTimeout(chunkTexts);
-
-                // Store results
-                let chunkZeroVec = 0;
-                for (let i = 0; i < chunk.length; i++) {
-                    const entry = chunk[i];
-                    const embedding = embeddings[i];
-                    if (embedding) {
-                        this.index.add(entry.sessionId, entry.role, entry.messageIndex, entry.paragraphIndex, embedding);
-                        // Quick zero-vector test — check first element only; full scan
-                        // only when we know timeouts occurred.
-                        const isZero = embedding[0] === 0 && embedding[1] === 0 && embedding[2] === 0;
-                        if (isZero) { chunkZeroVec++; totalZeroVec++; }
-                        completedSessions.add(entry.sessionId);
-                    }
-                }
-
-                // Report progress after every chunk so the user sees movement
-                const sessionsDone = completedSessions.size;
-                this._totalSessionsCompleted = sessionsDone;
-                report(sessionsDone, totalSessions);
-                this._lastProgressTs = Date.now();
-
-                if (chunkZeroVec > EMBED_CHUNK_SIZE / 2) {
-                    anyTimeout = true;
-                    this.log.warn('Chunk %d had %d/%d zero-vectors (probable timeout)', chunkIndex, chunkZeroVec, chunk.length);
+                // Safety valve: if the queue hasn't been fully drained after several
+                // iterations (new sessions keep arriving), exit and let the debounce
+                // timer handle the rest to avoid an infinite busy-loop.
+                iterationsSinceLastDrain++;
+                if (iterationsSinceLastDrain > 10) {
+                    break;
                 }
             }
-
-            this._scheduleSave();
-
-            // Mark completed sessions (remove from pending)
-            for (const sid of completedSessions) {
-                this._pendingBySession.delete(sid);
-            }
-
-            this.log.info('Embedding complete — %d sessions done, %d chunks failed, %d zero-vector fallbacks',
-                completedSessions.size, failedChunks, totalZeroVec);
         });
 
         this._queueRunning = false;
-        this._clearStallWatchdog();
-        this.log.info('Queue finished — %d sessions completed', this._totalSessionsCompleted);
 
-        // If more sessions were added while we were running, restart seamlessly
+        // If more sessions were added while we were wrapping up (race with the break
+        // guard above), schedule a new queue run via the debounce timer so it shows
+        // a single fresh progress bar.
         if (!this._disposed && this._queue.length > 0) {
-            this.log.debug('More sessions queued during run — restarting queue (%d remaining)', this._queue.length);
-            this._queueRunning = true;
-            setImmediate(() => {
-                if (!this._disposed && this._queue.length > 0) {
-                    this._runQueue().catch((err) => { this.log.error('Queue restart failed: %s', String(err)); });
+            this._queueStartTimer = setTimeout(() => {
+                this._queueStartTimer = undefined;
+                if (!this._queueRunning && this._queue.length > 0 && !this._disposed) {
+                    this._runQueue();
                 }
-            });
+            }, this._queueStartDebounceMs);
             return;
         }
 
@@ -639,42 +500,85 @@ export class SemanticIndexer implements ISemanticIndexer {
             this._indexingCompleteTimer = setTimeout(() => {
                 this._indexingCompleteTimer = undefined;
                 if (!this._disposed) {
-                    this.log.info('Showing indexing complete notification (%d sessions)', this._totalSessionsCompleted);
                     this.vsCodeApi.showIndexingComplete(this._totalSessionsCompleted);
                 }
-            }, 1_000);
+            }, 5_000);
         }
     }
 
     /**
-     * Calls engine.embedBatch() with a timeout guard.
-     * If the call times out, returns zero-vectors so the queue doesn't stall.
+     * Process one batch of up to MAX_CONCURRENT_SESSIONS worth of queue entries.
+     * Extracted so the progress wrapper in _runQueue() is entered only once.
+     *
+     * Unlike the old approach (one embedBatch call per session via Promise.all,
+     * which the ONNX runtime serialises on the same underlying model), this
+     * flattens ALL entries from ALL selected sessions into a SINGLE embedBatch
+     * call. The ONNX runtime parallelises inference across the batch dimension
+     * internally, which is significantly faster than sequential per-session calls.
+     *
+     * Entries are NOT removed from the queue until embedding succeeds, so a
+     * transient failure is retried on the next iteration.
      */
-    private async _embedWithTimeout(texts: string[]): Promise<Float32Array[]> {
-        if (texts.length === 0) { return []; }
-        this.log.debug('Embedding %d texts with timeout of %dms', texts.length, EMBED_TIMEOUT_MS);
-        const startTime = Date.now();
-        try {
-            const result = await Promise.race([
-                this.engine.embedBatch(texts),
-                new Promise<null>((_, reject) => {
-                    setTimeout(() => reject(new Error('embedBatch timed out')), EMBED_TIMEOUT_MS);
-                }),
-            ]);
-            const elapsed = Date.now() - startTime;
-            this.log.debug('embedBatch succeeded in %dms', elapsed);
-            if (result === null) {
-                this.log.warn('embedBatch returned null — using zero-vectors');
-                const dims = 384;
-                return texts.map(() => new Float32Array(dims));
-            }
-            return result;
-        } catch (err) {
-            const elapsed = Date.now() - startTime;
-            this.log.warn('embedBatch failed after %dms: %s — falling back to zero-vectors', elapsed, String(err));
-            const dims = 384;
-            return texts.map(() => new Float32Array(dims));
+    private async _processQueueBatch(report: (completed: number, total: number) => void): Promise<void> {
+        report(this._totalSessionsCompleted, this._totalSessionsQueued);
+
+        // Identify the sessions to process this iteration (up to MAX_CONCURRENT_SESSIONS).
+        const selectedSessions = new Set<string>();
+        for (const entry of this._queue) {
+            if (selectedSessions.has(entry.sessionId)) { continue; }
+            if (selectedSessions.size >= SemanticIndexer._MAX_CONCURRENT_SESSIONS) { break; }
+            selectedSessions.add(entry.sessionId);
         }
+
+        if (selectedSessions.size === 0) { return; }
+
+        // Flatten all entries from selected sessions into a single embedBatch call.
+        // This lets the ONNX runtime parallelise inference across the full batch
+        // dimension internally, rather than serialising per-session calls.
+        const allEntries: { sessionId: string; entry: QueueEntry }[] = [];
+        for (const entry of this._queue) {
+            if (selectedSessions.has(entry.sessionId)) {
+                allEntries.push({ sessionId: entry.sessionId, entry });
+            }
+        }
+
+        let success = false;
+        try {
+            const texts = allEntries.map(e => e.entry.text);
+            const embeddings = await this.engine.embedBatch(texts);
+            for (let i = 0; i < allEntries.length; i++) {
+                const { sessionId, entry } = allEntries[i];
+                const embedding = embeddings[i];
+                if (embedding) {
+                    this.index.add(sessionId, entry.role, entry.messageIndex, entry.paragraphIndex, embedding);
+                }
+            }
+            this._scheduleSave();
+            success = true;
+        } catch {
+            // Embedding failed for the entire batch — entries stay in the queue
+            // and will be retried on the next iteration.
+        }
+
+        // On success, remove the processed entries from the queue and bump counters.
+        if (success) {
+            const remaining: QueueEntry[] = [];
+            for (const entry of this._queue) {
+                if (!selectedSessions.has(entry.sessionId)) {
+                    remaining.push(entry);
+                }
+            }
+            this._queue = remaining;
+
+            for (const sid of selectedSessions) {
+                if (this._pendingBySession.has(sid)) {
+                    this._pendingBySession.delete(sid);
+                    this._totalSessionsCompleted++;
+                }
+            }
+        }
+
+        report(this._totalSessionsCompleted, this._totalSessionsQueued);
     }
 
     private _scheduleSave(): void {
@@ -683,11 +587,9 @@ export class SemanticIndexer implements ISemanticIndexer {
         }
         this._saveTimer = setTimeout(() => {
             this._saveTimer = undefined;
-            this.log.debug('Saving embedding index to disk');
             this.index
                 .save(this.embeddingsPath)
-                .then(() => this.log.debug('Embedding index saved successfully'))
-                .catch((err) => this.log.warn('Failed to save embedding index: %s', String(err)));
+                .catch(() => { /* ignore */ });
         }, SAVE_DEBOUNCE_MS);
     }
 }

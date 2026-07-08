@@ -124,6 +124,7 @@ class MemIndex implements ISemanticIndex {
     search(_queryEmbedding: Float32Array, _topK: number, _minScore?: number, _scope?: SemanticScope): SemanticMessageResult[] { return []; }
     async load(): Promise<void> { /* no-op */ }
     async save(): Promise<void> { /* no-op */ }
+    saveSync(): void { /* no-op */ }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

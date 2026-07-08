@@ -97,6 +97,7 @@ function makeIndexStub(): ISemanticIndex & { addCalls: IndexAddCall[] } {
             });
         },
         async save() {},
+        saveSync() {},
         async load() {},
     };
 }

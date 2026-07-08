@@ -11,6 +11,10 @@ const DOWNLOAD_TIMEOUT_MS = 300_000; // 5 minutes
 /** How long (ms) before a pending embedBatch response is considered stuck. */
 const EMBED_RPC_TIMEOUT_MS = 120_000;
 
+/** Number of worker threads for parallel ONNX inference. Each worker loads its own
+ *  model session, enabling true concurrent CPU utilization across cores. */
+const POOL_SIZE = 2;
+
 /** Minimal callable shape returned by @xenova/transformers pipeline() */
 type PipelineCallable = {
     (text: string, options: Record<string, unknown>): Promise<{ data: ArrayLike<number> }>;
@@ -27,158 +31,135 @@ export type PipelineFactory = (
     onProgress?: (message: string) => void,
 ) => Promise<PipelineCallable>;
 
-/** Default factory — delegates to the worker thread. */
+/** Default factory — delegates to a pool of worker threads for parallel ONNX inference. */
 async function defaultPipelineFactory(
     cacheDir: string,
     onProgress?: (message: string) => void,
     parentLog?: BoundLogger,
 ): Promise<PipelineCallable> {
-    // Resolve the worker script relative to __dirname.
-    // When bundled by esbuild, __dirname = dist/ and worker.js is alongside.
-    // When running via tsc (out/), the worker is at out/src/search/embeddingWorker.js.
     const workerPath = path.resolve(__dirname, 'embeddingWorker.js');
     const log: BoundLogger = parentLog?.withContext('EmbeddingWorker') ?? createLogger().withContext('EmbeddingWorker');
-    log.info('Spawning worker thread from %s', workerPath);
+    log.info('Spawning %d worker threads from %s', POOL_SIZE, workerPath);
 
-    const worker = new Worker(workerPath);
+    interface WorkerHandle {
+        worker: Worker;
+        callable: (texts: string[]) => Promise<{ data: ArrayLike<number> }>;
+        pending: Map<number, { resolve: (dataBuffer: ArrayBuffer, dims: number) => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }>;
+        disposed: boolean;
+    }
 
-    // RPC state: map of request ID → { resolve, reject, timer }
-    let nextId = 1;
-    const pending = new Map<number, {
-        resolve: (dataBuffer: ArrayBuffer, dims: number) => void;
-        reject: (err: Error) => void;
-        timer: ReturnType<typeof setTimeout>;
-    }>();
-    let workerReady = false;
-    let workerClosed = false;
+    function spawnSingleWorker(): Promise<WorkerHandle> {
+        const worker = new Worker(workerPath);
+        let nextId = 1;
+        const pending = new Map<number, { resolve: (dataBuffer: ArrayBuffer, dims: number) => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+        let resolveInit: (() => void) | undefined;
+        const initDone = new Promise<void>((resolve) => { resolveInit = resolve; });
+        let disposed = false;
 
-    // Resolver that fires when the worker signals init_done — used to block
-    // the factory until the ONNX model is loaded in the worker thread.
-    let resolveInit: (() => void) | undefined;
-    const initDone = new Promise<void>((resolve) => { resolveInit = resolve; });
-
-    // Proxy worker progress to the caller's onProgress callback
-    worker.on('message', (msg: Record<string, unknown>) => {
-        const type = String(msg['type'] ?? '');
-
-        if (type === 'progress' && onProgress) {
-            onProgress(String(msg['message'] ?? ''));
-            return;
-        }
-
-        if (type === 'init_done') {
-            log.info('Worker init complete');
-            workerReady = true;
-            resolveInit?.();
-            return;
-        }
-
-        if (type === 'result') {
-            const id = msg['id'] as number;
-            const dataBuffer = msg['dataBuffer'] as ArrayBuffer;
-            const dims = msg['dims'] as number;
-            const entry = pending.get(id);
-            if (entry) {
-                clearTimeout(entry.timer);
-                pending.delete(id);
-                entry.resolve(dataBuffer, dims);
+        worker.on('message', (msg: Record<string, unknown>) => {
+            const type = String(msg['type'] ?? '');
+            if (type === 'progress' && onProgress) {
+                onProgress(String(msg['message'] ?? ''));
+                return;
             }
-            return;
-        }
-
-        if (type === 'error') {
-            const id = msg['id'] as number | undefined;
-            const errorMsg = String(msg['error'] ?? 'Unknown worker error');
-            if (id !== undefined && id !== null) {
+            if (type === 'init_done') {
+                resolveInit?.();
+                return;
+            }
+            if (type === 'result') {
+                const id = msg['id'] as number;
+                const dataBuffer = msg['dataBuffer'] as ArrayBuffer;
+                const dims = msg['dims'] as number;
                 const entry = pending.get(id);
                 if (entry) {
                     clearTimeout(entry.timer);
                     pending.delete(id);
-                    entry.reject(new Error(errorMsg));
+                    entry.resolve(dataBuffer, dims);
                 }
-            } else {
-                log.error('Worker error: %s', errorMsg);
+                return;
             }
-            return;
-        }
-    });
-
-    worker.on('error', (err) => {
-        workerClosed = true;
-        resolveInit?.(); // Unblock init wait so the factory can fail
-        log.error('Worker crashed: %s', String(err));
-        // Reject all pending requests
-        for (const [, entry] of pending) {
-            clearTimeout(entry.timer);
-            entry.reject(err);
-        }
-        pending.clear();
-    });
-
-    worker.on('exit', (code) => {
-        workerClosed = true;
-        resolveInit?.(); // Unblock init wait so the factory can continue/poll
-        if (code !== 0) {
-            log.warn('Worker exited with code %d', code);
-        }
-        // Reject remaining pending requests
-        for (const [, entry] of pending) {
-            clearTimeout(entry.timer);
-            entry.reject(new Error(`Worker exited with code ${code}`));
-        }
-        pending.clear();
-    });
-
-    // === Send init message and wait for worker to be ready ===
-    // The worker loads the ONNX model asynchronously. We block here so that
-    // embedBatch calls cannot race ahead before the model is loaded.
-    worker.postMessage({ type: 'init', cacheDir });
-    try {
-        await withTimeout(initDone, DOWNLOAD_TIMEOUT_MS + 10_000, 'Worker model init');
-        log.info('Worker model loaded and ready');
-    } catch (err) {
-        log.error('Worker init failed: %s — worker thread will be terminated', String(err));
-        try { worker.terminate(); } catch { /* ignore */ }
-        throw err;
-    }
-
-    // The returned callable acts as a PipelineFactory pipeline: it sends messages
-    // to the worker and returns a { data: ArrayLike }-shaped response.
-    const callable = async (textOrTexts: string | string[], options: Record<string, unknown>): Promise<{ data: ArrayLike<number> }> => {
-        // Normalise to array
-        const texts = Array.isArray(textOrTexts) ? textOrTexts : [textOrTexts];
-        const id = nextId++;
-
-        return new Promise<{ data: ArrayLike<number> }>((resolve, reject) => {
-            const timer = setTimeout(() => {
-                pending.delete(id);
-                reject(new Error(`embedBatch RPC timed out after ${EMBED_RPC_TIMEOUT_MS}ms`));
-            }, EMBED_RPC_TIMEOUT_MS);
-
-            pending.set(id, {
-                resolve: (dataBuffer: ArrayBuffer, dims: number) => {
-                    // Reconstruct the flat Float32Array from the transferred buffer
-                    const flat = new Float32Array(dataBuffer);
-                    // Return in the same shape as @xenova/transformers pipeline output
-                    resolve({ data: flat });
-                },
-                reject,
-                timer,
-            });
-
-            if (!workerClosed) {
-                worker.postMessage({ type: 'embedBatch', id, texts });
-            } else {
-                clearTimeout(timer);
-                pending.delete(id);
-                reject(new Error('Worker is closed'));
+            if (type === 'error') {
+                const id = msg['id'] as number | undefined;
+                const errorMsg = String(msg['error'] ?? 'Unknown worker error');
+                if (id !== undefined && id !== null) {
+                    const entry = pending.get(id);
+                    if (entry) {
+                        clearTimeout(entry.timer);
+                        pending.delete(id);
+                        entry.reject(new Error(errorMsg));
+                    }
+                } else {
+                    log.error('Worker error: %s', errorMsg);
+                }
+                return;
             }
         });
+
+        worker.on('error', (err) => {
+            for (const [, entry] of pending) {
+                clearTimeout(entry.timer);
+                entry.reject(err);
+            }
+            pending.clear();
+            resolveInit?.();
+        });
+
+        worker.on('exit', (code) => {
+            if (code !== 0) {
+                log.warn('Worker exited with code %d', code);
+            }
+            for (const [, entry] of pending) {
+                clearTimeout(entry.timer);
+                entry.reject(new Error(`Worker exited with code ${code}`));
+            }
+            pending.clear();
+            resolveInit?.();
+        });
+
+        worker.postMessage({ type: 'init', cacheDir });
+
+        const callable = (texts: string[]): Promise<{ data: ArrayLike<number> }> => {
+            const id = nextId++;
+            return new Promise<{ data: ArrayLike<number> }>((resolve, reject) => {
+                const timer = setTimeout(() => {
+                    pending.delete(id);
+                    reject(new Error(`embedBatch RPC timed out after ${EMBED_RPC_TIMEOUT_MS}ms`));
+                }, EMBED_RPC_TIMEOUT_MS);
+                pending.set(id, {
+                    resolve: (dataBuffer: ArrayBuffer, dims: number) => {
+                        const flat = new Float32Array(dataBuffer);
+                        resolve({ data: flat });
+                    },
+                    reject,
+                    timer,
+                });
+                worker.postMessage({ type: 'embedBatch', id, texts });
+            });
+        };
+
+        return initDone.then(() => ({ worker, callable, pending, disposed }));
+    }
+
+    // Spawn all workers and wait for init
+    const handles: WorkerHandle[] = await Promise.all(
+        Array.from({ length: POOL_SIZE }, () => spawnSingleWorker()),
+    );
+    log.info('All %d workers ready', handles.length);
+
+    // Round-robin index — only the first worker forwards progress to avoid duplicates
+    let rrIndex = 0;
+
+    // The returned callable acts as a PipelineFactory pipeline: round-robins across workers
+    const callable = async (textOrTexts: string | string[], options: Record<string, unknown>): Promise<{ data: ArrayLike<number> }> => {
+        const texts = Array.isArray(textOrTexts) ? textOrTexts : [textOrTexts];
+        const handle = handles[rrIndex % POOL_SIZE];
+        rrIndex++;
+        return handle.callable(texts);
     };
 
-    // Hang a dispose method on the callable so the engine can clean up
-    (callable as unknown as Record<string, unknown>)._worker = worker;
-    (callable as unknown as Record<string, unknown>)._pending = pending;
+    // Hang dispose + handles on the callable for clean-up
+    (callable as unknown as Record<string, unknown>)._handles = handles;
+    (callable as unknown as Record<string, unknown>)._poolSize = POOL_SIZE;
 
     return callable as unknown as PipelineCallable;
 }
@@ -296,31 +277,35 @@ export class EmbeddingEngine implements IEmbeddingEngine {
         if (this._disposed) { return; }
         this._disposed = true;
 
-        // If we're in worker mode, the pipelineFn has a hidden _worker reference.
+        // If we're in worker mode, the pipelineFn has hidden _handles with workers.
         if (!this.factory && this.pipelineFn) {
             const callable = this.pipelineFn as unknown as Record<string, unknown>;
-            const worker = callable['_worker'] as Worker | undefined;
-            const pending = callable['_pending'] as Map<number, { timer: ReturnType<typeof setTimeout> }> | undefined;
+            const handles = callable['_handles'] as Array<{ worker: Worker; pending: Map<number, { timer: ReturnType<typeof setTimeout> }> }> | undefined;
 
-            if (pending) {
-                for (const [, entry] of pending) {
-                    clearTimeout(entry.timer);
+            if (handles) {
+                for (const handle of handles) {
+                    // Clear all pending RPC timers so they don't fire after disposal
+                    for (const [, entry] of handle.pending) {
+                        clearTimeout(entry.timer);
+                    }
+                    handle.pending.clear();
+
+                    // Send graceful terminate signal
+                    try {
+                        handle.worker.postMessage({ type: 'terminate' });
+                    } catch { /* worker may already be closed */ }
+
+                    // Force-terminate after a short grace period
+                    const killTimer = setTimeout(() => {
+                        try { handle.worker.terminate(); } catch { /* ignore */ }
+                    }, 2_000);
+                    killTimer.unref();
+
+                    handle.worker.on('exit', () => {
+                        clearTimeout(killTimer);
+                    });
                 }
-                pending.clear();
-            }
-
-            if (worker) {
-                worker.postMessage({ type: 'terminate' });
-                // Force-terminate after a short grace period
-                const killTimer = setTimeout(() => {
-                    try { worker.terminate(); } catch { /* ignore */ }
-                }, 2_000);
-                killTimer.unref();
-
-                worker.on('exit', () => {
-                    clearTimeout(killTimer);
-                });
-                this.log.debug('Worker terminate signal sent');
+                this.log.debug('All %d workers terminated', handles.length);
             }
         }
 

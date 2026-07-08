@@ -81,7 +81,6 @@ function makeEngineStub(opts: {
             const base = opts.embedResult ?? new Float32Array(SEMANTIC_DIMS).fill(0.1);
             return texts.map(() => new Float32Array(base));
         },
-        dispose(): void { /* no-op */ },
         get loadCallCount() { return state.loadCallCount; },
         get embedCallCount() { return state.embedCallCount; },
         get lastEmbedText() { return state.lastEmbedText; },

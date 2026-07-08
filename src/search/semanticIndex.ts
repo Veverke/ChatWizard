@@ -156,6 +156,45 @@ export class SemanticIndex implements ISemanticIndex {
         await fs.promises.rename(tmpPath, filePath);
     }
 
+    /** Synchronous variant of save() — used in dispose() where await is unavailable. */
+    saveSync(filePath: string): void {
+        const entries = [...this._store.entries()];
+        const N = entries.length;
+
+        let totalSize = 16;
+        const keyBufs: Buffer[] = [];
+        for (const [key] of entries) {
+            const keyBuf = Buffer.from(key, 'utf8');
+            keyBufs.push(keyBuf);
+            totalSize += 4 + keyBuf.byteLength + SEMANTIC_DIMS * 4;
+        }
+
+        const buf = Buffer.allocUnsafe(totalSize);
+        let offset = 0;
+
+        MAGIC.copy(buf, offset); offset += 4;
+        buf.writeUInt32LE(FILE_VERSION, offset); offset += 4;
+        buf.writeUInt32LE(SEMANTIC_DIMS, offset); offset += 4;
+        buf.writeUInt32LE(N, offset); offset += 4;
+
+        for (let i = 0; i < N; i++) {
+            const keyBuf = keyBufs[i];
+            const embedding = entries[i][1];
+
+            buf.writeUInt32LE(keyBuf.byteLength, offset); offset += 4;
+            keyBuf.copy(buf, offset); offset += keyBuf.byteLength;
+
+            for (let d = 0; d < SEMANTIC_DIMS; d++) {
+                buf.writeFloatLE(embedding[d], offset); offset += 4;
+            }
+        }
+
+        // Atomic write: write to a temp file first, then rename.
+        const tmpPath = filePath + '.tmp';
+        fs.writeFileSync(tmpPath, buf);
+        fs.renameSync(tmpPath, filePath);
+    }
+
     async load(filePath: string): Promise<void> {
         let raw: Buffer;
         try {
