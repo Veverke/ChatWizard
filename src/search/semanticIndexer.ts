@@ -83,15 +83,16 @@ export function defaultVsCodeApi(globalState?: SemanticGlobalState): SemanticInd
             return choice === 'Download';
         },
         isFirstUse(storagePath: string): boolean {
+            // Check BOTH globalState AND the sentinel file.
+            // globalState is the fast path (shared across windows), but its async
+            // update() may not have completed before shutdown — the sentinel file
+            // is written synchronously and is the reliable fallback.
             if (globalState) {
-                // globalState is shared across all VS Code windows — reliable even when
-                // multiple windows are open simultaneously.
-                return !(globalState.get<boolean>(CONSENT_KEY) ?? false);
+                const consented = globalState.get<boolean>(CONSENT_KEY) ?? false;
+                if (consented) { return false; }
             }
-            // Fallback (tests / no globalState): check the sentinel file written by
-            // markModelDownloaded(). Checking only the directory is unreliable:
-            // @xenova/transformers may load the model from its own OS-level cache
-            // without creating this directory.
+            // Fallback (tests / no globalState / async update didn't persist):
+            // check the sentinel file written synchronously by markModelDownloaded().
             return !fs.existsSync(path.join(storagePath, MODEL_CACHE_SUBDIR, '.chatwizard-ready'));
         },
         async loadModelWithProgress(task: (report: (msg: string) => void) => Promise<void>): Promise<void> {
@@ -128,12 +129,9 @@ export function defaultVsCodeApi(globalState?: SemanticGlobalState): SemanticInd
             );
         },
         markModelDownloaded(storagePath: string): void {
-            if (globalState) {
-                // Persist consent in globalState — survives across windows and reloads.
-                void globalState.update(CONSENT_KEY, true);
-                return;
-            }
-            // Fallback: write sentinel file.
+            // Always write the sentinel file synchronously — this is the reliable
+            // persistence mechanism that survives VS Code shutdown even if the
+            // async globalState.update() hasn't completed yet.
             const dir = path.join(storagePath, MODEL_CACHE_SUBDIR);
             if (!fs.existsSync(dir)) {
                 fs.mkdirSync(dir, { recursive: true });
@@ -142,6 +140,12 @@ export function defaultVsCodeApi(globalState?: SemanticGlobalState): SemanticInd
                 fs.writeFileSync(path.join(dir, '.chatwizard-ready'), '');
             } catch {
                 // Non-critical: if writing fails the consent dialog may reappear on next reload.
+            }
+
+            if (globalState) {
+                // Also persist consent in globalState — survives across windows and reloads.
+                // This is fire-and-forget; the sentinel file above is the reliable source.
+                void globalState.update(CONSENT_KEY, true);
             }
         },
         showModelReady(): void {

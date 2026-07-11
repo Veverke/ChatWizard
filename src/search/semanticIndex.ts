@@ -1,6 +1,7 @@
 // src/search/semanticIndex.ts
 
 import * as fs from 'fs';
+import * as path from 'path';
 import { ISemanticIndex, SEMANTIC_DIMS, SemanticScope } from './semanticContracts';
 import { SemanticMessageResult } from './types';
 
@@ -152,11 +153,21 @@ export class SemanticIndex implements ISemanticIndex {
         // Atomic write: write to a temp file first, then rename.
         // This prevents partial/corrupt files when VS Code shuts down mid-write.
         const tmpPath = filePath + '.tmp';
+        // Ensure parent directory exists
+        const dir = path.dirname(filePath);
+        if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true });
+        }
         await fs.promises.writeFile(tmpPath, buf);
         await fs.promises.rename(tmpPath, filePath);
     }
 
-    /** Synchronous variant of save() — used in dispose() where await is unavailable. */
+    /** Synchronous variant of save() — used in dispose() where await is unavailable.
+     *
+     * NOTE: This writes directly to the target file (no .tmp + rename) because
+     * dispose() may race with a pending async save() that is already using the
+     * same .tmp path.  At shutdown there are no concurrent readers, so a direct
+     * write is safe and avoids the race. */
     saveSync(filePath: string): void {
         const entries = [...this._store.entries()];
         const N = entries.length;
@@ -189,10 +200,23 @@ export class SemanticIndex implements ISemanticIndex {
             }
         }
 
-        // Atomic write: write to a temp file first, then rename.
-        const tmpPath = filePath + '.tmp';
+        // Ensure parent directory exists
+        const dir = path.dirname(filePath);
+        if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true });
+        }
+
+        // Use a unique temp path (.tmp.sync) that CANNOT collide with the async
+        // save() path (.tmp).  This prevents a race where an in-flight async
+        // save() captured a stale snapshot of _store before dispose() ran, then
+        // its rename(.tmp → filePath) overwrites the fresh data we write here.
+        const tmpPath = filePath + '.tmp.sync';
         fs.writeFileSync(tmpPath, buf);
         fs.renameSync(tmpPath, filePath);
+
+        // Remove the stale .tmp left by a racing async save() so its pending
+        // rename target no longer exists (rename will fail harmlessly).
+        try { fs.unlinkSync(filePath + '.tmp'); } catch { /* never existed */ }
     }
 
     async load(filePath: string): Promise<void> {
