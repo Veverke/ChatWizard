@@ -16,74 +16,33 @@ e2e tests, manual verification steps, and a completion gate.
 
 ---
 
-## Pre-flight: Implementation Status Audit
-
-Before beginning P3 work, each feature was checked against the current codebase to determine
-whether it (or a significant part of it) is already implemented.
-
-| # | Feature | Status | Notes |
-|---|---------|--------|-------|
-| 23 | KB entry classification + KB generation | ✅ Implemented | All source files exist: `kbClassifier.ts`, `kbClusterer.ts`, `kbExporter.ts`. Types defined. |
-| 24 | SQLite persistent cache | ✅ Implemented | Full CacheManager implementation: schema, FTS5, parse_state, incremental parsing, wired into extension.ts and watcher. |
-| 25 | Git/branch linkage | ✅ Implemented | `gitContextReader.ts` exists. Chronicle branch data merged in extension.ts. Branch grouping in tree view. |
-| 26 | Workspace Digest / Standup Reports | ✅ Implemented | `digestBuilder.ts` exists and is functional. |
-| 27 | Cloud sync (opt-in) | ✅ Implemented | `CloudSyncManager` with Gist/S3/Azure backends, AES-256-GCM encryption, periodic sync. |
-| 28 | Session status lifecycle | ✅ Implemented | Status picker, filter by status, context value, tree item display, status chip in reader. |
-| 29 | Bookmarks within a session | ✅ Implemented | Full bookmark UI, toggle, persistence in sidecar, jump list. |
-| 30 | Inline annotations | ✅ Implemented | Full annotation UI, add/edit/delete, persistence. |
-| 31 | Session linking | ✅ Implemented | Bidirectional linking, link/unlink commands, sidecar persistence. |
-| 32 | Response rating | ✅ Implemented | Types, sidecar store methods, commands registered. |
-| 33 | Duplicate / related session detection | ✅ Implemented | `duplicateDetector.ts` exists. |
-| 34 | Outcome / follow-up tracking | ✅ Implemented | `actionItemExtractor.ts` exists. Types and sidecar store methods. |
-| 35 | Keyboard-only navigation | ✅ Complete | Focus navigation commands registered + `keybindings` entries added in `package.json` for `j`/`k`/`g`/`G`/`/` navigation. |
-| 36 | Session sharing | ✅ Implemented | `sessionHtmlExporter.ts` exists. Share command available. |
-| 37 | Post-session cost tips & analytics | ✅ Implemented | `SessionCostAdvisorNotifier` is instantiated in extension.ts. |
-| 38 | MCP tools: `includeCode` flag | ✅ Implemented | `contentFilter.ts` exists with `stripCodeBlocks()`. |
-| 39 | MCP `/mcp-config` auth hardening | ✅ Implemented | Auth check already present in `mcpServer.ts` (line 187). |
-| 40 | Antigravity `.pb` (protobuf) support | ✅ Implemented | `antigravityProtobuf.ts` exists and is wired. |
-| 41 | Zed AI source support | ✅ Implemented | `zed.ts`, `zedWorkspace.ts` exist. `SessionSource` includes `'zed'`. |
-| 42 | Tabnine Chat source support | ✅ Implemented | Parser (`parsers/tabnine.ts`) and reader (`readers/tabnineWorkspace.ts`) exist and are now wired into the file watcher. `TabnineSourceWatcher` implements `ISourceWatcher`. `indexTabnine` config setting added. Sessions are collected at startup and watched live. |
-| 43 | Session retention controls | ✅ Complete | `sessionRetentionDays` setting applied in extension.ts. `semanticIndexMaxAgeDays` now wired into `SemanticIndexer.scheduleSession()` via `setMaxAgeDays()`. |
-| 44 | API / programmatic access | ✅ Implemented | Full REST API server with health, sessions list/detail, search, stats endpoints. Bearer auth. |
-| 45 | Compacted session detection & visibility | ✅ Implemented | `isCompacted`/`compactionSummary` fields on `Session` type. |
-
-### Key findings
-
-- **Features 28–35, 37–43, 45 are now complete** — all P3 features with existing source code have been fully wired and configured.
-- **Feature 35** now has comprehensive keybindings: `j`/`k` for navigation, `g` for focus, `/` for search, `l`/`h` for expand/collapse, `ctrl+l` for filter, `enter` for open, `ctrl+a` for select all.
-- **Feature 42** is now fully implemented: Tabnine parser (`parsers/tabnine.ts`) and reader (`readers/tabnineWorkspace.ts`) already existed; the `TabnineSourceWatcher` (`watcher/sources/TabnineSourceWatcher.ts`) provides `ISourceWatcher` integration for both initial indexing and live file watching. The `indexTabnine` configuration flag (default `true`) allows users to disable Tabnine indexing.
-- **Feature 43** is now fully complete: `sessionRetentionDays` works in UI; `semanticIndexMaxAgeDays` is now wired into `SemanticIndexer.setMaxAgeDays()` and filters sessions at `scheduleSession()` time. Config is read from VS Code settings and applied in `extension.ts` during `createAndInitSemanticIndexer()`.
-- **All P3 features now implemented**. Features 24, 27, and 44 have been built and wired. See Feature implementation sections for detailed architecture.
-
----
-
 ## Table of Contents
 
-| # | Feature | Effort | Status | What You Can Now Do |
-|---|---------|--------|--------|---------------------|
-| [23](#feature-23--kb-entry-classification--kb-generation) | KB entry classification + KB generation | L | ✅ | Run `ChatWizard: Generate Knowledge Base` to classify sessions into KB entry types and export an Obsidian-compatible Markdown knowledge base. |
-| [24](#feature-24--sqlite-persistent-cache) | SQLite persistent cache | L | ⬜ | All sessions are cached in a local SQLite DB (FTS5 search). Startup loads from cache instantly. Unchanged JSONL files are skipped via parse_state tracking. |
-| [25](#feature-25--gitbranch-linkage) | Git/branch linkage | M | ✅ | Sessions are auto-tagged with the current Git branch and commit. Tree view has **Group by Branch** mode. Reader header shows the branch. |
-| [26](#feature-26--workspace-digest--standup-reports) | Workspace Digest / Standup Reports | M | ✅ | Run `ChatWizard: Generate Digest` to produce a Markdown standup report filtered by time window, grouped by branch and model. |
-| [27](#feature-27--cloud-sync-opt-in) | Cloud sync (opt-in) | L | ⬜ | Enable cloud sync to back up sessions to a private GitHub Gist with AES-256-GCM encryption. Periodic auto-sync every 5 minutes. |
-| [28](#feature-28--session-status-lifecycle) | Session status lifecycle | S | ✅ | Set sessions to **Open**, **Resolved**, or **Revisit**. Filter by status. Badges and chips appear in the tree and reader. |
-| [29](#feature-29--bookmarks-within-a-session) | Bookmarks within a session | S | ✅ | Click ★/☆ on any message to bookmark it. A jump list lets you scroll to bookmarked messages. Bookmarks persist across restarts. |
-| [30](#feature-30--inline-annotations) | Inline annotations | S | ✅ | Click 📝 on any message to add an inline note. Annotations are saved and rendered when re-opening the session. |
-| [31](#feature-31--session-linking) | Session linking | M | ✅ | Link two related sessions via QuickPick. Links are bidirectional — opening a session shows its linked sessions. |
-| [32](#feature-32--response-rating) | Response rating | S | ✅ | Rate a response as helpful (👍) or not (👎). Ratings are stored per-message in the sidecar metadata. |
-| [33](#feature-33--duplicate--related-session-detection) | Duplicate / related session detection | M | ✅ | The extension auto-detects similar sessions using embedding-based cosine similarity. Related sessions are suggested for review. |
-| [34](#feature-34--outcome--follow-up-tracking) | Outcome / follow-up tracking | S | ✅ | Action items are auto-extracted from sessions via heuristic phrase matching. Track what needs to be done after a coding session. |
-| [35](#feature-35--keyboard-only-navigation) | Keyboard-only navigation | S | ✅ | Navigate the tree view entirely by keyboard: `j`/`k` to move, `g` to focus tree, `/` to search, `l`/`h` to expand/collapse. |
-| [36](#feature-36--session-sharing) | Session sharing | M | ✅ | Run `ChatWizard: Share Session` to export a session as a self-contained HTML file. Optionally redact code blocks. |
-| [37](#feature-37--post-session-cost-tips--analytics) | Post-session cost tips & analytics | S | ✅ | After a session, see cost analytics (tokens used, estimated cost) and tips for reducing costs. Integrated into the session reader. |
-| [38](#feature-38--mcp-tools-includecode-flag) | MCP tools: `includeCode` flag | S | ✅ | The MCP `chatwizard_search_sessions` tool has an `includeCode` param. Set to `false` to exclude code blocks from results. |
-| [39](#feature-39--mcp-mcp-config-auth-hardening) | MCP `/mcp-config` auth hardening | XS | ✅ | The `/mcp-config` endpoint requires a valid Bearer token. Unauthorized requests receive a 401 response. |
-| [40](#feature-40--antigravity-pb-protobuf-support) | Antigravity `.pb` (protobuf) support | S | ✅ | ChatWizard can now read Antigravity's protobuf-format files (`.pb`), scanning wire-type 2 string fields and parsing them into sessions. |
-| [41](#feature-41--zed-ai-source-support) | Zed AI source support | S | ✅ | ChatWizard now discovers and indexes sessions from **Zed AI** editor, parsed from Zed's conversation format. |
-| [42](#feature-42--tabnine-chat-source-support) | Tabnine Chat source support | M | ✅ | ChatWizard now discovers and indexes **Tabnine Chat** sessions. Toggle via `chatwizard.indexTabnine`. Initial indexing + live file watching. |
-| [43](#feature-43--session-retention-controls) | Session retention controls | S | ✅ | Set `chatwizard.sessionRetentionDays` to auto-hide old sessions. Set `semanticIndexMaxAgeDays` to limit which sessions are embedded. |
-| [44](#feature-44--api--programmatic-access) | API / programmatic access | M | ⬜ | Enable `chatwizard.restApi.enabled` to start a REST API. Access sessions, search, and stats via HTTP with Bearer token auth. |
-| [45](#feature-45--compacted-session-detection--visibility) | Compacted session detection & visibility | S | ✅ | Compacted sessions (Claude summary JSONL entries) are detected and flagged with an `isCompacted` marker and badge in the tree view. |
+| # | Feature | Effort | Status | What You Can Now Do | Notes |
+|---|---------|--------|--------|---------------------|-------|
+| [23](#feature-23--kb-entry-classification--kb-generation) | KB entry classification + KB generation | L | ✅ | Run `ChatWizard: Generate Knowledge Base` to classify sessions into KB entry types and export an Obsidian-compatible Markdown knowledge base. | All source files exist: `kbClassifier.ts`, `kbClusterer.ts`, `kbExporter.ts`. Types defined. |
+| [24](#feature-24--sqlite-persistent-cache) | SQLite persistent cache | L | ✅ | All sessions are cached in a local SQLite DB (FTS5 search). Startup loads from cache instantly. Unchanged JSONL files are skipped via parse_state tracking. | Full CacheManager implementation: schema, FTS5, parse_state, incremental parsing, wired into extension.ts and watcher. |
+| [25](#feature-25--gitbranch-linkage) | Git/branch linkage | M | ✅ | Sessions are auto-tagged with the current Git branch and commit. Tree view has **Group by Branch** mode. Reader header shows the branch. | `gitContextReader.ts` exists. Chronicle branch data merged in extension.ts. Branch grouping in tree view. |
+| [26](#feature-26--workspace-digest--standup-reports) | Workspace Digest / Standup Reports | M | ✅ | Run `ChatWizard: Generate Digest` to produce a Markdown standup report filtered by time window, grouped by branch and model. | `digestBuilder.ts` exists and is functional. |
+| [27](#feature-27--cloud-sync-opt-in) | Cloud sync (opt-in) | L | ✅ | Enable cloud sync to back up sessions to a private GitHub Gist with AES-256-GCM encryption. Periodic auto-sync every 5 minutes. | `CloudSyncManager` with Gist/S3/Azure backends, AES-256-GCM encryption, periodic sync. |
+| [28](#feature-28--session-status-lifecycle) | Session status lifecycle | S | ✅ | Set sessions to **Open**, **Resolved**, or **Revisit**. Filter by status. Badges and chips appear in the tree and reader. | Status picker, filter by status, context value, tree item display, status chip in reader. |
+| [29](#feature-29--bookmarks-within-a-session) | Bookmarks within a session | S | ✅ | Click ★/☆ on any message to bookmark it. A jump list lets you scroll to bookmarked messages. Bookmarks persist across restarts. | Full bookmark UI, toggle, persistence in sidecar, jump list. |
+| [30](#feature-30--inline-annotations) | Inline annotations | S | ✅ | Click 📝 on any message to add an inline note. Annotations are saved and rendered when re-opening the session. | Full annotation UI, add/edit/delete, persistence. |
+| [31](#feature-31--session-linking) | Session linking | M | ✅ | Link two related sessions via QuickPick. Links are bidirectional — opening a session shows its linked sessions. | Bidirectional linking, link/unlink commands, sidecar persistence. |
+| [32](#feature-32--response-rating) | Response rating | S | ✅ | Rate a response as helpful (👍) or not (👎). Ratings are stored per-message in the sidecar metadata. | Types, sidecar store methods, commands registered. |
+| [33](#feature-33--duplicate--related-session-detection) | Duplicate / related session detection | M | ✅ | The extension auto-detects similar sessions using embedding-based cosine similarity. Related sessions are suggested for review. | `duplicateDetector.ts` exists. |
+| [34](#feature-34--outcome--follow-up-tracking) | Outcome / follow-up tracking | S | ✅ | Action items are auto-extracted from sessions via heuristic phrase matching. Track what needs to be done after a coding session. | `actionItemExtractor.ts` exists. Types and sidecar store methods. |
+| [35](#feature-35--keyboard-only-navigation) | Keyboard-only navigation | S | ✅ | Navigate the tree view entirely by keyboard: `j`/`k` to move, `g` to focus tree, `/` to search, `l`/`h` to expand/collapse. | Focus navigation commands registered + `keybindings` entries in `package.json` for `j`/`k`/`g`/`G`/`/` navigation. |
+| [36](#feature-36--session-sharing) | Session sharing | M | ✅ | Run `ChatWizard: Share Session` to export a session as a self-contained HTML file. Optionally redact code blocks. | `sessionHtmlExporter.ts` exists. Share command available. |
+| [37](#feature-37--post-session-cost-tips--analytics) | Post-session cost tips & analytics | S | ✅ | After a session, see cost analytics (tokens used, estimated cost) and tips for reducing costs. Integrated into the session reader. | `SessionCostAdvisorNotifier` is instantiated in extension.ts. |
+| [38](#feature-38--mcp-tools-includecode-flag) | MCP tools: `includeCode` flag | S | ✅ | The MCP `chatwizard_search_sessions` tool has an `includeCode` param. Set to `false` to exclude code blocks from results. | `contentFilter.ts` exists with `stripCodeBlocks()`. |
+| [39](#feature-39--mcp-mcp-config-auth-hardening) | MCP `/mcp-config` auth hardening | XS | ✅ | The `/mcp-config` endpoint requires a valid Bearer token. Unauthorized requests receive a 401 response. | Auth check already present in `mcpServer.ts` (line 187). |
+| [40](#feature-40--antigravity-pb-protobuf-support) | Antigravity `.pb` (protobuf) support | S | ✅ | ChatWizard can now read Antigravity's protobuf-format files (`.pb`), scanning wire-type 2 string fields and parsing them into sessions. | `antigravityProtobuf.ts` exists and is wired. |
+| [41](#feature-41--zed-ai-source-support) | Zed AI source support | S | ✅ | ChatWizard now discovers and indexes sessions from **Zed AI** editor, parsed from Zed's conversation format. | `zed.ts`, `zedWorkspace.ts` exist. `SessionSource` includes `'zed'`. |
+| [42](#feature-42--tabnine-chat-source-support) | Tabnine Chat source support | M | ✅ | ChatWizard now discovers and indexes **Tabnine Chat** sessions. Toggle via `chatwizard.indexTabnine`. Initial indexing + live file watching. | Parser (`parsers/tabnine.ts`) and reader (`readers/tabnineWorkspace.ts`) exist and are wired into the file watcher. `TabnineSourceWatcher` implements `ISourceWatcher`. |
+| [43](#feature-43--session-retention-controls) | Session retention controls | S | ✅ | Set `chatwizard.sessionRetentionDays` to auto-hide old sessions. Set `semanticIndexMaxAgeDays` to limit which sessions are embedded. | `sessionRetentionDays` setting applied in extension.ts. `semanticIndexMaxAgeDays` wired into `SemanticIndexer.scheduleSession()`. |
+| [44](#feature-44--api--programmatic-access) | API / programmatic access | M | ✅ | Enable `chatwizard.restApi.enabled` to start a REST API. Access sessions, search, and stats via HTTP with Bearer token auth. | Full REST API server with health, sessions list/detail, search, stats endpoints. Bearer auth. |
+| [45](#feature-45--compacted-session-detection--visibility) | Compacted session detection & visibility | S | ✅ | Compacted sessions (Claude summary JSONL entries) are detected and flagged with an `isCompacted` marker and badge in the tree view. | `isCompacted`/`compactionSummary` fields on `Session` type. |
 
 ---
 
@@ -413,8 +372,6 @@ _Effort: M · Priority: P3 · No blockers (runs independently of SQLite)_
 - Bound to 127.0.0.1 only, CORS enabled
 - Config: `chatwizard.restApi.enabled`, `chatwizard.restApi.port`, `chatwizard.restApi.enableDocs`
 - Wired into `extension.ts` with config-based auto-start
-
-### Status: ⬜ Not started
 
 ---
 
