@@ -84,6 +84,7 @@ function makeEngineStub(opts: {
         get loadCallCount() { return state.loadCallCount; },
         get embedCallCount() { return state.embedCallCount; },
         get lastEmbedText() { return state.lastEmbedText; },
+        dispose(): void { /* no-op in tests */ },
     };
 }
 
@@ -132,6 +133,10 @@ function makeIndexStub(): ISemanticIndex & {
         async load(filePath: string) {
             state.loadCalled++;
             state.lastLoadedPath = filePath;
+        },
+        saveSync(filePath: string): void {
+            state.saveCalled++;
+            state.lastSavedPath = filePath;
         },
     };
 }

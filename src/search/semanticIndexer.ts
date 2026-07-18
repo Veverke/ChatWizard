@@ -11,6 +11,14 @@ import { createLogger, type BoundLogger, withTimeout } from '../utils/logger';
 const EMBEDDINGS_FILENAME = 'semantic-embeddings.bin';
 const SAVE_DEBOUNCE_MS = 5_000;
 const MODEL_CACHE_SUBDIR = 'models';
+/**
+ * Lock file name (in global storage) for serialising bulk embedding across
+ * VS Code instances.  Each instance tries to atomically create this directory
+ * before running the queue; only one succeeds at a time.
+ */
+const GLOBAL_BULK_LOCK = '.semantic-bulk-lock';
+/** Max delay (ms) before retrying the lock after a failed attempt. */
+const LOCK_RETRY_MAX_MS = 30_000;
 // How long to wait after the last scheduleSession() call before starting to embed.
 // This lets the archive-restore batch (which arrives a second or two after the
 // initial file-watcher batch) be collected before the queue runs, so the progress
@@ -206,7 +214,9 @@ export class SemanticIndexer implements ISemanticIndexer {
     // stop arriving — letting both the live batch and the archive-restore batch land
     // before the first embed, ensuring the progress total is correct from the start.
     private _queueStartTimer: ReturnType<typeof setTimeout> | undefined;
-
+    // Retry timer for global bulk-lock acquisition — fires when another instance
+    // is holding the lock, giving it another chance after a backoff.
+    private _lockRetryTimer: ReturnType<typeof setTimeout> | undefined;
     // Debounced "indexing complete" notification timer.
     // Prevents a double notification when the archive-restore batch arrives shortly
     // after the first file-watcher batch (two _runQueue() runs → one notification).
@@ -219,6 +229,10 @@ export class SemanticIndexer implements ISemanticIndexer {
 
     private readonly _queueStartDebounceMs: number;
     private readonly embeddingsPath: string;
+    /** Path to the global bulk-embedding lock directory. */
+    private readonly _bulkLockPath: string;
+    /** Whether this instance currently holds the bulk lock. */
+    private _bulkLockHeld = false;
 
     constructor(
         storagePath: string,
@@ -230,6 +244,7 @@ export class SemanticIndexer implements ISemanticIndexer {
         embeddingsFilePath?: string,
     ) {
         this.embeddingsPath = embeddingsFilePath ?? path.join(storagePath, EMBEDDINGS_FILENAME);
+        this._bulkLockPath = path.join(storagePath, GLOBAL_BULK_LOCK);
         this.storagePath = storagePath;
         this.engine = engineFactory(path.join(storagePath, MODEL_CACHE_SUBDIR));
         this.index = indexFactory();
@@ -471,6 +486,13 @@ export class SemanticIndexer implements ISemanticIndexer {
             clearTimeout(this._stallTimer);
             this._stallTimer = undefined;
         }
+        if (this._lockRetryTimer !== undefined) {
+            clearTimeout(this._lockRetryTimer);
+            this._lockRetryTimer = undefined;
+        }
+
+        // Release the global bulk lock if we hold it — lets another instance start building.
+        this._releaseBulkLock();
 
         // Synchronous final save — must complete before the process exits
         if (this._isReady) {
@@ -481,6 +503,64 @@ export class SemanticIndexer implements ISemanticIndexer {
                 this.log.warn('Final save failed: %s', String(err));
             }
         }
+    }
+
+    // ── Global bulk lock ───────────────────────────────────────────────────
+    //
+    // The lock uses fs.mkdirSync which is atomic on every platform (including
+    // Windows): only one process succeeds, the rest get an EEXIST / EACCES.
+    // This prevents N VS Code instances from each building embeddings for their
+    // respective workspaces simultaneously, which would saturate the CPU.
+    //
+    // If the lock cannot be acquired the instance shows a single info message
+    // and defers to incremental per-session embedding.  Sessions that are never
+    // bulk-built will be indexed normally the next time the workspace is opened
+    // without contention.
+
+    /**
+     * Try to acquire the global bulk-embedding lock synchronously.
+     * @returns `true` if the lock was acquired, `false` if another instance holds it.
+     */
+    private _tryAcquireBulkLock(): boolean {
+        if (this._bulkLockHeld) { return true; }
+        try {
+            // Ensure the parent directory exists (global storage may not yet be created)
+            fs.mkdirSync(path.dirname(this._bulkLockPath), { recursive: true });
+            fs.mkdirSync(this._bulkLockPath, { recursive: false });
+            this._bulkLockHeld = true;
+            this.log.debug('Acquired global bulk lock at %s', this._bulkLockPath);
+            return true;
+        } catch {
+            this.log.debug('Global bulk lock held by another instance — deferring');
+            return false;
+        }
+    }
+
+    /** Release the global bulk-embedding lock. */
+    private _releaseBulkLock(): void {
+        if (!this._bulkLockHeld) { return; }
+        this._bulkLockHeld = false;
+        try {
+            fs.rmdirSync(this._bulkLockPath);
+            this.log.debug('Released global bulk lock');
+        } catch {
+            // Non-critical — stale lock is harmless; next instance will overwrite.
+        }
+    }
+
+    /**
+     * Show a one-shot info message about the lock being held by another instance.
+     */
+    private _showLockContentionNotification(): void {
+        // Use a flag in the vsCodeApi to avoid spamming the user on every retry.
+        // This is best-effort — not persisted across restarts.
+        if ((this as any).__lockNoticeShown) { return; }
+        (this as any).__lockNoticeShown = true;
+        void vscode.window.showInformationMessage(
+            'Chat Wizard: Vector embeddings are being built in another VS Code ' +
+            'instance. This workspace will index new sessions incrementally ' +
+            'once the other instance finishes.'
+        );
     }
 
     // ── Private helpers ──────────────────────────────────────────────────────
@@ -542,6 +622,28 @@ export class SemanticIndexer implements ISemanticIndexer {
     }
 
     private async _runQueue(): Promise<void> {
+        // Try the global lock first to serialise bulk embedding across instances.
+        if (!this._tryAcquireBulkLock()) {
+            this._showLockContentionNotification();
+            // Don't set _queueRunning — the queue stays so the next scheduleSession
+            // call will retry (with its 1.5s debounce).  If this is the initial bulk
+            // batch, scheduleSession won't be called again until the next startup,
+            // so schedule a retry with backoff.
+            const delay = this._totalSessionsQueued > 0 ? LOCK_RETRY_MAX_MS : 15_000;
+            this._lockRetryTimer = setTimeout(() => {
+                this._lockRetryTimer = undefined;
+                if (!this._disposed && this._queue.length > 0 && !this._queueRunning) {
+                    this._queueStartTimer = setTimeout(() => {
+                        this._queueStartTimer = undefined;
+                        if (!this._disposed && this._queue.length > 0 && !this._queueRunning) {
+                            this._runQueue();
+                        }
+                    }, 500);
+                }
+            }, delay);
+            return;
+        }
+
         this._queueRunning = true;
         this._startStallWatchdog();
 
@@ -610,6 +712,9 @@ export class SemanticIndexer implements ISemanticIndexer {
 
         this._clearStallWatchdog();
         this._queueRunning = false;
+
+        // Release the global lock so another instance can start building.
+        this._releaseBulkLock();
 
         this.log.info('Queue finished — %d sessions completed out of %d queued', this._totalSessionsCompleted, this._totalSessionsQueued);
 

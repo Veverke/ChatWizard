@@ -79,7 +79,6 @@ import { FileHistoryCodeLensProvider } from './ui/fileHistoryCodeLens';
 import { FileHistoryPanel } from './views/fileHistoryPanel';
 import { discoverChronicleDbsAsync } from './readers/chronicleWorkspace';
 import { ActiveSessionTagButton } from './ui/activeSessionTagButton';
-import { SessionCostAdvisorNotifier } from './ui/sessionCostAdvisorNotifier';
 import { LiveSessionTracker } from './utils/liveSessionTracker';
 import { PromptAnalyzer } from './analytics/promptAnalyzer';
 import { readChronicleCheckpoints, readChronicleSessions } from './parsers/chronicle';
@@ -2326,10 +2325,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         w.setLiveTracker(liveTracker);
         const activeSessionTagBtn = new ActiveSessionTagButton(liveTracker);
         context.subscriptions.push(activeSessionTagBtn);
-
-        // ── Feature 20-J / 37: Session Cost Advisor (Feature 37 — re-enabled in P3) ──
-        const costAdvisorNotifier = new SessionCostAdvisorNotifier(liveTracker, index);
-        context.subscriptions.push(costAdvisorNotifier);
 
         context.subscriptions.push(
             vscode.commands.registerCommand('chatwizard.tagActiveSession', async () => {
