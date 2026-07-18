@@ -59,31 +59,31 @@ whether it (or a significant part of it) is already implemented.
 
 ## Table of Contents
 
-| # | Feature | Effort | Status |
-|---|---------|--------|--------|
-| [23](#feature-23--kb-entry-classification--kb-generation) | KB entry classification + KB generation | L | ✅ |
-| [24](#feature-24--sqlite-persistent-cache) | SQLite persistent cache | L | ⬜ |
-| [25](#feature-25--gitbranch-linkage) | Git/branch linkage | M | ✅ |
-| [26](#feature-26--workspace-digest--standup-reports) | Workspace Digest / Standup Reports | M | ✅ |
-| [27](#feature-27--cloud-sync-opt-in) | Cloud sync (opt-in) | L | ⬜ |
-| [28](#feature-28--session-status-lifecycle) | Session status lifecycle | S | ✅ |
-| [29](#feature-29--bookmarks-within-a-session) | Bookmarks within a session | S | ✅ |
-| [30](#feature-30--inline-annotations) | Inline annotations | S | ✅ |
-| [31](#feature-31--session-linking) | Session linking | M | ✅ |
-| [32](#feature-32--response-rating) | Response rating | S | ✅ |
-| [33](#feature-33--duplicate--related-session-detection) | Duplicate / related session detection | M | ✅ |
-| [34](#feature-34--outcome--follow-up-tracking) | Outcome / follow-up tracking | S | ✅ |
-| [35](#feature-35--keyboard-only-navigation) | Keyboard-only navigation | S | ✅ |
-| [36](#feature-36--session-sharing) | Session sharing | M | ✅ |
-| [37](#feature-37--post-session-cost-tips--analytics) | Post-session cost tips & analytics | S | ✅ |
-| [38](#feature-38--mcp-tools-includecode-flag) | MCP tools: `includeCode` flag | S | ✅ |
-| [39](#feature-39--mcp-mcp-config-auth-hardening) | MCP `/mcp-config` auth hardening | XS | ✅ |
-| [40](#feature-40--antigravity-pb-protobuf-support) | Antigravity `.pb` (protobuf) support | S | ✅ |
-| [41](#feature-41--zed-ai-source-support) | Zed AI source support | S | ✅ |
-| [42](#feature-42--tabnine-chat-source-support) | Tabnine Chat source support | M | ✅ |
-| [43](#feature-43--session-retention-controls) | Session retention controls | S | ✅ |
-| [44](#feature-44--api--programmatic-access) | API / programmatic access | M | ⬜ |
-| [45](#feature-45--compacted-session-detection--visibility) | Compacted session detection & visibility | S | ✅ |
+| # | Feature | Effort | Status | What You Can Now Do |
+|---|---------|--------|--------|---------------------|
+| [23](#feature-23--kb-entry-classification--kb-generation) | KB entry classification + KB generation | L | ✅ | Run `ChatWizard: Generate Knowledge Base` to classify sessions into KB entry types and export an Obsidian-compatible Markdown knowledge base. |
+| [24](#feature-24--sqlite-persistent-cache) | SQLite persistent cache | L | ⬜ | All sessions are cached in a local SQLite DB (FTS5 search). Startup loads from cache instantly. Unchanged JSONL files are skipped via parse_state tracking. |
+| [25](#feature-25--gitbranch-linkage) | Git/branch linkage | M | ✅ | Sessions are auto-tagged with the current Git branch and commit. Tree view has **Group by Branch** mode. Reader header shows the branch. |
+| [26](#feature-26--workspace-digest--standup-reports) | Workspace Digest / Standup Reports | M | ✅ | Run `ChatWizard: Generate Digest` to produce a Markdown standup report filtered by time window, grouped by branch and model. |
+| [27](#feature-27--cloud-sync-opt-in) | Cloud sync (opt-in) | L | ⬜ | Enable cloud sync to back up sessions to a private GitHub Gist with AES-256-GCM encryption. Periodic auto-sync every 5 minutes. |
+| [28](#feature-28--session-status-lifecycle) | Session status lifecycle | S | ✅ | Set sessions to **Open**, **Resolved**, or **Revisit**. Filter by status. Badges and chips appear in the tree and reader. |
+| [29](#feature-29--bookmarks-within-a-session) | Bookmarks within a session | S | ✅ | Click ★/☆ on any message to bookmark it. A jump list lets you scroll to bookmarked messages. Bookmarks persist across restarts. |
+| [30](#feature-30--inline-annotations) | Inline annotations | S | ✅ | Click 📝 on any message to add an inline note. Annotations are saved and rendered when re-opening the session. |
+| [31](#feature-31--session-linking) | Session linking | M | ✅ | Link two related sessions via QuickPick. Links are bidirectional — opening a session shows its linked sessions. |
+| [32](#feature-32--response-rating) | Response rating | S | ✅ | Rate a response as helpful (👍) or not (👎). Ratings are stored per-message in the sidecar metadata. |
+| [33](#feature-33--duplicate--related-session-detection) | Duplicate / related session detection | M | ✅ | The extension auto-detects similar sessions using embedding-based cosine similarity. Related sessions are suggested for review. |
+| [34](#feature-34--outcome--follow-up-tracking) | Outcome / follow-up tracking | S | ✅ | Action items are auto-extracted from sessions via heuristic phrase matching. Track what needs to be done after a coding session. |
+| [35](#feature-35--keyboard-only-navigation) | Keyboard-only navigation | S | ✅ | Navigate the tree view entirely by keyboard: `j`/`k` to move, `g` to focus tree, `/` to search, `l`/`h` to expand/collapse. |
+| [36](#feature-36--session-sharing) | Session sharing | M | ✅ | Run `ChatWizard: Share Session` to export a session as a self-contained HTML file. Optionally redact code blocks. |
+| [37](#feature-37--post-session-cost-tips--analytics) | Post-session cost tips & analytics | S | ✅ | After a session, see cost analytics (tokens used, estimated cost) and tips for reducing costs. Integrated into the session reader. |
+| [38](#feature-38--mcp-tools-includecode-flag) | MCP tools: `includeCode` flag | S | ✅ | The MCP `chatwizard_search_sessions` tool has an `includeCode` param. Set to `false` to exclude code blocks from results. |
+| [39](#feature-39--mcp-mcp-config-auth-hardening) | MCP `/mcp-config` auth hardening | XS | ✅ | The `/mcp-config` endpoint requires a valid Bearer token. Unauthorized requests receive a 401 response. |
+| [40](#feature-40--antigravity-pb-protobuf-support) | Antigravity `.pb` (protobuf) support | S | ✅ | ChatWizard can now read Antigravity's protobuf-format files (`.pb`), scanning wire-type 2 string fields and parsing them into sessions. |
+| [41](#feature-41--zed-ai-source-support) | Zed AI source support | S | ✅ | ChatWizard now discovers and indexes sessions from **Zed AI** editor, parsed from Zed's conversation format. |
+| [42](#feature-42--tabnine-chat-source-support) | Tabnine Chat source support | M | ✅ | ChatWizard now discovers and indexes **Tabnine Chat** sessions. Toggle via `chatwizard.indexTabnine`. Initial indexing + live file watching. |
+| [43](#feature-43--session-retention-controls) | Session retention controls | S | ✅ | Set `chatwizard.sessionRetentionDays` to auto-hide old sessions. Set `semanticIndexMaxAgeDays` to limit which sessions are embedded. |
+| [44](#feature-44--api--programmatic-access) | API / programmatic access | M | ⬜ | Enable `chatwizard.restApi.enabled` to start a REST API. Access sessions, search, and stats via HTTP with Bearer token auth. |
+| [45](#feature-45--compacted-session-detection--visibility) | Compacted session detection & visibility | S | ✅ | Compacted sessions (Claude summary JSONL entries) are detected and flagged with an `isCompacted` marker and badge in the tree view. |
 
 ---
 

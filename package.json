@@ -530,6 +530,18 @@
         "icon": "$(folder-library)"
       },
       {
+        "command": "chatwizard.session",
+        "title": "Session…",
+        "category": "Chat Wizard",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "chatwizard.folder",
+        "title": "Folder & Archive…",
+        "category": "Chat Wizard",
+        "icon": "$(archive)"
+      },
+      {
         "command": "chatwizard.startMcpServer",
         "title": "Chat Wizard: Start MCP Server",
         "category": "Chat Wizard"
@@ -1266,6 +1278,110 @@
         },
         {
           "command": "chatwizard.addSessionToFolder",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.revealSessionInExplorer",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.archiveSession",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.deleteArchivedSession",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.groupSessions",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.focusSessionTree",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.regenerateTitle",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.regenerateAllTitles",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.startMcpServer",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.stopMcpServer",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.copyMcpConfig",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.connectCopilot",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.setupGlobalInstructions",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.addTag",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.removeTag",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.tagActiveSession",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.regenerateSummary",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.showFileHistory",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.showArchiveStats",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.exportToObsidian",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.exportToNotion",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.forgetNotionApiKey",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.setSessionStatus",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.filterByStatus",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.addBookmark",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.removeBookmark",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.createFolder",
           "when": "false"
         }
       ]
