@@ -81,8 +81,13 @@ import { discoverChronicleDbsAsync } from './readers/chronicleWorkspace';
 import { ActiveSessionTagButton } from './ui/activeSessionTagButton';
 import { LiveSessionTracker } from './utils/liveSessionTracker';
 import { PromptAnalyzer } from './analytics/promptAnalyzer';
+import { classifySession } from './analytics/kbClassifier';
+import { clusterEntries } from './analytics/kbClusterer';
+import { exportKbAsync } from './export/kbExporter';
+import type { KbEntry } from './types/kb';
 import { readChronicleCheckpoints, readChronicleSessions } from './parsers/chronicle';
 import { CacheIntegration } from './cache/cacheIntegration';
+import { resolveSharedCacheDir } from './utils/sharedCachePath';
 import { RestApiServer } from './api/restApiServer';
 import { CloudSyncManager } from './cloud/cloudSyncManager';
 
@@ -130,7 +135,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (enableCache) {
         channel.appendLine('[Chat Wizard] Initialising SQLite persistent cache…');
         try {
-            cacheIntegration = new CacheIntegration(context.globalStorageUri.fsPath);
+            // Feature 24b (shared cache): resolve the cache directory from the
+            // `chatwizard.sharedCacheDir` setting — empty string defaults to a
+            // cross-IDE location outside any IDE's own app-data.
+            const sharedDir = vscode.workspace.getConfiguration('chatwizard').get<string>('sharedCacheDir', '');
+            const cacheDir = resolveSharedCacheDir(sharedDir);
+            channel.appendLine(`[Chat Wizard] Cache directory: ${cacheDir}`);
+            cacheIntegration = new CacheIntegration(cacheDir);
             channel.appendLine('[Chat Wizard] SQLite persistent cache initialised.');
         } catch (err) {
             channel.appendLine(`[Chat Wizard] SQLite cache init failed (continuing without cache): ${err}`);
@@ -2644,6 +2655,70 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             vscode.commands.registerCommand('chatwizard.forgetNotionApiKey', async () => {
                 await context.secrets.delete('chatwizard.notionApiKey');
                 void vscode.window.showInformationMessage('Notion API key removed from SecretStorage.');
+            }),
+            // ── Feature 23: Generate Knowledge Base ─────────────────────────
+            vscode.commands.registerCommand('chatwizard.generateKnowledgeBase', async () => {
+                // Pick output directory
+                const uri = await vscode.window.showOpenDialog({
+                    canSelectFolders: true, canSelectFiles: false, openLabel: 'Select KB output folder',
+                });
+                if (!uri?.[0]) { return; }
+                const outputDir = uri[0].fsPath;
+
+                // Load all sessions and sidecar metadata
+                const summaries = index.getAllSummaries();
+                const sessions = summaries
+                    .map(s => index.get(s.id))
+                    .filter((s): s is NonNullable<typeof s> => s !== null);
+
+                if (sessions.length === 0) {
+                    void vscode.window.showInformationMessage('No sessions found to generate knowledge base.');
+                    return;
+                }
+
+                // Classify every session into a KB entry type
+                const cache = await sidecarStore.load();
+                const entries: KbEntry[] = [];
+                for (const session of sessions) {
+                    const meta = cache.get(session.id);
+                    const tags = meta?.tags ?? [];
+                    const entryType = classifySession(session);
+                    // Derive a 1-3 sentence summary (use sidecar summary if available, else title)
+                    const summary = meta?.summary ?? session.title;
+                    entries.push({
+                        sessionId: session.id,
+                        type: entryType,
+                        title: session.title,
+                        summary,
+                        tags,
+                        createdAt: session.createdAt,
+                    });
+                }
+
+                // Cluster entries by tag + embedding similarity
+                // If semantic indexer is not ready, cluster by tag only (no-op embedding)
+                const embeddingFn = (text: string): Float32Array => {
+                    // Return a zero vector as fallback — clusterer falls back to tag-only grouping
+                    return new Float32Array(384);
+                };
+                const clusters = clusterEntries(entries, embeddingFn);
+
+                // Export
+                await vscode.window.withProgress(
+                    { location: vscode.ProgressLocation.Notification, title: 'Chat Wizard: Generating knowledge base…', cancellable: false },
+                    async () => {
+                        await exportKbAsync(entries, clusters, outputDir, { incrementalUpdate: true });
+                    },
+                );
+
+                void vscode.window.showInformationMessage(
+                    `Knowledge base generated at ${outputDir} — ${entries.length} entries.`,
+                    'Open Folder',
+                ).then(choice => {
+                    if (choice === 'Open Folder') {
+                        void vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(outputDir));
+                    }
+                });
             }),
         );
 

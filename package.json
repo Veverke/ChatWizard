@@ -684,6 +684,12 @@
         "command": "chatwizard.addSessionToFolder",
         "title": "Chat Wizard: Add Session to Folder",
         "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.generateKnowledgeBase",
+        "title": "Chat Wizard: Generate Knowledge Base",
+        "category": "Chat Wizard",
+        "icon": "$(book)"
       }
     ],
     "menus": {
@@ -803,6 +809,11 @@
           "group": "export@2"
         },
         {
+          "command": "chatwizard.generateKnowledgeBase",
+          "when": "view == chatwizardSessions",
+          "group": "export@3"
+        },
+        {
           "command": "chatwizard.filterCodeBlocks",
           "when": "view == chatwizardCodeBlocks",
           "group": "navigation@0"
@@ -910,14 +921,19 @@
           "group": "2_export@1"
         },
         {
-          "command": "chatwizard.exportFromTreeSelection",
+          "command": "chatwizard.generateKnowledgeBase",
           "when": "viewItem == session || viewItem == session.pinned",
           "group": "2_export@2"
         },
         {
-          "command": "chatwizard.injectAsContext",
+          "command": "chatwizard.exportFromTreeSelection",
           "when": "viewItem == session || viewItem == session.pinned",
           "group": "2_export@3"
+        },
+        {
+          "command": "chatwizard.injectAsContext",
+          "when": "viewItem == session || viewItem == session.pinned",
+          "group": "2_export@4"
         },
         {
           "command": "chatwizard.pinSession",
@@ -1474,6 +1490,11 @@
             "type": "boolean",
             "default": true,
             "description": "Enable the SQLite persistent cache (chatwizard-cache.db). When enabled, sessions are stored in a local SQLite database and loaded from it on startup — only changed source files are re-parsed. Disable to force full re-parsing on every activation."
+          },
+          "chatwizard.sharedCacheDir": {
+            "type": "string",
+            "default": "",
+            "description": "Custom directory for the shared SQLite cache (chatwizard-cache.db). When empty, uses a cross-IDE default: Windows → %LOCALAPPDATA%\\ChatWizard, macOS → ~/Library/Application Support/ChatWizard, Linux → ~/.local/share/chatwizard. All ChatWizard instances on the same machine converge on this location, so bookmarks, tags, notes, ratings, and parse state are shared across IDEs. Set this to a network or RAM-disk path for advanced scenarios."
           },
           "chatwizard.logLevel": {
             "type": "string",

@@ -1105,9 +1105,11 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
             result.push(new FolderGroupTreeItem(sub, stats, this.index, all));
         }
 
-        // Add session items directly in this folder
+        // Add session items directly in this folder, sorted by date descending
         const sessionIdsInFolder = new Set(element.folder.sessionIds);
-        const sessions = all.filter(s => sessionIdsInFolder.has(s.id));
+        const sessions = all
+            .filter(s => sessionIdsInFolder.has(s.id))
+            .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
         for (const s of sessions) {
             result.push(new SessionTreeItem(s, pinnedSet.has(s.id), this.extensionUri,
                 this.index.getSidecarMeta(s.id)?.tags,
@@ -1179,7 +1181,9 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
                     assignedIds.add(sid);
                 }
             }
-            const uncategorized = all.filter(s => !assignedIds.has(s.id));
+            const uncategorized = all
+                .filter(s => !assignedIds.has(s.id))
+                .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
             return uncategorized.map(s => new SessionTreeItem(s, pinnedSet.has(s.id), this.extensionUri,
                 this.index.getSidecarMeta(s.id)?.tags,
                 this.index.getSidecarMeta(s.id)?.summary,

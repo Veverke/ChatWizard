@@ -189,6 +189,8 @@ export class CacheManager implements ICacheManager {
 
         // Enable WAL mode for crash recovery + concurrent reads
         this.db.pragma('journal_mode = WAL');
+        // Multi-process safety: retry up to 3 s when another IDE holds the write lock
+        this.db.pragma('busy_timeout = 3000');
         this.db.pragma('foreign_keys = ON');
 
         this._ensureSchema();
@@ -202,12 +204,23 @@ export class CacheManager implements ICacheManager {
         // Check current schema version in the DB
         const userVersion = this.db.pragma('user_version', { simple: true }) as number;
 
+        if (userVersion > CACHE_SCHEMA_VERSION) {
+            // DB schema is newer than what this extension version understands.
+            // This can happen with a shared cache when a different IDE has a newer
+            // ChatWizard. Log a clear error so the caller can fall back gracefully.
+            throw new Error(
+                `Cache DB schema version ${userVersion} is newer than ` +
+                `this extension supports (${CACHE_SCHEMA_VERSION}). ` +
+                'Please update ChatWizard to read this cache.'
+            );
+        }
+
         if (userVersion < CACHE_SCHEMA_VERSION) {
             // Build schema from scratch
             this.db.exec(SCHEMA_SQL);
             this.db.pragma(`user_version = ${CACHE_SCHEMA_VERSION}`);
         }
-        // If userVersion >= CACHE_SCHEMA_VERSION, schema is already up-to-date
+        // If userVersion === CACHE_SCHEMA_VERSION, schema is already up-to-date
     }
 
     private _prepareStatements(): void {
