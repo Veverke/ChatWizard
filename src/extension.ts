@@ -621,6 +621,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 return;
             }
 
+            // Dropping session(s) onto (uncategorized) → remove from any folder
+            if (draggedSessions && target instanceof vscode.TreeItem && (target as vscode.TreeItem).id === 'folder:__uncategorized__') {
+                const ids = draggedSessions.value as string[];
+                for (const id of ids) {
+                    await folderStore.moveSessionToFolder(id, undefined);
+                }
+                provider.refresh();
+                treeView.description = provider.getDescription();
+                return;
+            }
+
             // Dropping folder(s) onto a folder → make subfolder
             const draggedFolders = dataTransfer.get('application/vnd.chatwizard.folder');
             if (draggedFolders && target instanceof FolderGroupTreeItem) {

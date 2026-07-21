@@ -985,6 +985,11 @@
           "group": "navigation@0"
         },
         {
+          "command": "chatwizard.createFolder",
+          "when": "view == chatwizardSessions",
+          "group": "navigation@9"
+        },
+        {
           "command": "chatwizard.addBookmark",
           "when": "viewItem == session || viewItem == session.pinned || viewItem == session.archived || viewItem == session.userArchived",
           "group": "6_status@2"
@@ -1008,6 +1013,11 @@
           "command": "chatwizard.deleteFolder",
           "when": "viewItem == sessionFolder",
           "group": "1_folder@3"
+        },
+        {
+          "command": "chatwizard.createFolder",
+          "when": "viewItem == sessionFolder || viewItem == folderUncategorized",
+          "group": "0_new@1"
         },
         {
           "command": "chatwizard.moveSessionToFolder",

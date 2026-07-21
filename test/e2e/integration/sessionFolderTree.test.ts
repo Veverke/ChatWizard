@@ -80,6 +80,12 @@ async function collectSessionItems(
                     }
                 }
             }
+        } else if (child.id === 'folder:__uncategorized__') {
+            // Descend into (uncategorized) group
+            const nested = await provider.getChildren(child);
+            for (const n of nested) {
+                if (n instanceof SessionTreeItem) { items.push(n); }
+            }
         }
     }
     return items;
@@ -169,9 +175,16 @@ suite('SessionTreeProvider — folder group mode', function () {
         index.upsert(makeSession({ id: 'uncat1' }));
         index.upsert(makeSession({ id: 'uncat2' }));
 
-        const folders = await collectFolderItems(provider);
-        const uncategorized = folders.find(f => f.folder.name === '(uncategorized)');
-        assert.ok(uncategorized, '(uncategorized) folder should be present');
+        const rootChildren = await provider.getChildren(undefined);
+        const uncategorized = rootChildren.find(
+            c => !(c instanceof FolderGroupTreeItem) && c.id === 'folder:__uncategorized__'
+        );
+        assert.ok(uncategorized, '(uncategorized) group should be present at root');
+
+        // Expand the (uncategorized) group — should show the unassigned sessions
+        const uncatChildren = await provider.getChildren(uncategorized);
+        const sessionItems = uncatChildren.filter(c => c instanceof SessionTreeItem);
+        assert.strictEqual(sessionItems.length, 2, '(uncategorized) should show 2 sessions');
     });
 
     test('moving sessions between folders updates the tree', async () => {

@@ -224,6 +224,10 @@ export interface FolderStats {
     sources: string[];
     /** Unique model names across all descendant sessions */
     models: string[];
+    /** Earliest updatedAt among descendant sessions (ISO date string) */
+    minDate?: string;
+    /** Latest updatedAt among descendant sessions (ISO date string) */
+    maxDate?: string;
 }
 
 /** Per-assistant request count within a WorkspaceUsage */
