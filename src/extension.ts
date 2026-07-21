@@ -38,6 +38,7 @@ import { AnalyticsPanel } from './analytics/analyticsPanel';
 import { AnalyticsViewProvider } from './analytics/analyticsViewProvider';
 import { ModelUsageViewProvider } from './analytics/modelUsageViewProvider';
 import { TimelineViewProvider } from './timeline/timelineViewProvider';
+import { KbViewProvider } from './analytics/kbViewProvider';
 import { TelemetryRecorder } from './telemetry/telemetryRecorder';
 import { registerManageWorkspacesCommand } from './commands/manageWorkspaces';
 import { registerPaletteCommands } from './commands/paletteCommands';
@@ -81,10 +82,6 @@ import { discoverChronicleDbsAsync } from './readers/chronicleWorkspace';
 import { ActiveSessionTagButton } from './ui/activeSessionTagButton';
 import { LiveSessionTracker } from './utils/liveSessionTracker';
 import { PromptAnalyzer } from './analytics/promptAnalyzer';
-import { classifySession } from './analytics/kbClassifier';
-import { clusterEntries } from './analytics/kbClusterer';
-import { exportKbAsync } from './export/kbExporter';
-import type { KbEntry } from './types/kb';
 import { readChronicleCheckpoints, readChronicleSessions } from './parsers/chronicle';
 import { CacheIntegration } from './cache/cacheIntegration';
 import { resolveSharedCacheDir } from './utils/sharedCachePath';
@@ -213,6 +210,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const timelineViewProvider = new TimelineViewProvider(index, context);
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider(TimelineViewProvider.viewType, timelineViewProvider)
+    );
+
+    const kbViewProvider = new KbViewProvider(index, sidecarStore);
+    context.subscriptions.push(
+        vscode.window.registerWebviewViewProvider(KbViewProvider.viewType, kbViewProvider)
     );
 
     context.subscriptions.push(
@@ -455,6 +457,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         timelineViewProvider.refresh();
     });
     context.subscriptions.push(timelineListener);
+
+    const kbListener = index.addChangeListener(() => {
+        kbViewProvider.refresh();
+    });
+    context.subscriptions.push(kbListener);
 
     // ── Feature 12: Session archive ──────────────────────────────────────────
     // Registered here (before startWatcher) so it receives the initial batch event.
@@ -2658,14 +2665,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             }),
             // ── Feature 23: Generate Knowledge Base ─────────────────────────
             vscode.commands.registerCommand('chatwizard.generateKnowledgeBase', async () => {
-                // Pick output directory
-                const uri = await vscode.window.showOpenDialog({
-                    canSelectFolders: true, canSelectFiles: false, openLabel: 'Select KB output folder',
-                });
-                if (!uri?.[0]) { return; }
-                const outputDir = uri[0].fsPath;
-
-                // Load all sessions and sidecar metadata
+                // Load all sessions + sidecar metadata
                 const summaries = index.getAllSummaries();
                 const sessions = summaries
                     .map(s => index.get(s.id))
@@ -2676,49 +2676,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                     return;
                 }
 
-                // Classify every session into a KB entry type
-                const cache = await sidecarStore.load();
-                const entries: KbEntry[] = [];
-                for (const session of sessions) {
-                    const meta = cache.get(session.id);
-                    const tags = meta?.tags ?? [];
-                    const entryType = classifySession(session);
-                    // Derive a 1-3 sentence summary (use sidecar summary if available, else title)
-                    const summary = meta?.summary ?? session.title;
-                    entries.push({
-                        sessionId: session.id,
-                        type: entryType,
-                        title: session.title,
-                        summary,
-                        tags,
-                        createdAt: session.createdAt,
-                    });
-                }
-
-                // Cluster entries by tag + embedding similarity
-                // If semantic indexer is not ready, cluster by tag only (no-op embedding)
-                const embeddingFn = (text: string): Float32Array => {
-                    // Return a zero vector as fallback — clusterer falls back to tag-only grouping
-                    return new Float32Array(384);
-                };
-                const clusters = clusterEntries(entries, embeddingFn);
-
-                // Export
-                await vscode.window.withProgress(
-                    { location: vscode.ProgressLocation.Notification, title: 'Chat Wizard: Generating knowledge base…', cancellable: false },
-                    async () => {
-                        await exportKbAsync(entries, clusters, outputDir, { incrementalUpdate: true });
-                    },
-                );
-
-                void vscode.window.showInformationMessage(
-                    `Knowledge base generated at ${outputDir} — ${entries.length} entries.`,
-                    'Open Folder',
-                ).then(choice => {
-                    if (choice === 'Open Folder') {
-                        void vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(outputDir));
-                    }
-                });
+                // Reveal the sidebar Knowledge Base view — it already computes
+                // and displays the dashboard on visibility change.
+                void vscode.commands.executeCommand('workbench.view.extension.chatwizard');
+                // Focus the KB view specifically
+                void vscode.commands.executeCommand('chatwizardKnowledgeBase.focus');
             }),
         );
 

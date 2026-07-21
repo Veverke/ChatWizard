@@ -68,6 +68,7 @@
     "onView:chatwizardAnalytics",
     "onView:chatwizardModelUsage",
     "onView:chatwizardTimeline",
+    "onView:chatwizardKnowledgeBase",
     "onChatParticipant:Veverke.chatwizard"
   ],
   "main": "./dist/extension.js",
@@ -109,6 +110,11 @@
         {
           "id": "chatwizardTimeline",
           "name": "Timeline",
+          "type": "webview"
+        },
+        {
+          "id": "chatwizardKnowledgeBase",
+          "name": "Knowledge Base",
           "type": "webview"
         }
       ]
@@ -902,6 +908,11 @@
           "command": "chatwizard.cbSortByLanguage.desc",
           "when": "view == chatwizardCodeBlocks && chatwizard.cbSortKey == 'language' && chatwizard.cbSortDir == 'desc'",
           "group": "navigation@5"
+        },
+        {
+          "command": "chatwizard.generateKnowledgeBase",
+          "when": "view == chatwizardKnowledgeBase",
+          "group": "navigation@0"
         }
       ],
       "view/item/context": [
