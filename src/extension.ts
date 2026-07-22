@@ -212,7 +212,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         vscode.window.registerWebviewViewProvider(TimelineViewProvider.viewType, timelineViewProvider)
     );
 
-    const kbViewProvider = new KbViewProvider(index, sidecarStore);
+    const kbViewProvider = new KbViewProvider(index, sidecarStore, context.globalState);
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider(KbViewProvider.viewType, kbViewProvider)
     );
@@ -2349,6 +2349,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         watcher = w;
         watcherRef.current = w;
         context.subscriptions.push(w);
+
+        // ── Feature 23-H: Auto-classify KB on startup ─────────────────────────
+        // After the initial session batch is loaded, pre-compute KB entries so new
+        // sessions get automatically classified into existing categories.
+        // Use a one-shot batch listener so we run exactly once after the initial load.
+        {
+            let done = false;
+            const autoClassifyListener = index.addTypedChangeListener((event) => {
+                if (done) { return; }
+                if (event.type === 'batch') {
+                    done = true;
+                    autoClassifyListener.dispose();
+                    void kbViewProvider.preload();
+                }
+            });
+            context.subscriptions.push(autoClassifyListener);
+        }
 
         // ── Feature 13-H: Active session tag button ───────────────────────────
         w.setLiveTracker(liveTracker);

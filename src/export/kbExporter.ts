@@ -3,18 +3,23 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import type { KbEntry, KbEntryType } from '../types/kb';
+import type { KbEntry } from '../types/kb';
+import { DEFAULT_KB_TYPES } from '../types/kb';
 
 /**
  * Map from KB entry type to its output subdirectory name.
+ * For custom types, the type name is used as-is (lowercased).
  */
-const TYPE_DIR: Record<KbEntryType, string> = {
-    decision:     'decisions',
-    learning:     'learnings',
-    pattern:      'patterns',
-    gotcha:       'gotchas',
-    architecture: 'architecture',
-};
+function getTypeDir(type: string): string {
+    const known: Record<string, string> = {
+        decision:     'decisions',
+        learning:     'learnings',
+        pattern:      'patterns',
+        gotcha:       'gotchas',
+        architecture: 'architecture',
+    };
+    return known[type] ?? type.toLowerCase().replace(/\s+/g, '-');
+}
 
 /**
  * Parse the YAML frontmatter `locked` field from an existing KB entry file.
@@ -78,22 +83,30 @@ function renderIndexMarkdown(
     ];
 
     // Group by type for the ToC
-    const byType = new Map<KbEntryType, KbEntry[]>();
+    const byType = new Map<string, KbEntry[]>();
     for (const entry of entries) {
         const arr = byType.get(entry.type) ?? [];
         arr.push(entry);
         byType.set(entry.type, arr);
     }
 
-    const typeOrder: KbEntryType[] = ['decision', 'architecture', 'pattern', 'gotcha', 'learning'];
+    // Order: known types first, then custom types alphabetically
+    const presentTypes = new Set(byType.keys());
+    const knownTypes = DEFAULT_KB_TYPES.filter(t => presentTypes.has(t));
+    const customTypes = Array.from(presentTypes)
+        .filter(t => !DEFAULT_KB_TYPES.includes(t))
+        .sort();
+    const typeOrder = [...knownTypes, ...customTypes];
+
     for (const type of typeOrder) {
         const typeEntries = byType.get(type);
         if (!typeEntries || typeEntries.length === 0) { continue; }
 
-        lines.push(`### ${capitalise(type)}s (${typeEntries.length})`);
+        const label = capitalise(type) + (DEFAULT_KB_TYPES.includes(type) ? 's' : '');
+        lines.push(`### ${label} (${typeEntries.length})`);
         lines.push('');
         for (const entry of typeEntries) {
-            const dir = TYPE_DIR[type];
+            const dir = getTypeDir(type);
             lines.push(`- [[${dir}/${entry.sessionId}|${entry.title}]]`);
         }
         lines.push('');
@@ -149,13 +162,14 @@ export async function exportKbAsync(
 ): Promise<void> {
     // Ensure output directory and type subdirectories exist
     await fs.promises.mkdir(outputDir, { recursive: true });
-    for (const dir of Object.values(TYPE_DIR)) {
+    const typeDirs = new Set(entries.map(e => getTypeDir(e.type)));
+    for (const dir of typeDirs) {
         await fs.promises.mkdir(path.join(outputDir, dir), { recursive: true });
     }
 
     // Write individual entry files
     for (const entry of entries) {
-        const dir = TYPE_DIR[entry.type];
+        const dir = getTypeDir(entry.type);
         const filePath = path.join(outputDir, dir, `${entry.sessionId}.md`);
 
         // In incremental mode, skip locked files

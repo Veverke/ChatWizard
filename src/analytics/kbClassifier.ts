@@ -1,8 +1,11 @@
 // src/analytics/kbClassifier.ts
 // Feature 23 — KB Entry Classification
+// Supports both heuristic (default types) and LLM-based (custom categories) classification.
 
 import type { Session } from '../types/index';
 import type { KbEntryType } from '../types/kb';
+import { DEFAULT_KB_TYPE_SET } from '../types/kb';
+import { classifySessionWithLlm } from './kbLlmClassifier';
 
 /**
  * Heuristic signal phrases for each KB entry type.
@@ -68,4 +71,40 @@ export function classifySession(session: Session): KbEntryType {
 
     // Fallthrough: any session not matching the above is a 'learning'
     return 'learning';
+}
+
+/**
+ * Classify a session using the given categories.
+ *
+ * - If all categories are default types, uses the heuristic classifier (sync).
+ * - If custom categories are present, uses the LLM classifier (async), falling
+ *   back to the heuristic classifier for default-type results.
+ *
+ * @returns The best-matching category name.
+ */
+export async function classifySessionWithCategories(
+    session: Session,
+    categories: string[],
+): Promise<KbEntryType> {
+    // Check if all categories are defaults — if so, use heuristic
+    const allDefaults = categories.every(c => DEFAULT_KB_TYPE_SET.has(c));
+    if (allDefaults) {
+        return classifySession(session);
+    }
+
+    // Custom categories present — try LLM first
+    const llmResult = await classifySessionWithLlm(session, categories);
+    if (llmResult) {
+        return llmResult;
+    }
+
+    // LLM failed — fall back to heuristic if the result is a default type
+    const heuristic = classifySession(session);
+    if (categories.includes(heuristic)) {
+        return heuristic;
+    }
+
+    // If even the heuristic result isn't in the requested categories,
+    // return the first category as a safe default
+    return categories[0] ?? 'learning';
 }

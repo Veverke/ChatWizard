@@ -185,6 +185,49 @@ suite('Sessions Tree View', function () {
         assert.ok(groups.length >= 1, 'expected at least one date group');
     });
 
+    test('15b — sessions within a date group are sorted by updatedAt descending', async () => {
+        const index = new SessionIndex();
+        // Both sessions land in the same "This Week" bucket (current date is 2026-07-22)
+        index.upsert(makeSession({ id: 'sg-older', updatedAt: '2026-07-20T10:00:00.000Z', title: 'Older this week' }));
+        index.upsert(makeSession({ id: 'sg-newer', updatedAt: '2026-07-21T15:00:00.000Z', title: 'Newer this week' }));
+
+        const provider = new SessionTreeProvider(index);
+        provider.setGroupMode('date');
+
+        const root = await provider.getChildren(undefined);
+        const thisWeekGroup = root.find(n => n instanceof DateGroupTreeItem && n.bucketLabel === 'This Week') as DateGroupTreeItem | undefined;
+        assert.ok(thisWeekGroup, 'expected a "This Week" group');
+
+        const children = await provider.getChildren(thisWeekGroup!);
+        const items = children.filter(n => n instanceof SessionTreeItem) as SessionTreeItem[];
+        assert.strictEqual(items.length, 2, 'expected 2 sessions in This Week');
+        assert.strictEqual(items[0].summary.id, 'sg-newer', 'newer session should appear first');
+        assert.strictEqual(items[1].summary.id, 'sg-older', 'older session should appear second');
+    });
+
+    test('15c — pinned sessions float to top within date group, then sorted by date', async () => {
+        const index = new SessionIndex();
+        // Both land in "This Week" — pin the older one
+        index.upsert(makeSession({ id: 'sg-pinned-older', updatedAt: '2026-07-20T08:00:00.000Z', title: 'Pinned older' }));
+        index.upsert(makeSession({ id: 'sg-unpinned-newer', updatedAt: '2026-07-21T12:00:00.000Z', title: 'Unpinned newer' }));
+
+        const provider = new SessionTreeProvider(index);
+        provider.setGroupMode('date');
+        provider.pin('sg-pinned-older');
+
+        const root = await provider.getChildren(undefined);
+        const thisWeekGroup = root.find(n => n instanceof DateGroupTreeItem && n.bucketLabel === 'This Week') as DateGroupTreeItem | undefined;
+        assert.ok(thisWeekGroup, 'expected a "This Week" group');
+
+        const children = await provider.getChildren(thisWeekGroup!);
+        const items = children.filter(n => n instanceof SessionTreeItem) as SessionTreeItem[];
+        assert.strictEqual(items.length, 2, 'expected 2 sessions in This Week');
+        assert.strictEqual(items[0].summary.id, 'sg-pinned-older', 'pinned session should be first even if older');
+        assert.ok(items[0].pinned, 'first item should be pinned');
+        assert.strictEqual(items[1].summary.id, 'sg-unpinned-newer', 'unpinned session should be second');
+        assert.ok(!items[1].pinned, 'second item should not be pinned');
+    });
+
     // ── Test 16: Flat list toggle ─────────────────────────────────────────
 
     test('16 — groupMode=none produces only SessionTreeItems at root', async () => {

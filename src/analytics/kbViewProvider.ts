@@ -8,6 +8,8 @@ import { buildKbEntries } from './kbEngine';
 import { clusterEntries } from './kbClusterer';
 import { exportKbAsync } from '../export/kbExporter';
 import { KbDashboardPanel } from './kbDashboardPanel';
+import { configureCategories } from './kbCategoryConfigurator';
+import { DEFAULT_KB_TYPES } from '../types/kb';
 
 export class KbViewProvider implements vscode.WebviewViewProvider {
     static readonly viewType = 'chatwizardKnowledgeBase';
@@ -15,11 +17,18 @@ export class KbViewProvider implements vscode.WebviewViewProvider {
     private _view?: vscode.WebviewView;
     private _refreshTimer: ReturnType<typeof setTimeout> | null = null;
     private _lastResult: import('./kbEngine').KbEngineResult | null = null;
+    private _categories: string[] | undefined;
+    private _classifiedSessionIds: string[] | undefined;
 
     constructor(
         private readonly _index: SessionIndex,
         private readonly _sidecarStore: SidecarMetadataStore,
-    ) {}
+        private readonly _globalState: vscode.Memento,
+    ) {
+        // Restore persisted categories from previous session
+        this._categories = _globalState.get<string[]>('chatwizard.kbCategories', undefined as unknown as string[]);
+        this._classifiedSessionIds = _globalState.get<string[]>('chatwizard.kbClassifiedSessionIds', undefined as unknown as string[]);
+    }
 
     resolveWebviewView(
         webviewView: vscode.WebviewView,
@@ -36,62 +45,130 @@ export class KbViewProvider implements vscode.WebviewViewProvider {
         // When the webview signals ready, send the initial data
         webviewView.webview.onDidReceiveMessage((msg: { type?: string; command?: string; sessionId?: string }) => {
             if (msg.type === 'ready') {
-                this._sendData();
+                this._sendToView();
             } else if (msg.command === 'openSession' && msg.sessionId) {
                 void vscode.commands.executeCommand('chatwizard.openSession', { id: msg.sessionId });
-            } else if (msg.command === 'generateKb') {
-                void vscode.commands.executeCommand('chatwizard.generateKnowledgeBase');
+            } else if (msg.command === 'generateKb' || msg.command === 'regenerateKb') {
+                void this._handleGenerate();
             } else if (msg.command === 'export') {
                 void this._handleExport();
             }
         });
 
         webviewView.onDidChangeVisibility(() => {
-            if (webviewView.visible) { this._sendData(); }
+            if (webviewView.visible) { this._sendToView(); }
         });
     }
 
     /** Re-render the view when the session index changes. Debounced 5 s. No-op if not visible. */
     refresh(): void {
-        if (!this._view?.visible) { return; }
         if (this._refreshTimer) { clearTimeout(this._refreshTimer); }
         this._refreshTimer = setTimeout(() => {
             this._refreshTimer = null;
-            if (this._view?.visible) { this._sendData(); }
+            void this._computeResult().then(() => this._sendToView());
         }, 5000);
     }
 
-    private _sendData(): void {
-        if (!this._view) { return; }
-        setImmediate(() => {
-            if (!this._view?.visible) { return; }
+    /**
+     * Run KB classification in the background (no view needed).
+     * Called on extension startup to auto-classify new sessions.
+     */
+    async preload(): Promise<void> {
+        await this._computeResult();
+    }
 
-            const summaries = this._index.getAllSummaries();
-            const sessions = summaries
-                .map(s => this._index.get(s.id))
-                .filter((s): s is NonNullable<typeof s> => s !== null);
+    /**
+     * Set custom categories for the next KB generation.
+     * Pass `undefined` to reset to default categories.
+     */
+    setCategories(categories: string[] | undefined): void {
+        this._categories = categories;
+    }
 
-            if (sessions.length === 0) {
-                this._lastResult = null;
-                // No sessions indexed yet — show loading state, not Generate button
-                void this._view.webview.postMessage({
-                    type: 'update',
-                    payload: { slices: [], total: 0, sessionsReady: false },
-                });
-                return;
-            }
+    private async _handleGenerate(): Promise<void> {
+        const categories = await configureCategories();
+        if (!categories) { return; } // user cancelled
 
-            void this._sidecarStore.load().then(cache => {
-                const result = buildKbEntries(sessions, cache);
-                this._lastResult = result;
-                if (this._view?.visible) {
-                    void this._view.webview.postMessage({
-                        type: 'update',
-                        payload: { ...KbDashboardPanel.buildPayload(result), sessionsReady: true },
+        this._categories = categories;
+
+        await vscode.window.withProgress(
+            {
+                location: vscode.ProgressLocation.Notification,
+                title: 'Chat Wizard: Regenerating knowledge base…',
+                cancellable: false,
+            },
+            async (progress) => {
+                await this._computeResult((done, total) => {
+                    progress.report({
+                        message: `${done} / ${total} sessions classified`,
+                        increment: 100 / total,
                     });
-                }
+                });
+            },
+        );
+
+        this._saveState();
+        this._sendToView();
+    }
+
+    /**
+     * Build the KB result from all sessions; stores it in `_lastResult`.
+     * Does NOT require the view to be visible.
+     */
+    private async _computeResult(onProgress?: (done: number, total: number) => void): Promise<void> {
+        const summaries = this._index.getAllSummaries();
+        const sessions = summaries
+            .map(s => this._index.get(s.id))
+            .filter((s): s is NonNullable<typeof s> => s !== null);
+
+        if (sessions.length === 0) {
+            this._lastResult = null;
+            return;
+        }
+
+        const cache = await this._sidecarStore.load();
+        const useCategories = this._categories ?? DEFAULT_KB_TYPES;
+        const result = await buildKbEntries(sessions, cache, useCategories, onProgress);
+        this._lastResult = result;
+    }
+
+    /**
+     * Send the current `_lastResult` to the webview, or show loading/empty state.
+     */
+    private _sendToView(): void {
+        if (!this._view?.visible) { return; }
+
+        if (!this._lastResult) {
+            const summaries = this._index.getAllSummaries();
+            const sessionsReady = summaries.length > 0;
+            void this._view.webview.postMessage({
+                type: 'update',
+                payload: { slices: [], total: 0, sessionsReady },
             });
+            return;
+        }
+
+        const result = this._lastResult;
+        void this._view.webview.postMessage({
+            type: 'update',
+            payload: {
+                ...KbDashboardPanel.buildPayload(result),
+                sessionsReady: true,
+            },
         });
+    }
+
+    /**
+     * Persist the current categories and classified session IDs to globalState.
+     */
+    private _saveState(): void {
+        if (this._categories) {
+            void this._globalState.update('chatwizard.kbCategories', this._categories);
+        }
+        if (this._lastResult) {
+            const ids = this._lastResult.entries.map(e => e.sessionId);
+            void this._globalState.update('chatwizard.kbClassifiedSessionIds', ids);
+        }
     }
 
     private async _handleExport(): Promise<void> {

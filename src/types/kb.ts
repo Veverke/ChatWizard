@@ -2,10 +2,20 @@
 // Feature 23 — KB Entry Classification + KB Generation
 
 /**
- * The five knowledge-base entry types, classified by heuristic rules
- * applied to session content.
+ * A knowledge-base entry type — one of the five default types, or a user-defined
+ * custom category.
  */
-export type KbEntryType = 'decision' | 'learning' | 'pattern' | 'gotcha' | 'architecture';
+export type KbEntryType = string;
+
+/**
+ * The five built-in KB entry types.
+ */
+export const DEFAULT_KB_TYPES: KbEntryType[] = ['decision', 'learning', 'pattern', 'gotcha', 'architecture'];
+
+/**
+ * Set of the five built-in KB entry types for fast lookup.
+ */
+export const DEFAULT_KB_TYPE_SET = new Set<KbEntryType>(DEFAULT_KB_TYPES);
 
 /**
  * A single entry in the ChatWizard knowledge base.

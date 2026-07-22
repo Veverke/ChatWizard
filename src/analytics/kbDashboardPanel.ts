@@ -2,11 +2,11 @@
 // Feature 23 — KB Dashboard webview with doughnut chart, drill-down table, and export.
 
 import * as vscode from 'vscode';
-import type { KbEntry, KbEntryType } from '../types/kb';
+import type { KbEntry } from '../types/kb';
 import type { KbEngineResult } from './kbEngine';
 import { cwThemeCss, cwInteractiveJs } from '../webview/cwTheme';
 
-const TYPE_LABELS: Record<KbEntryType, string> = {
+const TYPE_LABELS: Record<string, string> = {
     decision:     'Decisions',
     learning:     'Learnings',
     pattern:      'Patterns',
@@ -15,7 +15,7 @@ const TYPE_LABELS: Record<KbEntryType, string> = {
 };
 
 /** Distinct slice colours — same order as typeOrder below. */
-const SLICE_COLORS = [
+const DEFAULT_COLORS = [
     '#5B8AF5',  // decision   — blue
     '#a67bf0',  // learning   — purple
     '#f0883e',  // pattern    — orange
@@ -23,7 +23,23 @@ const SLICE_COLORS = [
     '#2ecc71',  // architecture — green
 ];
 
-const TYPE_ORDER: KbEntryType[] = ['decision', 'architecture', 'pattern', 'gotcha', 'learning'];
+/** Extended palette for user-defined custom categories. */
+const CUSTOM_COLORS = [
+    '#e84393', '#00cec9', '#6c5ce7', '#fd79a8', '#00b894',
+    '#0984e3', '#e17055', '#636e72', '#b2bec3', '#d63031',
+    '#fdcb6e', '#e056fd', '#badc58', '#f19066', '#3dc1d3',
+];
+
+const TYPE_ORDER: string[] = ['decision', 'architecture', 'pattern', 'gotcha', 'learning'];
+
+function getTypeLabel(type: string): string {
+    return TYPE_LABELS[type] ?? type.charAt(0).toUpperCase() + type.slice(1);
+}
+
+function getTypeColor(type: string, index: number): string {
+    if (index < DEFAULT_COLORS.length) { return DEFAULT_COLORS[index]; }
+    return CUSTOM_COLORS[(index - DEFAULT_COLORS.length) % CUSTOM_COLORS.length];
+}
 
 export class KbDashboardPanel {
     private static _panel: vscode.WebviewPanel | undefined;
@@ -112,13 +128,27 @@ export class KbDashboardPanel {
     // ── Payload builder ─────────────────────────────────────────────────────
 
     private static _buildPayload(result: KbEngineResult): object {
-        const slices = TYPE_ORDER.map((t, i) => {
+        // Collect all types present in the result
+        const presentTypes = new Set<string>();
+        for (const key of result.grouped.keys()) {
+            presentTypes.add(key);
+        }
+
+        // Order: known types first (in TYPE_ORDER), then custom types alphabetically
+        const knownTypes = TYPE_ORDER.filter(t => presentTypes.has(t));
+        const customTypes = Array.from(presentTypes)
+            .filter(t => !TYPE_ORDER.includes(t))
+            .sort();
+
+        const allTypes = [...knownTypes, ...customTypes];
+
+        const slices = allTypes.map((t, i) => {
             const entries = result.grouped.get(t) ?? [];
             return {
                 type: t,
-                label: TYPE_LABELS[t],
+                label: getTypeLabel(t),
                 count: entries.length,
-                color: SLICE_COLORS[i],
+                color: getTypeColor(t, i),
                 entries: entries.map(e => ({
                     sessionId: e.sessionId,
                     title: e.title,
@@ -149,6 +179,7 @@ export class KbDashboardPanel {
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'unsafe-inline';">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2/dist/chartjs-plugin-datalabels.min.js"></script>
   <style>
     ${cwThemeCss()}
     * { box-sizing: border-box; }
@@ -185,16 +216,20 @@ export class KbDashboardPanel {
     }
 
     .back-btn {
-      background: none;
-      border: 1px solid var(--cw-border-strong, rgba(255,255,255,0.13));
-      color: var(--vscode-editor-foreground);
+      background: var(--cw-accent, #5B8AF5);
+      border: none;
+      color: #fff;
       border-radius: var(--cw-radius-sm, 5px);
-      padding: 4px 10px;
+      padding: 6px 14px;
       cursor: pointer;
       font-size: 0.85em;
-      opacity: 0.7;
+      font-weight: 600;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      transition: opacity 0.15s;
     }
-    .back-btn:hover { opacity: 1; }
+    .back-btn:hover { opacity: 0.85; }
 
     /* ── Action buttons ── */
     .action-bar {
@@ -281,8 +316,13 @@ export class KbDashboardPanel {
     #drilldown-view { display: none; }
     #drilldown-title {
       margin: 0;
-      font-size: 1em;
-      font-weight: 600;
+      font-size: 1.05em;
+      font-weight: 700;
+      color: var(--cw-accent, #5B8AF5);
+      background: var(--cw-surface-subtle, #252b40);
+      padding: 6px 12px;
+      border-radius: var(--cw-radius-sm, 5px);
+      border-left: 4px solid var(--cw-accent, #5B8AF5);
     }
     .data-table {
       width: 100%;
@@ -394,6 +434,7 @@ export class KbDashboardPanel {
         <h2>Knowledge Base Dashboard</h2>
         <div class="action-bar">
           <button class="action-btn" id="exportBtn">📤 Export to Markdown</button>
+          <button class="action-btn" id="regenerateBtn">🔄 Regenerate</button>
         </div>
       </div>
 
@@ -567,6 +608,7 @@ export class KbDashboardPanel {
         } else {
           Chart.defaults.color = getComputedStyle(document.body)
             .getPropertyValue('--vscode-editor-foreground').trim() || '#cccccc';
+          Chart.register(ChartDataLabels);
           kbChart = new Chart(ctx, {
             type: 'doughnut',
             data: {
@@ -588,17 +630,34 @@ export class KbDashboardPanel {
                 tooltip: {
                   callbacks: {
                     label: function(ctx) {
-                      var sl = slices[ctx.dataIndex];
-                      return sl.label + ': ' + sl.count + ' entry' + (sl.count === 1 ? '' : 's');
+                      var val = ctx.parsed;
+                      var total = ctx.dataset.data.reduce(function(a, b) { return a + b; }, 0);
+                      var pct = total > 0 ? ' (' + Math.round(val / total * 100) + '%)' : '';
+                      return ctx.label + pct;
                     }
+                  }
+                },
+                datalabels: {
+                  color: '#fff',
+                  font: { weight: 'bold', size: 11 },
+                  formatter: function(value, ctx2) {
+                    var total = ctx2.dataset.data.reduce(function(a, b) { return a + b; }, 0);
+                    return total > 0 ? Math.round(value / total * 100) + '%' : '';
+                  },
+                  display: function(ctx2) {
+                    var total = ctx2.dataset.data.reduce(function(a, b) { return a + b; }, 0);
+                    return total > 0 && (ctx2.dataset.data[ctx2.dataIndex] / total) >= 0.05;
                   }
                 }
               },
               onClick: function(e, items) {
                 if (items.length > 0) {
                   var idx = items[0].index;
-                  var sl = slices[idx];
-                  if (sl.count > 0) {
+                  // Always read from the persisted payload to avoid stale closure
+                  var vscodeState = vscode.getState && vscode.getState();
+                  var currentSlices = vscodeState && vscodeState.lastPayload && vscodeState.lastPayload.slices;
+                  var sl = currentSlices && currentSlices[idx];
+                  if (sl && sl.count > 0) {
                     showDrillView(sl.label, sl.entries);
                   }
                 }
@@ -631,6 +690,10 @@ export class KbDashboardPanel {
       });
 
       // Export button
+      document.getElementById('regenerateBtn').addEventListener('click', function() {
+        vscode.postMessage({ command: 'regenerateKb' });
+      });
+
       document.getElementById('exportBtn').addEventListener('click', function() {
         vscode.postMessage({ command: 'export' });
       });

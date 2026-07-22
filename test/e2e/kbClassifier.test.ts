@@ -2,7 +2,7 @@
 // Feature 23 — KB Entry Classification
 
 import * as assert from 'assert';
-import { classifySession } from '../../src/analytics/kbClassifier';
+import { classifySession, classifySessionWithCategories } from '../../src/analytics/kbClassifier';
 import type { Session } from '../../src/types/index';
 
 function makeSession(content: string): Session {
@@ -78,5 +78,37 @@ suite('Feature 23 — KB Classifier', () => {
     test('classification is case-insensitive', () => {
         const session = makeSession('WE CHOSE PostgreSQL. THE TRADE-OFF was clear.');
         assert.strictEqual(classifySession(session), 'decision');
+    });
+
+    suite('classifySessionWithCategories', () => {
+        test('uses heuristic when all categories are defaults', async () => {
+            const session = makeSession('We decided to use PostgreSQL for the trade-off benefits.');
+            const result = await classifySessionWithCategories(session, ['decision', 'learning', 'pattern', 'gotcha', 'architecture']);
+            assert.strictEqual(result, 'decision');
+        });
+
+        test('falls back to heuristic when LLM unavailable and result is in custom list', async () => {
+            const session = makeSession('We decided to use PostgreSQL.');
+            // Custom categories, but LLM will be unavailable (no API in test env)
+            const result = await classifySessionWithCategories(session, ['bug', 'decision', 'feature']);
+            // heuristic says 'decision', which IS in the custom list
+            assert.strictEqual(result, 'decision');
+        });
+
+        test('returns first category when heuristic result is not in custom list', async () => {
+            const session = makeSession('We decided to use PostgreSQL.');
+            // Custom categories that don't include 'decision'
+            const result = await classifySessionWithCategories(session, ['bug', 'feature']);
+            // heuristic says 'decision', not in custom list → returns first category 'bug'
+            assert.strictEqual(result, 'bug');
+        });
+
+        test('falls back to "learning" when both heuristic and categories are empty', async () => {
+            const session = makeSession('boring content');
+            // Empty categories list
+            const result = await classifySessionWithCategories(session, []);
+            // heuristic says 'learning', not in [] → first category is undefined → 'learning' fallback
+            assert.strictEqual(result, 'learning');
+        });
     });
 });
