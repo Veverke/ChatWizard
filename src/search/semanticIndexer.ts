@@ -19,6 +19,13 @@ const MODEL_CACHE_SUBDIR = 'models';
 const GLOBAL_BULK_LOCK = '.semantic-bulk-lock';
 /** Max delay (ms) before retrying the lock after a failed attempt. */
 const LOCK_RETRY_MAX_MS = 30_000;
+/**
+ * How old (ms) a bulk lock directory must be before we consider it stale and
+ * remove it.  Prevents a lock left behind by a crash / force-kill from
+ * permanently blocking embedding.  30s is long enough to avoid races with
+ * a simultaneous VS Code restart.
+ */
+const STALE_LOCK_MS = 30_000;
 // How long to wait after the last scheduleSession() call before starting to embed.
 // This lets the archive-restore batch (which arrives a second or two after the
 // initial file-watcher batch) be collected before the queue runs, so the progress
@@ -531,6 +538,31 @@ export class SemanticIndexer implements ISemanticIndexer {
             this.log.debug('Acquired global bulk lock at %s', this._bulkLockPath);
             return true;
         } catch {
+            // Lock directory exists — check if it's stale (left over from a crash).
+            try {
+                const stat = fs.statSync(this._bulkLockPath);
+                if (Date.now() - stat.mtimeMs > STALE_LOCK_MS) {
+                    this.log.warn(
+                        'Bulk lock at %s is stale (age=%dms) — removing and retrying',
+                        this._bulkLockPath,
+                        Date.now() - stat.mtimeMs,
+                    );
+                    fs.rmdirSync(this._bulkLockPath);
+                    // Retry once
+                    try {
+                        fs.mkdirSync(this._bulkLockPath, { recursive: false });
+                        this._bulkLockHeld = true;
+                        this.log.debug('Acquired (stale) global bulk lock at %s', this._bulkLockPath);
+                        return true;
+                    } catch {
+                        this.log.debug('Global bulk lock still held after stale removal — deferring');
+                        return false;
+                    }
+                }
+            } catch {
+                // stat/rmdir failed — lock directory probably vanished or is locked by
+                // another process. Treat as genuinely held.
+            }
             this.log.debug('Global bulk lock held by another instance — deferring');
             return false;
         }

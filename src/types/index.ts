@@ -104,6 +104,12 @@ export interface Session {
      * Rendered as a "Context summary from earlier conversation" block at the top of the reader.
      */
     compactionSummary?: string;
+    /**
+     * Git branch and commit captured at the time the session was indexed (Feature 25).
+     * Distinct from chronicleData.branch which comes from Copilot's internal Chronicle DB.
+     * Populated by readGitContextAsync() during file indexing.
+     */
+    gitContext?: GitContext;
 }
 
 /** Copilot Chronicle checkpoint summary attached to a Copilot session */
@@ -189,6 +195,8 @@ export interface SessionSummary {
     userTokens?: number;
     /** Pre-computed token estimate for all assistant messages (word-count / 4). Populated by toSummary(). */
     assistantTokens?: number;
+    /** Git branch active at index time (from gitContext or chronicleData). Populated by toSummary(). */
+    branch?: string;
 }
 
 /**

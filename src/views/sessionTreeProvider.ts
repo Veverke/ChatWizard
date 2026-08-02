@@ -748,7 +748,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
                 if (grp) { return new DateGroupTreeItem(grp.label, grp.items.length); }
             } else if (this._groupMode === 'branch') {
                 const session = this.index.get(element.summary.id);
-                const key = session?.chronicleData?.branch ?? '[no branch recorded]';
+                const key = session?.gitContext?.branch ?? session?.chronicleData?.branch ?? '[no branch recorded]';
                 return new ContextGroupTreeItem(key, 0, 'branch');
             } else if (this._groupMode === 'workItem') {
                 const session = this.index.get(element.summary.id);
@@ -866,12 +866,12 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
             .sort((a, b) => dateBucketOrder(a.label) - dateBucketOrder(b.label));
     }
 
-    /** Groups summaries by Chronicle branch. */
+    /** Groups summaries by branch (from gitContext or chronicleData). */
     private _buildBranchGroups(summaries: SessionSummary[]): ContextGroupTreeItem[] {
         const groupMap = new Map<string, number>();
         for (const s of summaries) {
             const session = this.index.get(s.id);
-            const key = session?.chronicleData?.branch ?? '[no branch recorded]';
+            const key = session?.gitContext?.branch ?? session?.chronicleData?.branch ?? '[no branch recorded]';
             groupMap.set(key, (groupMap.get(key) ?? 0) + 1);
         }
         return Array.from(groupMap.entries())
@@ -1054,10 +1054,11 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
         };
     }
 
-    /** True if at least one session has Chronicle branch data. */
+    /** True if at least one session has branch data (from gitContext or chronicleData). */
     hasBranchData(): boolean {
         for (const s of this.index.getAllSummaries()) {
-            if (this.index.get(s.id)?.chronicleData?.branch) { return true; }
+            const session = this.index.get(s.id);
+            if (session?.gitContext?.branch ?? session?.chronicleData?.branch) { return true; }
         }
         return false;
     }

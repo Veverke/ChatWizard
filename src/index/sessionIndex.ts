@@ -66,6 +66,7 @@ export function toSummary(session: Session): SessionSummary {
         userArchived: session.userArchived || undefined,
         userTokens,
         assistantTokens,
+        branch: session.gitContext?.branch ?? session.chronicleData?.branch ?? undefined,
     };
 }
 

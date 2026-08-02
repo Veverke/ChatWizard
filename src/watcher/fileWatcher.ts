@@ -38,6 +38,7 @@ import { parseGeminiCodeAssistSession } from '../parsers/geminiCodeAssist';
 import { discoverTabnineConversationsAsync } from '../readers/tabnineWorkspace';
 import { parseTabnineConversation } from '../parsers/tabnine';
 import type { ICacheManager } from '../cache/cacheManager';
+import { readGitContextAsync, GitContextCache } from '../utils/gitContextReader';
 
 export class ChatWizardWatcher implements vscode.Disposable {
     private disposables: vscode.Disposable[] = [];
@@ -54,11 +55,14 @@ export class ChatWizardWatcher implements vscode.Disposable {
     private _liveTracker: LiveSessionTracker | undefined;
     /** Feature 24: Optional cache manager for incremental parsing. */
     private _cacheManager: ICacheManager | undefined;
+    /** Feature 25: Cached git context reader — avoids repeated subprocess calls. */
+    private _gitContextCache: GitContextCache;
 
     constructor(index: SessionIndex, channel: vscode.OutputChannel, scopeManager: WorkspaceScopeManager) {
         this.index = index;
         this.channel = channel;
         this.scopeManager = scopeManager;
+        this._gitContextCache = new GitContextCache(5 * 60_000);
     }
 
     // SEC-6: Symlink traversal guards — ensure resolved path stays within base directory.
@@ -161,7 +165,7 @@ export class ChatWizardWatcher implements vscode.Disposable {
                     this._watchDirFast(projDir, '.jsonl', (fullPath) => {
                         if (!fs.existsSync(fullPath)) { return; }
                         if (!ChatWizardWatcher._isSafeFilePath(claudeBaseDir, fullPath)) { return; }
-                        this.indexFile(fullPath, 'claude');
+                        void this.indexFile(fullPath, 'claude');
                     });
                 }
             } catch { /* directory unreadable — skip */ }
@@ -207,7 +211,7 @@ export class ChatWizardWatcher implements vscode.Disposable {
                 const wsPath = workspace.workspacePath;
                 this._watchDirFast(chatSessionsDir, '.jsonl', (fullPath) => {
                     if (!fs.existsSync(fullPath)) { return; }
-                    this.indexFile(fullPath, 'copilot', wsId, wsPath);
+                    void this.indexFile(fullPath, 'copilot', wsId, wsPath);
                 });
             }
         }
@@ -504,6 +508,33 @@ this.index.remove(taskId);
 
                 const cfg = vscode.workspace.getConfiguration('chatwizard');
                 const all = applySessionFilters([...claudeSessions, ...copilotSessions, ...clineSessions, ...rooCodeSessions, ...cursorSessions, ...windsurfSessions, ...aiderSessions, ...antigravitySessions, ...deduplicatedJsonSessions, ...continueSessions, ...amazonQSessions, ...geminiSessions, ...tabnineSessions], cfg, this.channel);
+
+                // Feature 25: Enrich sessions with git context (best-effort, non-blocking).
+                // Collect unique workspace paths that lack gitContext, fetch once per path, then apply.
+                {
+                    const wsPaths = new Set<string>();
+                    for (const s of all) {
+                        const p = s.workspacePath;
+                        if (p && !s.gitContext) { wsPaths.add(p); }
+                    }
+                    if (wsPaths.size > 0) {
+                        const ctxMap = new Map<string, Awaited<ReturnType<typeof readGitContextAsync>>>();
+                        await Promise.all(Array.from(wsPaths).map(async (p) => {
+                            ctxMap.set(p, await this._gitContextCache.getOrFetch(p));
+                        }));
+                        let enriched = 0;
+                        for (const s of all) {
+                            if (!s.gitContext && s.workspacePath) {
+                                const ctx = ctxMap.get(s.workspacePath);
+                                if (ctx) { s.gitContext = ctx; enriched++; }
+                            }
+                        }
+                        if (enriched > 0) {
+                            this.channel.appendLine(`[init] Enriched ${enriched} session(s) with git context`);
+                        }
+                    }
+                }
+
                 this.channel.appendLine(
                     `[init] Discovered — Claude: ${claudeSessions.length}, ` +
                     `Copilot: ${copilotSessions.length}, Cline: ${clineSessions.length}, ` +
@@ -1288,18 +1319,25 @@ this.index.remove(taskId);
     public refreshSessionById(sessionId: string): void {
         const session = this.index.get(sessionId);
         if (!session?.filePath) { return; }
-        this.indexFile(session.filePath, session.source, session.workspaceId, session.workspacePath);
+        void this.indexFile(session.filePath, session.source, session.workspaceId, session.workspacePath);
     }
 
     /** Parse and immediately upsert a single file into the index (used for live file-change events). */
-    private indexFile(
+    private async indexFile(
         filePath: string,
         source: SessionSource,
         workspaceId?: string,
         workspacePath?: string
-    ): Session | undefined {
+    ): Promise<Session | undefined> {
         const session = this.parseFile(filePath, source, workspaceId, workspacePath);
         if (session) {
+            // Feature 25: Attach git context (branch + commit) at index time.
+            // Try the session's own workspacePath first, then fall back to the configured workspace.
+            const wsPath = session.workspacePath ?? workspacePath;
+            if (!session.gitContext && wsPath) {
+                const gitCtx = await this._gitContextCache.getOrFetch(wsPath);
+                if (gitCtx) { session.gitContext = gitCtx; }
+            }
             this.index.upsert(session);
             return session;
         } else {
@@ -1562,14 +1600,14 @@ if (composerIdToWsInfo.has(result.session.id)) {
         }
     }
 
-    private onFileChanged(
+    private async onFileChanged(
         uri: vscode.Uri,
         source: SessionSource,
         workspaceId?: string,
         workspacePath?: string
-    ): void {
+    ): Promise<void> {
         const before = this.index.size;
-        const session = this.indexFile(uri.fsPath, source, workspaceId, workspacePath);
+        const session = await this.indexFile(uri.fsPath, source, workspaceId, workspacePath);
         if (session) { this._liveTracker?.record(session.source, session.id); }
         const sessionId = path.basename(uri.fsPath, '.jsonl');
         const verb = this.index.size > before ? 'added' : 'updated';

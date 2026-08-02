@@ -289,6 +289,7 @@ export class SessionWebviewPanel {
             parseErrors:      session.parseErrors ?? [],
             sourceNotes:      session.sourceNotes ?? [],
             filePath:         session.filePath,
+            branch:           session.gitContext?.branch ?? session.chronicleData?.branch ?? null,
             tags:             state.tags ?? [],
             entities:         state.entities ?? null,
             summary:          state.summary ?? null,
@@ -843,6 +844,8 @@ export class SessionWebviewPanel {
     <span id="session-req-field" style="display:none">User Requests: <span id="session-user-req"></span></span>
     <span class="meta-sep" style="display:none" id="session-status-sep"> &nbsp;·&nbsp; </span>
     <span id="session-status" style="display:none"></span>
+    <span class="meta-sep" style="display:none" id="session-branch-sep"> &nbsp;·&nbsp; </span>
+    <span id="session-branch-field" style="display:none"><span id="session-branch-icon" style="opacity:0.6">⎇</span> <span id="session-branch"></span></span>
   </div>
   <details id="session-entities" style="display:none">
     <summary class="cw-entities-summary">&#128269; Entities</summary>
@@ -1496,9 +1499,13 @@ ${cwInteractiveJs()}
       var reqField    = document.getElementById('session-req-field');
       var reqEl       = document.getElementById('session-user-req');
       var sepEl       = document.getElementById('session-meta-sep');
+      var branchField = document.getElementById('session-branch-field');
+      var branchEl    = document.getElementById('session-branch');
+      var branchSep   = document.getElementById('session-branch-sep');
       var showModel   = data.model && data.model !== 'Unknown';
       var showReq     = data.userRequestCount !== undefined;
-      if (metaEl && (showModel || showReq)) {
+      var showBranch  = !!data.branch;
+      if (metaEl && (showModel || showReq || showBranch)) {
         if (showModel && modelField && modelEl) {
           modelEl.textContent = data.model;
           modelField.style.display = 'inline';
@@ -1507,7 +1514,14 @@ ${cwInteractiveJs()}
           reqEl.textContent = data.userRequestCount;
           reqField.style.display = 'inline';
         }
-        if (showModel && showReq && sepEl) { sepEl.style.display = 'inline'; }
+        if (showBranch && branchField && branchEl) {
+          branchEl.textContent = data.branch;
+          branchField.style.display = 'inline';
+        }
+        if (sepEl) {
+          var visibleCount = (showModel ? 1 : 0) + (showReq ? 1 : 0) + (showBranch ? 1 : 0);
+          sepEl.style.display = visibleCount >= 2 ? 'inline' : 'none';
+        }
         metaEl.style.display = 'block';
       }
       // Tags chips

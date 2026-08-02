@@ -454,7 +454,7 @@ export class KbDashboardPanel {
         </div>
         <table class="data-table">
           <thead>
-            <tr><th data-col="title">Title<span class="sort-arrow"></span></th><th data-col="tags">Tags<span class="sort-arrow"></span></th><th data-col="description">Description</th><th data-col="createdAt">Chat Date<span class="sort-arrow"></span></th></tr>
+            <tr><th>#</th><th data-col="title">Title<span class="sort-arrow"></span></th><th data-col="tags">Tags<span class="sort-arrow"></span></th><th data-col="description">Description</th><th data-col="createdAt">Chat Date<span class="sort-arrow"></span></th></tr>
           </thead>
           <tbody id="drilldown-tbody"></tbody>
         </table>
@@ -514,19 +514,20 @@ export class KbDashboardPanel {
         }
 
         var tbody = document.getElementById('drilldown-tbody');
-        var rows = entries.map(function(e) {
+        var rows = entries.map(function(e, i) {
           var desc = e.summary ? escHtml(e.summary.replace(/[\\n\\r]+/g, ' ')) : '—';
           var tags = (e.tags && e.tags.length > 0)
             ? e.tags.map(function(t) { return '<span class="tag-badge">' + escHtml(t) + '</span>'; }).join('')
             : '—';
           return '<tr>' +
+            '<td style="text-align:right;opacity:0.6;font-size:0.9em;width:32px;">' + (i + 1) + '</td>' +
             '<td><a class="clickable" data-sid="' + escHtml(e.sessionId) + '">' + escHtml(e.title) + '</a></td>' +
             '<td>' + tags + '</td>' +
             '<td class="desc-cell" title="' + desc + '">' + desc + '</td>' +
             '<td>' + escHtml(e.createdAt) + '</td>' +
             '</tr>';
         }).join('');
-        tbody.innerHTML = rows || '<tr><td colspan="4" class="empty-state">No entries.</td></tr>';
+        tbody.innerHTML = rows || '<tr><td colspan="5" class="empty-state">No entries.</td></tr>';
 
         // Update sort arrow classes on header
         var ths = document.querySelectorAll('#drilldown-view .data-table th[data-col]');
