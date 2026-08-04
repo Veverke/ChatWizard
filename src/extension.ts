@@ -26,10 +26,13 @@ import {
     getDateBucket,
 } from './views/sessionTreeProvider';
 import { CodeBlockTreeProvider, CodeBlockFilter, CbSortMode, CodeBlockSessionRef, CbGroupMode } from './views/codeBlockTreeProvider';
+import { ActionItemsProvider } from './views/actionItemsProvider';
 import { SessionWebviewPanel } from './views/sessionWebviewPanel';
 import { FullTextSearchEngine } from './search/fullTextEngine';
 import { SearchPanel } from './search/searchPanel';
+import { AnnotationSearchPanel } from './search/annotationSearchPanel';
 import { registerExportCommands, performExport } from './export/exportCommands';
+import { exportSessionAsHtml } from './export/sessionHtmlExporter';
 import { CodeBlockSearchEngine } from './codeblocks/codeBlockSearchEngine';
 import { CodeBlocksPanel } from './codeblocks/codeBlocksPanel';
 import { PromptLibraryPanel } from './prompts/promptLibraryPanel';
@@ -705,6 +708,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // Show rich empty-state message initially (no data yet); cleared once code blocks are indexed.
     codeBlockTreeView.message = makeEmptyStateMsg('code blocks');
     context.subscriptions.push(codeBlockTreeView);
+
+    // ── Action Items tree view (Feature 34) ──────────────────────────────
+    const actionItemsProvider = new ActionItemsProvider(index);
+    const actionItemsTreeView = vscode.window.createTreeView('chatwizardActionItems', {
+        treeDataProvider: actionItemsProvider,
+        canSelectMany: false,
+    });
+    actionItemsTreeView.message = 'No action items found.';
+    context.subscriptions.push(actionItemsTreeView);
 
     // Register codeBlockListener here (after codeBlockTreeView is initialised)
     // to avoid accessing the const before its declaration (TDZ ReferenceError).
@@ -1575,6 +1587,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
 
     context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.searchAnnotations', () => {
+            telemetry.record('searchAnnotations.opened');
+            AnnotationSearchPanel.show(context, index, sidecarStore);
+        })
+    );
+
+    context.subscriptions.push(
         vscode.commands.registerCommand('chatwizard.showCodeBlocks', () => {
             CodeBlocksPanel.show(context, index, codeBlockEngine);
         })
@@ -1593,8 +1612,85 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
 
     context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.showActionItems', () => {
+            void vscode.commands.executeCommand('chatwizardActionItems.focus');
+        })
+    );
+
+    context.subscriptions.push(
         vscode.commands.registerCommand('chatwizard.showTimeline', () => {
             void vscode.commands.executeCommand('chatwizardTimeline.focus');
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.generateDigest', async () => {
+            const { buildDigest } = await import('./analytics/digestBuilder');
+            const summaries = index.getAllSummaries();
+            const sessions = summaries
+                .map(s => index.get(s.id))
+                .filter((s): s is NonNullable<typeof s> => s !== null);
+            if (sessions.length === 0) {
+                void vscode.window.showInformationMessage('No sessions found to generate digest.');
+                return;
+            }
+            // Prompt for time window
+            const windowPick = await vscode.window.showQuickPick(
+                [
+                    { label: 'Today',       description: 'Digest of sessions from today',       value: 'today' as const },
+                    { label: 'This Week',   description: 'Digest of sessions from this week',   value: 'thisWeek' as const },
+                    { label: 'This Sprint', description: 'Digest of sessions from this sprint', value: 'thisSprint' as const },
+                ],
+                { title: 'Digest Time Window', placeHolder: 'Select a time window for the digest' }
+            );
+            if (!windowPick) { return; }
+            // Load sidecar summaries for richer digest output
+            const metaCache = sidecarStore ? await sidecarStore.load() : undefined;
+            const summariesMap = new Map<string, string>();
+            if (metaCache) {
+                for (const [id, meta] of Object.entries(metaCache)) {
+                    if (meta.summary) summariesMap.set(id, meta.summary);
+                }
+            }
+            const result = buildDigest(sessions, windowPick.value, new Date(), summariesMap);
+            const doc = await vscode.workspace.openTextDocument({ content: result.markdown, language: 'markdown' });
+            await vscode.window.showTextDocument(doc);
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.shareSession', async (item?: SessionTreeItem) => {
+            const sessionId = item?.summary?.id;
+            if (!sessionId) {
+                const picked = await vscode.window.showInputBox({ prompt: 'Enter session ID to share' });
+                if (!picked?.trim()) { return; }
+                const s = index.get(picked.trim());
+                if (!s) { void vscode.window.showWarningMessage(`Session "${picked.trim()}" not found.`); return; }
+                await doShare(s);
+                return;
+            }
+            const session = index.get(sessionId);
+            if (!session) { void vscode.window.showWarningMessage(`Session "${sessionId}" not found.`); return; }
+            await doShare(session);
+
+            async function doShare(s: Session): Promise<void> {
+                const uri = await vscode.window.showSaveDialog({
+                    title: 'Export Session as HTML',
+                    defaultUri: vscode.Uri.file(`${s.title.replace(/[^a-zA-Z0-9_-]/g, '_')}.html`),
+                    filters: { 'HTML files': ['html'] },
+                });
+                if (!uri) { return; }
+                const meta = index.getSidecarMeta(s.id);
+                await exportSessionAsHtml(s, uri.fsPath, {
+                    includeAnnotations: true,
+                    annotations: meta?.annotations?.map(a => ({
+                        messageIndex: a.messageIndex,
+                        text: (a as any).text ?? (a as any).noteText ?? '',
+                        createdAt: a.createdAt,
+                    })),
+                });
+                void vscode.window.showInformationMessage(`Session exported to ${uri.fsPath}`);
+            }
         })
     );
 
@@ -2751,6 +2847,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             );
             void cloudSync.initialize().catch((err: unknown) => {
                 channel.appendLine(`[Chat Wizard] Cloud sync init failed: ${String(err)}`);
+            });
+            // Also back up the local .db file to cloud storage
+            const dbPath = cacheIntegration.dbPath;
+            void cloudSync.syncDbBackup(dbPath).catch((err: unknown) => {
+                channel.appendLine(`[Chat Wizard] DB backup sync failed: ${String(err)}`);
             });
             context.subscriptions.push({ dispose: () => cloudSync?.dispose() });
             channel.appendLine(`[Chat Wizard] Cloud sync (${cloudSyncType}) initialised.`);

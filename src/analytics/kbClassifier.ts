@@ -4,7 +4,6 @@
 
 import type { Session } from '../types/index';
 import type { KbEntryType } from '../types/kb';
-import { DEFAULT_KB_TYPE_SET } from '../types/kb';
 import { classifySessionWithLlm } from './kbLlmClassifier';
 
 /**
@@ -76,9 +75,8 @@ export function classifySession(session: Session): KbEntryType {
 /**
  * Classify a session using the given categories.
  *
- * - If all categories are default types, uses the heuristic classifier (sync).
- * - If custom categories are present, uses the LLM classifier (async), falling
- *   back to the heuristic classifier for default-type results.
+ * Tries the free AI model (Copilot LM API) first for all category types.
+ * Falls back to heuristic phrase-matching only when the model is unavailable.
  *
  * @returns The best-matching category name.
  */
@@ -86,19 +84,13 @@ export async function classifySessionWithCategories(
     session: Session,
     categories: string[],
 ): Promise<KbEntryType> {
-    // Check if all categories are defaults — if so, use heuristic
-    const allDefaults = categories.every(c => DEFAULT_KB_TYPE_SET.has(c));
-    if (allDefaults) {
-        return classifySession(session);
-    }
-
-    // Custom categories present — try LLM first
+    // Try LLM first — works for both default and custom categories
     const llmResult = await classifySessionWithLlm(session, categories);
     if (llmResult) {
         return llmResult;
     }
 
-    // LLM failed — fall back to heuristic if the result is a default type
+    // LLM unavailable — fall back to heuristic
     const heuristic = classifySession(session);
     if (categories.includes(heuristic)) {
         return heuristic;

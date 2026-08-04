@@ -116,6 +116,10 @@
           "id": "chatwizardKnowledgeBase",
           "name": "Knowledge Base",
           "type": "webview"
+        },
+        {
+          "id": "chatwizardActionItems",
+          "name": "Action Items"
         }
       ]
     },
@@ -135,6 +139,12 @@
         "title": "Search",
         "category": "Chat Wizard",
         "icon": "$(search)"
+      },
+      {
+        "command": "chatwizard.searchAnnotations",
+        "title": "Search Annotations",
+        "category": "Chat Wizard",
+        "icon": "$(comment)"
       },
       {
         "command": "chatwizard.filterSessions",
@@ -651,6 +661,12 @@
         "icon": "$(bookmark)"
       },
       {
+        "command": "chatwizard.addAnnotation",
+        "title": "Chat Wizard: Add Annotation…",
+        "category": "Chat Wizard",
+        "icon": "$(comment)"
+      },
+      {
         "command": "chatwizard.removeBookmark",
         "title": "Chat Wizard: Remove Bookmark…",
         "category": "Chat Wizard",
@@ -696,6 +712,31 @@
         "title": "Chat Wizard: Generate Knowledge Base",
         "category": "Chat Wizard",
         "icon": "$(book)"
+      },
+      {
+        "command": "chatwizard.generateDigest",
+        "title": "Chat Wizard: Generate Digest",
+        "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.linkSession",
+        "title": "Chat Wizard: Link Session",
+        "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.unlinkSession",
+        "title": "Chat Wizard: Unlink Session",
+        "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.shareSession",
+        "title": "Chat Wizard: Share Session",
+        "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.showActionItems",
+        "title": "Chat Wizard: Show Action Items",
+        "category": "Chat Wizard"
       }
     ],
     "menus": {
@@ -1071,6 +1112,18 @@
         },
         {
           "command": "chatwizard.search",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.searchAnnotations",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.addAnnotation",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.generateDigest",
           "when": "false"
         },
         {

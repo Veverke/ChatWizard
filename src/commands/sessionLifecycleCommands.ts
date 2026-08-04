@@ -13,7 +13,7 @@ import * as vscode from 'vscode';
 import { SidecarMetadataStore } from '../index/sidecarMetadataStore';
 import { SessionIndex } from '../index/sessionIndex';
 import { SessionTreeProvider, SessionTreeItem } from '../views/sessionTreeProvider';
-import { SessionBookmark, SessionAnnotation, MessageRating } from '../types/index';
+import { SessionBookmark, SessionAnnotation } from '../types/index';
 
 // ---------------------------------------------------------------------------
 // Registration
@@ -252,37 +252,6 @@ export function registerSessionLifecycleCommands(
             await metaStore.removeLinkedSession(sessionId, pick.id);
             await metaStore.removeLinkedSession(pick.id, sessionId); // bidirectional
             vscode.window.showInformationMessage('Session unlinked.');
-        })
-    );
-
-    // ── Feature 32: Response rating ───────────────────────────────────────
-
-    context.subscriptions.push(
-        vscode.commands.registerCommand('chatwizard.rateSession', async (item?: SessionTreeItem) => {
-            const sessionId = resolveSessionId(item);
-            if (!sessionId) { return; }
-
-            type RateItem = vscode.QuickPickItem & { value: 1 | -1 };
-            const items: RateItem[] = [
-                { label: '$(thumbsup)  Thumbs Up', description: 'Helpful response', value: 1 },
-                { label: '$(thumbsdown)  Thumbs Down', description: 'Not helpful', value: -1 },
-            ];
-
-            const pick = await vscode.window.showQuickPick(items, {
-                title: `Rate Session — ${sessionId.slice(0, 8)}…`,
-                placeHolder: 'Was this session helpful?',
-            });
-            if (!pick) { return; }
-
-            const rating: MessageRating = {
-                messageIndex: 0,
-                rating: pick.value,
-                createdAt: new Date().toISOString(),
-            };
-            await metaStore.setRating(sessionId, rating);
-            vscode.window.showInformationMessage(
-                pick.value === 1 ? 'Rated thumbs up.' : 'Rated thumbs down.'
-            );
         })
     );
 

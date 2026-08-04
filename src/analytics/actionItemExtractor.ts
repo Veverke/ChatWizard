@@ -1,7 +1,11 @@
 // src/analytics/actionItemExtractor.ts
 // Feature 34 — Outcome / Follow-Up Tracking
+//
+// Tries the free AI model (Copilot LM API) first to extract action items.
+// Falls back to heuristic phrase-matching when the model is unavailable.
 
 import type { Session, ActionItem } from '../types/index';
+import { extractActionItemsWithLlm } from './actionItemLlmExtractor';
 
 const MAX_ACTION_ITEMS = 20;
 
@@ -66,14 +70,28 @@ function normalizeForDedup(text: string): string {
 }
 
 /**
- * Extract action items from assistant messages in a session.
+ * Extract action items from a session.
  *
- * Scans assistant messages for actionable phrases, extracts the containing
- * sentence, deduplicates by normalized text, and caps at MAX_ACTION_ITEMS.
+ * Tries the free AI model (Copilot LM API) first for more accurate extraction.
+ * Falls back to heuristic phrase-matching when the model is unavailable.
  *
  * Returns an empty array for purely conversational sessions.
  */
-export function extractActionItems(session: Session): ActionItem[] {
+export async function extractActionItems(session: Session): Promise<ActionItem[]> {
+    // Try LLM first
+    const llmResult = await extractActionItemsWithLlm(session);
+    if (llmResult) { return llmResult; }
+
+    // LLM unavailable — fall back to heuristic
+    return extractActionItemsHeuristic(session);
+}
+
+/**
+ * Heuristic phrase-matching fallback.
+ * Scans assistant messages for actionable phrases, extracts the containing
+ * sentence, deduplicates by normalized text, and caps at MAX_ACTION_ITEMS.
+ */
+function extractActionItemsHeuristic(session: Session): ActionItem[] {
     const items: ActionItem[] = [];
     const seenTexts = new Set<string>();
     let index = 0;

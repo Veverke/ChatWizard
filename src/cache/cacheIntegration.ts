@@ -13,6 +13,7 @@ import { Session } from '../types/index';
 
 export interface ICacheIntegration {
     readonly cacheManager: ICacheManager;
+    readonly dbPath: string;
     /** Load all sessions from DB into the index (startup path). */
     loadIntoIndex(index: SessionIndex): Promise<void>;
     /** After a parse completes, write sessions to DB and index. */
@@ -25,6 +26,8 @@ export interface ICacheIntegration {
 
 export class CacheIntegration implements ICacheIntegration {
     public readonly cacheManager: ICacheManager;
+
+    public get dbPath(): string { return this.cacheManager.dbPath; }
 
     constructor(storageDir: string) {
         this.cacheManager = new CacheManager(storageDir);

@@ -41,6 +41,7 @@ const TAG_LENGTH = 16;
 const KEY_FILENAME = 'cloud-sync-key.bin';
 const SYNC_STATE_FILENAME = 'cloud-sync-state.json';
 const SESSION_SUMMARIES_FILENAME = 'chatwizard-sessions.json';
+const DB_BACKUP_FILENAME = 'chatwizard-cache.db.backup.enc';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -89,10 +90,10 @@ interface SyncState {
 
 export interface ICloudBackend {
     readonly name: string;
-    /** Read the current stored data (returns null if none exists). */
+    /** Read the current stored data for the default (summaries) entry. Returns null if none exists. */
     read(): Promise<Buffer | null>;
-    /** Write (overwrite) the stored data. */
-    write(data: Buffer): Promise<void>;
+    /** Write (overwrite) entries. Each key is a filename, value is the content. */
+    writeFiles(files: Record<string, Buffer>): Promise<void>;
     /** Test connectivity and credentials. */
     test(): Promise<boolean>;
 }
@@ -132,13 +133,16 @@ class GitHubGistBackend implements ICloudBackend {
         }
     }
 
-    async write(data: Buffer): Promise<void> {
+    async writeFiles(files: Record<string, Buffer>): Promise<void> {
+        const filesPayload: Record<string, { content: string }> = {};
+        for (const [name, data] of Object.entries(files)) {
+            filesPayload[name] = { content: data.toString('base64') };
+        }
+
         const body = {
             description: 'ChatWizard session sync',
             public: false,
-            files: {
-                [SESSION_SUMMARIES_FILENAME]: { content: data.toString('base64') },
-            },
+            files: filesPayload,
         };
 
         try {
@@ -194,7 +198,7 @@ class S3Backend implements ICloudBackend {
         return null;
     }
 
-    async write(_data: Buffer): Promise<void> {
+    async writeFiles(_files: Record<string, Buffer>): Promise<void> {
         // Placeholder — S3 SDK is not bundled
         throw new Error('S3 backend requires the @aws-sdk/client-s3 package. Install it manually.');
     }
@@ -216,7 +220,7 @@ class AzureBlobBackend implements ICloudBackend {
         return null;
     }
 
-    async write(_data: Buffer): Promise<void> {
+    async writeFiles(_files: Record<string, Buffer>): Promise<void> {
         // Placeholder — Azure SDK is not bundled
         throw new Error('Azure Blob backend requires the @azure/storage-blob package. Install it manually.');
     }
@@ -301,8 +305,9 @@ export class CloudSyncManager {
             // Encrypt
             const encrypted = this._encrypt(compressed);
 
-            // Upload
-            await this.backend.write(encrypted);
+            await this.backend.writeFiles({
+                [SESSION_SUMMARIES_FILENAME]: encrypted,
+            });
 
             // Update state
             this.state = {
@@ -336,6 +341,75 @@ export class CloudSyncManager {
             this.logger(`[Chat Wizard] Cloud sync pull error: ${String(err)}`);
             return 0;
         }
+    }
+
+    /**
+     * Backup the shared SQLite .db file to the cloud backend.
+     * Reads the .db file, encrypts it, and stores it as a separate blob.
+     * Call this periodically alongside sync().
+     */
+    async syncDbBackup(dbPath?: string): Promise<void> {
+        if (this._disposed || !this.backend) { return; }
+
+        const resolvedPath = dbPath ?? this._resolveDefaultDbPath();
+        if (!resolvedPath) {
+            this.logger('[Chat Wizard] DB backup: no .db path available.');
+            return;
+        }
+
+        try {
+            if (!fs.existsSync(resolvedPath)) {
+                this.logger(`[Chat Wizard] DB backup: .db file not found at ${resolvedPath}`);
+                return;
+            }
+
+            const dbBuffer = fs.readFileSync(resolvedPath);
+
+            // Encrypt the raw .db file (no compression — already binary)
+            const encrypted = this._encrypt(dbBuffer);
+
+            // Write as a separate named blob via the backend.
+            // Since our ICloudBackend interface only supports a single named file,
+            // we use a naming convention by writing the backup under a different key.
+            // For Gist backends, we write to the same gist with a different filename.
+            // This requires modifying the write approach — we leverage the fact that
+            // the raw encrypted buffer can be stored directly.
+
+            // For the initial single-file approach, write the backup alongside summaries.
+            // Both are uploaded atomically in a single writeFiles call.
+            const backupPayload = Buffer.concat([
+                Buffer.from('DB01'),  // magic header + version
+                encrypted,
+            ]);
+
+            await this.backend.writeFiles({
+                [SESSION_SUMMARIES_FILENAME]: encrypted,
+                [DB_BACKUP_FILENAME]: backupPayload,
+            });
+
+            this.logger(`[Chat Wizard] DB backup: ${(dbBuffer.length / 1024).toFixed(0)} KB backed up to cloud alongside summaries.`);
+        } catch (err) {
+            this.logger(`[Chat Wizard] DB backup error: ${String(err)}`);
+        }
+    }
+
+    private _resolveDefaultDbPath(): string | null {
+        // Walk up from storageDir to find a chatwizard-cache.db
+        // Try common locations
+        const candidates = [
+            path.join(this.storageDir, '..', 'chatwizard-cache.db'),
+            path.join(this.storageDir, 'chatwizard-cache.db'),
+        ];
+        // Also check %LOCALAPPDATA%/ChatWizard
+        const localAppData = process.env.LOCALAPPDATA;
+        if (localAppData) {
+            candidates.push(path.join(localAppData, 'ChatWizard', 'chatwizard-cache.db'));
+        }
+        for (const c of candidates) {
+            const resolved = path.resolve(c);
+            if (fs.existsSync(resolved)) { return resolved; }
+        }
+        return null;
     }
 
     dispose(): void {

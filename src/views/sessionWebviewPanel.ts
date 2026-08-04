@@ -444,6 +444,10 @@ export class SessionWebviewPanel {
       font-weight: 600;
       opacity: 1;
     }
+    .session-meta .cw-meta-model { color: var(--vscode-debugTokenExpression-name, #569cd6); }
+    .session-meta .cw-meta-branch { color: var(--vscode-gitDecoration-modifiedResourceForeground, #e2c08d); }
+    .session-meta .cw-meta-req { color: var(--vscode-gitDecoration-addedResourceForeground, #73c991); }
+    .session-meta .cw-meta-label { opacity: 0.7; font-weight: 500; }
     #session-tags { min-height: 0; margin-bottom: 6px; padding-bottom: 6px; border-bottom: 1px solid var(--vscode-textBlockQuote-background, #444); }
     .cw-tag-chip {
       display: inline-flex; align-items: center;
@@ -839,13 +843,13 @@ export class SessionWebviewPanel {
   <p id="session-summary" style="display:none;margin:4px 0 8px;opacity:0.7;font-size:0.875em;font-style:italic;"></p>
   <div id="session-tags" style="display:none"></div>
   <div class="session-meta" id="session-meta">
-    <span id="session-model-field" style="display:none">Model: <span id="session-model"></span></span>
+    <span id="session-model-field" class="cw-meta-model" style="display:none"><span class="cw-meta-label">Model:</span> <span id="session-model"></span></span>
     <span class="meta-sep" id="session-meta-sep" style="display:none"> &nbsp;·&nbsp; </span>
-    <span id="session-req-field" style="display:none">User Requests: <span id="session-user-req"></span></span>
+    <span id="session-req-field" class="cw-meta-req" style="display:none"><span class="cw-meta-label">User Requests:</span> <span id="session-user-req"></span></span>
     <span class="meta-sep" style="display:none" id="session-status-sep"> &nbsp;·&nbsp; </span>
     <span id="session-status" style="display:none"></span>
     <span class="meta-sep" style="display:none" id="session-branch-sep"> &nbsp;·&nbsp; </span>
-    <span id="session-branch-field" style="display:none"><span id="session-branch-icon" style="opacity:0.6">⎇</span> <span id="session-branch"></span></span>
+    <span id="session-branch-field" class="cw-meta-branch" style="display:none"><span id="session-branch-icon" style="opacity:0.6">⎇</span> <span class="cw-meta-label">Branch:</span> <span id="session-branch"></span></span>
   </div>
   <details id="session-entities" style="display:none">
     <summary class="cw-entities-summary">&#128269; Entities</summary>

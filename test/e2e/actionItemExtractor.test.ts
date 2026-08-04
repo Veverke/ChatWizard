@@ -24,27 +24,27 @@ function makeSession(assistantMessages: string[]): Session {
 }
 
 suite('Feature 34 — Action Item Extractor', () => {
-    test('returns items for a session with actionable phrases', () => {
+    test('returns items for a session with actionable phrases', async () => {
         const session = makeSession([
             'You should add error handling to the login function.',
             'Next step: run the test suite to verify changes.',
             "Don't forget to update the documentation.",
         ]);
-        const items = extractActionItems(session);
+        const items = await extractActionItems(session);
         assert.ok(items.length >= 2, `should find at least 2 action items, got ${items.length}`);
     });
 
-    test('returns empty array for a purely conversational session', () => {
+    test('returns empty array for a purely conversational session', async () => {
         const session = makeSession([
             'That is a great approach to the problem.',
             'The code looks good overall.',
             'I think this design pattern is elegant.',
         ]);
-        const items = extractActionItems(session);
+        const items = await extractActionItems(session);
         assert.strictEqual(items.length, 0, 'should return empty array for non-actionable content');
     });
 
-    test('extracts items only from assistant messages, not user messages', () => {
+    test('extracts items only from assistant messages, not user messages', async () => {
         const session: Session = {
             id: 'mixed-session',
             title: 'Mixed',
@@ -58,34 +58,34 @@ suite('Feature 34 — Action Item Extractor', () => {
             createdAt: '2026-06-01T10:00:00Z',
             updatedAt: '2026-06-01T10:30:00Z',
         };
-        const items = extractActionItems(session);
+        const items = await extractActionItems(session);
         // Only the assistant message should contribute
         assert.strictEqual(items.length, 1, 'only assistant messages should be scanned');
     });
 
-    test('deduplicates items with the same normalized text', () => {
+    test('deduplicates items with the same normalized text', async () => {
         const session = makeSession([
             'You should test the changes. You should test the changes.',
         ]);
-        const items = extractActionItems(session);
+        const items = await extractActionItems(session);
         // Duplicate sentence should appear only once
         const unique = new Set(items.map(i => i.text.toLowerCase().trim()));
         assert.strictEqual(unique.size, items.length, 'duplicate items should be removed');
     });
 
-    test('caps extracted items at 20', () => {
+    test('caps extracted items at 20', async () => {
         // Create a message with many actionable phrases
         const lines = Array.from({ length: 30 }, (_, i) => `You should do step ${i}.`);
         const session = makeSession([lines.join('\n')]);
-        const items = extractActionItems(session);
+        const items = await extractActionItems(session);
         assert.ok(items.length <= 20, `should cap at 20 items, got ${items.length}`);
     });
 
-    test('each item has correct structure', () => {
+    test('each item has correct structure', async () => {
         const session = makeSession([
             'Make sure to commit your changes before merging.',
         ]);
-        const items = extractActionItems(session);
+        const items = await extractActionItems(session);
         if (items.length > 0) {
             const item = items[0];
             assert.ok(typeof item.id === 'string' && item.id.length > 0, 'id should be non-empty string');
@@ -96,19 +96,19 @@ suite('Feature 34 — Action Item Extractor', () => {
         }
     });
 
-    test('identifies todo: phrase', () => {
+    test('identifies todo: phrase', async () => {
         const session = makeSession(['Todo: write integration tests for the auth module.']);
-        const items = extractActionItems(session);
+        const items = await extractActionItems(session);
         assert.ok(items.length > 0, 'should find action item with "todo:" phrase');
     });
 
-    test('identifies "remember to" phrase', () => {
+    test('identifies "remember to" phrase', async () => {
         const session = makeSession(['Remember to update the environment variables in production.']);
-        const items = extractActionItems(session);
+        const items = await extractActionItems(session);
         assert.ok(items.length > 0, 'should find action item with "remember to" phrase');
     });
 
-    test('returns empty array for session with no messages', () => {
+    test('returns empty array for session with no messages', async () => {
         const session: Session = {
             id: 'empty',
             title: 'Empty',
@@ -119,7 +119,7 @@ suite('Feature 34 — Action Item Extractor', () => {
             createdAt: '2026-06-01T10:00:00Z',
             updatedAt: '2026-06-01T10:30:00Z',
         };
-        const items = extractActionItems(session);
+        const items = await extractActionItems(session);
         assert.strictEqual(items.length, 0, 'should return empty array for session with no messages');
     });
 });

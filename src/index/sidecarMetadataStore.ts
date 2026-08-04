@@ -296,17 +296,4 @@ export class SidecarMetadataStore {
         await this.patch(sessionId, { linkedSessionIds: updated });
     }
 
-    /** Sets a rating (thumbs up/down) for a specific message. */
-    async setRating(sessionId: string, rating: import('../types/index').MessageRating): Promise<void> {
-        const map = this.cache ?? await this.load();
-        const existing = map.get(sessionId) ?? { sessionId };
-        const ratings = (existing as any).ratings ?? [];
-        const idx = ratings.findIndex((r: import('../types/index').MessageRating) => r.messageIndex === rating.messageIndex);
-        if (idx >= 0) {
-            ratings[idx] = rating;
-        } else {
-            ratings.push(rating);
-        }
-        await this.patch(sessionId, { ratings } as any);
     }
-}

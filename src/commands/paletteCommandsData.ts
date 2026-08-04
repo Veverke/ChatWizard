@@ -52,6 +52,7 @@ export const PALETTE_CATEGORIES: readonly PaletteCategory[] = [
         icon: '$(search)',
         items: [
             { commandId: 'chatwizard.search',         label: 'Full-Text Search',                 icon: '$(search)'  },
+            { commandId: 'chatwizard.searchAnnotations', label: 'Search Annotations',             icon: '$(comment)' },
             { commandId: 'chatwizard.semanticSearch', label: 'Find Sessions by Topic (Semantic)', icon: '$(sparkle)' },
         ],
     },
@@ -85,6 +86,8 @@ export const PALETTE_CATEGORIES: readonly PaletteCategory[] = [
             { commandId: 'chatwizard.groupSessions',     label: 'Group Sessions…',      icon: '$(list-tree)'         },
             { commandId: 'chatwizard.injectAsContext',   label: 'Inject as Context…',   icon: '$(comment-discussion)'},
             { commandId: 'chatwizard.revealSessionInExplorer', label: 'Reveal in Explorer', icon: '$(folder-opened)' },
+            { commandId: 'chatwizard.addAnnotation',    label: 'Add Annotation…',      icon: '$(comment)'           },
+            { commandId: 'chatwizard.generateDigest',     label: 'Generate Digest…',     icon: '$(note)'       },
         ],
     },
     {

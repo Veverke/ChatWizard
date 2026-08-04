@@ -123,6 +123,7 @@ export interface ICacheManager {
     getSessionCount(): number;
     close(): void;
     readonly isOpen: boolean;
+    readonly dbPath: string;
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -133,7 +134,7 @@ const DB_FILENAME = 'chatwizard-cache.db';
 
 export class CacheManager implements ICacheManager {
     private db: BetterSqlite3.Database | null = null;
-    private readonly dbPath: string;
+    private readonly _dbPath: string;
     private _isOpen = false;
 
     // Prepared statements — created once in _initDb()
@@ -162,11 +163,15 @@ export class CacheManager implements ICacheManager {
     } | null = null;
 
     constructor(storageDir: string) {
-        this.dbPath = path.join(storageDir, DB_FILENAME);
+        this._dbPath = path.join(storageDir, DB_FILENAME);
     }
 
     get isOpen(): boolean {
         return this._isOpen;
+    }
+
+    get dbPath(): string {
+        return this._dbPath;
     }
 
     // ── Initialization ───────────────────────────────────────────────────────
@@ -180,12 +185,12 @@ export class CacheManager implements ICacheManager {
         if (this._isOpen) { return; }
 
         // Ensure the storage directory exists
-        const dir = path.dirname(this.dbPath);
+        const dir = path.dirname(this._dbPath);
         if (!fs.existsSync(dir)) {
             fs.mkdirSync(dir, { recursive: true });
         }
 
-        this.db = new BetterSqlite3(this.dbPath);
+        this.db = new BetterSqlite3(this._dbPath);
 
         // Enable WAL mode for crash recovery + concurrent reads
         this.db.pragma('journal_mode = WAL');

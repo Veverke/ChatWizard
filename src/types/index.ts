@@ -388,8 +388,6 @@ export interface SessionMetadata {
     entitiesVersion?: number;
     /** Feature 29 — Bookmarks pointing to specific messages within a session */
     bookmarks?: SessionBookmark[];
-    /** Feature 32 — Per-response ratings (thumbs up/down) */
-    ratings?: MessageRating[];
     /** Feature 34 — Action items extracted from or manually added to a session */
     actionItems?: ActionItem[];
 }
@@ -419,13 +417,6 @@ export interface SessionBookmark {
     messageIndex: number;
     note?: string;
     /** ISO-8601 */
-    createdAt: string;
-}
-
-/** Feature 32 — Per-response rating (thumbs up/down) */
-export interface MessageRating {
-    messageIndex: number;
-    rating: 1 | -1;     // 1 = thumbs up, -1 = thumbs down
     createdAt: string;
 }
 

@@ -81,7 +81,7 @@ suite('Feature 23 — KB Classifier', () => {
     });
 
     suite('classifySessionWithCategories', () => {
-        test('uses heuristic when all categories are defaults', async () => {
+        test('tries LLM first, falls back to heuristic when LLM unavailable', async () => {
             const session = makeSession('We decided to use PostgreSQL for the trade-off benefits.');
             const result = await classifySessionWithCategories(session, ['decision', 'learning', 'pattern', 'gotcha', 'architecture']);
             assert.strictEqual(result, 'decision');
