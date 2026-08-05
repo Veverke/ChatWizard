@@ -9,16 +9,36 @@ import { BrandingStatusBarItem } from './brandingStatusBar';
 
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
+interface SectionHeading {
+    text: string;
+    /** GitHub-style anchor fragment (lowercased, spaces → hyphens, stripped special chars). */
+    anchor: string;
+}
+
+/**
+ * Convert heading text to a GitHub-style anchor fragment.
+ * Matches what GitHub's markdown renderer and VS Code's markdown preview produce.
+ */
+function headingToAnchor(text: string): string {
+    return text
+        .toLowerCase()
+        .replace(/[`~!@#$%^&*()=+[\]{}|;:'",.<>/?\\]/g, '')  // strip special chars
+        .replace(/\s+/g, '-')                                    // spaces → hyphens
+        .replace(/-+/g, '-')                                     // collapse multiple hyphens
+        .replace(/^-+|-+$/g, '');                                // trim leading/trailing hyphens
+}
+
 /**
  * Parse section headings ("## ..." and "### ...") from the user-guide markdown
- * file. Returns a deduplicated list of heading texts (without the prefix),
+ * file. Returns a deduplicated list of {text, anchor} pairs,
  * excluding the top-level H1 and any empty or TOC-only headings.
  */
-function parseUserGuideSections(filePath: string): string[] {
+function parseUserGuideSections(filePath: string): SectionHeading[] {
     try {
         const content = fs.readFileSync(filePath, 'utf-8');
         const lines = content.split('\n');
-        const headings = new Set<string>();
+        const seen = new Set<string>();
+        const headings: SectionHeading[] = [];
 
         for (const line of lines) {
             const trimmed = line.trim();
@@ -26,13 +46,14 @@ function parseUserGuideSections(filePath: string): string[] {
             if (/^#{2,3}\s+(?!\n)(.+)/.test(trimmed)) {
                 const text = trimmed.replace(/^#{2,3}\s+/, '').trim();
                 // Skip table of contents entries and empty headings
-                if (text && !text.startsWith('Table of Contents') && text.length > 2) {
-                    headings.add(text);
+                if (text && !text.startsWith('Table of Contents') && text.length > 2 && !seen.has(text)) {
+                    seen.add(text);
+                    headings.push({ text, anchor: headingToAnchor(text) });
                 }
             }
         }
 
-        return Array.from(headings);
+        return headings;
     } catch {
         return [];
     }
@@ -51,8 +72,8 @@ function shuffle<T>(arr: T[]): T[] {
 }
 
 export class DidYouKnowNudge implements vscode.Disposable {
-    private _items: string[] = [];
-    private _queue: string[] = [];
+    private _items: SectionHeading[] = [];
+    private _queue: SectionHeading[] = [];
     private _intervalTimer: ReturnType<typeof setInterval> | undefined;
     private _disposables: vscode.Disposable[] = [];
     private readonly _extensionPath: string;
@@ -67,14 +88,14 @@ export class DidYouKnowNudge implements vscode.Disposable {
         if (this._items.length === 0) {
             // Fallback: a few built-in items if parsing fails
             this._items = [
-                'Search past sessions by keyword',
-                'Tag sessions for quick filtering',
-                'Export sessions to Markdown or Obsidian',
-                'Use @chatwizard in Copilot Chat',
-                'Connect Claude Desktop via MCP server',
-                'View per-model usage stats',
-                'Browse AI-generated code blocks',
-                'See which files a session touched',
+                { text: 'Search past sessions by keyword', anchor: 'search-past-sessions-by-keyword' },
+                { text: 'Tag sessions for quick filtering', anchor: 'tag-sessions-for-quick-filtering' },
+                { text: 'Export sessions to Markdown or Obsidian', anchor: 'export-sessions-to-markdown-or-obsidian' },
+                { text: 'Use @chatwizard in Copilot Chat', anchor: 'use-chatwizard-in-copilot-chat' },
+                { text: 'Connect Claude Desktop via MCP server', anchor: 'connect-claude-desktop-via-mcp-server' },
+                { text: 'View per-model usage stats', anchor: 'view-per-model-usage-stats' },
+                { text: 'Browse AI-generated code blocks', anchor: 'browse-ai-generated-code-blocks' },
+                { text: 'See which files a session touched', anchor: 'see-which-files-a-session-touched' },
             ];
         }
         this._queue = shuffle(this._items);
@@ -98,7 +119,7 @@ export class DidYouKnowNudge implements vscode.Disposable {
         }
 
         const item = this._queue.pop()!;
-        const msg = `🐿️ Did you know? ${item}`;
+        const msg = `🐿️ Did you know? ${item.text}`;
         this._brandingBar.notify(msg, 'workbench.view.extension.chatwizard');
 
         // Show notification with "Open User Guide" button (opens user-guide.md)
@@ -107,7 +128,8 @@ export class DidYouKnowNudge implements vscode.Disposable {
         void vscode.window.showInformationMessage(msg, 'Open User Guide', "Don't show again").then(selection => {
             if (selection === 'Open User Guide') {
                 const userGuidePath = path.join(this._extensionPath, 'docs', 'user-guide.md');
-                void vscode.commands.executeCommand('markdown.showPreview', vscode.Uri.file(userGuidePath));
+                const uri = vscode.Uri.file(userGuidePath).with({ fragment: item.anchor });
+                void vscode.commands.executeCommand('markdown.showPreview', uri);
             } else if (selection === "Don't show again") {
                 this.dispose();
             }
