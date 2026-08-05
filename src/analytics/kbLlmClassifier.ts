@@ -214,6 +214,65 @@ export function parseClassification(raw: string): string | null {
     return firstLine;
 }
 
+// ── Top-level grouping ───────────────────────────────────────────────────
+
+/**
+ * Build the prompt for grouping fine-grained categories into broader top-level topics.
+ */
+export function buildTopLevelGroupingPrompt(categories: string[]): string {
+    return [
+        'You are a category organizer. Group the following fine-grained topic labels',
+        'into broader top-level categories. Each top-level category should be a general',
+        'area (e.g. "Git", "Docker", "React", "Testing", "Deployment").',
+        '',
+        'Rules:',
+        '- Return ONLY a JSON object — no commentary, no markdown fences.',
+        '- Each key is a top-level category name (1-3 words, Title Case).',
+        '- Each value is an array of child categories that belong under it.',
+        '- Every input label must appear in exactly one group.',
+        '- Merge similar labels under the same parent (e.g. "Git Pull", "Git Push", "Git Ignore" → "Git").',
+        '- Use "Other" as a top-level group for anything that does not fit.',
+        '- Keep the total number of top-level groups between 3 and 12.',
+        '',
+        'Example:',
+        'Input: ["Git Pull", "Git Push", "Git Ignore", "Docker Compose", "Docker Networking", "React Hooks", "React State"]',
+        'Output: {"Git":["Git Pull","Git Push","Git Ignore"],"Docker":["Docker Compose","Docker Networking"],"React":["React Hooks","React State"]}',
+        '',
+        '=== CATEGORIES TO GROUP ===',
+        categories.map(c => `- ${c}`).join('\n'),
+    ].join('\n');
+}
+
+/**
+ * Parse the JSON response from top-level grouping.
+ */
+export function parseTopLevelGrouping(raw: string): Map<string, string[]> | null {
+    const cleaned = raw.trim();
+
+    // Strip code fences if present
+    const FENCE_PATTERN = /^```(?:json)?\s*\n?([\s\S]*?)\n?\s*```$/;
+    const fenceMatch = cleaned.match(FENCE_PATTERN);
+    const jsonStr = fenceMatch ? fenceMatch[1].trim() : cleaned;
+
+    try {
+        const parsed = JSON.parse(jsonStr);
+        if (typeof parsed !== 'object' || parsed === null) { return null; }
+
+        const result = new Map<string, string[]>();
+        for (const [key, value] of Object.entries(parsed)) {
+            if (Array.isArray(value)) {
+                const children = value.filter(v => typeof v === 'string');
+                if (children.length > 0) {
+                    result.set(key, children);
+                }
+            }
+        }
+        return result.size > 0 ? result : null;
+    } catch {
+        return null;
+    }
+}
+
 // ── Public API ──────────────────────────────────────────────────────────────
 
 /**
@@ -301,6 +360,65 @@ export async function classifySessionWithLlm(
 
             // Non-retryable or exhausted retries
             log.warn(`LLM request failed for ${session.id}: ${err} — falling back to heuristic`);
+            return null;
+        }
+    }
+
+    return null;
+}
+
+/**
+ * Group a list of fine-grained category labels into broader top-level categories.
+ *
+ * Uses a single LLM call to analyze all existing categories and produce a
+ * hierarchical grouping (e.g. {"Git": ["Git Pull", "Git Push"], ...}).
+ *
+ * Returns a Map<topLevelCategory, childCategories[]> or `null` on failure.
+ */
+export async function classifyTopLevelCategories(
+    categories: string[],
+): Promise<Map<string, string[]> | null> {
+    if (categories.length < 2) {
+        // No grouping needed for 0-1 categories
+        return null;
+    }
+
+    // Filter out generic "Other" from being grouped
+    const filtered = categories.filter(c => c.toLowerCase() !== 'other');
+    if (filtered.length < 1) { return null; }
+
+    // Use the same model selection and retry logic
+    for (let attempt = 0; attempt <= MAX_RATE_LIMIT_RETRIES; attempt++) {
+        if (attempt > 0) {
+            const backoff = RATE_LIMIT_BASE_DELAY_MS * Math.pow(2, attempt - 1);
+            await delay(backoff);
+        }
+
+        try {
+            const model = await selectCopilotModel();
+            if (!model) { return null; }
+
+            const content = buildTopLevelGroupingPrompt(filtered);
+            const messages = [vscode.LanguageModelChatMessage.User(content)];
+            const response = await model.sendRequest(messages);
+
+            let raw = '';
+            for await (const chunk of response.text) {
+                raw += chunk;
+            }
+
+            const parsed = parseTopLevelGrouping(raw);
+            if (parsed && parsed.size > 0) {
+                log.info(`Generated ${parsed.size} top-level groups from ${filtered.length} categories`);
+                return parsed;
+            }
+
+            log.debug(`Top-level grouping returned unparseable result, attempt ${attempt + 1}`);
+        } catch (err) {
+            if (isRateLimitedError(err) && attempt < MAX_RATE_LIMIT_RETRIES) {
+                continue;
+            }
+            log.warn(`Top-level grouping failed: ${err}`);
             return null;
         }
     }

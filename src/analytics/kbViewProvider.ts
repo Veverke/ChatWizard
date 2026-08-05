@@ -129,7 +129,8 @@ export class KbViewProvider implements vscode.WebviewViewProvider {
 
     /**
      * Build the KB result from all sessions; stores it in `_lastResult`.
-     * Does NOT require the view to be visible.
+     * Does NOT require the view to be visible. Also auto-tags sessions
+     * with their KB categories when chatwizard.kbAutoTagSessions is enabled.
      */
     private async _computeResult(onProgress?: (done: number, total: number) => void): Promise<void> {
         const summaries = this._index.getAllSummaries();
@@ -146,6 +147,37 @@ export class KbViewProvider implements vscode.WebviewViewProvider {
         const useCategories = this._categories ?? DEFAULT_KB_TYPES;
         const result = await buildKbEntries(sessions, cache, useCategories, onProgress);
         this._lastResult = result;
+
+        // ── Auto-tag sessions with KB categories ─────────────────────────
+        const autoTagEnabled = vscode.workspace.getConfiguration('chatwizard').get<boolean>('kbAutoTagSessions', true);
+        if (autoTagEnabled && result.entries.length > 0) {
+            // Build a reverse map: child category → parent group
+            const childToParent = new Map<string, string>();
+            if (result.topLevelGrouping) {
+                for (const [parent, children] of result.topLevelGrouping.entries()) {
+                    for (const child of children) {
+                        // Keep the more general parent if a child appears in multiple groups
+                        if (!childToParent.has(child)) {
+                            childToParent.set(child, parent);
+                        }
+                    }
+                }
+            }
+
+            // Tag each entry concurrently
+            await Promise.all(result.entries.map(async (entry) => {
+                // Tag: kb-category:<fine-grained-category>
+                const fineTag = `kb-category:${entry.type.toLowerCase().replace(/\s+/g, '-')}`;
+                await this._sidecarStore.addTag(entry.sessionId, fineTag);
+
+                // Tag: kb-group:<top-level-group> (if applicable)
+                const parentGroup = childToParent.get(entry.type);
+                if (parentGroup) {
+                    const groupTag = `kb-group:${parentGroup.toLowerCase().replace(/\s+/g, '-')}`;
+                    await this._sidecarStore.addTag(entry.sessionId, groupTag);
+                }
+            }));
+        }
     }
 
     /**

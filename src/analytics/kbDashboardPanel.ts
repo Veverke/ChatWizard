@@ -142,6 +142,59 @@ export class KbDashboardPanel {
 
         const allTypes = [...knownTypes, ...customTypes];
 
+        // ── Top-level grouping ───────────────────────────────────────────
+        // If topLevelGrouping exists, build the overview from top-level groups.
+        // Each top-level slice contains the aggregated entries of all its children.
+        // Also include a reverse mapping for child → parent.
+        let topLevelData: Array<{
+            parent: string;
+            parentColor: string;
+            childEntries: Array<{
+                type: string;
+                label: string;
+                count: number;
+                color: string;
+                entries: object[];
+            }>;
+        }> | null = null;
+
+        if (result.topLevelGrouping && result.topLevelGrouping.size > 0) {
+            topLevelData = [];
+            const tlColors = ['#5B8AF5', '#e74c3c', '#2ecc71', '#f0883e', '#a67bf0', '#e84393', '#00cec9', '#6c5ce7', '#fd79a8', '#00b894', '#0984e3', '#e17055'];
+            let tlIdx = 0;
+            for (const [parentLabel, childLabels] of result.topLevelGrouping.entries()) {
+                const childEntries: typeof topLevelData[0]['childEntries'] = [];
+                let totalChildCount = 0;
+                for (const childLabel of childLabels) {
+                    const rawEntries = result.grouped.get(childLabel) ?? [];
+                    if (rawEntries.length === 0) continue;
+                    const colorIdx = allTypes.indexOf(childLabel);
+                    childEntries.push({
+                        type: childLabel,
+                        label: getTypeLabel(childLabel),
+                        count: rawEntries.length,
+                        color: getTypeColor(childLabel, colorIdx >= 0 ? colorIdx : allTypes.length + childEntries.length),
+                        entries: rawEntries.map(e => ({
+                            sessionId: e.sessionId,
+                            title: e.title,
+                            summary: e.summary.slice(0, 200),
+                            createdAt: e.createdAt.slice(0, 10),
+                            tags: e.tags,
+                        })),
+                    });
+                    totalChildCount += rawEntries.length;
+                }
+                if (childEntries.length === 0) continue;
+                topLevelData.push({
+                    parent: parentLabel,
+                    parentColor: tlColors[tlIdx % tlColors.length],
+                    childEntries,
+                });
+                tlIdx++;
+            }
+        }
+
+        // ── Flat slices (fallback / child drill view) ────────────────────
         const slices = allTypes.map((t, i) => {
             const entries = result.grouped.get(t) ?? [];
             return {
@@ -158,7 +211,8 @@ export class KbDashboardPanel {
                 })),
             };
         });
-        return { slices, total: result.total };
+
+        return { slices, total: result.total, topLevelData };
     }
 
     // ── Shell HTML ──────────────────────────────────────────────────────────
@@ -438,8 +492,11 @@ export class KbDashboardPanel {
         </div>
       </div>
 
-      <!-- Pie chart + legend (overview) -->
+      <!-- Pie chart + legend (overview / child-level) -->
       <div id="pie-view">
+        <div class="section-header" style="justify-content:flex-start;gap:12px;">
+          <button class="back-btn" id="pieBackBtn" style="display:none;">← Back to Overview</button>
+        </div>
         <div class="chart-wrap">
           <div class="chart-container"><canvas id="kbChart"></canvas></div>
         </div>
@@ -477,9 +534,13 @@ export class KbDashboardPanel {
       }
 
       function showPieView() {
-        document.getElementById('pie-view').style.display = 'block';
-        document.getElementById('drilldown-view').style.display = 'none';
-        document.getElementById('backBtn').style.display = 'none';
+        var st = vscode.getState && vscode.getState() || {};
+        st._drillStack = [];
+        vscode.setState(st);
+        // Re-render using the stored payload
+        if (st.lastPayload) {
+          renderDashboard(st.lastPayload);
+        }
       }
 
       var _sortCol = null;
@@ -545,14 +606,12 @@ export class KbDashboardPanel {
         if (!th) { return; }
         var col = th.dataset.col;
         if (!col) { return; }
-        // Toggle: same col → flip direction, else asc
         if (_sortCol === col) {
           _sortAsc = !_sortAsc;
         } else {
           _sortCol = col;
           _sortAsc = true;
         }
-        // Re-render with current entries from the stored payload
         var vscodeState = vscode.getState && vscode.getState();
         if (vscodeState && vscodeState._drillPayload) {
           showDrillView(vscodeState._drillPayload.label, vscodeState._drillPayload.entries);
@@ -563,29 +622,75 @@ export class KbDashboardPanel {
         var slices = payload.slices || [];
         var total = payload.total || 0;
         var sessionsReady = payload.sessionsReady === true;
+        var topLevelData = payload.topLevelData || null;
 
-        // Hide everything first
         document.getElementById('loading-state').style.display = 'none';
         document.getElementById('empty-state').style.display = 'none';
         document.getElementById('dashboard-content').style.display = 'none';
 
         if (!sessionsReady) {
-          // No sessions indexed yet — show loading
           document.getElementById('loading-state').style.display = 'block';
           return;
         }
-
         if (total === 0) {
-          // Sessions exist but no KB entries — show empty state with Generate button
           document.getElementById('empty-state').style.display = 'block';
           return;
         }
-
-        // Entries exist — show dashboard
         document.getElementById('dashboard-content').style.display = 'block';
 
-        // Legend chips with count badges
-        var chipsHtml = slices.map(function(s) {
+        var st = vscode.getState && vscode.getState() || {};
+        var drillStack = st._drillStack || [];
+
+        // Decide which slices to render in the chart
+        var chartSlices = null;
+
+        if (drillStack.length === 0 && topLevelData) {
+          // ── Top-level overview ──
+          chartSlices = topLevelData.map(function(tl, idx) {
+            var childCount = tl.childEntries.reduce(function(sum, c) { return sum + c.count; }, 0);
+            return {
+              type: tl.parent,
+              label: tl.parent,
+              count: childCount,
+              color: tl.parentColor,
+              entries: null,
+              childData: tl.childEntries,
+              isTopLevel: true,
+            };
+          });
+          st._topLevelData = topLevelData;
+          vscode.setState(st);
+        } else if (drillStack.length > 0 && topLevelData) {
+          // ── Child level: drillStack[0] is the selected parent ──
+          var activeParent = drillStack[0];
+          var tlGroup = topLevelData.find(function(t) { return t.parent === activeParent; });
+          if (tlGroup) {
+            chartSlices = tlGroup.childEntries.map(function(c) {
+              return {
+                type: c.type,
+                label: c.label,
+                count: c.count,
+                color: c.color,
+                entries: c.entries,
+                childData: null,
+                isTopLevel: false,
+              };
+            });
+          } else {
+            chartSlices = slices;
+          }
+        } else {
+          // ── Flat fallback (no hierarchy) ──
+          chartSlices = slices;
+        }
+
+        // ── Render chart ──
+        var labels = chartSlices.map(function(s) { return s.label + ' (' + s.count + ')'; });
+        var data   = chartSlices.map(function(s) { return s.count; });
+        var colors = chartSlices.map(function(s) { return s.color; });
+
+        // Legend chips
+        var chipsHtml = chartSlices.map(function(s) {
           return '<span class="legend-chip" data-type="' + escHtml(s.type) + '">' +
             '<span class="dot" style="background:' + s.color + '"></span>' +
             escHtml(s.label) +
@@ -594,11 +699,21 @@ export class KbDashboardPanel {
         }).join('');
         document.getElementById('legend-row').innerHTML = chipsHtml;
 
-        // Chart.js doughnut
-        var labels = slices.map(function(s) { return s.label + ' (' + s.count + ')'; });
-        var data   = slices.map(function(s) { return s.count; });
-        var colors = slices.map(function(s) { return s.color; });
+        // Back button
+        if (drillStack.length > 0) {
+          document.getElementById('backBtn').style.display = 'inline-block';
+          document.getElementById('backBtn').innerHTML = '← Back to Overview';
+          document.getElementById('pieBackBtn').style.display = 'inline-block';
+        } else {
+          document.getElementById('backBtn').style.display = 'none';
+          document.getElementById('pieBackBtn').style.display = 'none';
+        }
 
+        // Ensure pie-view is visible and drilldown is hidden
+        document.getElementById('pie-view').style.display = 'block';
+        document.getElementById('drilldown-view').style.display = 'none';
+
+        // Chart
         var ctx = document.getElementById('kbChart').getContext('2d');
 
         if (kbChart) {
@@ -654,12 +769,46 @@ export class KbDashboardPanel {
               onClick: function(e, items) {
                 if (items.length > 0) {
                   var idx = items[0].index;
-                  // Always read from the persisted payload to avoid stale closure
-                  var vscodeState = vscode.getState && vscode.getState();
-                  var currentSlices = vscodeState && vscodeState.lastPayload && vscodeState.lastPayload.slices;
-                  var sl = currentSlices && currentSlices[idx];
+                  // Read current state for overviewSlices
+                  var st2 = vscode.getState && vscode.getState() || {};
+                  var topTl = st2._topLevelData;
+                  var dStack = st2._drillStack || [];
+                  // Build current chartSlices the same way as renderDashboard
+                  var curSlices;
+                  if (dStack.length === 0 && topTl) {
+                    curSlices = topTl.map(function(tl) {
+                      return {
+                        type: tl.parent,
+                        label: tl.parent,
+                        count: tl.childEntries.reduce(function(s, c) { return s + c.count; }, 0),
+                        entries: null,
+                        childData: tl.childEntries,
+                        isTopLevel: true,
+                      };
+                    });
+                  } else if (dStack.length > 0 && topTl) {
+                    var activeP = dStack[0];
+                    var tlG = topTl.find(function(t) { return t.parent === activeP; });
+                    curSlices = tlG ? tlG.childEntries.map(function(c) {
+                      return { type: c.type, label: c.label, count: c.count, color: c.color, entries: c.entries, isTopLevel: false };
+                    }) : (st2.lastPayload && st2.lastPayload.slices || []);
+                  } else {
+                    curSlices = st2.lastPayload && st2.lastPayload.slices || [];
+                  }
+                  var sl = curSlices && curSlices[idx];
                   if (sl && sl.count > 0) {
-                    showDrillView(sl.label, sl.entries);
+                    if (sl.isTopLevel && sl.childData) {
+                      // Drill into top-level → show child pie chart
+                      var newStack = [sl.type];
+                      var ns = vscode.getState && vscode.getState() || {};
+                      ns._drillStack = newStack;
+                      vscode.setState(ns);
+                      // Re-render with stored payload
+                      if (ns.lastPayload) { renderDashboard(ns.lastPayload); }
+                    } else if (sl.entries) {
+                      // Show drill-down table
+                      showDrillView(sl.label, sl.entries);
+                    }
                   }
                 }
               }
@@ -675,18 +824,43 @@ export class KbDashboardPanel {
         var chip = e.target && e.target.closest ? e.target.closest('.legend-chip') : null;
         if (!chip) { return; }
         var type = chip.dataset.type;
-        // Find the matching slice from the last received payload
-        var vscodeState = vscode.getState && vscode.getState();
-        if (vscodeState && vscodeState.lastPayload) {
-          var sl = vscodeState.lastPayload.slices.find(function(s) { return s.type === type; });
-          if (sl && sl.count > 0) {
-            showDrillView(sl.label, sl.entries);
+        var st = vscode.getState && vscode.getState() || {};
+        var topTl = st._topLevelData;
+        var dStack = st._drillStack || [];
+        var payload = st.lastPayload;
+
+        if (dStack.length === 0 && topTl) {
+          // Top-level: find the parent group and drill
+          var tlG = topTl.find(function(t) { return t.parent === type; });
+          if (tlG && tlG.childEntries.length > 0) {
+            st._drillStack = [type];
+            vscode.setState(st);
+            if (payload) { renderDashboard(payload); }
+          }
+        } else if (dStack.length > 0 && topTl) {
+          // Child level: find the child slice entries
+          var activeP = dStack[0];
+          var tlG2 = topTl.find(function(t) { return t.parent === activeP; });
+          if (tlG2) {
+            var child = tlG2.childEntries.find(function(c) { return c.type === type; });
+            if (child && child.entries && child.count > 0) {
+              showDrillView(child.label, child.entries);
+            }
+          }
+        } else {
+          // Flat view fallback: find slice by type
+          if (payload) {
+            var sl = payload.slices.find(function(s) { return s.type === type; });
+            if (sl && sl.count > 0) { showDrillView(sl.label, sl.entries); }
           }
         }
       });
 
-      // Back button
+      // Back buttons
       document.getElementById('backBtn').addEventListener('click', function() {
+        showPieView();
+      });
+      document.getElementById('pieBackBtn').addEventListener('click', function() {
         showPieView();
       });
 
@@ -726,9 +900,13 @@ export class KbDashboardPanel {
         var msg = event.data;
         if (msg && msg.type === 'update') {
           renderDashboard(msg.payload);
-          // Persist payload so legend chip clicks can drill down; preserve _drillPayload if set
+          // Persist payload so legend chip clicks can drill down; preserve existing state
           var existing = vscode.getState && vscode.getState() || {};
           existing.lastPayload = msg.payload;
+          // Preserve _drillStack if set; if payload has topLevelData, store it
+          if (msg.payload.topLevelData) {
+            existing._topLevelData = msg.payload.topLevelData;
+          }
           vscode.setState(existing);
         }
       });

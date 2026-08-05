@@ -1568,6 +1568,11 @@
             "default": 300,
             "minimum": 30,
             "description": "Interval in seconds between 'Did you know?' squirrel notifications. Default is 300 (5 minutes). Set to 0 to disable the nudge entirely."
+          },
+          "chatwizard.kbAutoTagSessions": {
+            "type": "boolean",
+            "default": true,
+            "description": "When true, each session classified by the Knowledge Base automatically gets its KB category (and top-level group, if any) added as tags. E.g. a session classified as 'Git Push' under 'Git' gets tags 'git-push' and 'git'."
           }
         }
       },
