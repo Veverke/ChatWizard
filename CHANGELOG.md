@@ -1,5 +1,110 @@
 # Change Log
 
+## [1.6.0] - 2026-08-05
+
+### Knowledge Base (Feature 23)
+
+> **Note:** KB generation requires a populated session index — run `ChatWizard: Generate Knowledge Base` from the KB dashboard panel after the extension has fully loaded.
+
+- **`ChatWizard: Generate Knowledge Base`** — classifies all indexed sessions into Decision / Learning / Pattern / Gotcha / Architecture types using local heuristics (no LLM call). Clusters by tag (primary) and embedding similarity (fallback). Generates a structured knowledge-base dashboard with doughnut chart, drill-down table, and export.
+- **KB dashboard webview** — sidebar and full-panel views showing per-type distribution, drill-down into individual entries, and a Generate / Regenerate button.
+- **Two-tier classifier** — heuristic-based (`KbClassifier`) as the primary engine, with an LLM-based fallback (`KbLlmClassifier`) for sessions where heuristics are inconclusive. Configurable via `chatwizard.kb.useLlmFallback` (default: `true`).
+- **Markdown export** (`KbExporter`) — KB entries are emitted as Obsidian-compatible Markdown with YAML frontmatter, per-chapter organization, and a `locked: true` flag to preserve user edits on re-generation. Incremental runs append new entries; existing locked entries are never overwritten.
+- **`@chatwizard /generateKB`** slash command — triggers KB generation from the chat panel.
+- **Auto-classify on startup** — a background job runs classification after the initial batch of sessions is loaded, so the KB dashboard is populated without manual action.
+
+### SQLite Persistent Cache (Feature 24)
+
+- **`chatwizard.enablePersistentCache`** setting (default: `true`) — replaces the purely in-memory session index with a local SQLite store (`chatwizard-cache.db`). Sessions are parsed once; all subsequent startups load from the cache, dramatically reducing cold-start latency for power users (10K+ sessions).
+- **FTS5 full-text search** — ranked BM25 search via SQLite FTS5 virtual table replaces the in-memory substring scan with relevance-ranked results, at zero additional code.
+- **Incremental parsing** — byte-offset-aware JSONL parsing only re-reads changed files; unchanged sessions load from cache in under 200ms.
+- **`chatwizard.sharedCacheDir`** setting — share the SQLite cache across IDEs (VS Code, Cursor, Windsurf) by pointing to a common directory outside any single IDE's app-data.
+- **Cache health diagnostics** — structured logging of cache hit rates, session counts, and schema version at startup. A corrupt DB is silently discarded; the extension falls back to full re-parse without crashing.
+- Cache-backed archive restoration and cloud sync both automatically use the cached session index.
+
+### Workspace Digest / Standup Reports (Feature 26)
+
+- **`ChatWizard: Generate Digest`** command — produces a copy-pasteable standup or PR description from your session timeline. Supports three time windows: Today, This Week, and This Sprint.
+- **Sidecar summary integration** — AI-generated session summaries (Feature 18) are included in the digest output when available, providing richer, more contextual daily reports.
+- Output opens in a new editor tab as Markdown; ready to paste into Slack, Jira, or GitHub PR descriptions.
+
+### Session Status, Bookmarks, Annotations & Linking (Features 28–31)
+
+- **Session Status lifecycle** — right-click any session → **Set Session Status** to mark it as `Open`, `Resolved`, or `Revisit`. Status badges appear inline in the session tree. The **Filter Sessions…** dialog includes a "Filter by Status" option.
+- **Bookmarks** (`Feature 29`) — mark specific messages within a session for quick navigation. Right-click → **Add Bookmark** (with optional note). Session reader scrolls to and highlights bookmarked messages.
+- **Inline Annotations** (`Feature 30`) — attach a personal note to any session (`ChatWizard: Add Annotation` / `Remove Annotation`). Annotations are stored in sidecar metadata and displayed in the session reader.
+- **Session Linking** (`Feature 31`) — explicitly link two sessions (bidirectional) to create a conversation graph. Right-click → **Link Session** shows a QuickPick of all indexed sessions. Linked sessions are surfaced in the session reader header for forward/backward navigation.
+- **Response Rating** (`Feature 32`) — per-response thumbs-up/thumbs-down stored in sidecar metadata. Search results can be filtered to only highly-rated responses.
+
+### Duplicate & Related Session Detection (Feature 33)
+
+- **`DuplicateDetector`** — detects when the same conversation was split across sessions (e.g. Claude vs. Cursor for the same task). Uses TF-IDF content similarity (threshold: 0.7 cosine) and metadata heuristics (same title prefix, same start time window).
+- Duplicates are flagged in the session tree with a `· duplicate` badge. The analytics panel excludes duplicates from session counts for more accurate metrics.
+
+### Outcome / Follow-Up Tracking (Feature 34)
+
+- **Action item extraction** (`ActionItemExtractor`, `ActionItemLlmExtractor`) — after session indexing, a background job scans session content for action items, decisions, and follow-up tasks using keyword heuristics and an optional LLM pass.
+- **`ActionItemVerifier`** — LLM-based verification pass checks whether extracted action items are genuine (no false positives from code blocks or documentation text).
+- Action items appear in the session reader as a collapsible "Action Items" section with checkbox state persisted in sidecar metadata.
+
+### Session Sharing (Feature 36)
+
+- **`ChatWizard: Share Session`** — export any session as a standalone HTML bundle. The HTML file is fully self-contained (inline CSS, no external dependencies) and renders the full conversation with source badges, tags, and annotations — no ChatWizard installation required for the recipient.
+- Accessible via right-click → **Share Session** on any tree item, or the Command Palette with a session ID prompt.
+
+### Session Retention Controls (Feature 43)
+
+- **`chatwizard.sessionRetentionDays`** — suppress sessions older than N days from all surfaces (tree, search, analytics) without deleting source files. Default: `0` (no limit).
+- **`chatwizard.semanticIndexMaxAgeDays`** — exclude old sessions from the semantic search index only (keeps the embedding vector store lean). Default: `365` days.
+- Both settings take effect on next reload; pruning runs at startup and applies to all loaded sessions.
+
+### REST API Server (Feature 44)
+
+- **`chatwizard.restApi.enabled`** setting (default: `false`) — exposes a read-only REST API on a configurable port (`chatwizard.restApi.port`, default `6790`), independent of the MCP server. Enables external scripts, dashboards, and CI/CD to query the session index without VS Code being open.
+- **Swagger UI** — enabled via `chatwizard.restApi.enableDocs` (default: `true`). Browse and test all endpoints at `http://localhost:{port}/docs/`.
+- Endpoints: `GET /sessions` (list with pagination), `GET /sessions/:id`, `GET /sources`, `GET /stats`, `GET /search?q=…`, `GET /health`.
+- Uses the same bearer token as the MCP server for authentication.
+
+### Cloud Sync (Feature 27)
+
+- **`chatwizard.cloudSync.enabled`** setting (default: `false`) — optional encrypted sync of the session index to the user's own cloud backend. Key is derived locally; the cloud provider never sees plaintext session content.
+- **`chatwizard.cloudSync.type`** — supports `gist` (GitHub Gist) backend. Additional backends can be added by implementing the `CloudBackend` interface.
+- **DB backup sync** — the SQLite cache DB is also backed up to the same cloud backend, providing a full restoration point.
+- API key stored in VS Code `SecretStorage` — never in `settings.json`.
+
+### Folder Organisation
+
+- **`ChatWizard: Create Folder`** — create named folders to organize sessions into a custom hierarchy. Supports subfolders and drag-and-drop assignment.
+- **`Group by Folder` mode** — a new group mode in the Sessions panel toolbar that organizes sessions by their folder assignment. Sessions not assigned to any folder appear under `(uncategorized)`.
+- **Drag-and-drop** — drag sessions onto folders to assign them; drag folders into other folders to create nested hierarchies. Context menu commands: Rename Folder, Delete Folder (sessions move to uncategorized), Move Session to Folder.
+- Persisted to `chatwizard-folders.json` in `globalStorageUri`; survives window reloads and shares between VS Code and compatible IDEs.
+
+### Command Palette Groups
+
+- Five top-level category commands declutter the `Ctrl+Shift+P` palette: **Sessions**, **Search & Discovery**, **Analytics & KB**, **Export**, and **Server**. Each opens a QuickPick sub-menu that delegates to the underlying leaf command.
+- All leaf commands remain fully accessible via toolbar buttons, context menus, and keyboard shortcuts — only the flat command palette is condensed.
+- Contributed via `src/commands/paletteCommands.ts` and `src/commands/paletteCommandsData.ts`.
+
+### "Did You Know" Nudge
+
+- The squirrel mascot (`BrandingStatusBarItem`) now cycles through section headings from `docs/user-guide.md` at a configurable interval (`chatwizard.didYouKnowInterval`, default 300 seconds).
+- Clicking the nudge opens the corresponding section in the user guide. The nudge list deduplicates headings and skips TOC entries.
+- Configurable via `chatwizard.didYouKnowEnabled` (default: `true`).
+
+### Cross-Instance Embedding Safety
+
+- A global lock file (`semantic-embeddings.lock`) in `globalStorageUri` serializes bulk embedding across multiple VS Code instances. Prevents two windows from simultaneously rebuilding the same embedding file and corrupting the vector store.
+- Lock timeout: 30 seconds. If another instance holds the lock, the second instance skips the bulk rebuild and uses the existing embeddings.
+
+### Performance & Robustness
+
+- **Faster embedding vector loading** — the `SemanticIndexer` now loads pre-built embedding files directly from disk instead of re-indexing on every startup. Cache-hit path completes in under 500ms for 5K+ sessions.
+- **Disappearing-chat fix** — file-watcher notifications are now debounced at the file-system level, preventing transient rename/create events from removing sessions from the index.
+- **Coverage gate** — CI enforces ≥90% line coverage across all modules. Several uncovered paths were brought up to threshold.
+- **Code quality** — 5 Copilot PR review recommendation batches applied across scalability, archive, tagging, and KB subsystems.
+
+---
+
 ## [1.5.0] - 2026-05-25
 
 ### Three new AI tool sources

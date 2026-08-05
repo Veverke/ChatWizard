@@ -97,7 +97,7 @@ ChatWizard provides a unified interface for browsing, searching, analyzing, and 
 - **Sessions Panel** — browse, sort, filter, pin, group, and manage every AI session across all tools and workspaces
 - **Full-Text & Semantic Search** — instant keyword search (with regex) and topic-similarity search via a local AI model
 - **Code Block & Prompt Libraries** — every AI-generated snippet and every prompt, deduplicated and filterable
-- **Knowledge Base & Action Items** — auto-classified session categories and auto-extracted follow-up tasks
+- **Knowledge Base** — auto-classified session categories
 - **Analytics, Model Usage & Timeline** — token charts, per-model drill-down, and activity heat maps with streaks
 - **MCP Server & @chatwizard Participant** — expose your history to any MCP-compatible tool or query it directly in Copilot Chat
 - **Export & Sharing** — sessions to Markdown, Obsidian, Notion, or self-contained HTML with code block redaction
@@ -139,7 +139,6 @@ Capabilities not available in the built-in GitHub Copilot Chat panel or the Clau
 | AI-generated one-line session summaries _(Beta)_ | ✅ | ❌ | ❌ |
 | Auto-extract entities (files, functions, errors, decisions) _(Beta)_ | ✅ | ❌ | ❌ |
 | Auto-classify sessions into Knowledge Base categories | ✅ | ❌ | ❌ |
-| Auto-extract action items / follow-up tasks | ✅ | ❌ | ❌ |
 | Duplicate / related session detection | ✅ | ❌ | ❌ |
 | Share session as self-contained HTML file | ✅ | ❌ | ❌ |
 | Post-session cost tips & analytics | ✅ | ❌ | ❌ |
@@ -248,7 +247,6 @@ See the **[User Guide → Commands Reference](docs/user-guide.md#31-commands-ref
 - **Inline Annotations** — click 📝 on any message to add an inline note. Annotations rendered when re-opening the session. Persisted in metadata.
 - **Session Linking** — link two related sessions via QuickPick. Bidirectional — opening a session shows its linked sessions.
 - **Duplicate / Related Session Detection** — auto-detects similar sessions using embedding-based cosine similarity; related sessions suggested for review.
-- **Action Items** — auto-extracted from sessions via heuristic phrase matching (e.g. "we should", "next steps"). Track follow-up tasks. LLM-based extraction when Copilot LM API is available.
 - **Knowledge Base Generation** — `ChatWizard: Generate Knowledge Base` classifies sessions into KB entry types (Decisions, Learnings, Patterns, etc.) using the free Copilot LM API, with heuristic fallback. Exports an Obsidian-compatible Markdown knowledge base with clustered entries.
 - **Session Sharing** — export sessions as self-contained HTML files with optional code block redaction. `ChatWizard: Share Session` command.
 - **Post-Session Cost Tips & Analytics** — after a session, view cost analytics (tokens used, estimated cost) and tips for reducing costs, integrated into the session reader.

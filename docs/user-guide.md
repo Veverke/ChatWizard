@@ -33,14 +33,11 @@ ChatWizard indexes every AI chat session from all your tools (Copilot, Claude, C
    - [Custom Categories](#custom-categories)
    - [Exporting](#exporting)
    - [Regeneration](#regeneration)
-8. [Action Items](#8-action-items)
-   - [How It Works](#how-it-works)
-   - [Managing Action Items](#managing-action-items)
-9. [Analytics & Monitoring](#9-analytics--monitoring)
+8. [Analytics & Monitoring](#8-analytics--monitoring)
    - [Analytics Dashboard](#analytics-dashboard)
    - [Model Usage](#model-usage)
    - [Timeline](#timeline)
-10. [Export & Sharing](#10-export--sharing)
+9. [Export & Sharing](#9-export--sharing)
     - [Export a Single Session](#export-a-single-session)
     - [Export Selected Sessions](#export-selected-sessions)
     - [Export All Sessions](#export-all-sessions)
@@ -51,7 +48,7 @@ ChatWizard indexes every AI chat session from all your tools (Copilot, Claude, C
     - [Share as HTML](#share-as-html)
     - [Code Block Redaction](#code-block-redaction)
     - [Batch Sharing](#batch-sharing)
-11. [MCP Server & AI Integrations](#11-mcp-server--ai-integrations)
+10. [MCP Server & AI Integrations](#10-mcp-server--ai-integrations)
     - [Enabling the Server](#enabling-the-server)
     - [Quick Start](#quick-start)
     - [Available MCP Tools](#available-mcp-tools)
@@ -59,34 +56,34 @@ ChatWizard indexes every AI chat session from all your tools (Copilot, Claude, C
     - [@chatwizard Copilot Participant](#chatwizard-copilot-participant)
     - [Token Security](#token-security)
     - [Troubleshooting](#troubleshooting-1)
-12. [REST API](#12-rest-api)
+11. [REST API](#11-rest-api)
     - [Enabling the API](#enabling-the-api)
     - [Authentication](#authentication)
     - [Endpoints](#endpoints)
     - [Example](#example)
-13. [Cloud Sync (Opt-In)](#13-cloud-sync-opt-in)
-14. [Workspace Digest / Standup Reports](#14-workspace-digest--standup-reports)
-15. [Post-Session Cost Tips & Analytics](#15-post-session-cost-tips--analytics)
-16. [Workspace & File History](#16-workspace--file-history)
+12. [Cloud Sync (Opt-In)](#12-cloud-sync-opt-in)
+13. [Workspace Digest / Standup Reports](#13-workspace-digest--standup-reports)
+14. [Post-Session Cost Tips & Analytics](#14-post-session-cost-tips--analytics)
+15. [Workspace & File History](#15-workspace--file-history)
     - [Workspace Management](#workspace-management)
     - [File History](#file-history)
-17. [Session Lifecycle Management](#17-session-lifecycle-management)
+16. [Session Lifecycle Management](#16-session-lifecycle-management)
     - [Session Retention](#session-retention)
     - [Compacted Sessions](#compacted-sessions)
-18. [AI Intelligence](#18-ai-intelligence)
+17. [AI Intelligence](#17-ai-intelligence)
     - [Session Summaries](#session-summaries)
     - [Entity Extraction](#entity-extraction)
-19. [Keyboard Navigation](#19-keyboard-navigation)
+18. [Keyboard Navigation](#18-keyboard-navigation)
     - [Sessions Panel Keys](#sessions-panel-keys)
     - [Session Reader Keys](#session-reader-keys)
     - [Code Blocks Panel Keys](#code-blocks-panel-keys)
-20. [Did You Know Tips](#20-did-you-know-tips)
+19. [Did You Know Tips](#19-did-you-know-tips)
     - [How It Works](#how-it-works-1)
     - [Fallback Tips](#fallback-tips)
     - [Disabling](#disabling)
-21. [Settings Reference](#21-settings-reference)
-22. [Commands Reference](#22-commands-reference)
-23. [Quick Reference](#23-quick-reference)
+20. [Settings Reference](#20-settings-reference)
+21. [Commands Reference](#21-commands-reference)
+22. [Quick Reference](#22-quick-reference)
 
 ---
 
@@ -110,7 +107,6 @@ Eight panels live under the Chat Wizard Activity Bar icon:
 | **Prompt Library** | Your full history of prompts, deduplicated and searchable |
 | **Code Blocks** | Every AI-generated code snippet, filterable by language |
 | **Knowledge Base** | Categorized learnings, decisions, patterns, gotchas, and architecture |
-| **Action Items** | Concrete follow-up tasks extracted from sessions |
 | **Analytics** | Token usage charts and stats |
 | **Model Usage** | Per-model request counts with date range filtering |
 | **Timeline** | Chronological feed with heat map, streaks, and topic drift |
@@ -474,27 +470,7 @@ Click **Regenerate** to re-run classification on all sessions. The result update
 
 ---
 
-## 8. Action Items
-
-The Action Items panel automatically extracts concrete follow-up tasks from your sessions. When you open a session in the reader, action items are extracted from assistant messages using signal phrases (e.g. "we should", "remember to", "next steps", "don't forget").
-
-### How It Works
-
-- **Heuristic extraction** — signal phrases in assistant messages are detected and the surrounding sentence is captured as an action item
-- **LLM-based extraction** — the free Copilot LM API is tried first for richer extraction; the heuristic is the fallback
-- Items appear in the **Action Items** sidebar panel, grouped by session
-- Clicking an item opens the parent session and scrolls to the exact message where the item was inferred
-
-### Managing Action Items
-
-- Check the circle icon to mark an item as done ✓
-- Click the item to open the source session at the relevant message
-- Done items are grouped separately at the bottom
-- Items persist in the session metadata across restarts
-
----
-
-## 9. Analytics & Monitoring
+## 8. Analytics & Monitoring
 
 Three panels provide data-driven insight into your AI usage.
 
@@ -547,7 +523,7 @@ Ctrl+Shift+P → Chat Wizard: View… → Show Timeline
 
 ---
 
-## 10. Export & Sharing
+## 9. Export & Sharing
 
 Export sessions to multiple formats and destinations, or share them as self-contained HTML files.
 
@@ -655,7 +631,7 @@ Select multiple sessions in the Sessions panel and use the **Export Selected** t
 
 ---
 
-## 11. MCP Server & AI Integrations
+## 10. MCP Server & AI Integrations
 
 The MCP server exposes your entire local chat history to any MCP-compatible AI tool — GitHub Copilot, Claude Desktop, Cursor, Continue, and others — so they can retrieve relevant past conversations before answering your questions. Everything runs **100% locally**; no data leaves your machine. The server is **read-only** and **opt-in**.
 
@@ -859,7 +835,7 @@ The server uses a 64-character bearer token stored in VS Code's secret storage �
 
 ---
 
-## 12. REST API
+## 11. REST API
 
 A lightweight HTTP API for querying your session index programmatically — useful for custom integrations, scripts, and automation.
 
@@ -894,7 +870,7 @@ curl -s http://localhost:6791/api/sessions/search?q=performance \
 
 ---
 
-## 13. Cloud Sync (Opt-In)
+## 12. Cloud Sync (Opt-In)
 
 Back up your session index to a private GitHub Gist with AES-256-GCM encryption. Every 5 minutes, the extension checks for changes and syncs automatically.
 
@@ -922,7 +898,7 @@ All data is encrypted with a per-machine key derived from your hostname and stor
 
 ---
 
-## 14. Workspace Digest / Standup Reports
+## 13. Workspace Digest / Standup Reports
 
 Generate a Markdown standup report from your recent AI coding sessions.
 
@@ -940,7 +916,7 @@ The report groups sessions by git branch and model, filtered by a configurable t
 
 ---
 
-## 15. Post-Session Cost Tips & Analytics
+## 14. Post-Session Cost Tips & Analytics
 
 After each chat session, ChatWizard estimates the token usage and cost, and displays a summary with tips to reduce spending. This is integrated into the session reader as a collapsible **Cost & Tips** section.
 
@@ -965,7 +941,7 @@ curl -H "Authorization: Bearer <token>" http://127.0.0.1:6791/api/search?q=authe
 
 ---
 
-## 16. Workspace & File History
+## 15. Workspace & File History
 
 ### Workspace Management
 
@@ -993,7 +969,7 @@ Chronicle-powered visibility into which sessions touched the current file — di
 
 ---
 
-## 17. Session Lifecycle Management
+## 16. Session Lifecycle Management
 
 ### Session Retention
 
@@ -1009,7 +985,7 @@ Control how long sessions remain in the index before automatic cleanup.
 
 **What Gets Deleted:**
 - The session entry from the SQLite index
-- Associated metadata (tags, bookmarks, annotations, links, action items)
+- Associated metadata (tags, bookmarks, annotations, links)
 - The archived copy (if any)
 
 **Scope:** Retention applies to all sessions regardless of source. For per-source limits, configure individual source settings or use the archive pruning settings.
@@ -1035,7 +1011,7 @@ Compacted sessions are not deleted — they remain searchable and navigable. The
 
 ---
 
-## 18. AI Intelligence
+## 17. AI Intelligence
 
 > **Beta:** These features are functional but have not completed full end-to-end testing. They run silent background jobs and will not break other functionality, but may produce unexpected results on very large indexes or sessions containing large pasted code blocks.
 
@@ -1069,7 +1045,7 @@ A second background job extracts structured entities from session content and st
 
 ---
 
-## 19. Keyboard Navigation
+## 18. Keyboard Navigation
 
 Navigate the Sessions panel and Session reader entirely from the keyboard.
 
@@ -1108,7 +1084,7 @@ Navigate the Sessions panel and Session reader entirely from the keyboard.
 
 ---
 
-## 20. Did You Know Tips
+## 19. Did You Know Tips
 
 A 🐿️ squirrel mascot in the status bar cycles through useful tips about ChatWizard features at regular intervals.
 
@@ -1129,7 +1105,7 @@ Set `chatwizard.didYouKnow.enabled` to `false` in settings to hide the squirrel.
 
 ---
 
-## 21. Settings Reference
+## 20. Settings Reference
 
 ### Data Scope
 
@@ -1257,7 +1233,7 @@ Leave a path override empty to use the platform default location.
 
 ---
 
-## 22. Commands Reference
+## 21. Commands Reference
 
 ### Command Palette (user-facing)
 
@@ -1331,7 +1307,7 @@ Code Blocks panel toolbar cycles through: `chatwizard.cbSortByDate`, `chatwizard
 
 ---
 
-## 23. Quick Reference
+## 22. Quick Reference
 
 | Task | How |
 |------|-----|
