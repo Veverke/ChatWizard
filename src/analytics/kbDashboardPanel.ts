@@ -496,6 +496,7 @@ export class KbDashboardPanel {
       <div id="pie-view">
         <div class="section-header" style="justify-content:flex-start;gap:12px;">
           <button class="back-btn" id="pieBackBtn" style="display:none;">← Back to Overview</button>
+          <h3 id="pieDrillTitle" style="margin:0;flex:1;"></h3>
         </div>
         <div class="chart-wrap">
           <div class="chart-container"><canvas id="kbChart"></canvas></div>
@@ -646,6 +647,7 @@ export class KbDashboardPanel {
 
         if (drillStack.length === 0 && topLevelData) {
           // ── Top-level overview ──
+          document.getElementById('pieDrillTitle').textContent = '';
           chartSlices = topLevelData.map(function(tl, idx) {
             var childCount = tl.childEntries.reduce(function(sum, c) { return sum + c.count; }, 0);
             return {
@@ -663,6 +665,7 @@ export class KbDashboardPanel {
         } else if (drillStack.length > 0 && topLevelData) {
           // ── Child level: drillStack[0] is the selected parent ──
           var activeParent = drillStack[0];
+          document.getElementById('pieDrillTitle').textContent = activeParent;
           var tlGroup = topLevelData.find(function(t) { return t.parent === activeParent; });
           if (tlGroup) {
             chartSlices = tlGroup.childEntries.map(function(c) {
