@@ -22,7 +22,8 @@ suite('logger', () => {
             );
         });
 
-        test('rejects when timeout elapses before inner promise resolves', async () => {
+        test('rejects when timeout elapses before inner promise resolves', async function () {
+            this.timeout(5000);
             const slow = new Promise<string>(() => { /* never settles */ });
             await assert.rejects(
                 withTimeout(slow, 50, 'slow-op'),

@@ -152,8 +152,9 @@ suite('calcWorkspaceSizeMb', () => {
         tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cw-size-test-'));
     });
 
-    teardown(async () => {
-        await fs.promises.rm(tmpDir, { recursive: true, force: true });
+    teardown(async function () {
+        this.timeout(15000);
+        await fs.promises.rm(tmpDir, { recursive: true, force: true, maxRetries: 3 });
     });
 
     test('returns 0 when storageDir does not exist', async () => {

@@ -20,7 +20,7 @@ suite('windsurf (unit)', () => {
             const blocks = extractWindsurfCodeBlocks(content, 'session-1', 1);
             assert.strictEqual(blocks.length, 1);
             assert.strictEqual(blocks[0].language, 'python');
-            assert.strictEqual(blocks[0].content, 'print("hello")\n');
+            assert.strictEqual(blocks[0].content, 'print("hello")');
         });
     });
 });

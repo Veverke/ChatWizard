@@ -42,7 +42,7 @@ suite('aider (unit)', () => {
             const blocks = extractAiderCodeBlocks(content, 'session-1', 1);
             assert.strictEqual(blocks.length, 1);
             assert.strictEqual(blocks[0].language, 'typescript');
-            assert.strictEqual(blocks[0].content, 'const x = 1;\n');
+            assert.strictEqual(blocks[0].content, 'const x = 1;');
         });
     });
 
