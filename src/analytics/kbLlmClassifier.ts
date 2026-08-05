@@ -28,13 +28,32 @@ const FREE_MODEL_CHAIN = [
 ];
 
 async function selectCopilotModel(): Promise<vscode.LanguageModelChat | undefined> {
-    // Try the explicit free-model chain first…
+    // Quick timeout helper
+    const TIMEOUT_MS = 2000;
+
+    // 1) Try ANY available model (vendor-agnostic) — catches Cursor, etc.
+    try {
+        const anyLm = await Promise.race([
+            vscode.lm.selectChatModels({}),
+            new Promise<never>((_, reject) =>
+                setTimeout(() => reject(new Error('timeout')), TIMEOUT_MS),
+            ),
+        ]);
+        if (anyLm?.[0]) {
+            log.debug(`Selected any-vendor model: ${anyLm[0].name || anyLm[0].family || 'unknown'}`);
+            return anyLm[0];
+        }
+    } catch {
+        // fall through
+    }
+
+    // 2) Try the explicit free Copilot model chain
     for (const filter of FREE_MODEL_CHAIN) {
         try {
             const model = await Promise.race([
                 vscode.lm.selectChatModels({ vendor: 'copilot', ...filter }),
                 new Promise<never>((_, reject) =>
-                    setTimeout(() => reject(new Error('timeout')), 3000),
+                    setTimeout(() => reject(new Error('timeout')), TIMEOUT_MS),
                 ),
             ]);
             if (model?.[0]) {
@@ -45,16 +64,17 @@ async function selectCopilotModel(): Promise<vscode.LanguageModelChat | undefine
             // try next
         }
     }
-    // …then fall back to any Copilot model at all (user's default selection).
+
+    // 3) Fallback — any Copilot model at all
     try {
         const any = await Promise.race([
             vscode.lm.selectChatModels({ vendor: 'copilot' }),
             new Promise<never>((_, reject) =>
-                setTimeout(() => reject(new Error('timeout')), 3000),
+                setTimeout(() => reject(new Error('timeout')), TIMEOUT_MS),
             ),
         ]);
         if (any?.[0]) {
-            log.debug(`Selected fallback model: ${any[0].name || any[0].family || 'unknown'}`);
+            log.debug(`Selected Copilot fallback model: ${any[0].name || any[0].family || 'unknown'}`);
             return any[0];
         }
     } catch {

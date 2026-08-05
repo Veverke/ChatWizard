@@ -375,15 +375,14 @@ export class CloudSyncManager {
             // This requires modifying the write approach — we leverage the fact that
             // the raw encrypted buffer can be stored directly.
 
-            // For the initial single-file approach, write the backup alongside summaries.
-            // Both are uploaded atomically in a single writeFiles call.
+            // Write the DB backup file to the Gist.
+            // Summaries are uploaded separately by sync() — do not overwrite them.
             const backupPayload = Buffer.concat([
                 Buffer.from('DB01'),  // magic header + version
                 encrypted,
             ]);
 
             await this.backend.writeFiles({
-                [SESSION_SUMMARIES_FILENAME]: encrypted,
                 [DB_BACKUP_FILENAME]: backupPayload,
             });
 

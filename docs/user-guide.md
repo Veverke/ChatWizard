@@ -1,6 +1,6 @@
 # ChatWizard — User Guide
 
-ChatWizard indexes every AI chat session from all your tools (Copilot, Claude, Cursor, Cline, Roo Code, Windsurf, Aider, Antigravity, Continue.dev, Amazon Q Developer, Gemini Code Assist) into one searchable archive — without sending anything off your machine.
+ChatWizard indexes every AI chat session from all your tools (Copilot, Claude, Cursor, Cline, Roo Code, Windsurf, Aider, Antigravity, Continue.dev, Amazon Q Developer, Gemini Code Assist, Zed AI, Tabnine Chat) into one searchable archive — without sending anything off your machine.
 
 ---
 
@@ -64,26 +64,29 @@ ChatWizard indexes every AI chat session from all your tools (Copilot, Claude, C
     - [Authentication](#authentication)
     - [Endpoints](#endpoints)
     - [Example](#example)
-13. [Workspace & File History](#13-workspace--file-history)
+13. [Cloud Sync (Opt-In)](#13-cloud-sync-opt-in)
+14. [Workspace Digest / Standup Reports](#14-workspace-digest--standup-reports)
+15. [Post-Session Cost Tips & Analytics](#15-post-session-cost-tips--analytics)
+16. [Workspace & File History](#16-workspace--file-history)
     - [Workspace Management](#workspace-management)
     - [File History](#file-history)
-14. [Session Lifecycle Management](#14-session-lifecycle-management)
+17. [Session Lifecycle Management](#17-session-lifecycle-management)
     - [Session Retention](#session-retention)
     - [Compacted Sessions](#compacted-sessions)
-15. [AI Intelligence](#15-ai-intelligence)
+18. [AI Intelligence](#18-ai-intelligence)
     - [Session Summaries](#session-summaries)
     - [Entity Extraction](#entity-extraction)
-16. [Keyboard Navigation](#16-keyboard-navigation)
+19. [Keyboard Navigation](#19-keyboard-navigation)
     - [Sessions Panel Keys](#sessions-panel-keys)
     - [Session Reader Keys](#session-reader-keys)
     - [Code Blocks Panel Keys](#code-blocks-panel-keys)
-17. [Did You Know Tips](#17-did-you-know-tips)
+20. [Did You Know Tips](#20-did-you-know-tips)
     - [How It Works](#how-it-works-1)
     - [Fallback Tips](#fallback-tips)
     - [Disabling](#disabling)
-18. [Settings Reference](#18-settings-reference)
-19. [Commands Reference](#19-commands-reference)
-20. [Quick Reference](#20-quick-reference)
+21. [Settings Reference](#21-settings-reference)
+22. [Commands Reference](#22-commands-reference)
+23. [Quick Reference](#23-quick-reference)
 
 ---
 
@@ -93,7 +96,7 @@ ChatWizard indexes every AI chat session from all your tools (Copilot, Claude, C
 2. The extension indexes sessions automatically on startup — no configuration needed for most setups.
 3. Click the **Chat Wizard** speech-bubble icon in the Activity Bar to open the sidebar.
 
-> **Supported tools:** GitHub Copilot, Claude Code, Cline, Roo Code, Cursor, Windsurf, Aider, Google Antigravity, Continue.dev, Amazon Q Developer, Gemini Code Assist.
+> **Supported tools:** GitHub Copilot, Claude Code, Cline, Roo Code, Cursor, Windsurf, Aider, Google Antigravity, Continue.dev, Amazon Q Developer, Gemini Code Assist, Zed AI, Tabnine Chat.
 
 ---
 
@@ -878,6 +881,76 @@ Requests must include the header `Authorization: Bearer <token>`. The token is t
 |--------|------|-------------|------------|
 | `GET` | `/health` | Server status | — |
 | `GET` | `/api/sessions` | List sessions (paginated) | `limit`, `offset`, `source`, `status` |
+| `GET` | `/api/sessions/:id` | Full session detail | — |
+| `GET` | `/api/sessions/search` | Full-text search | `q`, `source`, `limit` |
+| `GET` | `/api/stats` | Aggregate statistics | — |
+
+### Example
+
+```bash
+curl -s http://localhost:6791/api/sessions/search?q=performance \
+  -H "Authorization: Bearer <token>" | jq
+```
+
+---
+
+## 13. Cloud Sync (Opt-In)
+
+Back up your session index to a private GitHub Gist with AES-256-GCM encryption. Every 5 minutes, the extension checks for changes and syncs automatically.
+
+### Enabling Cloud Sync
+
+```json
+"chatwizard.cloudSync.enabled": true,
+"chatwizard.cloudSync.type": "gist"
+```
+
+### Setup
+
+1. **GitHub personal access token** — create a token with `gist` scope at [github.com/settings/tokens](https://github.com/settings/tokens) and set it as the environment variable `CHATWIZARD_GITHUB_TOKEN`.
+2. Restart VS Code — the extension creates the Gist on first sync.
+
+All data is encrypted with a per-machine key derived from your hostname and storage path. The Gist ID is stored in VS Code's global storage — the extension remembers it across restarts.
+
+### Supported Backends
+
+| Backend | Status | Credentials |
+|---------|--------|-------------|
+| GitHub Gist | ✅ Fully functional | `CHATWIZARD_GITHUB_TOKEN` (env var) |
+| Amazon S3 | ⚠️ Placeholder — configure via code | — |
+| Azure Blob | ⚠️ Placeholder — configure via code | — |
+
+---
+
+## 14. Workspace Digest / Standup Reports
+
+Generate a Markdown standup report from your recent AI coding sessions.
+
+```bash
+Ctrl+Shift+P → Chat Wizard: Generate Digest
+```
+
+The report groups sessions by git branch and model, filtered by a configurable time window (default: last 24 hours). Each group lists sessions with their title, model, duration, and key topics. The output is a Markdown file you can paste into your daily standup channel or ticket.
+
+**Custom time window:**
+
+```json
+"chatwizard.digest.windowHours": 24
+```
+
+---
+
+## 15. Post-Session Cost Tips & Analytics
+
+After each chat session, ChatWizard estimates the token usage and cost, and displays a summary with tips to reduce spending. This is integrated into the session reader as a collapsible **Cost & Tips** section.
+
+**What's shown:**
+- Total tokens used (input + output)
+- Estimated cost in USD (based on public pricing for the detected model)
+- Tips for reducing cost (e.g. "Shorter system prompts", "Use Claude Haiku for simple tasks")
+- Cost comparison per message
+
+The cost advisor uses public model pricing tables. Estimates are approximate and may not match your actual billing. Disable via `chatwizard.enableCostAdvisor`.
 | `GET` | `/api/sessions/:id` | Get a single session | — |
 | `GET` | `/api/search` | Full-text search | `q` (query string), `limit`, `source` |
 | `GET` | `/api/sessions/:id/messages` | Get messages for a session | — |
@@ -892,7 +965,7 @@ curl -H "Authorization: Bearer <token>" http://127.0.0.1:6791/api/search?q=authe
 
 ---
 
-## 13. Workspace & File History
+## 16. Workspace & File History
 
 ### Workspace Management
 
@@ -920,7 +993,7 @@ Chronicle-powered visibility into which sessions touched the current file — di
 
 ---
 
-## 14. Session Lifecycle Management
+## 17. Session Lifecycle Management
 
 ### Session Retention
 
@@ -962,7 +1035,7 @@ Compacted sessions are not deleted — they remain searchable and navigable. The
 
 ---
 
-## 15. AI Intelligence
+## 18. AI Intelligence
 
 > **Beta:** These features are functional but have not completed full end-to-end testing. They run silent background jobs and will not break other functionality, but may produce unexpected results on very large indexes or sessions containing large pasted code blocks.
 
@@ -996,7 +1069,7 @@ A second background job extracts structured entities from session content and st
 
 ---
 
-## 16. Keyboard Navigation
+## 19. Keyboard Navigation
 
 Navigate the Sessions panel and Session reader entirely from the keyboard.
 
@@ -1035,7 +1108,7 @@ Navigate the Sessions panel and Session reader entirely from the keyboard.
 
 ---
 
-## 17. Did You Know Tips
+## 20. Did You Know Tips
 
 A 🐿️ squirrel mascot in the status bar cycles through useful tips about ChatWizard features at regular intervals.
 
@@ -1056,7 +1129,7 @@ Set `chatwizard.didYouKnow.enabled` to `false` in settings to hide the squirrel.
 
 ---
 
-## 18. Settings Reference
+## 21. Settings Reference
 
 ### Data Scope
 
@@ -1156,7 +1229,7 @@ Leave a path override empty to use the platform default location.
 
 ---
 
-## 19. Commands Reference
+## 22. Commands Reference
 
 ### Command Palette (user-facing)
 
@@ -1224,7 +1297,7 @@ Code Blocks panel toolbar cycles through: `chatwizard.cbSortByDate`, `chatwizard
 
 ---
 
-## 20. Quick Reference
+## 23. Quick Reference
 
 | Task | How |
 |------|-----|

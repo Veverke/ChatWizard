@@ -6,7 +6,7 @@
  */
 export function isNewerVersion(candidate: string, current: string): boolean {
     const parse = (v: string): [number, number, number] => {
-        const parts = v.split('.').map(p => parseInt(p, 10));
+        const parts = v.split('.').map(p => parseInt(p.split('-')[0], 10));
         return [parts[0] ?? 0, parts[1] ?? 0, parts[2] ?? 0];
     };
     const [caMaj, caMin, caPatch] = parse(candidate);

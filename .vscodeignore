@@ -5,6 +5,7 @@ src/**
 test/**
 out/**
 docs/**
+!docs/user-guide.md
 .github/**
 .claude/**
 .gitignore
