@@ -186,7 +186,6 @@ export function withTimeout<T>(promise: Promise<T>, ms: number, label = 'operati
         const timer = setTimeout(() => {
             reject(new Error(`Timed out after ${ms}ms: ${label}`));
         }, ms);
-        timer.unref();
         promise.then(
             (v) => { clearTimeout(timer); resolve(v); },
             (e) => { clearTimeout(timer); reject(e); },
