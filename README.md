@@ -91,39 +91,21 @@ Instead of asking the same question twice, search your Chat Wizard history. Find
 
 ## Features
 
-- **Sessions Panel** — browse, sort, filter, pin, group, and reorder every AI session across all tools and workspaces
-- **Full-Text Search** — instant in-memory keyword search with regex support and source/role filters
-- **Semantic Search** — topic-similarity search via a local AI model (opt-in, ~22 MB)
-- **Code Block Library** — every AI-generated code snippet, filterable by language, with one-click copy
-- **Prompt Library** — deduplicated, frequency-ranked archive of all your prompts with near-duplicate clustering and merge
-- **Knowledge Base** — AI-classified session categories (Decisions, Learnings, Patterns, Gotchas, Architecture) with doughnut chart dashboard and Obsidian export
-- **Action Items** — automatic extraction of follow-up tasks from sessions with click-to-scroll to source message
-- **Analytics** — token usage charts, daily activity, top projects, top terms, longest sessions
-- **Model Usage** — per-model request counts with date-range filtering and workspace/session drill-down
-- **Timeline** — chronological feed with activity heat map, work bursts, topic drift ribbon, and streak stats
-- **Session Bookmarks** — ★ toggle bookmark on sessions with dedicated bookmarked list
-- **Inline Annotations** — 📝 add freeform notes pinned to specific messages in any session
-- **Session Linking** — bidirectional 🔗 links between related sessions with badge navigation
-- **Session Status Lifecycle** — track Open → Resolved → Revisit workflow with tag-based auto-status
-- **Session Sharing** — export as self-contained HTML with optional code block redaction
-- **Keyboard Navigation** — full `j`/`k`/`gg`/`G` keyboard support for Sessions panel, Code Blocks, and reader
-- **Did You Know Tips** — 🐿️ squirrel mascot cycles through user-guide tips every 5 minutes
-- **Export** — single session, multi-select, all sessions, or excerpt — to structured Markdown, **Obsidian vault**, or **Notion database**
-- **Session Retention** — auto-delete sessions older than `sessionRetentionDays` at startup and after each indexing cycle
-- **Compacted Sessions** — large sessions compressed with `· compacted` badge and abbreviated content in reader
-- **REST API** — lightweight HTTP endpoint (`GET /api/search`, `GET /api/sessions`, etc.) for custom integrations
-- **Session Archive** — every indexed session is mirrored locally so history survives source tool pruning; configurable age/size limits
-- **Session Tagging** — attach freeform labels to sessions; filter, search, and tag the active session from the status bar or `/tag` chat command
-- **File History** — Chronicle-powered "N sessions touched this file" in the status bar, CodeLens, and Explorer right-click; `chatwizard_sessions_for_file` MCP tool
-- **Branch & Work Item Grouping** — group sessions by git branch or extracted work-item ID (Jira, GitHub Issues, Azure DevOps)
-- **AI Session Summaries** _(Beta)_ — auto-generated one-line summaries for every session (Chronicle data first, then VS Code LM API, then offline TF-IDF)
-- **Entity Extraction** _(Beta)_ — automatic extraction of file paths, function names, error codes, and decision phrases; filterable chips in the session reader
-- **MCP Server** — expose your full chat history to Claude Desktop, Cursor, Continue, and Copilot agent mode via the Model Context Protocol (**11 tools**)
-- **`@chatwizard` Copilot Chat Participant** — `/queryHistory`, `/continueFromHistory`, `/tag`, and `/referMessage` directly in Copilot Chat, no MCP server required
-- **Live Indexing** — file watcher keeps all views up-to-date as new sessions are written, with no manual refresh needed
-- **100% local** — no network calls, no account, read-only access to your existing session files
+ChatWizard provides a unified interface for browsing, searching, analyzing, and exporting AI chat history from all major coding tools.
 
-For detailed usage instructions, settings, and commands see the **[User Guide](docs/user-guide.md)**.
+**Core capabilities:**
+- **Sessions Panel** — browse, sort, filter, pin, group, and manage every AI session across all tools and workspaces
+- **Full-Text & Semantic Search** — instant keyword search (with regex) and topic-similarity search via a local AI model
+- **Code Block & Prompt Libraries** — every AI-generated snippet and every prompt, deduplicated and filterable
+- **Knowledge Base & Action Items** — auto-classified session categories and auto-extracted follow-up tasks
+- **Analytics, Model Usage & Timeline** — token charts, per-model drill-down, and activity heat maps with streaks
+- **MCP Server & @chatwizard Participant** — expose your history to any MCP-compatible tool or query it directly in Copilot Chat
+- **Export & Sharing** — sessions to Markdown, Obsidian, Notion, or self-contained HTML with code block redaction
+- **Session Organization** — bookmarks, inline annotations, bidirectional linking, tagging, folders, status lifecycle, and archive
+- **File History & Workspace Management** — see which sessions touched a file, group by branch or work item
+- **AI Intelligence** _(Beta)_ — auto-generated summaries and entity extraction
+
+For detailed usage instructions, all settings, and the complete commands reference, see the **[User Guide](docs/user-guide.md)**.
 
 ---
 
