@@ -58,7 +58,7 @@ suite('Feature 23 — LLM Classifier', () => {
             assert.ok(prompt.includes('[ASSISTANT]\nassistant text'));
         });
 
-        test('does not truncate message content', () => {
+        test('does not truncate message content within limit', () => {
             const longContent = 'x'.repeat(10000);
             const session = makeSession({
                 messages: [{ id: 'm0', role: 'user', content: longContent, codeBlocks: [] }],
@@ -66,6 +66,39 @@ suite('Feature 23 — LLM Classifier', () => {
             const prompt = buildClassificationPrompt(session);
             // Full content preserved
             assert.ok(prompt.includes(longContent));
+        });
+
+        test('truncates messages exceeding MAX_CONVERSATION_CHARS', () => {
+            // Create messages that total well over 24K chars
+            const messages = Array.from({ length: 10 }, (_, i) => ({
+                id: `m${i}`,
+                role: 'user' as const,
+                content: 'x'.repeat(5000),
+                codeBlocks: [] as never[],
+            }));
+            const session = makeSession({ messages });
+            const prompt = buildClassificationPrompt(session);
+            // Total would be 10*5000 = 50K chars, so truncation must happen
+            // The prompt should be under 25K total (header + truncated conversation)
+            assert.ok(prompt.length < 25000, `prompt length was ${prompt.length}`);
+            // The most recent messages should be preserved
+            assert.ok(prompt.includes('[USER]\n' + 'x'.repeat(5000)));
+        });
+
+        test('truncation keeps newest messages, drops oldest', () => {
+            const messages = Array.from({ length: 10 }, (_, i) => ({
+                id: `m${i}`,
+                role: 'user' as const,
+                content: `Message number ${i} `.repeat(600), // ~10K chars each
+                codeBlocks: [] as never[],
+            }));
+            const session = makeSession({ messages });
+            const prompt = buildClassificationPrompt(session);
+            // Newest messages (high indices) should be present
+            assert.ok(prompt.includes('Message number 9'));
+            // Oldest messages (low indices) may be dropped
+            // At minimum the prompt should be under 25K
+            assert.ok(prompt.length < 25000);
         });
     });
 
@@ -123,9 +156,60 @@ suite('Feature 23 — LLM Classifier', () => {
             assert.strictEqual(parseClassification('```markdown'), null);
         });
 
+        test('strips markdown code fences and extracts content', () => {
+            assert.strictEqual(parseClassification('```markdown\nSchema Design\n```'), 'Schema Design');
+            assert.strictEqual(parseClassification('```\nBug Fixes\n```'), 'Bug Fixes');
+            assert.strictEqual(parseClassification("```typescript\nLogic Change\n```"), 'Logic Change');
+        });
+
+        test('strips fences with trailing text and takes first line', () => {
+            const result = parseClassification("```markdown\nCode Review\n\nSome extra text\n```");
+            assert.strictEqual(result, 'Code Review');
+        });
+
+        test('strips unclosed fences (no closing ```)', () => {
+            assert.strictEqual(parseClassification("```markdown\nSchema Design"), 'Schema Design');
+            assert.strictEqual(parseClassification("```\nBug Fixes"), 'Bug Fixes');
+            assert.strictEqual(parseClassification("```typescript\nLogic Change"), 'Logic Change');
+        });
+
+        test('strips unclosed fences with extra text after first line', () => {
+            const result = parseClassification("```markdown\nCode Review\n\nSome extra text");
+            assert.strictEqual(result, 'Code Review');
+        });
+
+        test('rejects "Sorry," with comma (refusal variant)', () => {
+            assert.strictEqual(parseClassification("Sorry, I can't assist with that."), null);
+        });
+
         test('rejects markdown headings', () => {
             assert.strictEqual(parseClassification('## Work Plan Comparison'), null);
             assert.strictEqual(parseClassification('## MCP Server Feature Overview'), null);
+        });
+
+        test('rejects JS/TS code statements', () => {
+            assert.strictEqual(parseClassification('let showTimer = null;'), null);
+            assert.strictEqual(parseClassification('const x = 5;'), null);
+            assert.strictEqual(parseClassification('var foo = "bar"'), null);
+            assert.strictEqual(parseClassification('function doSomething()'), null);
+            assert.strictEqual(parseClassification('if (x > 0) {'), null);
+        });
+
+        test('rejects Mermaid diagram declarations', () => {
+            assert.strictEqual(parseClassification('graph TD;'), null);
+            assert.strictEqual(parseClassification('graph LR:'), null);
+            assert.strictEqual(parseClassification('sequenceDiagram'), null);
+        });
+
+        test('rejects code comment output', () => {
+            assert.strictEqual(parseClassification('// ── rebuild-native.js ──'), null);
+            assert.strictEqual(parseClassification('// This is a comment'), null);
+        });
+
+        test('rejects markdown link output', () => {
+            assert.strictEqual(parseClassification('[VS Code Marketplace]'), null);
+            assert.strictEqual(parseClassification('[X] Completed'), null);
+            assert.strictEqual(parseClassification('[!NOTE]'), null);
         });
 
         test('rejects conversational responses', () => {
@@ -135,6 +219,13 @@ suite('Feature 23 — LLM Classifier', () => {
 
         test('rejects refusal patterns', () => {
             assert.strictEqual(parseClassification('sorry i cannot assist'), null);
+        });
+
+        test('rejects emoji-prefixed output', () => {
+            assert.strictEqual(parseClassification('✅ COMPLETED'), null);
+            assert.strictEqual(parseClassification('❌ Failed'), null);
+            assert.strictEqual(parseClassification('⚠️ Warning'), null);
+            assert.strictEqual(parseClassification('🔴 Error'), null);
         });
 
         test('rejects sentences with more than 5 words', () => {
@@ -178,6 +269,18 @@ suite('Feature 23 — LLM Classifier', () => {
             };
         }
 
+        test('prompt includes inline classification instructions', () => {
+            const session = makeChatSession('Fix login crash', [
+                { role: 'user', content: 'The login button crashes' },
+            ]);
+            const prompt = buildClassificationPrompt(session);
+            // Instructions are embedded inline (not systemPrompt) so the model always sees them
+            assert.ok(prompt.includes('You are a session categorizer'));
+            assert.ok(prompt.includes('Return ONLY the category label'));
+            assert.ok(prompt.includes('=== CONVERSATION TO CLASSIFY ==='));
+            assert.ok(prompt.includes('Use Title Case'));
+        });
+
         test('prompt for bug-fix session includes all turns', () => {
             const session = makeChatSession('Fix login crash', [
                 { role: 'user', content: 'The login button crashes the app when clicked' },
@@ -217,7 +320,6 @@ suite('Feature 23 — LLM Classifier', () => {
             // Simulate what the LLM might wrongly return for a bug-fix session
             const badOutputs = [
                 '## Fix Login Crash',
-                '```bug fix suggestion```',
                 'yes the session is about fixing bugs',
                 'sorry I cannot categorize this',
                 'This session is about fixing a login crash in the authentication module',
@@ -225,6 +327,12 @@ suite('Feature 23 — LLM Classifier', () => {
             for (const out of badOutputs) {
                 assert.strictEqual(parseClassification(out), null, `expected null for: "${out}"`);
             }
+        });
+
+        test('parseClassification extracts valid category from inline code fence', () => {
+            // The LLM sometimes wraps a short category in an inline code fence
+            // (no line breaks). The parser should strip the fences and accept it.
+            assert.strictEqual(parseClassification('```bug fix suggestion```'), 'fix suggestion');
         });
 
         test('parseClassification accepts valid category labels', () => {
@@ -246,6 +354,73 @@ suite('Feature 23 — LLM Classifier', () => {
                 // Must be ≤5 words
                 assert.ok(result!.split(/\s+/).length <= 5, `expected ≤5 words for: "${label}"`);
             }
+        });
+    });
+
+    // ── Regression: leaky outputs from production log ────────────────────
+    // These are actual LLM outputs that passed through the old code (v1.6.0
+    // with only 2 REJECT_PATTERNS) and were logged as INFO "Classified".
+    // Every one must be rejected by the current parser.
+    suite('regression — leaky outputs from production log', () => {
+        // Mermaid diagram syntax
+        test('rejects "graph TD;"', () => {
+            assert.strictEqual(parseClassification('graph TD;'), null);
+        });
+
+        // Code comment with em-dashes
+        test('rejects "// ── rebuild-native.js ──"', () => {
+            assert.strictEqual(parseClassification('// ── rebuild-native.js ────────────────────────────────────────────────'), null);
+        });
+
+        // Single # heading
+        test('rejects "# Summary of Updates"', () => {
+            assert.strictEqual(parseClassification('# Summary of Updates'), null);
+        });
+
+        test('rejects "# Changelog"', () => {
+            assert.strictEqual(parseClassification('# Changelog'), null);
+        });
+
+        test('rejects "# Chat Wizard"', () => {
+            assert.strictEqual(parseClassification('# Chat Wizard'), null);
+        });
+
+        test('rejects "# Extension Features Overview"', () => {
+            assert.strictEqual(parseClassification('# Extension Features Overview'), null);
+        });
+
+        test('rejects "# ChatWizard Release Work Plan"', () => {
+            assert.strictEqual(parseClassification('# ChatWizard Release Work Plan'), null);
+        });
+
+        test('rejects "# Phase 2 Implementation Summary"', () => {
+            assert.strictEqual(parseClassification('# Phase 2 Implementation Summary'), null);
+        });
+
+        // Markdown link with badge image
+        test('rejects "[![VS Code Marketplace]..." badge link', () => {
+            const mdLink = '[![VS Code Marketplace](https://img.shields.io/visual-studio-marketplace/v/Veverke.chatwizard?label=VS%20Code%20Marketplace&logo=visual-studio-code)](https://marketplace.visualstudio.com/items?itemName=Veverke.chatwizard)';
+            assert.strictEqual(parseClassification(mdLink), null);
+        });
+
+        // JS declaration
+        test('rejects "let showTimer = null;"', () => {
+            assert.strictEqual(parseClassification('let showTimer = null;'), null);
+        });
+
+        // Code comment about search fix
+        test('rejects "// Search fix implementation"', () => {
+            assert.strictEqual(parseClassification('// Search fix implementation'), null);
+        });
+
+        // Emoji-prefixed output
+        test('rejects "✅ COMPLETED"', () => {
+            assert.strictEqual(parseClassification('✅ COMPLETED'), null);
+        });
+
+        // ## heading
+        test('rejects "## Work Plan Comparison"', () => {
+            assert.strictEqual(parseClassification('## Work Plan Comparison'), null);
         });
     });
 });

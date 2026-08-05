@@ -62,7 +62,7 @@ import { ListSourcesTool } from './mcp/tools/listSourcesTool';
 import { ServerInfoTool } from './mcp/tools/serverInfoTool';
 import { QueryHistoryPrompt, ContinueFromHistoryPrompt, GetPromptsPrompt } from './mcp/prompts/contextPrompts';
 import { isNewerVersion } from './utils/semver';
-import { createLogger, type BoundLogger } from './utils/logger';
+import { createLogger, getSharedChannel, type BoundLogger } from './utils/logger';
 import { loadUiState, saveUiState } from './utils/persistedUiState';
 import { registerChatParticipant } from './mcp/chatParticipant';
 import { NullSemanticIndexer, ISemanticIndexer } from './search/semanticContracts';
@@ -100,7 +100,7 @@ let _scopeManagerRef: WorkspaceScopeManager | undefined;
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
     const startedAt = Date.now();
 
-    const channel = vscode.window.createOutputChannel('Chat Wizard');
+    const channel = getSharedChannel();
     context.subscriptions.push(channel);
     channel.appendLine('[Chat Wizard] activate() started.');
 

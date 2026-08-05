@@ -100,7 +100,7 @@ export async function classifySessionWithCategories(
     }
 
     // LLM unavailable — fall back to heuristic
-    log.warn(`LLM returned null for session ${session.id} — using heuristic fallback`);
+    log.debug(`LLM returned null for session ${session.id} — using heuristic fallback`);
     const heuristic = classifySession(session);
     if (categories.includes(heuristic)) {
         return heuristic;

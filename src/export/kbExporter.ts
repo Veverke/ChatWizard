@@ -5,6 +5,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { KbEntry } from '../types/kb';
 import { DEFAULT_KB_TYPES } from '../types/kb';
+import { createLogger } from '../utils/logger';
+
+const log = createLogger().withContext('KB-Export');
 
 /**
  * Map from KB entry type to its output subdirectory name.
@@ -18,7 +21,19 @@ function getTypeDir(type: string): string {
         gotcha:       'gotchas',
         architecture: 'architecture',
     };
-    return known[type] ?? type.toLowerCase().replace(/\s+/g, '-');
+    if (known[type]) { return known[type]; }
+    // Sanitize: lowercase, replace whitespace with hyphens, strip any
+    // characters that are unsafe in file paths across Windows/Mac/Linux.
+    // This defends against LLM garbage output masquerading as a category label.
+    return type
+        .toLowerCase()
+        .replace(/\s+/g, '-')
+        .replace(/[<>:"/\\|?*[\]]/g, '')   // strip Windows-invalid path chars
+        .replace(/^\.+/, '')               // strip leading dots (hidden files/dirs)
+        .replace(/^[-\s]+/, '')             // strip leading hyphens/whitespace
+        .replace(/[-\s]+$/, '')             // strip trailing hyphens/whitespace
+        .replace(/\.\./g, '')               // strip double-dots (directory traversal)
+        || 'uncategorised';                 // never return empty string
 }
 
 /**
@@ -167,18 +182,26 @@ export async function exportKbAsync(
         await fs.promises.mkdir(path.join(outputDir, dir), { recursive: true });
     }
 
-    // Write individual entry files
+    // Write individual entry files — catch per-entry errors so one bad
+    // type dir doesn't kill the entire export.
     for (const entry of entries) {
-        const dir = getTypeDir(entry.type);
-        const filePath = path.join(outputDir, dir, `${entry.sessionId}.md`);
+        try {
+            const dir = getTypeDir(entry.type);
+            const filePath = path.join(outputDir, dir, `${entry.sessionId}.md`);
 
-        // In incremental mode, skip locked files
-        if (options.incrementalUpdate && isLockedFile(filePath)) {
-            continue;
+            // In incremental mode, skip locked files
+            if (options.incrementalUpdate && isLockedFile(filePath)) {
+                continue;
+            }
+
+            // Ensure the type dir exists (may have been skipped by mkdir fail above)
+            await fs.promises.mkdir(path.join(outputDir, dir), { recursive: true });
+
+            const content = renderEntryMarkdown(entry);
+            await fs.promises.writeFile(filePath, content, 'utf8');
+        } catch (err) {
+            log.warn(`Failed to export entry ${entry.sessionId} (type: ${entry.type}): ${err}`);
         }
-
-        const content = renderEntryMarkdown(entry);
-        await fs.promises.writeFile(filePath, content, 'utf8');
     }
 
     // Write index.md
