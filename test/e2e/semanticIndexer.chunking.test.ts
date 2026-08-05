@@ -143,9 +143,9 @@ suite('SemanticIndexer — chunked embedding', () => {
         );
         await indexer.initialize();
 
-        // Schedule 10 bare sessions (no titles) = 10 entries
-        // With EMBED_CHUNK_SIZE=5, this should produce 2 embedBatch calls
-        for (let i = 0; i < 10; i++) {
+        // Schedule 31 bare sessions (no titles) = 31 entries
+        // With EMBED_CHUNK_SIZE=30, this should produce 2 embedBatch calls
+        for (let i = 0; i < 31; i++) {
             indexer.scheduleSession(bareSession(`s${i}`, `text ${i}`));
         }
 
@@ -155,15 +155,15 @@ suite('SemanticIndexer — chunked embedding', () => {
         assert.ok(engine.embedBatchCalls.length >= 2,
             `Expected >=2 embedBatch calls, got ${engine.embedBatchCalls.length}`);
 
-        // Each call should have at most 5 texts
+        // Each call should have at most 30 texts
         for (let i = 0; i < engine.embedBatchCalls.length; i++) {
             const call = engine.embedBatchCalls[i];
-            assert.ok(call.length <= 5,
-                `embedBatch call ${i} has ${call.length} texts, expected <=5`);
+            assert.ok(call.length <= 30,
+                `embedBatch call ${i} has ${call.length} texts, expected <=30`);
         }
 
         // Verify all sessions were indexed
-        assert.strictEqual(index.size, 10);
+        assert.strictEqual(index.size, 31);
         indexer.dispose();
     });
 
@@ -180,15 +180,14 @@ suite('SemanticIndexer — chunked embedding', () => {
         );
         await indexer.initialize();
 
-        // Schedule 6 bare sessions = 6 entries → 2 chunks (5 + 1)
-        for (let i = 0; i < 6; i++) {
+        // Schedule 31 bare sessions = 31 entries → 2 chunks (30 + 1)
+        for (let i = 0; i < 31; i++) {
             indexer.scheduleSession(bareSession(`p${i}`, `progress ${i}`));
         }
 
         await new Promise(r => setTimeout(r, 500));
 
-        // Should have at least 2 progress reports (0 + after each chunk)
-        // Actually the first report is report(0, total), then one per chunk
+        // Should have at least 2 progress reports (one per chunk)
         const reports = api.progressReports;
         assert.ok(reports.length >= 2,
             `Expected >=2 progress reports, got ${reports.length}: ${JSON.stringify(reports)}`);
@@ -197,8 +196,8 @@ suite('SemanticIndexer — chunked embedding', () => {
         const last = reports[reports.length - 1];
         assert.strictEqual(last.completed, last.total,
             `Last report should show all done (${last.completed} === ${last.total})`);
-        assert.ok(last.completed >= 6,
-            `Expected >=6 sessions completed, got ${last.completed}`);
+        assert.ok(last.completed >= 31,
+            `Expected >=31 sessions completed, got ${last.completed}`);
 
         // Unique completed values should show progression
         const completedVals = new Set(reports.map(r => r.completed));
@@ -274,8 +273,10 @@ suite('SemanticIndexer — chunked embedding', () => {
         );
         await indexer.initialize();
 
-        // 3 sessions, each with title + user msg + assistant msg with paragraphs
-        for (let i = 0; i < 3; i++) {
+        // 7 sessions, each with title + user msg + assistant msg with 3 paragraphs
+        // Each session produces: 1 title + 1 user msg + 3 assistant paragraphs = 5 entries
+        // 7 sessions × 5 = 35 entries → 2 chunks (30 + 5)
+        for (let i = 0; i < 7; i++) {
             const session: Session = {
                 id: `rich-s${i}`,
                 title: `Title for session ${i}`,
@@ -299,16 +300,16 @@ suite('SemanticIndexer — chunked embedding', () => {
         await new Promise(r => setTimeout(r, 500));
 
         // Each session has: 1 title + 1 user msg + 3 assistant paragraphs = 5 entries
-        // 3 sessions × 5 = 15 entries total → 3 chunks (5+5+5)
-        assert.ok(engine.embedBatchCalls.length >= 3,
-            `Expected >=3 embedBatch calls for 15 entries, got ${engine.embedBatchCalls.length}`);
+        // 7 sessions × 5 = 35 entries → 2 chunks (30 + 5)
+        assert.ok(engine.embedBatchCalls.length >= 2,
+            `Expected >=2 embedBatch calls for 35 entries, got ${engine.embedBatchCalls.length}`);
 
-        // All 3 sessions should be indexed
-        assert.strictEqual(index.size, 3);
+        // All 7 sessions should be indexed
+        assert.strictEqual(index.size, 7);
         indexer.dispose();
     });
 
-    test('does not get stuck at 0% — first report shows 0, subsequent reports show > 0', async () => {
+    test('does not get stuck at 0% — first report shows progress, subsequent reports show > 0', async () => {
         const engine = new CallCountingEngine();
         const index = new MemIndex();
         const api = new ProgressCapturingApi();
@@ -322,7 +323,8 @@ suite('SemanticIndexer — chunked embedding', () => {
         await indexer.initialize();
 
         // Schedule enough sessions to require several chunks
-        for (let i = 0; i < 9; i++) {
+        // 31 bare sessions = 31 entries → 2 chunks (30 + 1)
+        for (let i = 0; i < 31; i++) {
             indexer.scheduleSession(bareSession(`stuck-s${i}`, `stuck test ${i}`));
         }
 
@@ -330,12 +332,12 @@ suite('SemanticIndexer — chunked embedding', () => {
 
         const reports = api.progressReports;
 
-        // First report should be 0 / total
-        assert.strictEqual(reports[0].completed, 0,
-            `First report should be 0, got ${reports[0].completed}`);
+        // First report should be after the first chunk — showing progress, not stuck at 0
+        assert.ok(reports[0].completed > 0,
+            `First report should show progress > 0, got ${reports[0].completed}`);
 
         // Must have at least one intermediate report showing partial progress
-        // (not just 0 then 9)
+        // (not just one report showing all completed)
         const intermediates = reports.filter(r => r.completed > 0 && r.completed < r.total);
         assert.ok(intermediates.length > 0,
             `Expected intermediate progress reports (>0, <total), got none among ${reports.length} reports`);

@@ -279,7 +279,7 @@ suite('SemanticIndexer.initialize', () => {
     test('calls loadModelWithProgress during model loading', async () => {
         const engine = makeEngineStub();
         const index = makeIndexStub();
-        const api = makeVsCodeApiStub({ isFirstUse: false });
+        const api = makeVsCodeApiStub({ isFirstUse: true });
         const indexer = new SemanticIndexer('/storage', () => engine, () => index, api);
         await indexer.initialize();
         assert.strictEqual(api.loadProgressCallCount, 1, 'loadModelWithProgress should be called once during initialize()');

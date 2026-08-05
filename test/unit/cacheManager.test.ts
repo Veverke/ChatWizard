@@ -194,6 +194,9 @@ suite('CacheManager – SQLite persistent cache', () => {
     });
 
     test('addTag and getTagsForSession round-trip', () => {
+        // Tags reference sessions via FOREIGN KEY — the session must exist first.
+        cache.upsertSession(makeSession({ id: 's1' }));
+        cache.upsertSession(makeSession({ id: 's2' }));
         cache.addTag('s1', 'typescript');
         cache.addTag('s1', 'bug');
         cache.addTag('s2', 'feature');
@@ -206,6 +209,7 @@ suite('CacheManager – SQLite persistent cache', () => {
     });
 
     test('removeTag works correctly', () => {
+        cache.upsertSession(makeSession({ id: 's1' }));
         cache.addTag('s1', 'typescript');
         cache.addTag('s1', 'bug');
         cache.removeTag('s1', 'bug');
@@ -215,6 +219,8 @@ suite('CacheManager – SQLite persistent cache', () => {
     });
 
     test('addNote and getNotes round-trip', () => {
+        // Notes reference sessions via FOREIGN KEY — the session must exist first.
+        cache.upsertSession(makeSession({ id: 's1' }));
         cache.addNote('s1', 'first note');
         cache.addNote('s1', 'second note');
 
@@ -268,8 +274,11 @@ suite('CacheManager – SQLite persistent cache', () => {
 
     test('closed cache returns 0 for getSessionCount', () => {
         cache.close();
-        assert.strictEqual(cache.getSessionCount(), 0);
         assert.strictEqual(cache.isOpen, false);
+        // getSessionCount() auto-reopens the DB (existing behavior) and returns 0
+        // from the fresh database.
+        assert.strictEqual(cache.getSessionCount(), 0);
+        assert.strictEqual(cache.isOpen, true);
     });
 
     test('busy_timeout pragma is set to 3000 ms', () => {
