@@ -26,7 +26,6 @@ import {
     getDateBucket,
 } from './views/sessionTreeProvider';
 import { CodeBlockTreeProvider, CodeBlockFilter, CbSortMode, CodeBlockSessionRef, CbGroupMode } from './views/codeBlockTreeProvider';
-import { ActionItemsProvider } from './views/actionItemsProvider';
 import { SessionWebviewPanel } from './views/sessionWebviewPanel';
 import { FullTextSearchEngine } from './search/fullTextEngine';
 import { SearchPanel } from './search/searchPanel';
@@ -79,6 +78,7 @@ import { SessionsForBranchTool } from './mcp/tools/sessionsForBranchTool';
 import { SessionsForWorkItemTool } from './mcp/tools/sessionsForWorkItemTool';
 import { FileHistoryStatusBarItem } from './ui/fileHistoryStatusBar';
 import { BrandingStatusBarItem } from './ui/brandingStatusBar';
+import { DidYouKnowNudge } from './ui/didYouKnowNudge';
 import { FileHistoryCodeLensProvider } from './ui/fileHistoryCodeLens';
 import { FileHistoryPanel } from './views/fileHistoryPanel';
 import { discoverChronicleDbsAsync } from './readers/chronicleWorkspace';
@@ -88,10 +88,14 @@ import { PromptAnalyzer } from './analytics/promptAnalyzer';
 import { readChronicleCheckpoints, readChronicleSessions } from './parsers/chronicle';
 import { CacheIntegration } from './cache/cacheIntegration';
 import { resolveSharedCacheDir } from './utils/sharedCachePath';
+import * as path from 'path';
 import { RestApiServer } from './api/restApiServer';
 import { CloudSyncManager } from './cloud/cloudSyncManager';
 
 let watcher: ChatWizardWatcher | undefined;
+/** Deferred reference — set after scopeManager is created so the archive listener
+ *  (registered before scopeManager) can filter restored sessions by workspace scope. */
+let _scopeManagerRef: WorkspaceScopeManager | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
     const startedAt = Date.now();
@@ -152,6 +156,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const version = String(context.extension.packageJSON.version ?? '0.0.0');
     const brandingBar = new BrandingStatusBarItem(version);
     context.subscriptions.push(brandingBar);
+
+    // Did-You-Know nudge — parses section headings from user-guide.md and
+    // cycles through them on the squirrel mascot every 5 minutes.
+    const userGuidePath = path.join(context.extensionPath, 'docs', 'user-guide.md');
+    const didYouKnowNudge = new DidYouKnowNudge(brandingBar, userGuidePath, context.extensionPath);
+    context.subscriptions.push(didYouKnowNudge);
+    channel.appendLine('[Chat Wizard] DidYouKnow nudge initialised.');
 
     // Sidecar metadata store — persists pins, custom titles, tags etc. outside source files.
     const sidecarStore = new SidecarMetadataStore(context.globalStorageUri.fsPath);
@@ -489,15 +500,42 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                     const pruned = await archive.prune({ maxAgeDays, maxSizeMB });
 
                     // 12-D: restore sessions that exist in the archive but not in the live index
+                    // Workspace-scope filter: only restore sessions belonging to the currently
+                    // selected workspace(s). Sources whose workspaceId matches the scope IDs
+                    // (Copilot, Claude, Cursor, Windsurf) are filtered by ID. Sources with a
+                    // real workspacePath (Cline, Roo Code, Aider) are filtered by path against
+                    // the open VS Code workspace folders. Sources without a scoped workspaceId
+                    // or path (Antigravity, Continue, Amazon Q, Gemini, Tabnine) pass through
+                    // since they cannot be scoped.
+                    const scopeRef = _scopeManagerRef;
+                    const selectedIds = scopeRef?.getSelectedIds() ?? [];
+                    const openFolderPaths = scopeRef?.getOpenFolderPaths() ?? [];
+                    const idScopedSources = new Set<SessionSource>(['copilot', 'claude', 'cursor', 'windsurf']);
                     const allArchived = await archive.loadAllSources();
                     const archivedOnly: import('./types').Session[] = [];
+                    let scopedOut = 0;
                     for (const entry of allArchived) {
                         if (!index.get(entry.sessionId)) {
                             const raw = await archive.loadRaw(entry.sessionId, entry.source);
                             if (raw) {
                                 try {
                                     const session = { ...JSON.parse(raw) as import('./types').Session, archived: true as const };
-                                    archivedOnly.push(session);
+                                    // Apply workspace scope
+                                    let inScope = true;
+                                    if (selectedIds.length > 0 && idScopedSources.has(session.source as SessionSource)) {
+                                        inScope = session.workspaceId ? selectedIds.includes(session.workspaceId) : false;
+                                    }
+                                    if (inScope && openFolderPaths.length > 0 && session.workspacePath) {
+                                        const norm = path.normalize(session.workspacePath).toLowerCase();
+                                        inScope = openFolderPaths.some(p =>
+                                            norm === p || norm.startsWith(p + path.sep)
+                                        );
+                                    }
+                                    if (inScope) {
+                                        archivedOnly.push(session);
+                                    } else {
+                                        scopedOut++;
+                                    }
                                 } catch { /* ignore corrupt archive entries */ }
                             }
                         }
@@ -508,7 +546,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                         `[Archive] ${stats.totalSessions} session(s) archived ` +
                         `(${(stats.totalBytes / 1024).toFixed(1)} KB)` +
                         (pruned > 0 ? `, pruned ${pruned}` : '') +
-                        (archivedOnly.length > 0 ? `, restored ${archivedOnly.length} from archive` : '')
+                        (archivedOnly.length > 0 ? `, restored ${archivedOnly.length} from archive` : '') +
+                        (scopedOut > 0 ? `, ${scopedOut} scoped out by workspace filter` : '')
                     );
 
                     if (archivedOnly.length > 0) {
@@ -708,15 +747,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // Show rich empty-state message initially (no data yet); cleared once code blocks are indexed.
     codeBlockTreeView.message = makeEmptyStateMsg('code blocks');
     context.subscriptions.push(codeBlockTreeView);
-
-    // ── Action Items tree view (Feature 34) ──────────────────────────────
-    const actionItemsProvider = new ActionItemsProvider(index);
-    const actionItemsTreeView = vscode.window.createTreeView('chatwizardActionItems', {
-        treeDataProvider: actionItemsProvider,
-        canSelectMany: false,
-    });
-    actionItemsTreeView.message = 'No action items found.';
-    context.subscriptions.push(actionItemsTreeView);
 
     // Register codeBlockListener here (after codeBlockTreeView is initialised)
     // to avoid accessing the const before its declaration (TDZ ReferenceError).
@@ -1537,7 +1567,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             }
             telemetry.record('session.opened', { source: session.source });
             const meta = index.getSidecarMeta(session.id);
-            SessionWebviewPanel.show(context, session, searchTerm, false, undefined, undefined, undefined, highlightContainer, meta?.tags, meta?.entities, meta?.summary, meta?.status, meta?.bookmarks, meta?.annotations);
+            // If the caller provided a message index (action item), scroll to it.
+            // Fallback: search session messages for the action item text.
+            let scrollToMsgIdx = summary.actionItemMsgIdx;
+            if (scrollToMsgIdx === undefined && summary.actionItemText) {
+                const lowerText = summary.actionItemText.toLowerCase();
+                for (let i = 0; i < session.messages.length; i++) {
+                    if (session.messages[i].content.toLowerCase().includes(lowerText)) {
+                        scrollToMsgIdx = i;
+                        break;
+                    }
+                }
+            }
+            SessionWebviewPanel.show(context, session, searchTerm, false, scrollToMsgIdx, undefined, undefined, highlightContainer, meta?.tags, meta?.entities, meta?.summary, meta?.status, meta?.bookmarks, meta?.annotations);
         })
     );
 
@@ -1612,12 +1654,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
 
     context.subscriptions.push(
-        vscode.commands.registerCommand('chatwizard.showActionItems', () => {
-            void vscode.commands.executeCommand('chatwizardActionItems.focus');
-        })
-    );
-
-    context.subscriptions.push(
         vscode.commands.registerCommand('chatwizard.showTimeline', () => {
             void vscode.commands.executeCommand('chatwizardTimeline.focus');
         })
@@ -1625,7 +1661,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     context.subscriptions.push(
         vscode.commands.registerCommand('chatwizard.generateDigest', async () => {
-            const { buildDigest } = await import('./analytics/digestBuilder');
+            const { buildDigest } = await import('./analytics/digestBuilder.js');
             const summaries = index.getAllSummaries();
             const sessions = summaries
                 .map(s => index.get(s.id))
@@ -2389,6 +2425,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     // Build the workspace scope manager (persists scope across VS Code restarts).
     const scopeManager = new WorkspaceScopeManager(context);
+    _scopeManagerRef = scopeManager;
 
     // Register the manage-workspaces command (scope changes take effect via watcher.restart()).
     registerManageWorkspacesCommand(context, scopeManager, () => watcher, channel, index);
@@ -2429,27 +2466,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             `[Chat Wizard] Workspace scope initialised — ${selectedIds.length} workspace(s) selected: ${selectedIds.join(', ')}`
         );
 
-        // ── Feature 24: Try to load sessions from SQLite cache first ────────
-        if (cacheIntegration) {
-            const cachedCount = cacheIntegration.cacheManager.getSessionCount();
-            if (cachedCount > 0) {
-                channel.appendLine(`[Chat Wizard] Loading ${cachedCount} sessions from SQLite cache…`);
-                await cacheIntegration.loadIntoIndex(index);
-                channel.appendLine(`[Chat Wizard] Loaded ${cachedCount} cached sessions — only changed files will be re-parsed.`);
-            } else {
-                channel.appendLine('[Chat Wizard] Empty cache — will re-parse all source files.');
-            }
-        }
-
-        const w = await startWatcher(index, channel, scopeManager, cacheIntegration?.cacheManager);
-        watcher = w;
-        watcherRef.current = w;
-        context.subscriptions.push(w);
-
         // ── Feature 23-H: Auto-classify KB on startup ─────────────────────────
-        // After the initial session batch is loaded, pre-compute KB entries so new
-        // sessions get automatically classified into existing categories.
-        // Use a one-shot batch listener so we run exactly once after the initial load.
+        // Register BEFORE loadIntoIndex/startWatcher so the one-shot batch
+        // listener catches the initial batch event.
         {
             let done = false;
             const autoClassifyListener = index.addTypedChangeListener((event) => {
@@ -2462,6 +2481,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             });
             context.subscriptions.push(autoClassifyListener);
         }
+
+        // ── Feature 24: Try to load sessions from SQLite cache first ────────
+        if (cacheIntegration) {
+            const cachedCount = cacheIntegration.cacheManager.getSessionCount();
+            if (cachedCount > 0) {
+                channel.appendLine(`[Chat Wizard] Loading ${cachedCount} sessions from SQLite cache…`);
+                await cacheIntegration.loadIntoIndex(index, selectedIds);
+                channel.appendLine(`[Chat Wizard] Loaded ${cachedCount} cached sessions — only changed files will be re-parsed.`);
+            } else {
+                channel.appendLine('[Chat Wizard] Empty cache — will re-parse all source files.');
+            }
+        }
+
+        const w = await startWatcher(index, channel, scopeManager, cacheIntegration?.cacheManager);
+        watcher = w;
+        watcherRef.current = w;
+        context.subscriptions.push(w);
 
         // ── Feature 13-H: Active session tag button ───────────────────────────
         w.setLiveTracker(liveTracker);

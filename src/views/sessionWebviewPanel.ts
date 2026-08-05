@@ -285,6 +285,7 @@ export class SessionWebviewPanel {
             total,
             hasMore:          windowEnd < total,
             userRequestCount: session.messages.filter(m => m.role === 'user').length,
+            createdAt:        session.createdAt,
             model:            friendlyModelName(session.model),
             parseErrors:      session.parseErrors ?? [],
             sourceNotes:      session.sourceNotes ?? [],
@@ -445,6 +446,7 @@ export class SessionWebviewPanel {
       opacity: 1;
     }
     .session-meta .cw-meta-model { color: var(--vscode-debugTokenExpression-name, #569cd6); }
+    .session-meta .cw-meta-date { color: var(--vscode-debugTokenExpression-timestamp, #6a9955); }
     .session-meta .cw-meta-branch { color: var(--vscode-gitDecoration-modifiedResourceForeground, #e2c08d); }
     .session-meta .cw-meta-req { color: var(--vscode-gitDecoration-addedResourceForeground, #73c991); }
     .session-meta .cw-meta-label { opacity: 0.7; font-weight: 500; }
@@ -843,6 +845,8 @@ export class SessionWebviewPanel {
   <p id="session-summary" style="display:none;margin:4px 0 8px;opacity:0.7;font-size:0.875em;font-style:italic;"></p>
   <div id="session-tags" style="display:none"></div>
   <div class="session-meta" id="session-meta">
+    <span id="session-date-field" class="cw-meta-date" style="display:none"><span class="cw-meta-label">Date:</span> <span id="session-date"></span></span>
+    <span class="meta-sep" id="session-date-sep" style="display:none"> &nbsp;·&nbsp; </span>
     <span id="session-model-field" class="cw-meta-model" style="display:none"><span class="cw-meta-label">Model:</span> <span id="session-model"></span></span>
     <span class="meta-sep" id="session-meta-sep" style="display:none"> &nbsp;·&nbsp; </span>
     <span id="session-req-field" class="cw-meta-req" style="display:none"><span class="cw-meta-label">User Requests:</span> <span id="session-user-req"></span></span>
@@ -1498,6 +1502,9 @@ ${cwInteractiveJs()}
         if (respLabelEl) { respLabelEl.textContent = srcLabel; }
       }
       var metaEl      = document.getElementById('session-meta');
+      var dateField   = document.getElementById('session-date-field');
+      var dateEl      = document.getElementById('session-date');
+      var dateSep     = document.getElementById('session-date-sep');
       var modelField  = document.getElementById('session-model-field');
       var modelEl     = document.getElementById('session-model');
       var reqField    = document.getElementById('session-req-field');
@@ -1509,7 +1516,13 @@ ${cwInteractiveJs()}
       var showModel   = data.model && data.model !== 'Unknown';
       var showReq     = data.userRequestCount !== undefined;
       var showBranch  = !!data.branch;
-      if (metaEl && (showModel || showReq || showBranch)) {
+      var showDate    = !!data.createdAt;
+      if (metaEl && (showModel || showReq || showBranch || showDate)) {
+        if (showDate && dateField && dateEl) {
+          var d = new Date(data.createdAt);
+          dateEl.textContent = isNaN(d.getTime()) ? data.createdAt : d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+          dateField.style.display = 'inline';
+        }
         if (showModel && modelField && modelEl) {
           modelEl.textContent = data.model;
           modelField.style.display = 'inline';
@@ -1522,8 +1535,9 @@ ${cwInteractiveJs()}
           branchEl.textContent = data.branch;
           branchField.style.display = 'inline';
         }
+        if (dateSep) { dateSep.style.display = (showDate && ((showModel ? 1 : 0) + (showReq ? 1 : 0) + (showBranch ? 1 : 0) >= 1)) ? 'inline' : 'none'; }
         if (sepEl) {
-          var visibleCount = (showModel ? 1 : 0) + (showReq ? 1 : 0) + (showBranch ? 1 : 0);
+          var visibleCount = (showModel ? 1 : 0) + (showReq ? 1 : 0) + (showBranch ? 1 : 0) + (showDate ? 1 : 0);
           sepEl.style.display = visibleCount >= 2 ? 'inline' : 'none';
         }
         metaEl.style.display = 'block';
@@ -1551,7 +1565,8 @@ ${cwInteractiveJs()}
           { label: '\uD83D\uDCC4 Files',        items: ent.filePaths },
           { label: '\u2699\uFE0F Functions',     items: ent.functionNames },
           { label: '\u26A0\uFE0F Errors',        items: ent.errors },
-          { label: '\uD83D\uDCA1 Decisions',     items: ent.decisions }
+          { label: '\uD83D\uDCA1 Decisions',     items: ent.decisions },
+          { label: '\uD83E\uDDE0 Concepts',      items: ent.semantic }
         ];
         var nonEmpty = entGroups.filter(function(g) { return g.items && g.items.length > 0; });
         if (nonEmpty.length > 0) {

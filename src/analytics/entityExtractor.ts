@@ -4,15 +4,18 @@
 //   - Function and class names
 //   - Error messages and HTTP status codes
 //   - Decision phrases
+//   - Semantic entities (frameworks, APIs, concepts, tools, languages) via LLM
 //
 // extractEntities() is a pure function — no I/O, fully unit-testable.
+// extractEntitiesSmart() tries the LLM first, then falls back to the regex path.
 // runEntityExtractionJob() (further down) performs background I/O via SidecarMetadataStore.
 
 import { Session, ExtractedEntities } from '../types/index';
 import { SidecarMetadataStore } from '../index/sidecarMetadataStore';
+import { extractEntitiesWithLlm } from './entityLlmExtractor';
 
 /** Current version of the extractor — bump when extraction logic changes to invalidate caches. */
-export const ENTITIES_VERSION = 1;
+export const ENTITIES_VERSION = 2;
 
 // ─── Regex patterns ───────────────────────────────────────────────────────────
 
@@ -104,6 +107,41 @@ function extractDecisions(text: string): string[] {
     return results;
 }
 
+// ─── Smart extraction (LLM-first with regex fallback) ────────────────────────
+
+/**
+ * Extracts entities from a session, trying the LLM pass first and falling
+ * back to the pure regex extractor when the LM API is unavailable.
+ *
+ * The regex result is always merged in (it is cheap and precise for
+ * file paths / errors), while the LLM adds semantic entities.
+ */
+export async function extractEntitiesSmart(session: Session): Promise<ExtractedEntities> {
+    // 1. Regex pass — precise for structured entities
+    const regexResult = extractEntities(session);
+
+    // 2. LLM pass — semantic entities; graceful fallback on failure
+    let semantic: string[] | undefined;
+    try {
+        const llmResult = await extractEntitiesWithLlm(session);
+        semantic = llmResult?.semantic;
+    } catch {
+        // LM API unavailable — keep regex-only result
+    }
+
+    if (semantic && semantic.length > 0) {
+        // Deduplicate against regex-extracted values
+        const seen = new Set<string>(
+            [...regexResult.filePaths, ...regexResult.functionNames, ...regexResult.errors, ...regexResult.decisions]
+                .map(v => v.toLowerCase()),
+        );
+        const filtered = semantic.filter(item => !seen.has(item.toLowerCase()));
+        return { ...regexResult, semantic: filtered };
+    }
+
+    return regexResult;
+}
+
 // ─── Background job ───────────────────────────────────────────────────────────
 
 /**
@@ -138,7 +176,7 @@ export async function runEntityExtractionJob(
             if (!session) { continue; }
 
             try {
-                const entities = extractEntities(session);
+                const entities = await extractEntitiesSmart(session);
                 await store.patch(id, { entities, entitiesVersion: ENTITIES_VERSION });
                 processed++;
             } catch (err) {

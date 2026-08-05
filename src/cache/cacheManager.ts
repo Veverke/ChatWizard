@@ -108,7 +108,7 @@ export interface DbSessionNoteRow {
 
 export interface ICacheManager {
     open(): void;
-    loadAll(index: SessionIndex): Promise<void>;
+    loadAll(index: SessionIndex, workspaceIds?: string[]): Promise<void>;
     upsertSession(session: Session): void;
     upsertSessions(sessions: Session[]): void;
     removeSession(sessionId: string): void;
@@ -326,13 +326,27 @@ export class CacheManager implements ICacheManager {
      * Load all sessions from the SQLite DB into the provided SessionIndex.
      * This is the startup path — avoids re-parsing source files.
      */
-    async loadAll(index: SessionIndex): Promise<void> {
+    async loadAll(index: SessionIndex, workspaceIds?: string[]): Promise<void> {
         if (!this.db || !this.stmt) { this.open(); }
         if (!this.db || !this.stmt) {
             throw new Error('CacheManager failed to open database');
         }
 
-        const sessionRows = this.stmt.getAllSessions.all() as DbSessionRow[];
+        // If workspaceIds is explicitly empty, load nothing
+        if (workspaceIds && workspaceIds.length === 0) { return; }
+
+        let sessionRows: DbSessionRow[];
+        if (workspaceIds && workspaceIds.length > 0) {
+            // Filter by workspace IDs using dynamic placeholders
+            const placeholders = workspaceIds.map(() => '?').join(',');
+            const stmt = this.db.prepare(
+                `SELECT * FROM sessions WHERE workspace_id IN (${placeholders}) ORDER BY updated_at DESC`
+            );
+            sessionRows = stmt.all(...workspaceIds) as DbSessionRow[];
+        } else {
+            // No filter — load all sessions (backward compat)
+            sessionRows = this.stmt.getAllSessions.all() as DbSessionRow[];
+        }
         if (sessionRows.length === 0) { return; }
 
         // Load all messages in a single query and group by session_id

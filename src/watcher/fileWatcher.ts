@@ -14,6 +14,7 @@ import {
 import { Session, SessionSource } from '../types/index';
 import { resolveClaudeProjectsPath, resolveClineStoragePath, resolveRooCodeStoragePath, resolveCursorStoragePath, resolveWindsurfStoragePath, resolveAntigravityBrainPath } from './configPaths';
 import { WorkspaceScopeManager } from './workspaceScope';
+import { getSharedChannel } from '../utils/logger';
 import { discoverClineTasksAsync, discoverRooCodeTasksAsync } from '../readers/clineWorkspace';
 import { parseClineTask } from '../parsers/cline';
 import { discoverCursorWorkspacesAsync, getCursorGlobalDbPath } from '../readers/cursorWorkspace';
@@ -491,8 +492,8 @@ this.index.remove(taskId);
                     indexCopilot      ? this.collectCopilotSessionsAsync(makeProgress('copilot'),    selectedIds)  : Promise.resolve([]),
                     indexCline        ? this.collectClineTasksAsync(makeProgress('cline'))                         : Promise.resolve([]),
                     indexRooCode      ? this.collectRooCodeTasksAsync(makeProgress('roo'))                         : Promise.resolve([]),
-                    indexCursor       ? this.collectCursorSessionsAsync(makeProgress('cursor'))                    : Promise.resolve([]),
-                    indexWindsurf     ? this.collectWindsurfSessionsAsync(makeProgress('windsurf'))                : Promise.resolve([]),
+                    indexCursor       ? this.collectCursorSessionsAsync(makeProgress('cursor'), undefined, undefined, selectedIds)   : Promise.resolve([]),
+                    indexWindsurf     ? this.collectWindsurfSessionsAsync(makeProgress('windsurf'), undefined, selectedIds)           : Promise.resolve([]),
                     indexAider        ? this.collectAiderSessionsAsync(makeProgress('aider'))                      : Promise.resolve([]),
                     indexAntigravity  ? this.collectAntigravitySessionsAsync(makeProgress('antigravity'))          : Promise.resolve([]),
                     indexAntigravity  ? this.collectAntigravityJsonSessionsAsync()                                 : Promise.resolve([]),
@@ -509,11 +510,23 @@ this.index.remove(taskId);
                 const cfg = vscode.workspace.getConfiguration('chatwizard');
                 const all = applySessionFilters([...claudeSessions, ...copilotSessions, ...clineSessions, ...rooCodeSessions, ...cursorSessions, ...windsurfSessions, ...aiderSessions, ...antigravitySessions, ...deduplicatedJsonSessions, ...continueSessions, ...amazonQSessions, ...geminiSessions, ...tabnineSessions], cfg, this.channel);
 
+                // Workspace-scope filtering for non-Copilot sources that carry a real
+                // workspace path (Cline, Roo Code, Aider). Copilot/Claude/Cursor/Windsurf
+                // are already filtered upstream via `selectedIds`. Sources that surface no
+                // workspace path (Antigravity, Continue, Amazon Q, Gemini, Tabnine) cannot
+                // be scoped by path and are kept as-is.
+                const openFolderPaths = this.scopeManager.getOpenFolderPaths();
+                const allScoped = filterSessionsByWorkspaceScope(
+                    all,
+                    selectedIds,
+                    openFolderPaths,
+                );
+
                 // Feature 25: Enrich sessions with git context (best-effort, non-blocking).
                 // Collect unique workspace paths that lack gitContext, fetch once per path, then apply.
                 {
                     const wsPaths = new Set<string>();
-                    for (const s of all) {
+                    for (const s of allScoped) {
                         const p = s.workspacePath;
                         if (p && !s.gitContext) { wsPaths.add(p); }
                     }
@@ -523,7 +536,7 @@ this.index.remove(taskId);
                             ctxMap.set(p, await this._gitContextCache.getOrFetch(p));
                         }));
                         let enriched = 0;
-                        for (const s of all) {
+                        for (const s of allScoped) {
                             if (!s.gitContext && s.workspacePath) {
                                 const ctx = ctxMap.get(s.workspacePath);
                                 if (ctx) { s.gitContext = ctx; enriched++; }
@@ -544,8 +557,11 @@ this.index.remove(taskId);
                     `Continue: ${continueSessions.length}, AmazonQ: ${amazonQSessions.length}, ` +
                     `Gemini: ${geminiSessions.length}, Tabnine: ${tabnineSessions.length}`
                 );
-                this.index.batchUpsert(all);
-                this.channel.appendLine(`[init] Batch indexed ${all.length} sessions in ${Date.now() - startTime}ms`);
+                this.channel.appendLine(
+                    `[init] Workspace scope applied — ${all.length} → ${allScoped.length} session(s) after path filtering`
+                );
+                this.index.batchUpsert(allScoped);
+                this.channel.appendLine(`[init] Batch indexed ${allScoped.length} sessions in ${Date.now() - startTime}ms`);
 
                 // Merge Chronicle checkpoint data for Copilot sessions (best-effort, non-blocking).
                 if (indexCopilot && indexChronicle) {
@@ -762,11 +778,15 @@ this.index.remove(taskId);
     async collectCursorSessionsAsync(
         onProgress?: (current: number, total: number) => void,
         _cursorRootOverride?: string,
-        _globalDbPathOverride?: string
+        _globalDbPathOverride?: string,
+        selectedIds?: string[]
     ): Promise<Session[]> {
         const root = _cursorRootOverride ?? resolveCursorStoragePath();
         try {
-            const workspaces = await discoverCursorWorkspacesAsync(root);
+            const ws = await discoverCursorWorkspacesAsync(root);
+            const workspaces = selectedIds
+                ? ws.filter(w => selectedIds.includes(w.id))
+                : ws;
             const total = workspaces.length;
             let current = 0;
 
@@ -864,11 +884,15 @@ this.index.remove(taskId);
     /** Async: parse all Windsurf sessions by reading state.vscdb files across discovered workspaces. */
     async collectWindsurfSessionsAsync(
         onProgress?: (current: number, total: number) => void,
-        _windsurfRootOverride?: string
+        _windsurfRootOverride?: string,
+        selectedIds?: string[]
     ): Promise<Session[]> {
         const root = _windsurfRootOverride ?? resolveWindsurfStoragePath();
         try {
-            const workspaces = await discoverWindsurfWorkspacesAsync(root);
+            const ws = await discoverWindsurfWorkspacesAsync(root);
+            const workspaces = selectedIds
+                ? ws.filter(w => selectedIds.includes(w.id))
+                : ws;
             const total = workspaces.length;
             let current = 0;
 
@@ -1661,7 +1685,7 @@ export async function startWatcher(
     scopeManager?: WorkspaceScopeManager,
     cacheManager?: ICacheManager
 ): Promise<ChatWizardWatcher> {
-    const ch = channel ?? vscode.window.createOutputChannel('Chat Wizard');
+    const ch = channel ?? getSharedChannel();
     // When no scope manager is provided (legacy / tests), create a no-op instance
     // whose empty selection triggers the all-workspace fallback inside start().
     const mgr = scopeManager ?? new WorkspaceScopeManager({
@@ -1674,4 +1698,62 @@ export async function startWatcher(
     watcher.setCacheManager(cacheManager);
     await watcher.start();
     return watcher;
+}
+
+// ---------------------------------------------------------------------------
+// Workspace-scope path filtering (pure, unit-testable)
+// ---------------------------------------------------------------------------
+
+/**
+ * Sources that are scoped by the persisted selected workspace IDs upstream
+ * (in the collector methods). They are NOT re-filtered by path here.
+ */
+const ID_SCOPED_SOURCES = new Set<SessionSource>(['copilot', 'claude', 'cursor', 'windsurf']);
+
+/**
+ * Sources whose sessions carry a real `workspacePath` (extracted during parse)
+ * and therefore can be scoped by the VS Code open-folder paths.
+ */
+const PATH_SCOPED_SOURCES = new Set<SessionSource>(['cline', 'roocode', 'aider']);
+
+/**
+ * Apply workspace-scope filtering to a batch of freshly collected sessions.
+ *
+ * - ID-scoped sources (Copilot/Claude/Cursor/Windsurf) are already filtered in
+ *   their collectors via `selectedIds`, so they pass through unchanged here.
+ * - Path-scoped sources (Cline/Roo Code/Aider) are filtered to sessions whose
+ *   `workspacePath` falls under one of the open VS Code folders.
+ * - Sources that surface no workspace path (Antigravity, Continue, Amazon Q,
+ *   Gemini, Tabnine) cannot be scoped by path and are kept as-is.
+ *
+ * When both `selectedIds` and `openFolderPaths` are empty, no filtering is
+ * applied and `all` is returned unchanged.
+ */
+export function filterSessionsByWorkspaceScope(
+    all: Session[],
+    selectedIds: string[],
+    openFolderPaths: string[],
+): Session[] {
+    if (selectedIds.length === 0 && openFolderPaths.length === 0) {
+        return all;
+    }
+
+    if (openFolderPaths.length === 0) {
+        return all;
+    }
+
+    const normalizedOpen = openFolderPaths.map(p => path.normalize(p).toLowerCase());
+
+    return all.filter(s => {
+        if (!PATH_SCOPED_SOURCES.has(s.source)) {
+            // ID-scoped sources are already filtered upstream; non-scoped sources
+            // (no workspace path available) pass through.
+            return true;
+        }
+        if (!s.workspacePath) {
+            return false;
+        }
+        const norm = path.normalize(s.workspacePath).toLowerCase();
+        return normalizedOpen.some(p => norm === p || norm.startsWith(p + path.sep));
+    });
 }

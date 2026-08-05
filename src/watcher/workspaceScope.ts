@@ -86,6 +86,11 @@ export class WorkspaceScopeManager {
         return this._context.globalState.get<string[]>(STORAGE_KEY) ?? [];
     }
 
+    /** Returns the normalised, lowercase paths of the currently open VS Code workspace folders. */
+    getOpenFolderPaths(): string[] {
+        return this._getOpenFolderPaths();
+    }
+
     /** Persists a new selection of workspace IDs. */
     setSelectedIds(ids: string[]): void {
         void this._context.globalState.update(STORAGE_KEY, ids);

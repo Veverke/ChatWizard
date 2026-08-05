@@ -5,6 +5,9 @@
 import type { Session } from '../types/index';
 import type { KbEntryType } from '../types/kb';
 import { classifySessionWithLlm } from './kbLlmClassifier';
+import { createLogger } from '../utils/logger';
+
+const log = createLogger().withContext('KB');
 
 /**
  * Heuristic signal phrases for each KB entry type.
@@ -75,22 +78,29 @@ export function classifySession(session: Session): KbEntryType {
 /**
  * Classify a session using the given categories.
  *
- * Tries the free AI model (Copilot LM API) first for all category types.
- * Falls back to heuristic phrase-matching only when the model is unavailable.
+ * Tries the free AI model (Copilot LM API) first — the LLM generates a
+ * free-form category label from the conversation content with no predefined
+ * buckets. Falls back to heuristic phrase-matching (hardcoded types) only
+ * when the model is unavailable.
  *
- * @returns The best-matching category name.
+ * @returns The best-matching category name — either an LLM-invented label
+ *          or a hardcoded type from the heuristic fallback.
  */
 export async function classifySessionWithCategories(
     session: Session,
     categories: string[],
 ): Promise<KbEntryType> {
-    // Try LLM first — works for both default and custom categories
-    const llmResult = await classifySessionWithLlm(session, categories);
+    // Try LLM first — no predefined categories, it invents a label freely
+    const llmResult = await classifySessionWithLlm(session);
     if (llmResult) {
+        // Normalise: if the LLM label looks like one of the known heuristic
+        // types, map it for consistency (e.g. "debugging" stays as is,
+        // but "architecture" maps to itself).
         return llmResult;
     }
 
     // LLM unavailable — fall back to heuristic
+    log.warn(`LLM returned null for session ${session.id} — using heuristic fallback`);
     const heuristic = classifySession(session);
     if (categories.includes(heuristic)) {
         return heuristic;

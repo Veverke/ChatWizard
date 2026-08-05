@@ -14,8 +14,8 @@ import { Session } from '../types/index';
 export interface ICacheIntegration {
     readonly cacheManager: ICacheManager;
     readonly dbPath: string;
-    /** Load all sessions from DB into the index (startup path). */
-    loadIntoIndex(index: SessionIndex): Promise<void>;
+    /** Load all sessions from DB into the index (startup path), optionally filtered by workspace IDs. */
+    loadIntoIndex(index: SessionIndex, workspaceIds?: string[]): Promise<void>;
     /** After a parse completes, write sessions to DB and index. */
     ingestSessions(index: SessionIndex, sessions: Session[]): void;
     /** After a session is removed from the index, also remove from DB. */
@@ -34,8 +34,8 @@ export class CacheIntegration implements ICacheIntegration {
         this.cacheManager.open();
     }
 
-    async loadIntoIndex(index: SessionIndex): Promise<void> {
-        await this.cacheManager.loadAll(index);
+    async loadIntoIndex(index: SessionIndex, workspaceIds?: string[]): Promise<void> {
+        await this.cacheManager.loadAll(index, workspaceIds);
     }
 
     ingestSessions(index: SessionIndex, sessions: Session[]): void {

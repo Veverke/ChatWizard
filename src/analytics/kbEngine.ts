@@ -33,12 +33,23 @@ export function cleanSummary(summary: string): string {
 /**
  * Build KB entries from all sessions and their sidecar metadata.
  *
+ * The AI-first pipeline works as follows:
+ * 1. Each session is sent to the free AI model (Copilot LM API) which freely
+ *    generates a category label based on the conversation content — no predefined
+ *    buckets are used.
+ * 2. If the AI model is unavailable, the heuristic `classifySession()` fallback
+ *    assigns one of the five hardcoded types (decision, learning, pattern, gotcha,
+ *    architecture).
+ *
+ * The `categories` parameter only constrains the HEURISTIC fallback — it defines
+ * which types the heuristic is allowed to return. When the LLM succeeds, its
+ * free-form label is used regardless of the `categories` list.
+ *
  * @param sessions    All hydrated sessions (must have messages loaded).
  * @param cache       Sidecar metadata map (sessionId → SessionMetadata), or null.
- * @param categories  Optional list of categories to classify into. When provided,
- *                    sessions are classified using the LLM (if custom categories
- *                    are present) or the heuristic classifier. Defaults to the
- *                    five built-in types.
+ * @param categories  Optional list of categories for the HEURISTIC fallback only.
+ *                    When the LLM is available, categories emerge freely from content.
+ *                    Defaults to the five built-in types for fallback compatibility.
  */
 export async function buildKbEntries(
     sessions: Session[],

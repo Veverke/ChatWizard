@@ -304,4 +304,48 @@ suite('CacheManager – SQLite persistent cache', () => {
         }, /newer|schema version/);
         cache2.close();
     });
+
+    test('loadAll with workspaceIds filters sessions by workspace', async () => {
+        // Insert sessions from two different workspaces
+        cache.upsertSessions([
+            makeSession({ id: 'ws1-s1', workspaceId: 'ws1', workspacePath: '/ws1', title: 'WS1 Session' }),
+            makeSession({ id: 'ws1-s2', workspaceId: 'ws1', workspacePath: '/ws1', title: 'WS1 Session 2' }),
+            makeSession({ id: 'ws2-s1', workspaceId: 'ws2', workspacePath: '/ws2', title: 'WS2 Session' }),
+            makeSession({ id: 'ws2-s2', workspaceId: 'ws2', workspacePath: '/ws2', title: 'WS2 Session 2' }),
+        ]);
+
+        // Load only ws1 sessions
+        const index = new SessionIndex();
+        await cache.loadAll(index, ['ws1']);
+
+        assert.strictEqual(index.size, 2, 'should only load ws1 sessions');
+        assert.ok(index.get('ws1-s1'), 'ws1-s1 should be loaded');
+        assert.ok(index.get('ws1-s2'), 'ws1-s2 should be loaded');
+        assert.ok(!index.get('ws2-s1'), 'ws2-s1 should NOT be loaded');
+        assert.ok(!index.get('ws2-s2'), 'ws2-s2 should NOT be loaded');
+    });
+
+    test('loadAll with empty workspaceIds array loads nothing', async () => {
+        cache.upsertSessions([
+            makeSession({ id: 's1', workspaceId: 'ws1' }),
+            makeSession({ id: 's2', workspaceId: 'ws2' }),
+        ]);
+
+        const index = new SessionIndex();
+        await cache.loadAll(index, []);
+
+        assert.strictEqual(index.size, 0, 'empty workspaceIds should load nothing');
+    });
+
+    test('loadAll without workspaceIds loads all sessions (backward compat)', async () => {
+        cache.upsertSessions([
+            makeSession({ id: 's1', workspaceId: 'ws1' }),
+            makeSession({ id: 's2', workspaceId: 'ws2' }),
+        ]);
+
+        const index = new SessionIndex();
+        await cache.loadAll(index);
+
+        assert.strictEqual(index.size, 2, 'no workspaceIds should load all');
+    });
 });

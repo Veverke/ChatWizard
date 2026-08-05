@@ -33,7 +33,11 @@ export class ActionItemLeafItem extends vscode.TreeItem {
         this.description = sessionTitle;
         this.iconPath = actionItem.done
             ? new vscode.ThemeIcon('pass-filled', new vscode.ThemeColor('gitDecoration.addedResourceForeground'))
-            : new vscode.ThemeIcon('circle-outline');
+            : actionItem.verified === false
+                ? new vscode.ThemeIcon('warning', new vscode.ThemeColor('gitDecoration.deletedResourceForeground'))
+                : actionItem.verified === true
+                    ? new vscode.ThemeIcon('pass', new vscode.ThemeColor('gitDecoration.addedResourceForeground'))
+                    : new vscode.ThemeIcon('circle-outline');
 
         // Strikethrough styling for done items
         if (actionItem.done) {
@@ -43,7 +47,7 @@ export class ActionItemLeafItem extends vscode.TreeItem {
         this.command = {
             command: 'chatwizard.openSession',
             title: 'Open Session',
-            arguments: [{ id: sessionId }],
+            arguments: [{ id: sessionId, actionItemMsgIdx: actionItem.messageIndex, actionItemText: actionItem.text }],
         };
     }
 }
@@ -53,6 +57,7 @@ export class ActionItemLeafItem extends vscode.TreeItem {
 export class ActionItemsProvider implements vscode.TreeDataProvider<ActionItemTreeNode> {
     private _onDidChangeTreeData = new vscode.EventEmitter<ActionItemTreeNode | undefined | void>();
     readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
+    private _treeView: vscode.TreeView<ActionItemTreeNode> | undefined;
 
     constructor(
         private readonly index: SessionIndex,
@@ -60,6 +65,11 @@ export class ActionItemsProvider implements vscode.TreeDataProvider<ActionItemTr
         index.addChangeListener(() => {
             this.refresh();
         });
+    }
+
+    /** Bind the tree view so the provider can manage its message. */
+    setTreeView(tv: vscode.TreeView<ActionItemTreeNode>): void {
+        this._treeView = tv;
     }
 
     refresh(): void {
@@ -105,10 +115,12 @@ export class ActionItemsProvider implements vscode.TreeDataProvider<ActionItemTr
         if (doneItems.length > 0) {
             groups.push(new ActionItemRootItem('Done', doneItems));
         }
-        if (groups.length === 0) {
-            // No items — still show a single group with empty message via tree view message
-            return [];
+
+        // Update tree view message
+        if (this._treeView) {
+            this._treeView.message = groups.length === 0 ? 'No action items found.' : undefined;
         }
+
         return groups;
     }
 }

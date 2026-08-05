@@ -96,11 +96,23 @@ Instead of asking the same question twice, search your Chat Wizard history. Find
 - **Semantic Search** — topic-similarity search via a local AI model (opt-in, ~22 MB)
 - **Code Block Library** — every AI-generated code snippet, filterable by language, with one-click copy
 - **Prompt Library** — deduplicated, frequency-ranked archive of all your prompts with near-duplicate clustering and merge
+- **Knowledge Base** — AI-classified session categories (Decisions, Learnings, Patterns, Gotchas, Architecture) with doughnut chart dashboard and Obsidian export
+- **Action Items** — automatic extraction of follow-up tasks from sessions with click-to-scroll to source message
 - **Analytics** — token usage charts, daily activity, top projects, top terms, longest sessions
 - **Model Usage** — per-model request counts with date-range filtering and workspace/session drill-down
 - **Timeline** — chronological feed with activity heat map, work bursts, topic drift ribbon, and streak stats
+- **Session Bookmarks** — ★ toggle bookmark on sessions with dedicated bookmarked list
+- **Inline Annotations** — 📝 add freeform notes pinned to specific messages in any session
+- **Session Linking** — bidirectional 🔗 links between related sessions with badge navigation
+- **Session Status Lifecycle** — track Open → Resolved → Revisit workflow with tag-based auto-status
+- **Session Sharing** — export as self-contained HTML with optional code block redaction
+- **Keyboard Navigation** — full `j`/`k`/`gg`/`G` keyboard support for Sessions panel, Code Blocks, and reader
+- **Did You Know Tips** — 🐿️ squirrel mascot cycles through user-guide tips every 5 minutes
 - **Export** — single session, multi-select, all sessions, or excerpt — to structured Markdown, **Obsidian vault**, or **Notion database**
-- **Session Archive** — every indexed session is mirrored locally so history survives source tool pruning
+- **Session Retention** — auto-delete sessions older than `sessionRetentionDays` at startup and after each indexing cycle
+- **Compacted Sessions** — large sessions compressed with `· compacted` badge and abbreviated content in reader
+- **REST API** — lightweight HTTP endpoint (`GET /api/search`, `GET /api/sessions`, etc.) for custom integrations
+- **Session Archive** — every indexed session is mirrored locally so history survives source tool pruning; configurable age/size limits
 - **Session Tagging** — attach freeform labels to sessions; filter, search, and tag the active session from the status bar or `/tag` chat command
 - **File History** — Chronicle-powered "N sessions touched this file" in the status bar, CodeLens, and Explorer right-click; `chatwizard_sessions_for_file` MCP tool
 - **Branch & Work Item Grouping** — group sessions by git branch or extracted work-item ID (Jira, GitHub Issues, Azure DevOps)
@@ -188,13 +200,13 @@ Capabilities not available in the built-in GitHub Copilot Chat panel or the Clau
 
 ## Extension Settings
 
-See the **[User Guide → Settings Reference](docs/user-guide.md#14-settings-reference)**.
+See the **[User Guide → Settings Reference](docs/user-guide.md#30-settings-reference)**.
 
 ---
 
 ## Commands
 
-See the **[User Guide → Commands Reference](docs/user-guide.md#15-commands-reference)**.
+See the **[User Guide → Commands Reference](docs/user-guide.md#31-commands-reference)**.
 
 ---
 

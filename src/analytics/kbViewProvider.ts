@@ -8,7 +8,7 @@ import { buildKbEntries } from './kbEngine';
 import { clusterEntries } from './kbClusterer';
 import { exportKbAsync } from '../export/kbExporter';
 import { KbDashboardPanel } from './kbDashboardPanel';
-import { configureCategories } from './kbCategoryConfigurator';
+import { configureFallbackCategories } from './kbCategoryConfigurator';
 import { DEFAULT_KB_TYPES } from '../types/kb';
 
 export class KbViewProvider implements vscode.WebviewViewProvider {
@@ -65,16 +65,22 @@ export class KbViewProvider implements vscode.WebviewViewProvider {
         if (this._refreshTimer) { clearTimeout(this._refreshTimer); }
         this._refreshTimer = setTimeout(() => {
             this._refreshTimer = null;
-            void this._computeResult().then(() => this._sendToView());
+            void this._computeResult().then(() => {
+                this._sendToView();
+                this._notifyDashboardPanel();
+            });
         }, 5000);
     }
 
     /**
      * Run KB classification in the background (no view needed).
      * Called on extension startup to auto-classify new sessions.
+     * After completion, pushes the result to any open view/dashboard.
      */
     async preload(): Promise<void> {
         await this._computeResult();
+        this._sendToView();
+        this._notifyDashboardPanel();
     }
 
     /**
@@ -86,10 +92,12 @@ export class KbViewProvider implements vscode.WebviewViewProvider {
     }
 
     private async _handleGenerate(): Promise<void> {
-        const categories = await configureCategories();
-        if (!categories) { return; } // user cancelled
+        const fallbackCategories = await configureFallbackCategories();
+        // `undefined` = auto-detect (LLM generates freely; heuristic fallback uses built-in types)
+        // `string[]` = custom fallback categories for when LLM is unavailable
 
-        this._categories = categories;
+        this._categories = fallbackCategories;
+        this._lastResult = null; // Force fresh computation
 
         await vscode.window.withProgress(
             {
@@ -109,6 +117,14 @@ export class KbViewProvider implements vscode.WebviewViewProvider {
 
         this._saveState();
         this._sendToView();
+        this._notifyDashboardPanel();
+    }
+
+    /** Forward the latest result to the standalone dashboard panel if open. */
+    private _notifyDashboardPanel(): void {
+        if (this._lastResult) {
+            KbDashboardPanel.refresh(this._lastResult, () => this._handleExport());
+        }
     }
 
     /**

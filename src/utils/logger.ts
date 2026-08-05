@@ -83,19 +83,36 @@ function defaultMinLevel(): LogLevel {
 /**
  * Create a Logger that writes structured messages to a VS Code OutputChannel.
  * If `channel` is provided, it will be reused instead of creating a new one.
+ * When called without arguments, a single shared "Chat Wizard" channel is used
+ * so all Chat Wizard logs appear in the same Output entry.
  *
  * Usage:
- *   const log = createLogger();              // creates its own channel
+ *   const log = createLogger();              // uses shared channel
  *   const log = createLogger(channel);       // reuses an existing channel
  *   log.info('Startup', 'Activation began');
  *   log.withContext('Semantic').debug('Queue started');
  */
+
+// Shared channel reused by all createLogger() calls without explicit channel
+let _sharedChannel: vscode.OutputChannel | undefined;
+
+/**
+ * Get the shared "Chat Wizard" output channel used by `createLogger()`.
+ * Creates it on first use. Lets legacy code (e.g. watcher fallbacks) reuse
+ * the same channel so all Chat Wizard logs land in one Output entry.
+ */
+export function getSharedChannel(): vscode.OutputChannel {
+    return _sharedChannel ?? (_sharedChannel = vscode.window.createOutputChannel('Chat Wizard'));
+}
+
 export function createLogger(
     channelOrName?: vscode.OutputChannel | string,
 ): Logger {
     const channel = typeof channelOrName === 'object' && channelOrName !== null
         ? channelOrName
-        : vscode.window.createOutputChannel(typeof channelOrName === 'string' ? channelOrName : 'Chat Wizard');
+        : typeof channelOrName === 'string'
+            ? vscode.window.createOutputChannel(channelOrName)
+            : getSharedChannel();
     let minLevel = defaultMinLevel();
 
     function fmt(level: LogLevel, ctx: string, msg: string): string {

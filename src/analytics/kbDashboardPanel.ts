@@ -89,7 +89,7 @@ export class KbDashboardPanel {
                 setImmediate(() => {
                     void KbDashboardPanel._exportCb?.();
                 });
-            } else if (msg.command === 'generateKb') {
+            } else if (msg.command === 'generateKb' || msg.command === 'regenerateKb') {
                 void vscode.commands.executeCommand('chatwizard.generateKnowledgeBase');
             }
         }, undefined, context.subscriptions);

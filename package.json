@@ -116,10 +116,6 @@
           "id": "chatwizardKnowledgeBase",
           "name": "Knowledge Base",
           "type": "webview"
-        },
-        {
-          "id": "chatwizardActionItems",
-          "name": "Action Items"
         }
       ]
     },
@@ -731,11 +727,6 @@
       {
         "command": "chatwizard.shareSession",
         "title": "Chat Wizard: Share Session",
-        "category": "Chat Wizard"
-      },
-      {
-        "command": "chatwizard.showActionItems",
-        "title": "Chat Wizard: Show Action Items",
         "category": "Chat Wizard"
       }
     ],
@@ -1571,6 +1562,12 @@
               "Only errors"
             ],
             "description": "Minimum log level shown in the Chat Wizard output channel. Set to DEBUG when troubleshooting startup, indexing, or embedding issues."
+          },
+          "chatwizard.didYouKnowInterval": {
+            "type": "integer",
+            "default": 300,
+            "minimum": 30,
+            "description": "Interval in seconds between 'Did you know?' squirrel notifications. Default is 300 (5 minutes). Set to 0 to disable the nudge entirely."
           }
         }
       },

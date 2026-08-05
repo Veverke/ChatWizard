@@ -94,10 +94,11 @@ export async function extractActionItems(session: Session): Promise<ActionItem[]
 function extractActionItemsHeuristic(session: Session): ActionItem[] {
     const items: ActionItem[] = [];
     const seenTexts = new Set<string>();
-    let index = 0;
+    let actionItemIdx = 0;
     const now = new Date().toISOString();
 
-    for (const message of session.messages) {
+    for (let msgIdx = 0; msgIdx < session.messages.length; msgIdx++) {
+        const message = session.messages[msgIdx];
         if (message.role !== 'assistant') { continue; }
         if (!message.content) { continue; }
 
@@ -120,11 +121,12 @@ function extractActionItemsHeuristic(session: Session): ActionItem[] {
                 seenTexts.add(normalized);
 
                 items.push({
-                    id: makeActionItemId(session.id, sentence, index++),
+                    id: makeActionItemId(session.id, sentence, actionItemIdx++),
                     text: sentence,
                     done: false,
                     createdAt: message.timestamp ?? now,
                     source: 'extracted',
+                    messageIndex: msgIdx, // 0-based index within session.messages
                 });
 
                 if (items.length >= MAX_ACTION_ITEMS) {

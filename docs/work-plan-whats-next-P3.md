@@ -42,6 +42,7 @@ e2e tests, manual verification steps, and a completion gate.
 | [43](#feature-43--session-retention-controls) | Session retention controls | S | ✅ | Set `chatwizard.sessionRetentionDays` to auto-hide old sessions. Set `semanticIndexMaxAgeDays` to limit which sessions are embedded. | `sessionRetentionDays` setting applied in extension.ts. `semanticIndexMaxAgeDays` wired into `SemanticIndexer.scheduleSession()`. |
 | [44](#feature-44--api--programmatic-access) | API / programmatic access | M | ✅ | Enable `chatwizard.restApi.enabled` to start a REST API. Access sessions, search, and stats via HTTP with Bearer token auth. | Full REST API server with health, sessions list/detail, search, stats endpoints. Bearer auth. |
 | [45](#feature-45--compacted-session-detection--visibility) | Compacted session detection & visibility | S | ✅ | Compacted sessions (Claude summary JSONL entries) are detected and flagged with an `isCompacted` marker and badge in the tree view. | `isCompacted`/`compactionSummary` fields on `Session` type. |
+| 46 | new Action Items tab | L |  | Not thorouhgly tested. To make it add real value, it requires more work. |
 
 ---
 

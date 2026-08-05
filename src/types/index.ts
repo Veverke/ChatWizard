@@ -427,6 +427,10 @@ export interface ActionItem {
     done: boolean;
     createdAt: string;
     source: 'extracted' | 'manual';
+    /** 0-based message index within the session — populated by heuristic extractor */
+    messageIndex?: number;
+    /** Whether this action item has been verified by an LLM pass */
+    verified?: boolean;
 }
 
 /** Feature 25 — Git context captured at session-open time */
@@ -449,4 +453,6 @@ export interface ExtractedEntities {
     errors: string[];
     /** Decision phrases ("I decided to...", "we chose...", etc.) */
     decisions: string[];
+    /** Semantic entities from the LLM pass (frameworks, APIs, concepts, tools, languages) */
+    semantic?: string[];
 }
