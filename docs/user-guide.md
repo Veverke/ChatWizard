@@ -1156,6 +1156,8 @@ Each source has an index toggle and an optional custom path override:
 | `chatwizard.indexContinue` | `true` | `chatwizard.continueStoragePath` |
 | `chatwizard.indexAmazonQ` | `true` | `chatwizard.amazonQStoragePath` |
 | `chatwizard.indexGeminiCodeAssist` | `true` | `chatwizard.geminiCodeAssistStoragePath` |
+| `chatwizard.indexZed` | `true` | `chatwizard.zedStoragePath` |
+| `chatwizard.indexTabnine` | `true` | `chatwizard.tabnineStoragePath` |
 
 Leave a path override empty to use the platform default location.
 
@@ -1165,6 +1167,32 @@ Leave a path override empty to use the platform default location.
 |---------|---------|-------------|
 | `chatwizard.enableSemanticSearch` | `false` | Enable topic-similarity search (~22 MB model) |
 | `chatwizard.semanticMinScore` | `0.35` | Match threshold (0–1); lower = more results |
+| `chatwizard.enablePersistentCache` | `true` | Cache semantic search model across sessions to reduce startup time |
+
+### Cloud Sync
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `chatwizard.cloudSync.enabled` | `false` | Enable cloud sync of session index to a remote backend |
+| `chatwizard.cloudSync.type` | `"gist"` | Backend type: `"gist"` (GitHub), `"s3"`, `"azure"` |
+
+### Cost Advisor
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `chatwizard.enableCostAdvisor` | `true` | Show estimated token cost and savings tips after each session |
+
+### Workspace Digest
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `chatwizard.digest.windowHours` | `24` | Look-back window (hours) for the Generate Digest command |
+
+### Diagnostic Logging
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `chatwizard.logLevel` | `"info"` | Log verbosity: `"debug"`, `"info"`, `"warn"`, `"error"` |
 
 ### MCP Server
 
@@ -1257,6 +1285,12 @@ Leave a path override empty to use the platform default location.
 | `chatwizard.showArchiveStats` | Chat Wizard: Show Archive Statistics |
 | `chatwizard.manageWatchedWorkspaces` | Chat Wizard: Manage Watched Workspaces |
 | `chatwizard.rescan` | Chat Wizard: Rescan Sessions |
+| `chatwizard.generateDigest` | Chat Wizard: Generate Digest |
+| `chatwizard.generateKb` | Chat Wizard: Generate Knowledge Base |
+| `chatwizard.shareSession` | Chat Wizard: Share Session as HTML |
+| `chatwizard.rateSession` | Chat Wizard: Rate Session (Cost & Tips) |
+| `chatwizard.linkSession` | Chat Wizard: Link Session… |
+| `chatwizard.unlinkSession` | Chat Wizard: Unlink Session |
 | `chatwizard.startMcpServer` | Chat Wizard: Start MCP Server |
 | `chatwizard.stopMcpServer` | Chat Wizard: Stop MCP Server |
 | `chatwizard.copyMcpConfig` | Chat Wizard: Copy MCP Config to Clipboard |
@@ -1312,11 +1346,26 @@ Code Blocks panel toolbar cycles through: `chatwizard.cbSortByDate`, `chatwizard
 | Quote a past turn in the current chat | `@chatwizard /referMessage P3` |
 | Check token usage this month | Analytics panel |
 | See which models you've used | Model Usage panel |
+| Generate a daily standup report | `Ctrl+Shift+P` → **Generate Digest** |
+| Generate/refresh the Knowledge Base | `Ctrl+Shift+P` → **Generate Knowledge Base** |
+| Share a session as HTML | Right-click session → **Share as HTML** or `Ctrl+Shift+P` → **Share Session as HTML** |
+| Bookmark an important session | Click the bookmark icon on the session row |
+| Link related sessions together | Right-click session → **Link Session…** |
+| Rate a session for cost & tips | `Ctrl+Shift+P` → **Rate Session** |
 | Export a session to Markdown | Right-click session → Export Session to Markdown |
 | Export to an Obsidian vault | `Ctrl+Shift+P` → **Export Sessions to Obsidian** |
 | Export to Notion | `Ctrl+Shift+P` → **Export Sessions to Notion** |
 | Inject a session as context into a new chat | Right-click session → Inject as Context… |
 | Ask Copilot using your history | `@chatwizard /queryHistory <question>` |
 | Connect Claude Desktop to your history | Enable MCP server → Copy MCP Config → paste & restart |
+| Sync sessions to GitHub Gist | Set `chatwizard.cloudSync.enabled` to `true` and configure a token |
 | Force a full re-index | `Ctrl+Shift+P` → **Chat Wizard: Rescan Sessions** |
 | Only index recent sessions | Set `chatwizard.oldestSessionDate` to a date |
+
+---
+
+## Known Limitations
+
+- **Knowledge Base generation** works best in VS Code with GitHub Copilot (uses the free Copilot LM API for categorization). In **Cursor**, no free LLM is currently available for this purpose, so the Knowledge Base falls back to simpler heuristics (keyword-based grouping) which may produce less accurate categories.
+- **Cost estimates** are based on public pricing tables and are approximate — actual billing may differ.
+- **Cloud Sync** currently supports only GitHub Gist as a production backend; S3 and Azure Blob are placeholders and require code-level configuration.
