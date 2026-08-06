@@ -1,6 +1,8 @@
 // test/suite/semanticIndexer.test.ts
 
 import * as assert from 'assert';
+import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { SemanticIndexer, SemanticIndexerVsCodeApi } from '../../src/search/semanticIndexer';
 import { IEmbeddingEngine, ISemanticIndex, SEMANTIC_DIMS, SemanticScope } from '../../src/search/semanticContracts';
@@ -146,15 +148,16 @@ async function makeReadyIndexer(engineOpts: Parameters<typeof makeEngineStub>[0]
     const engine = makeEngineStub(engineOpts);
     const index = makeIndexStub();
     const api = makeVsCodeApiStub({ isFirstUse: false });
+    const storageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'semantic-indexer-test-'));
     const indexer = new SemanticIndexer(
-        '/storage',
+        storageDir,
         (_cacheDir) => engine,
         () => index,
         api,
         0,
     );
     await indexer.initialize();
-    return { indexer, engine, index, api };
+    return { indexer, engine, index, api, storageDir };
 }
 
 // ── isReady / indexedCount ────────────────────────────────────────────────────
@@ -365,7 +368,8 @@ suite('SemanticIndexer.scheduleSession', () => {
         };
         const index = makeIndexStub();
         const api = makeVsCodeApiStub({ isFirstUse: false });
-        const indexer = new SemanticIndexer('/storage', () => engine, () => index, api, 0);
+        const storageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'semantic-indexer-test-'));
+        const indexer = new SemanticIndexer(storageDir, () => engine, () => index, api, 0);
         await indexer.initialize();
 
         // Use sessions with no title so each session produces exactly 1 embed entry.
@@ -491,7 +495,8 @@ suite('SemanticIndexer.dispose', () => {
         const engine = makeEngineStub({ loadDelay: 0 });
         const index = makeIndexStub();
         const api = makeVsCodeApiStub({ isFirstUse: false });
-        const indexer = new SemanticIndexer('/storage', () => engine, () => index, api);
+        const storageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'semantic-indexer-test-'));
+        const indexer = new SemanticIndexer(storageDir, () => engine, () => index, api);
         await indexer.initialize();
 
         // Schedule many sessions, then immediately dispose

@@ -5,6 +5,9 @@
 // through manual Extension Development Host testing (see docs/).
 
 import * as assert from 'assert';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { SemanticIndexer, SemanticIndexerVsCodeApi } from '../../src/search/semanticIndexer';
 import { IEmbeddingEngine, ISemanticIndex, SEMANTIC_DIMS } from '../../src/search/semanticContracts';
 import { SemanticMessageResult } from '../../src/search/types';
@@ -106,9 +109,10 @@ async function makeReadyIndexer() {
     const engine = makeEngineStub();
     const index = makeIndexStub();
     const api = makeVsCodeApiStub();
-    const indexer = new SemanticIndexer('/storage', () => engine, () => index, api, 0);
+    const storageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'semantic-wiring-test-'));
+    const indexer = new SemanticIndexer(storageDir, () => engine, () => index, api, 0);
     await indexer.initialize();
-    return { indexer, engine, index };
+    return { indexer, engine, index, storageDir };
 }
 
 // ── scheduleSession() message splitting ────────────────────────────────────

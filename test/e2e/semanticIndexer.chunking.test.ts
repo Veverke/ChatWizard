@@ -21,6 +21,9 @@
  */
 
 import * as assert from 'assert';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { SemanticIndexer, SemanticIndexerVsCodeApi } from '../../src/search/semanticIndexer';
 import { IEmbeddingEngine, ISemanticIndex, SEMANTIC_DIMS, SemanticScope } from '../../src/search/semanticContracts';
 import { SemanticMessageResult } from '../../src/search/types';
@@ -134,8 +137,9 @@ suite('SemanticIndexer — chunked embedding', () => {
         const engine = new CallCountingEngine();
         const index = new MemIndex();
         const api = new ProgressCapturingApi();
+        const storageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'semantic-chunk-test-'));
         const indexer = new SemanticIndexer(
-            '/tmp/storage',
+            storageDir,
             () => engine,
             () => index,
             api,
@@ -171,8 +175,9 @@ suite('SemanticIndexer — chunked embedding', () => {
         const engine = new CallCountingEngine();
         const index = new MemIndex();
         const api = new ProgressCapturingApi();
+        const storageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'semantic-chunk-test-'));
         const indexer = new SemanticIndexer(
-            '/tmp/storage',
+            storageDir,
             () => engine,
             () => index,
             api,
@@ -210,8 +215,9 @@ suite('SemanticIndexer — chunked embedding', () => {
         const engine = new FailingEngine();
         const index = new MemIndex();
         const api = new ProgressCapturingApi();
+        const storageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'semantic-chunk-test-'));
         const indexer = new SemanticIndexer(
-            '/tmp/storage',
+            storageDir,
             () => engine,
             () => index,
             api,
@@ -234,8 +240,9 @@ suite('SemanticIndexer — chunked embedding', () => {
         const engine = new CallCountingEngine();
         const index = new MemIndex();
         const api = new ProgressCapturingApi();
+        const storageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'semantic-chunk-test-'));
         const indexer = new SemanticIndexer(
-            '/tmp/storage',
+            storageDir,
             () => engine,
             () => index,
             api,
@@ -264,8 +271,9 @@ suite('SemanticIndexer — chunked embedding', () => {
         const engine = new CallCountingEngine();
         const index = new MemIndex();
         const api = new ProgressCapturingApi();
+        const storageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'semantic-chunk-test-'));
         const indexer = new SemanticIndexer(
-            '/tmp/storage',
+            storageDir,
             () => engine,
             () => index,
             api,
@@ -313,8 +321,9 @@ suite('SemanticIndexer — chunked embedding', () => {
         const engine = new CallCountingEngine();
         const index = new MemIndex();
         const api = new ProgressCapturingApi();
+        const storageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'semantic-chunk-test-'));
         const indexer = new SemanticIndexer(
-            '/tmp/storage',
+            storageDir,
             () => engine,
             () => index,
             api,
@@ -350,8 +359,9 @@ suite('SemanticIndexer — chunked embedding', () => {
         const engine = new CallCountingEngine();
         const index = new MemIndex();
         const api = new ProgressCapturingApi();
+        const storageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'semantic-chunk-test-'));
         const indexer = new SemanticIndexer(
-            '/tmp/storage',
+            storageDir,
             () => engine,
             () => index,
             api,

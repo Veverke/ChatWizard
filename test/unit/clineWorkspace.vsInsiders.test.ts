@@ -23,9 +23,11 @@ suite('getClineCompatStorageRoot — VS Code Insiders preference', () => {
         const insidersTasksDir = path.join(tmpDir, 'Code - Insiders', 'User', 'globalStorage', 'saoudrizwan.claude-dev', 'tasks');
         fs.mkdirSync(insidersTasksDir, { recursive: true });
 
-        // Patch APPDATA so getClineCompatStorageRoot looks in tmpDir
+        // Patch platform-appropriate env vars so getClineCompatStorageRoot looks in tmpDir
         const originalAppData = process.env['APPDATA'];
+        const originalXdgConfig = process.env['XDG_CONFIG_HOME'];
         process.env['APPDATA'] = tmpDir;
+        process.env['XDG_CONFIG_HOME'] = tmpDir;
 
         try {
             // Re-require to pick up patched env
@@ -37,6 +39,7 @@ suite('getClineCompatStorageRoot — VS Code Insiders preference', () => {
             assert.strictEqual(result, insidersTasksDir);
         } finally {
             process.env['APPDATA'] = originalAppData;
+            process.env['XDG_CONFIG_HOME'] = originalXdgConfig;
             delete require.cache[require.resolve('../../src/readers/clineWorkspace')];
         }
     });
@@ -47,7 +50,9 @@ suite('getClineCompatStorageRoot — VS Code Insiders preference', () => {
         fs.mkdirSync(stableTasksDir, { recursive: true });
 
         const originalAppData = process.env['APPDATA'];
+        const originalXdgConfig = process.env['XDG_CONFIG_HOME'];
         process.env['APPDATA'] = tmpDir;
+        process.env['XDG_CONFIG_HOME'] = tmpDir;
 
         try {
             delete require.cache[require.resolve('../../src/readers/clineWorkspace')];
@@ -58,6 +63,7 @@ suite('getClineCompatStorageRoot — VS Code Insiders preference', () => {
             assert.strictEqual(result, stableTasksDir);
         } finally {
             process.env['APPDATA'] = originalAppData;
+            process.env['XDG_CONFIG_HOME'] = originalXdgConfig;
             delete require.cache[require.resolve('../../src/readers/clineWorkspace')];
         }
     });

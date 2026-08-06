@@ -107,7 +107,7 @@ suite('FolderStore', () => {
 
         // The .tmp file should NOT exist after successful save
         assert.ok(fs.existsSync(folderFile), 'Folder file should exist');
-        assert.ok(!fs.existsSync(tmpFile), 'Temp file should have been renamed');
+        assert.ok(!fs.existsSync(tmpFile), 'Temp file should have been removed after save');
     });
 
     // ------------------------------------------------------------------

@@ -62,9 +62,10 @@ export class FolderStore {
             await this.ensureDir();
             const entries = Array.from(map.values());
             const json = JSON.stringify(entries, null, 2);
-            const tmpPath = this.filePath + '.tmp';
-            await fs.promises.writeFile(tmpPath, json, 'utf-8');
-            await fs.promises.rename(tmpPath, this.filePath);
+            // Write directly to the target file. On Windows, rename + copyFile can hang
+            // when the destination is being scanned by antivirus/Defender, so we avoid
+            // the temp-file + rename pattern.
+            await fs.promises.writeFile(this.filePath, json, 'utf-8');
             this.cache = map;
         } catch (err) {
             console.error('[chatwizard] FolderStore.save() failed:', err);
