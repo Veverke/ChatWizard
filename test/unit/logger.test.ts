@@ -132,5 +132,14 @@ suite('logger', () => {
             bound.warn('warn %j', { x: 1 });
             bound.error('error %f', 2.5);
         });
+
+        test('bound logger getChannel returns the underlying channel', () => {
+            const { createLogger } = require('../../src/utils/logger');
+            const log = createLogger('Chat Wizard Test');
+            const bound = log.withContext('Sub');
+            const ch = bound.getChannel();
+            assert.ok(ch);
+            assert.strictEqual(typeof ch.appendLine, 'function');
+        });
     });
 });

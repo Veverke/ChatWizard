@@ -110,6 +110,16 @@ suite('sessionRenderer', () => {
         test('handles empty string', () => {
             assert.strictEqual(markdownToHtml(''), '');
         });
+
+        test('renders table with alignment attributes', () => {
+            const md = '| A | B | C |\n|:---|:---:|---:|\n| 1 | 2 | 3 |';
+            const html = markdownToHtml(md);
+            assert.ok(html.includes('<table'));
+            assert.ok(html.includes('text-align:left'));
+            assert.ok(html.includes('text-align:center'));
+            assert.ok(html.includes('text-align:right'));
+            assert.ok(html.includes('</table>'));
+        });
     });
 
     suite('renderMessage', () => {

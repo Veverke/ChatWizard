@@ -442,5 +442,23 @@ suite('sessionIndex', () => {
             assert.strictEqual(meta?.customTitle, 'My Title');
             assert.strictEqual(meta?.isPinned, true);
         });
+
+        test('addChangeListener dispose stops listener', () => {
+            const idx = new SessionIndex();
+            let count = 0;
+            const d = idx.addChangeListener(() => { count++; });
+            d.dispose();
+            idx.upsert(makeSession({ id: 's1', messages: [msg('user', 'A')] }));
+            assert.strictEqual(count, 0);
+        });
+
+        test('addTypedChangeListener dispose stops typed events', () => {
+            const idx = new SessionIndex();
+            const events: string[] = [];
+            const d = idx.addTypedChangeListener((event) => { events.push(event.type); });
+            d.dispose();
+            idx.upsert(makeSession({ id: 's1', messages: [msg('user', 'A')] }));
+            assert.strictEqual(events.length, 0);
+        });
     });
 });

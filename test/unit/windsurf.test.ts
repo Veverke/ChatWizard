@@ -6,7 +6,7 @@
  */
 
 import * as assert from 'assert';
-import { extractWindsurfCodeBlocks } from '../../src/parsers/windsurf';
+import { extractWindsurfCodeBlocks, parseWindsurfWorkspace } from '../../src/parsers/windsurf';
 
 suite('windsurf (unit)', () => {
     suite('extractWindsurfCodeBlocks', () => {
@@ -21,6 +21,16 @@ suite('windsurf (unit)', () => {
             assert.strictEqual(blocks.length, 1);
             assert.strictEqual(blocks[0].language, 'python');
             assert.strictEqual(blocks[0].content, 'print("hello")');
+        });
+    });
+
+    suite('parseWindsurfWorkspace — fatal error path', () => {
+        test('returns a fatal error result when the db cannot be opened', async () => {
+            const results = await parseWindsurfWorkspace('/nonexistent/state.vscdb', 'ws-1');
+            assert.strictEqual(results.length, 1);
+            assert.ok(results[0].errors.length > 0);
+            assert.strictEqual(results[0].session.id, 'ws-1-windsurf-error');
+            assert.strictEqual(results[0].session.messages.length, 0);
         });
     });
 });
