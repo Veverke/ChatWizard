@@ -1,9 +1,29 @@
 // src/search/embeddingEngine.ts
 
+import * as path from 'path';
+import { Worker } from 'worker_threads';
 import { IEmbeddingEngine, SEMANTIC_DIMS } from './semanticContracts';
+import { createLogger, type BoundLogger, withTimeout } from '../utils/logger';
+
+/** How long (ms) before we give up on downloading the ONNX model. */
+const DOWNLOAD_TIMEOUT_MS = 300_000; // 5 minutes
+
+/** How long (ms) before a pending embedBatch response is considered stuck. */
+const EMBED_RPC_TIMEOUT_MS = 120_000;
+
+/** Number of worker threads for parallel ONNX inference. Each worker loads its own
+ *  model session, enabling true concurrent CPU utilization across cores. */
+const POOL_SIZE = 2;
+
+/** How long (ms) a worker sits idle before being terminated to free ~200 MB WASM memory.
+ *  Workers are re-spawned lazily on the next embed call. */
+const IDLE_TIMEOUT_MS = 300_000; // 5 minutes
 
 /** Minimal callable shape returned by @xenova/transformers pipeline() */
-type PipelineCallable = (text: string, options: Record<string, unknown>) => Promise<{ data: ArrayLike<number> }>;
+type PipelineCallable = {
+    (text: string, options: Record<string, unknown>): Promise<{ data: ArrayLike<number> }>;
+    (texts: string[], options: Record<string, unknown>): Promise<{ data: ArrayLike<number> }>;
+};
 
 /**
  * Injectable factory that loads the feature-extraction pipeline.
@@ -15,56 +35,244 @@ export type PipelineFactory = (
     onProgress?: (message: string) => void,
 ) => Promise<PipelineCallable>;
 
-/** Default factory — delegates to @xenova/transformers (imported lazily so it stays external to the bundle) */
+/** Default factory — delegates to a pool of worker threads for parallel ONNX inference. */
 async function defaultPipelineFactory(
     cacheDir: string,
     onProgress?: (message: string) => void,
+    parentLog?: BoundLogger,
 ): Promise<PipelineCallable> {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-explicit-any
-    const xenovaModule = require('@xenova/transformers') as any;
-    const { pipeline, env } = xenovaModule as { pipeline: Function; env: { cacheDir: string } };
+    const workerPath = path.resolve(__dirname, 'embeddingWorker.js');
+    const log: BoundLogger = parentLog?.withContext('EmbeddingWorker') ?? createLogger().withContext('EmbeddingWorker');
+    log.info('Spawning %d worker threads from %s', POOL_SIZE, workerPath);
 
-    env.cacheDir = cacheDir;
+    interface WorkerHandle {
+        worker: Worker;
+        callable: (texts: string[]) => Promise<{ data: ArrayLike<number> }>;
+        pending: Map<number, { resolve: (dataBuffer: ArrayBuffer, dims: number) => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }>;
+        disposed: boolean;
+    }
 
-    const progressCallback = onProgress
-        ? (progress: Record<string, unknown>) => {
-              const status = progress['status'];
-              const file = String(progress['file'] ?? '');
-              if (status === 'progress') {
-                  const pct = typeof progress['progress'] === 'number'
-                      ? Math.round(progress['progress'] as number)
-                      : 0;
-                  onProgress(`Downloading ${file}: ${pct}%`);
-              } else if (status === 'done' && file) {
-                  onProgress(`Loaded ${file}`);
-              }
-          }
-        : undefined;
+    function spawnSingleWorker(): Promise<WorkerHandle> {
+        const worker = new Worker(workerPath);
+        let nextId = 1;
+        const pending = new Map<number, { resolve: (dataBuffer: ArrayBuffer, dims: number) => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+        let resolveInit: (() => void) | undefined;
+        const initDone = new Promise<void>((resolve) => { resolveInit = resolve; });
+        let disposed = false;
 
-    const extractor = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', {
-        cache_dir: cacheDir,
-        progress_callback: progressCallback,
-    });
+        worker.on('message', (msg: Record<string, unknown>) => {
+            const type = String(msg['type'] ?? '');
+            if (type === 'progress' && onProgress) {
+                onProgress(String(msg['message'] ?? ''));
+                return;
+            }
+            if (type === 'init_done') {
+                resolveInit?.();
+                return;
+            }
+            if (type === 'result') {
+                const id = msg['id'] as number;
+                const dataBuffer = msg['dataBuffer'] as ArrayBuffer;
+                const dims = msg['dims'] as number;
+                const entry = pending.get(id);
+                if (entry) {
+                    clearTimeout(entry.timer);
+                    pending.delete(id);
+                    entry.resolve(dataBuffer, dims);
+                }
+                return;
+            }
+            if (type === 'error') {
+                const id = msg['id'] as number | undefined;
+                const errorMsg = String(msg['error'] ?? 'Unknown worker error');
+                if (id !== undefined && id !== null) {
+                    const entry = pending.get(id);
+                    if (entry) {
+                        clearTimeout(entry.timer);
+                        pending.delete(id);
+                        entry.reject(new Error(errorMsg));
+                    }
+                } else {
+                    log.error('Worker error: %s', errorMsg);
+                }
+                return;
+            }
+        });
 
-    return extractor as unknown as PipelineCallable;
+        worker.on('error', (err) => {
+            for (const [, entry] of pending) {
+                clearTimeout(entry.timer);
+                entry.reject(err);
+            }
+            pending.clear();
+            resolveInit?.();
+        });
+
+        worker.on('exit', (code) => {
+            if (code !== 0) {
+                log.warn('Worker exited with code %d', code);
+            }
+            for (const [, entry] of pending) {
+                clearTimeout(entry.timer);
+                entry.reject(new Error(`Worker exited with code ${code}`));
+            }
+            pending.clear();
+            resolveInit?.();
+        });
+
+        worker.postMessage({ type: 'init', cacheDir });
+
+        const callable = (texts: string[]): Promise<{ data: ArrayLike<number> }> => {
+            const id = nextId++;
+            return new Promise<{ data: ArrayLike<number> }>((resolve, reject) => {
+                // Unref'd timer so it doesn't keep the process alive if everything else
+                // is done — preventing a hidden Node.js process leak in VS Code.
+                const timer = setTimeout(() => {
+                    pending.delete(id);
+                    reject(new Error(`embedBatch RPC timed out after ${EMBED_RPC_TIMEOUT_MS}ms`));
+                }, EMBED_RPC_TIMEOUT_MS);
+                timer.unref();
+                pending.set(id, {
+                    resolve: (dataBuffer: ArrayBuffer, dims: number) => {
+                        const flat = new Float32Array(dataBuffer);
+                        resolve({ data: flat });
+                    },
+                    reject,
+                    timer,
+                });
+                worker.postMessage({ type: 'embedBatch', id, texts });
+            });
+        };
+
+        return initDone.then(() => ({ worker, callable, pending, disposed }));
+    }
+
+    // Spawn all workers and wait for init
+    const handles: WorkerHandle[] = await Promise.all(
+        Array.from({ length: POOL_SIZE }, () => spawnSingleWorker()),
+    );
+    log.info('All %d workers ready', handles.length);
+
+    // Round-robin index — only the first worker forwards progress to avoid duplicates
+    let rrIndex = 0;
+
+    // Per-worker idle timers. When a worker has been idle for IDLE_TIMEOUT_MS,
+    // it gets terminated to free its ~200 MB WASM memory. It will be re-spawned
+    // lazily on the next invocation.
+    const idleTimers: (ReturnType<typeof setTimeout> | undefined)[] = [undefined, undefined];
+
+    function resetIdleTimer(index: number): void {
+        if (idleTimers[index] !== undefined) {
+            clearTimeout(idleTimers[index]!);
+            idleTimers[index] = undefined;
+        }
+    }
+
+    function scheduleIdleTimer(index: number): void {
+        resetIdleTimer(index);
+        if (handles[index].disposed) { return; }
+        idleTimers[index] = setTimeout(() => {
+            const handle = handles[index];
+            if (handle.disposed) { return; }
+            handle.disposed = true;
+            idleTimers[index] = undefined;
+            log.debug('Worker %d idle for %dms — terminating to free WASM memory', index, IDLE_TIMEOUT_MS);
+            for (const [, entry] of handle.pending) {
+                clearTimeout(entry.timer);
+            }
+            handle.pending.clear();
+            try { handle.worker.postMessage({ type: 'terminate' }); } catch { /* ignore */ }
+            setTimeout(() => {
+                try { handle.worker.terminate(); } catch { /* ignore */ }
+            }, 2_000).unref();
+        }, IDLE_TIMEOUT_MS);
+        idleTimers[index]!.unref();
+    }
+
+    // The returned callable acts as a PipelineFactory pipeline: round-robins across workers
+    const callable = async (textOrTexts: string | string[], options: Record<string, unknown>): Promise<{ data: ArrayLike<number> }> => {
+        const texts = Array.isArray(textOrTexts) ? textOrTexts : [textOrTexts];
+
+        // Find the next available worker, re-spawning disposed ones lazily
+        for (let attempt = 0; attempt < POOL_SIZE; attempt++) {
+            const idx = rrIndex % POOL_SIZE;
+            const handle = handles[idx];
+
+            if (handle.disposed) {
+                // Lazy re-spawn
+                log.debug('Re-spawning disposed worker %d', idx);
+                try {
+                    const fresh = await spawnSingleWorker();
+                    handles[idx] = fresh;
+                    rrIndex++;
+                    await new Promise<void>(r => setImmediate(r));
+                    resetIdleTimer(idx);
+                    return fresh.callable(texts);
+                } catch (err) {
+                    log.warn('Failed to re-spawn worker %d: %s', idx, String(err));
+                    rrIndex++;
+                    continue;
+                }
+            }
+
+            rrIndex++;
+            resetIdleTimer(idx);
+            try {
+                const result = await handle.callable(texts);
+                scheduleIdleTimer(idx);
+                return result;
+            } catch (err) {
+                // On failure, mark as disposed so next call re-spawns
+                handle.disposed = true;
+                log.warn('Worker %d call failed — marking for re-spawn: %s', idx, String(err));
+                scheduleIdleTimer(idx);
+                throw err; // let the caller handle the error
+            }
+        }
+
+        // All workers failed
+        throw new Error('All embedding workers are unavailable');
+    };
+
+    // Start idle timers after initial spawn
+    for (let i = 0; i < POOL_SIZE; i++) {
+        scheduleIdleTimer(i);
+    }
+
+    // Hang dispose + handles on the callable for clean-up
+    (callable as unknown as Record<string, unknown>)._handles = handles;
+    (callable as unknown as Record<string, unknown>)._poolSize = POOL_SIZE;
+
+    return callable as unknown as PipelineCallable;
 }
 
 /**
- * Thin wrapper around @xenova/transformers that loads the ONNX model and
- * produces normalized 384-dim embeddings.
+ * Thin wrapper that produces normalized 384-dim embeddings.
+ *
+ * TWO MODES:
+ * 1. **Worker mode** (default) — spawns a `worker_threads` Worker running
+ *    `embeddingWorker.ts`. All ONNX inference runs off the main thread, so the
+ *    extension host stays responsive across ALL VS Code windows.
+ *
+ * 2. **Factory mode** (tests/DI) — when a `pipelineFactory` is provided, runs
+ *    the pipeline directly on the main thread (same as the old behaviour).
  *
  * Accepts an optional `pipelineFactory` for dependency injection in tests.
+ * When omitted, automatically uses a worker thread.
  */
 export class EmbeddingEngine implements IEmbeddingEngine {
     private readonly cacheDir: string;
-    private readonly factory: PipelineFactory;
+    private readonly factory: PipelineFactory | undefined;
     private pipelineFn: PipelineCallable | undefined;
     private _isReady = false;
     private loadPromise: Promise<void> | undefined;
+    private _disposed = false;
+    private readonly log: BoundLogger;
 
-    constructor(cacheDir: string, pipelineFactory?: PipelineFactory) {
+    constructor(cacheDir: string, pipelineFactory?: PipelineFactory, parentLog?: BoundLogger) {
         this.cacheDir = cacheDir;
-        this.factory = pipelineFactory ?? defaultPipelineFactory;
+        this.factory = pipelineFactory;
+        this.log = parentLog?.withContext('EmbeddingEngine') ?? createLogger().withContext('EmbeddingEngine');
     }
 
     get isReady(): boolean {
@@ -87,13 +295,18 @@ export class EmbeddingEngine implements IEmbeddingEngine {
     }
 
     private async doLoad(onProgress?: (message: string) => void): Promise<void> {
-        this.pipelineFn = await this.factory(this.cacheDir, onProgress);
+        if (this.factory) {
+            // Test / DI mode — use the injected factory directly on this thread.
+            this.pipelineFn = await this.factory(this.cacheDir, onProgress);
+        } else {
+            // Production mode — spawn a worker thread for ONNX inference.
+            this.pipelineFn = await defaultPipelineFactory(this.cacheDir, onProgress, this.log);
+        }
         this._isReady = true;
     }
 
     /**
-     * Embeds the given text and returns a normalized Float32Array of length SEMANTIC_DIMS.
-     * Throws if the engine is not ready.
+     * Embeds a single text and returns a normalized Float32Array(384).
      */
     async embed(text: string): Promise<Float32Array> {
         if (!this._isReady || !this.pipelineFn) {
@@ -108,5 +321,77 @@ export class EmbeddingEngine implements IEmbeddingEngine {
             throw new Error(`Expected ${SEMANTIC_DIMS}-dim embedding, got ${result.length}`);
         }
         return result;
+    }
+
+    /**
+     * Embeds multiple texts in a single pipeline call.
+     * Falls back to sequential embed() if the batch path fails.
+     */
+    async embedBatch(texts: string[]): Promise<Float32Array[]> {
+        if (!this._isReady || !this.pipelineFn) {
+            throw new Error('EmbeddingEngine is not ready. Call load() first.');
+        }
+        if (texts.length === 0) { return []; }
+        if (texts.length === 1) { return [await this.embed(texts[0])]; }
+
+        const output = await this.pipelineFn(texts, { pooling: 'mean', normalize: true });
+        const flat = output.data;
+        const batchSize = texts.length;
+        const dims = SEMANTIC_DIMS;
+        const expectedLen = batchSize * dims;
+        if (flat.length !== expectedLen) {
+            throw new Error(`Expected batch embedding length ${expectedLen}, got ${flat.length}`);
+        }
+        // Convert flat tensor data into per-row Float32Arrays.
+        // Avoid Array.from() + Array.slice() double-copy — use subarray view + copy.
+        const flatArr = flat instanceof Float32Array ? flat : Float32Array.from(flat);
+        const results: Float32Array[] = new Array(batchSize);
+        for (let i = 0; i < batchSize; i++) {
+            results[i] = new Float32Array(flatArr.subarray(i * dims, (i + 1) * dims));
+        }
+        return results;
+    }
+
+    /**
+     * Terminates the worker thread (if in worker mode) and releases resources.
+     */
+    dispose(): void {
+        if (this._disposed) { return; }
+        this._disposed = true;
+
+        // If we're in worker mode, the pipelineFn has hidden _handles with workers.
+        if (!this.factory && this.pipelineFn) {
+            const callable = this.pipelineFn as unknown as Record<string, unknown>;
+            const handles = callable['_handles'] as Array<{ worker: Worker; pending: Map<number, { timer: ReturnType<typeof setTimeout> }> }> | undefined;
+
+            if (handles) {
+                for (const handle of handles) {
+                    // Clear all pending RPC timers so they don't fire after disposal
+                    for (const [, entry] of handle.pending) {
+                        clearTimeout(entry.timer);
+                    }
+                    handle.pending.clear();
+
+                    // Send graceful terminate signal
+                    try {
+                        handle.worker.postMessage({ type: 'terminate' });
+                    } catch { /* worker may already be closed */ }
+
+                    // Force-terminate after a short grace period
+                    const killTimer = setTimeout(() => {
+                        try { handle.worker.terminate(); } catch { /* ignore */ }
+                    }, 2_000);
+                    killTimer.unref();
+
+                    handle.worker.on('exit', () => {
+                        clearTimeout(killTimer);
+                    });
+                }
+                this.log.debug('All %d workers terminated', handles.length);
+            }
+        }
+
+        this.pipelineFn = undefined;
+        this._isReady = false;
     }
 }

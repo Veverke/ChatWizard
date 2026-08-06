@@ -21,6 +21,10 @@ export class GetSessionFullTool implements IMcpTool {
                 type: 'string',
                 description: 'The unique session ID (returned by other chatwizard tools as "ID: ...").',
             },
+            includeCode: {
+                type: 'boolean',
+                description: 'When false, strips fenced code blocks from message content to reduce token usage (default: true).',
+            },
         },
         required: ['sessionId'],
     };
@@ -44,8 +48,10 @@ export class GetSessionFullTool implements IMcpTool {
             };
         }
 
+        const includeCode = input['includeCode'] !== false; // default true
+
         return {
-            content: [{ type: 'text', text: formatSessionTranscript(session) }],
+            content: [{ type: 'text', text: formatSessionTranscript(session, undefined, includeCode) }],
         };
     }
 }

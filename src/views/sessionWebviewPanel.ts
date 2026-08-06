@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
-import { Session, ExtractedEntities } from '../types/index';
+import { Session, ExtractedEntities, SessionBookmark } from '../types/index';
+import type { SidecarMetadataStore } from '../index/sidecarMetadataStore';
 import { cwThemeCss, syntaxHighlighterCss, cwInteractiveJs } from '../webview/cwTheme';
 import { friendlyModelName } from '../analytics/modelNames';
 import { friendlySourceName } from '../ui/sourceUi';
@@ -34,20 +35,47 @@ interface PanelMsgState {
     tags?:            string[];
     entities?:        ExtractedEntities;
     summary?:         string;
+    status?:          string;
+    bookmarks?:       SessionBookmark[];
+    annotations?:     import('../types/index').MessageAnnotation[];
     panel:            vscode.WebviewPanel;
 }
 
 export class SessionWebviewPanel {
     static readonly _panels = new Map<string, vscode.WebviewPanel>();
 
+    /** Maximum number of sessions kept in the render cache. Oldest entry evicted when full. */
+    static readonly RENDER_CACHE_MAX = 50;
+
     /** Cache: `sessionId::updatedAt` → rendered HTML per visible message (null = not yet rendered) */
     static readonly _renderCache = new Map<string, (string | null)[]>();
+
+    /** Inserts an entry into _renderCache, evicting the oldest when capacity is reached. */
+    static _renderCacheSet(key: string, value: (string | null)[]): void {
+        const isUpdate = SessionWebviewPanel._renderCache.has(key);
+        if (isUpdate) {
+            // Delete first so the re-insertion below moves it to the end (LRU refresh).
+            SessionWebviewPanel._renderCache.delete(key);
+        } else if (SessionWebviewPanel._renderCache.size >= SessionWebviewPanel.RENDER_CACHE_MAX) {
+            // Map preserves insertion order — first key is the oldest entry.
+            const oldest = SessionWebviewPanel._renderCache.keys().next().value;
+            if (oldest !== undefined) {
+                SessionWebviewPanel._renderCache.delete(oldest);
+            }
+        }
+        SessionWebviewPanel._renderCache.set(key, value);
+    }
 
     /** Per-panel window / streaming state */
     static readonly _panelState = new Map<string, PanelMsgState>();
 
     /** Output channel for surfacing silent errors */
     static _channel: vscode.OutputChannel | undefined;
+
+    /** Sidecar metadata store — set from extension.ts for bookmark/annotation persistence */
+    static _sidecarStore: SidecarMetadataStore | undefined;
+    /** Callback invoked after bookmark/annotation/rating changes to refresh the index sidecar cache. */
+    static _onSidecarChanged: ((sessionId: string) => void) | undefined;
 
     // ── Public entry point ────────────────────────────────────────────────────
 
@@ -63,6 +91,9 @@ export class SessionWebviewPanel {
         tags?: string[],
         entities?: ExtractedEntities,
         summary?: string,
+        status?: string,
+        bookmarks?: SessionBookmark[],
+        annotations?: import('../types/index').MessageAnnotation[],
     ): void {
         const config = vscode.workspace.getConfiguration('chatwizard');
         const userColor = config.get<string>('userMessageColor', '#007acc') || '#007acc';
@@ -101,7 +132,7 @@ export class SessionWebviewPanel {
         let renderedMessages = SessionWebviewPanel._renderCache.get(cacheKey);
         if (!renderedMessages) {
             renderedMessages = new Array<string | null>(total).fill(null);
-            SessionWebviewPanel._renderCache.set(cacheKey, renderedMessages);
+            SessionWebviewPanel._renderCacheSet(cacheKey, renderedMessages);
         }
 
         const scrollInit: ScrollInit = {
@@ -123,7 +154,7 @@ export class SessionWebviewPanel {
                 session, visibleMessages, renderedMessages,
                 windowStart, windowEnd: initialWindowEnd,
                 streamVersion: newVersion,
-                assistantLabel, tags, entities, summary, panel: existing,
+                assistantLabel, tags, entities, summary, status, bookmarks, annotations, panel: existing,
             });
             void SessionWebviewPanel._startStream(
                 session.id, newVersion, userColor, searchTerm, scrollInit, highlightContainer
@@ -144,7 +175,8 @@ export class SessionWebviewPanel {
             session, visibleMessages, renderedMessages,
             windowStart, windowEnd: initialWindowEnd,
             streamVersion: 0,
-            assistantLabel, tags, entities, summary, panel,
+                assistantLabel, tags, entities, summary, panel,
+            status, bookmarks, annotations,
         });
         SessionWebviewPanel._panels.set(session.id, panel);
 
@@ -173,6 +205,15 @@ export class SessionWebviewPanel {
                     console.error(errMsg);
                 } else if (msg.type === 'revealInTree') {
                     void vscode.commands.executeCommand('chatwizard.revealInSessionsTree', session.id);
+                } else if ((msg as any).type === 'bookmarkMessage') {
+                    const m = msg as any;
+                    void SessionWebviewPanel._toggleBookmark(session.id, m.messageIndex as number);
+                } else if ((msg as any).type === 'saveAnnotation') {
+                    const m = msg as any;
+                    void SessionWebviewPanel._saveAnnotation(session.id, m.messageIndex as number, m.text as string);
+                } else if ((msg as any).type === 'deleteAnnotation') {
+                    const m = msg as any;
+                    void SessionWebviewPanel._deleteAnnotation(session.id, m.messageIndex as number);
                 }
             },
             undefined,
@@ -244,13 +285,27 @@ export class SessionWebviewPanel {
             total,
             hasMore:          windowEnd < total,
             userRequestCount: session.messages.filter(m => m.role === 'user').length,
+            createdAt:        session.createdAt,
             model:            friendlyModelName(session.model),
             parseErrors:      session.parseErrors ?? [],
             sourceNotes:      session.sourceNotes ?? [],
             filePath:         session.filePath,
+            branch:           session.gitContext?.branch ?? session.chronicleData?.branch ?? null,
             tags:             state.tags ?? [],
             entities:         state.entities ?? null,
             summary:          state.summary ?? null,
+            status:           state.status ?? null,
+            bookmarks:        state.bookmarks?.map(b => ({
+                messageIndex: b.messageIndex,
+                note: b.note || null,
+                createdAt: b.createdAt,
+            })) ?? [],
+            annotations:      state.annotations?.map(a => ({
+                messageIndex: a.messageIndex,
+                text: a.text,
+                createdAt: a.createdAt,
+                updatedAt: a.updatedAt || null,
+            })) ?? [],
         });
 
         // ── Stream remaining initial window via setImmediate ──────────────────
@@ -390,6 +445,11 @@ export class SessionWebviewPanel {
       font-weight: 600;
       opacity: 1;
     }
+    .session-meta .cw-meta-model { color: var(--vscode-debugTokenExpression-name, #569cd6); }
+    .session-meta .cw-meta-date { color: var(--vscode-debugTokenExpression-timestamp, #6a9955); }
+    .session-meta .cw-meta-branch { color: var(--vscode-gitDecoration-modifiedResourceForeground, #e2c08d); }
+    .session-meta .cw-meta-req { color: var(--vscode-gitDecoration-addedResourceForeground, #73c991); }
+    .session-meta .cw-meta-label { opacity: 0.7; font-weight: 500; }
     #session-tags { min-height: 0; margin-bottom: 6px; padding-bottom: 6px; border-bottom: 1px solid var(--vscode-textBlockQuote-background, #444); }
     .cw-tag-chip {
       display: inline-flex; align-items: center;
@@ -648,6 +708,136 @@ export class SessionWebviewPanel {
     }
     .cw-filter-label:hover { opacity: 1; }
     .cw-filter-label input { margin: 0; cursor: pointer; }
+    /* Annotation button styles */
+    .cw-annotation-btn {
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 1px 4px;
+      font-size: 0.9em;
+      color: inherit;
+      opacity: 0;
+      transition: opacity 0.15s, color 0.15s;
+      border-radius: 3px;
+      line-height: 1;
+    }
+    .message:hover .cw-annotation-btn { opacity: 0.4; }
+    .cw-annotation-btn:hover { opacity: 1 !important; background: var(--cw-surface-subtle); }
+    .cw-annotation-btn.cw-active { opacity: 1; color: var(--cw-accent, #f0c040); }
+    /* Annotation block styles */
+    .cw-annotation-block {
+      margin: 6px 0 0;
+      padding: 8px 12px;
+      background: rgba(200, 200, 0, 0.06);
+      border-left: 3px solid rgba(200, 200, 0, 0.4);
+      border-radius: 3px;
+      font-size: 0.88em;
+    }
+    .cw-annotation-block .cw-annotation-meta {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 4px;
+    }
+    .cw-annotation-block .cw-annotation-label {
+      font-weight: 600;
+      opacity: 0.6;
+      font-size: 0.82em;
+    }
+    .cw-annotation-block .cw-annotation-date {
+      opacity: 0.45;
+      font-size: 0.78em;
+    }
+    .cw-annotation-block .cw-annotation-text {
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+    .cw-annotation-block .cw-annotation-actions {
+      display: flex;
+      gap: 4px;
+      margin-top: 4px;
+    }
+    .cw-annotation-block .cw-annotation-actions button {
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-size: 0.78em;
+      opacity: 0.5;
+      padding: 1px 6px;
+      border-radius: 3px;
+      color: inherit;
+    }
+    .cw-annotation-block .cw-annotation-actions button:hover { opacity: 1; background: var(--cw-surface-subtle); }
+    /* Inline annotation editor */
+    .cw-annotation-editor {
+      margin: 6px 0 0;
+      padding: 0;
+    }
+    .cw-annotation-editor textarea {
+      width: 100%;
+      min-height: 48px;
+      font-family: var(--vscode-font-family, sans-serif);
+      font-size: var(--vscode-font-size, 13px);
+      background: var(--vscode-input-background, #3c3c3c);
+      color: var(--vscode-input-foreground, #cccccc);
+      border: 1px solid var(--vscode-input-border, #555);
+      border-radius: 3px;
+      padding: 6px 8px;
+      resize: vertical;
+      box-sizing: border-box;
+    }
+    .cw-annotation-editor textarea:focus { border-color: var(--vscode-focusBorder, #007fd4); outline: none; }
+    .cw-annotation-editor .cw-annotation-editor-actions {
+      display: flex;
+      gap: 4px;
+      margin-top: 4px;
+    }
+    .cw-annotation-editor .cw-annotation-editor-actions button {
+      background: var(--cw-surface-subtle);
+      color: inherit;
+      border: 1px solid var(--cw-border-strong);
+      padding: 2px 10px;
+      border-radius: var(--cw-radius-xs);
+      cursor: pointer;
+      font-size: 0.82em;
+      font-family: var(--vscode-font-family, sans-serif);
+    }
+    .cw-annotation-editor .cw-annotation-editor-actions button:hover {
+      background: var(--cw-accent);
+      color: var(--cw-accent-text);
+      border-color: var(--cw-accent);
+    }
+    /* Bookmark button styles */
+    .cw-bookmark-btn {
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 1px 4px;
+      font-size: 0.9em;
+      color: inherit;
+      opacity: 0;
+      transition: opacity 0.15s, color 0.15s;
+      border-radius: 3px;
+      line-height: 1;
+    }
+    .message:hover .cw-bookmark-btn { opacity: 0.4; }
+    .cw-bookmark-btn:hover { opacity: 1 !important; background: var(--cw-surface-subtle); }
+    .cw-bookmark-btn.cw-active { opacity: 1; color: var(--cw-accent, #f0c040); }
+    /* Bookmarks jump list */
+    #bookmarks-section { display: none; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--vscode-textBlockQuote-background, #444); }
+    #bookmarks-section summary { cursor: pointer; opacity: 0.65; user-select: none; font-size: 0.82em; }
+    #bookmarks-section summary:hover { opacity: 1; }
+    #bookmarks-list { padding: 4px 0; display: flex; flex-direction: column; gap: 3px; }
+    .bookmark-item {
+      display: flex; align-items: center; gap: 6px;
+      padding: 3px 6px; border-radius: 3px;
+      cursor: pointer; font-size: 0.82em;
+      transition: background 0.12s;
+    }
+    .bookmark-item:hover { background: var(--cw-surface-subtle); }
+    .bookmark-item .bm-marker { color: var(--cw-accent, #f0c040); font-size: 0.85em; }
+    .bookmark-item .bm-note { opacity: 0.7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .bookmark-item .bm-date { opacity: 0.45; font-size: 0.85em; margin-left: auto; white-space: nowrap; }
   </style>
 </head>
 <body>
@@ -655,14 +845,24 @@ export class SessionWebviewPanel {
   <p id="session-summary" style="display:none;margin:4px 0 8px;opacity:0.7;font-size:0.875em;font-style:italic;"></p>
   <div id="session-tags" style="display:none"></div>
   <div class="session-meta" id="session-meta">
-    <span id="session-model-field" style="display:none">Model: <span id="session-model"></span></span>
+    <span id="session-date-field" class="cw-meta-date" style="display:none"><span class="cw-meta-label">Date:</span> <span id="session-date"></span></span>
+    <span class="meta-sep" id="session-date-sep" style="display:none"> &nbsp;·&nbsp; </span>
+    <span id="session-model-field" class="cw-meta-model" style="display:none"><span class="cw-meta-label">Model:</span> <span id="session-model"></span></span>
     <span class="meta-sep" id="session-meta-sep" style="display:none"> &nbsp;·&nbsp; </span>
-    <span id="session-req-field" style="display:none">User Requests: <span id="session-user-req"></span></span>
+    <span id="session-req-field" class="cw-meta-req" style="display:none"><span class="cw-meta-label">User Requests:</span> <span id="session-user-req"></span></span>
+    <span class="meta-sep" style="display:none" id="session-status-sep"> &nbsp;·&nbsp; </span>
+    <span id="session-status" style="display:none"></span>
+    <span class="meta-sep" style="display:none" id="session-branch-sep"> &nbsp;·&nbsp; </span>
+    <span id="session-branch-field" class="cw-meta-branch" style="display:none"><span id="session-branch-icon" style="opacity:0.6">⎇</span> <span class="cw-meta-label">Branch:</span> <span id="session-branch"></span></span>
   </div>
   <details id="session-entities" style="display:none">
     <summary class="cw-entities-summary">&#128269; Entities</summary>
     <div id="session-entities-body"></div>
   </details>
+  <div id="bookmarks-section">
+    <summary style="cursor:pointer;opacity:0.65;user-select:none;font-size:0.82em;">&#9733; Bookmarks</summary>
+    <div id="bookmarks-list"></div>
+  </div>
   <div class="toolbar">
     <div class="search-group">
       <input id="search-input" type="text" placeholder="Search in messages&#8230;" autocomplete="off" aria-label="Search within session messages" />
@@ -712,6 +912,66 @@ ${cwInteractiveJs()}
   // ── State ──────────────────────────────────────────────────────────────────
   var _hasMore     = false;
   var _loadingMore = false;
+  var _bookmarks   = [];  // Array<{ messageIndex: number, note: string|null, createdAt: string }>
+  var _annotations = [];  // Array<{ messageIndex: number, text: string, createdAt: string, updatedAt: string|null }>
+
+  // ── Annotation helpers ─────────────────────────────────────────────────────
+  function renderAnnotationBlock(a) {
+    var date = new Date(a.createdAt).toLocaleDateString();
+    var updatedLabel = a.updatedAt ? ' (edited ' + new Date(a.updatedAt).toLocaleDateString() + ')' : '';
+    return '<div class="cw-annotation-block" data-annotation-msg-idx="' + a.messageIndex + '">' +
+      '<div class="cw-annotation-meta">' +
+        '<span class="cw-annotation-label">&#128221; Note</span>' +
+        '<span class="cw-annotation-date">' + date + updatedLabel + '</span>' +
+      '</div>' +
+      '<div class="cw-annotation-text">' + escH(a.text) + '</div>' +
+      '<div class="cw-annotation-actions">' +
+        '<button class="cw-annotation-edit-btn" data-msg-idx="' + a.messageIndex + '">Edit</button>' +
+        '<button class="cw-annotation-delete-btn" data-msg-idx="' + a.messageIndex + '">Delete</button>' +
+      '</div>' +
+    '</div>';
+  }
+
+  function openAnnotationEditor(msgIdx, existingText) {
+    // Close any existing editor first
+    var existing = document.querySelector('.cw-annotation-editor');
+    if (existing) { existing.remove(); }
+    // Find the message element
+    var msgEl = document.querySelector('[data-msg-idx="' + msgIdx + '"]');
+    if (!msgEl) { return; }
+    // Remove existing annotation block for this message if editing
+    var existingBlock = msgEl.querySelector('.cw-annotation-block[data-annotation-msg-idx="' + msgIdx + '"]');
+    if (existingBlock) { existingBlock.style.display = 'none'; }
+    // Create editor
+    var editor = document.createElement('div');
+    editor.className = 'cw-annotation-editor';
+    var textarea = document.createElement('textarea');
+    textarea.value = existingText || '';
+    textarea.placeholder = 'Add your note here…';
+    var actions = document.createElement('div');
+    actions.className = 'cw-annotation-editor-actions';
+    var saveBtn = document.createElement('button');
+    saveBtn.textContent = existingText ? 'Update' : 'Save';
+    var cancelBtn = document.createElement('button');
+    cancelBtn.textContent = 'Cancel';
+    actions.appendChild(saveBtn);
+    actions.appendChild(cancelBtn);
+    editor.appendChild(textarea);
+    editor.appendChild(actions);
+    msgEl.appendChild(editor);
+    textarea.focus();
+    textarea.select();
+    saveBtn.addEventListener('click', function() {
+      var text = textarea.value.trim();
+      if (!text) { editor.remove(); if (existingBlock) { existingBlock.style.display = ''; } return; }
+      vscode.postMessage({ type: 'saveAnnotation', messageIndex: msgIdx, text: text });
+      editor.remove();
+    });
+    cancelBtn.addEventListener('click', function() {
+      editor.remove();
+      if (existingBlock) { existingBlock.style.display = ''; }
+    });
+  }
 
   // ── Tag color palette (matches tree view emoji palette) ───────────────────
   var _CW_TAG_PALETTE = ['#f47067','#f0883e','#e3b341','#56d364','#58a6ff','#bc8cff','#c29070'];
@@ -825,8 +1085,58 @@ ${cwInteractiveJs()}
     hideMenu();
   });
 
-  // ── Turn reference copy button ──────────────────────────────────────────
+  // ── Update bookmarks UI ─────────────────────────────────────────────────
+  function updateBookmarksUI() {
+    var sectionEl = document.getElementById('bookmarks-section');
+    var listEl = document.getElementById('bookmarks-list');
+    if (!listEl || !sectionEl) { return; }
+    if (!_bookmarks || _bookmarks.length === 0) {
+      sectionEl.style.display = 'none';
+      return;
+    }
+    sectionEl.style.display = 'block';
+    // Mark bookmarked messages in the DOM
+    document.querySelectorAll('.message').forEach(function(msgEl) {
+      var msgIdx = parseInt(msgEl.getAttribute('data-msg-idx') || '-1', 10);
+      var bmBtn = msgEl.querySelector('.cw-bookmark-btn');
+      if (bmBtn) {
+        var isBookmarked = _bookmarks.some(function(b) { return b.messageIndex === msgIdx; });
+        bmBtn.textContent = isBookmarked ? '\u2605' : '\u2606';
+        bmBtn.classList.toggle('cw-active', isBookmarked);
+      }
+    });
+    // Populate jump list
+    listEl.innerHTML = _bookmarks.map(function(bm, i) {
+      var dateStr = bm.createdAt ? bm.createdAt.slice(0, 16).replace('T', ' ') : '';
+      var noteHtml = bm.note ? escH(bm.note) : '';
+      return '<div class="bookmark-item" data-bm-idx="' + i + '" data-bm-msg-idx="' + bm.messageIndex + '">' +
+        '<span class="bm-marker">\u2605</span>' +
+        '<span class="bm-note">#' + bm.messageIndex + (noteHtml ? ' &mdash; ' + noteHtml : '') + '</span>' +
+        '<span class="bm-date">' + dateStr + '</span>' +
+        '</div>';
+    }).join('');
+    // Click handler for jump list items
+    listEl.querySelectorAll('.bookmark-item').forEach(function(item) {
+      item.addEventListener('click', function() {
+        var msgIdx = parseInt(item.getAttribute('data-bm-msg-idx') || '-1', 10);
+        if (msgIdx >= 0) {
+          vscode.postMessage({ type: 'bookmarkJumped', messageIndex: msgIdx });
+        }
+      });
+    });
+  }
+
+  // ── Bookmark button click handler (delegated) ────────────────────────
   document.addEventListener('click', function(e) {
+    var bmBtn = e.target && e.target.closest ? e.target.closest('.cw-bookmark-btn') : null;
+    if (bmBtn) {
+      var msgEl = bmBtn.closest('.message');
+      if (msgEl) {
+        var msgIdx = parseInt(bmBtn.getAttribute('data-msg-orig-idx') || msgEl.getAttribute('data-msg-idx') || '-1', 10);
+        if (msgIdx >= 0) { vscode.postMessage({ type: 'bookmarkMessage', messageIndex: msgIdx }); }
+      }
+      return;
+    }
     var btn = e.target && e.target.closest ? e.target.closest('.cw-copy-ref-btn') : null;
     if (!btn) { return; }
     e.stopPropagation();
@@ -1132,6 +1442,7 @@ ${cwInteractiveJs()}
     while (tmp.firstChild) { container.appendChild(tmp.firstChild); }
     highlightAll();
     applyRoleFilter();
+    updateBookmarksUI();
   }
 
   // Try to find and highlight the pending prompt in the DOM.
@@ -1191,14 +1502,27 @@ ${cwInteractiveJs()}
         if (respLabelEl) { respLabelEl.textContent = srcLabel; }
       }
       var metaEl      = document.getElementById('session-meta');
+      var dateField   = document.getElementById('session-date-field');
+      var dateEl      = document.getElementById('session-date');
+      var dateSep     = document.getElementById('session-date-sep');
       var modelField  = document.getElementById('session-model-field');
       var modelEl     = document.getElementById('session-model');
       var reqField    = document.getElementById('session-req-field');
       var reqEl       = document.getElementById('session-user-req');
       var sepEl       = document.getElementById('session-meta-sep');
+      var branchField = document.getElementById('session-branch-field');
+      var branchEl    = document.getElementById('session-branch');
+      var branchSep   = document.getElementById('session-branch-sep');
       var showModel   = data.model && data.model !== 'Unknown';
       var showReq     = data.userRequestCount !== undefined;
-      if (metaEl && (showModel || showReq)) {
+      var showBranch  = !!data.branch;
+      var showDate    = !!data.createdAt;
+      if (metaEl && (showModel || showReq || showBranch || showDate)) {
+        if (showDate && dateField && dateEl) {
+          var d = new Date(data.createdAt);
+          dateEl.textContent = isNaN(d.getTime()) ? data.createdAt : d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+          dateField.style.display = 'inline';
+        }
         if (showModel && modelField && modelEl) {
           modelEl.textContent = data.model;
           modelField.style.display = 'inline';
@@ -1207,7 +1531,15 @@ ${cwInteractiveJs()}
           reqEl.textContent = data.userRequestCount;
           reqField.style.display = 'inline';
         }
-        if (showModel && showReq && sepEl) { sepEl.style.display = 'inline'; }
+        if (showBranch && branchField && branchEl) {
+          branchEl.textContent = data.branch;
+          branchField.style.display = 'inline';
+        }
+        if (dateSep) { dateSep.style.display = (showDate && ((showModel ? 1 : 0) + (showReq ? 1 : 0) + (showBranch ? 1 : 0) >= 1)) ? 'inline' : 'none'; }
+        if (sepEl) {
+          var visibleCount = (showModel ? 1 : 0) + (showReq ? 1 : 0) + (showBranch ? 1 : 0) + (showDate ? 1 : 0);
+          sepEl.style.display = visibleCount >= 2 ? 'inline' : 'none';
+        }
         metaEl.style.display = 'block';
       }
       // Tags chips
@@ -1233,7 +1565,8 @@ ${cwInteractiveJs()}
           { label: '\uD83D\uDCC4 Files',        items: ent.filePaths },
           { label: '\u2699\uFE0F Functions',     items: ent.functionNames },
           { label: '\u26A0\uFE0F Errors',        items: ent.errors },
-          { label: '\uD83D\uDCA1 Decisions',     items: ent.decisions }
+          { label: '\uD83D\uDCA1 Decisions',     items: ent.decisions },
+          { label: '\uD83E\uDDE0 Concepts',      items: ent.semantic }
         ];
         var nonEmpty = entGroups.filter(function(g) { return g.items && g.items.length > 0; });
         if (nonEmpty.length > 0) {
@@ -1259,7 +1592,30 @@ ${cwInteractiveJs()}
           entitiesEl.style.display = 'none';
         }
       }
+      // Status chip
+      var statusEl = document.getElementById('session-status');
+      if (data.status) {
+        var statusLabel = data.status === 'resolved' ? '\u2713 Resolved' : data.status === 'revisit' ? '\u27F2 Revisit' : '\u25CB Open';
+        if (statusEl) { statusEl.textContent = statusLabel; statusEl.style.display = 'inline'; }
+      } else if (statusEl) {
+        statusEl.style.display = 'none';
+      }
+      // Initialize bookmarks and annotations
+      if (data.bookmarks) { _bookmarks = data.bookmarks; }
+      if (data.annotations) { _annotations = data.annotations; }
       container.innerHTML = data.messagesHtml;
+      updateBookmarksUI();
+      // Render annotations for bookmarked messages
+      _annotations.forEach(function(a) {
+        var msgEl = document.querySelector('[data-msg-idx="' + a.messageIndex + '"]');
+        if (!msgEl) { return; }
+        // Remove existing block if any
+        var existingBlock = msgEl.querySelector('.cw-annotation-block');
+        if (existingBlock) { existingBlock.remove(); }
+        var tmp = document.createElement('div');
+        tmp.innerHTML = renderAnnotationBlock(a);
+        while (tmp.firstChild) { msgEl.appendChild(tmp.firstChild); }
+      });
 
       // Informational source notes (e.g. Cursor aiService-only recovery) — not parse failures
       if (data.sourceNotes && data.sourceNotes.length > 0) {
@@ -1330,12 +1686,96 @@ ${cwInteractiveJs()}
       if (_pendingHighlight) { tryHighlightMsg(); }
     }
 
+    if (data.type === 'annotationUpdated') {
+      _annotations = data.annotations || [];
+      // Render annotation blocks
+      _annotations.forEach(function(a) {
+        var msgEl = document.querySelector('[data-msg-idx="' + a.messageIndex + '"]');
+        if (!msgEl) { return; }
+        // Remove existing block if any
+        var existingBlock = msgEl.querySelector('.cw-annotation-block');
+        if (existingBlock) { existingBlock.remove(); }
+        // Remove any open editor
+        var editor = msgEl.querySelector('.cw-annotation-editor');
+        if (editor) { editor.remove(); }
+        // Insert new block
+        var tmp = document.createElement('div');
+        tmp.innerHTML = renderAnnotationBlock(a);
+        while (tmp.firstChild) { msgEl.appendChild(tmp.firstChild); }
+      });
+    }
+
+    if (data.type === 'bookmarkUpdated') {
+      _bookmarks = data.bookmarks || [];
+      // Update bookmark button states
+      document.querySelectorAll('.cw-bookmark-btn').forEach(function(btn) {
+        var idx = parseInt(btn.dataset.msgOrigIdx);
+        var isBookmarked = _bookmarks.some(function(b) { return b.messageIndex === idx; });
+        btn.classList.toggle('cw-active', isBookmarked);
+      });
+      // Update bookmarks section
+      var bmSection = document.getElementById('bookmarks-section');
+      if (_bookmarks.length > 0) {
+        var list = document.getElementById('bookmarks-list');
+        list.innerHTML = _bookmarks.map(function(b) {
+          var label = b.note ? escH(b.note) : 'Message #' + b.messageIndex;
+          return '<div class="bookmark-item" data-bm-idx="' + b.messageIndex + '">' +
+            '<span class="bm-marker">&#9733;</span>' +
+            '<span class="bm-note">' + label + '</span>' +
+            '<span class="bm-date">' + new Date(b.createdAt).toLocaleDateString() + '</span>' +
+          '</div>';
+        }).join('');
+        bmSection.style.display = 'block';
+      } else {
+        bmSection.style.display = 'none';
+      }
+    }
+
     if (data.type === 'cwScroll') {
       // Double rAF: first frame lets the browser apply any pending layout from
       // appended chunks, second frame ensures paint is complete before measuring.
       requestAnimationFrame(function() {
         requestAnimationFrame(function() { cwDoScroll(data); });
       });
+    }
+  });
+
+  // ── Click delegation for annotation buttons ────────────────────────────
+  document.addEventListener('click', function(e) {
+    // Annotation add button
+    var addBtn = e.target && e.target.closest ? e.target.closest('.cw-annotation-btn') : null;
+    if (addBtn) {
+      e.stopPropagation();
+      var msgIdx = parseInt(addBtn.dataset.msgOrigIdx);
+      // Check if annotation already exists
+      var existingAn = _annotations.find(function(a) { return a.messageIndex === msgIdx; });
+      openAnnotationEditor(msgIdx, existingAn ? existingAn.text : '');
+      return;
+    }
+    // Annotation edit button
+    var editBtn = e.target && e.target.closest ? e.target.closest('.cw-annotation-edit-btn') : null;
+    if (editBtn) {
+      e.stopPropagation();
+      var msgIdx2 = parseInt(editBtn.dataset.msgIdx);
+      var existingAn2 = _annotations.find(function(a) { return a.messageIndex === msgIdx2; });
+      openAnnotationEditor(msgIdx2, existingAn2 ? existingAn2.text : '');
+      return;
+    }
+    // Annotation delete button
+    var delBtn = e.target && e.target.closest ? e.target.closest('.cw-annotation-delete-btn') : null;
+    if (delBtn) {
+      e.stopPropagation();
+      var msgIdx3 = parseInt(delBtn.dataset.msgIdx);
+      vscode.postMessage({ type: 'deleteAnnotation', messageIndex: msgIdx3 });
+      return;
+    }
+    // Bookmark button
+    var bmBtn = e.target && e.target.closest ? e.target.closest('.cw-bookmark-btn') : null;
+    if (bmBtn) {
+      e.stopPropagation();
+      var bmIdx = parseInt(bmBtn.dataset.msgOrigIdx);
+      vscode.postMessage({ type: 'bookmarkMessage', messageIndex: bmIdx });
+      return;
     }
   });
 
@@ -1348,6 +1788,88 @@ ${cwInteractiveJs()}
 </script>
 </body>
 </html>`;
+    }
+
+    // ── Bookmark toggle handler ──────────────────────────────────────────────
+
+    static async _toggleBookmark(sessionId: string, messageIndex: number): Promise<void> {
+        const store = SessionWebviewPanel._sidecarStore;
+        if (!store) { return; }
+
+        await store.toggleBookmark(sessionId, messageIndex);
+
+        // Notify the index to refresh its sidecar cache
+        SessionWebviewPanel._onSidecarChanged?.(sessionId);
+
+        // Send updated bookmarks list to all panels for this session
+        const panel = SessionWebviewPanel._panels.get(sessionId);
+        if (panel) {
+            const bookmarks = await store.getBookmarks(sessionId);
+            void panel.webview.postMessage({
+                type: 'bookmarkUpdated',
+                bookmarks: bookmarks.map(b => ({
+                    messageIndex: b.messageIndex,
+                    note: b.note || null,
+                    createdAt: b.createdAt,
+                })),
+            });
+        }
+    }
+
+    // ── Annotation handlers ──────────────────────────────────────────────────
+
+    static async _saveAnnotation(sessionId: string, messageIndex: number, text: string): Promise<void> {
+        const store = SessionWebviewPanel._sidecarStore;
+        if (!store) { return; }
+
+        const annotation: import('../types/index').MessageAnnotation = {
+            messageIndex,
+            text,
+            createdAt: new Date().toISOString(),
+        };
+        await store.upsertAnnotation(sessionId, annotation);
+
+        // Notify the index to refresh its sidecar cache
+        SessionWebviewPanel._onSidecarChanged?.(sessionId);
+
+        // Send updated annotation state to all panels for this session
+        const panel = SessionWebviewPanel._panels.get(sessionId);
+        if (panel) {
+            const annotations = await store.getAnnotations(sessionId);
+            void panel.webview.postMessage({
+                type: 'annotationUpdated',
+                annotations: annotations.map(a => ({
+                    messageIndex: a.messageIndex,
+                    text: a.text,
+                    createdAt: a.createdAt,
+                    updatedAt: a.updatedAt || null,
+                })),
+            });
+        }
+    }
+
+    static async _deleteAnnotation(sessionId: string, messageIndex: number): Promise<void> {
+        const store = SessionWebviewPanel._sidecarStore;
+        if (!store) { return; }
+
+        await store.removeAnnotation(sessionId, messageIndex);
+
+        // Notify the index to refresh its sidecar cache
+        SessionWebviewPanel._onSidecarChanged?.(sessionId);
+
+        const panel = SessionWebviewPanel._panels.get(sessionId);
+        if (panel) {
+            const annotations = await store.getAnnotations(sessionId);
+            void panel.webview.postMessage({
+                type: 'annotationUpdated',
+                annotations: annotations.map(a => ({
+                    messageIndex: a.messageIndex,
+                    text: a.text,
+                    createdAt: a.createdAt,
+                    updatedAt: a.updatedAt || null,
+                })),
+            });
+        }
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

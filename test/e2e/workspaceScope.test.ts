@@ -81,7 +81,7 @@ suite('WorkspaceScopeManager', () => {
         assert.deepStrictEqual(mgr.getSelectedIds(), []);
     });
 
-    test('initDefault() always overwrites previously stored IDs', async () => {
+    test('initDefault() preserves previously stored IDs when no folder is open (test host)', async () => {
         const { context, store } = makeContext();
         store.set('chatwizard.selectedWorkspaceIds', ['ws-original']);
         const mgr = new WorkspaceScopeManager(context);
@@ -90,8 +90,9 @@ suite('WorkspaceScopeManager', () => {
             makeWorkspace('ws-new', '/projects/bar'),
         ];
         await mgr.initDefault(available);
-        // Always re-detects from open workspace; no workspace in test host → empty
-        assert.deepStrictEqual(mgr.getSelectedIds(), []);
+        // No VS Code workspace folder in the test host → the persisted selection
+        // is kept as-is so a manually configured scope is not lost.
+        assert.deepStrictEqual(mgr.getSelectedIds(), ['ws-original']);
     });
 
     test('initDefault() with empty available list persists empty array', async () => {
@@ -112,7 +113,7 @@ suite('WorkspaceScopeManager', () => {
         assert.deepStrictEqual(mgr.getSelectedIds(), firstResult);
     });
 
-    test('initDefault() does not preserve stale IDs across calls', async () => {
+    test('initDefault() preserves previously stored IDs across calls when no folder is open (test host)', async () => {
         const { context, store } = makeContext();
         store.set('chatwizard.selectedWorkspaceIds', ['ws-old', 'ws-keep']);
         const mgr = new WorkspaceScopeManager(context);
@@ -121,11 +122,11 @@ suite('WorkspaceScopeManager', () => {
             makeWorkspace('ws-new', '/projects/new'),
         ];
         await mgr.initDefault(available);
-        // Always re-detects; no workspace open in test host → empty
-        assert.deepStrictEqual(mgr.getSelectedIds(), []);
+        // No open folder in the test host → persisted selection is preserved.
+        assert.deepStrictEqual(mgr.getSelectedIds(), ['ws-old', 'ws-keep']);
     });
 
-    test('initDefault() sets empty scope when previously stored IDs are all stale', async () => {
+    test('initDefault() preserves previously stored IDs even when they are stale (no folder open in test host)', async () => {
         const { context, store } = makeContext();
         store.set('chatwizard.selectedWorkspaceIds', ['stale-1', 'stale-2']);
         const mgr = new WorkspaceScopeManager(context);
@@ -134,8 +135,8 @@ suite('WorkspaceScopeManager', () => {
             makeWorkspace('ws-b', '/projects/b'),
         ];
         await mgr.initDefault(available);
-        // Always re-detects from open workspace; no workspace open in test host → empty
-        assert.deepStrictEqual(mgr.getSelectedIds(), []);
+        // No open folder in the test host → persisted selection is preserved.
+        assert.deepStrictEqual(mgr.getSelectedIds(), ['stale-1', 'stale-2']);
     });
 });
 
@@ -151,8 +152,9 @@ suite('calcWorkspaceSizeMb', () => {
         tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cw-size-test-'));
     });
 
-    teardown(async () => {
-        await fs.promises.rm(tmpDir, { recursive: true, force: true });
+    teardown(async function () {
+        this.timeout(15000);
+        await fs.promises.rm(tmpDir, { recursive: true, force: true, maxRetries: 3 });
     });
 
     test('returns 0 when storageDir does not exist', async () => {

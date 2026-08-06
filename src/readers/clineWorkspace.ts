@@ -25,19 +25,24 @@ export function getClineCompatStorageRoot(extensionId: string): string {
     const platform = process.platform;
     let globalStorageBase: string;
     if (platform === 'win32') {
-        globalStorageBase = path.join(
-            process.env['APPDATA'] || os.homedir(),
-            'Code', 'User', 'globalStorage'
-        );
+        const appData = process.env['APPDATA'] || os.homedir();
+        // Prefer VS Code Insiders path when it exists; fall back to stable.
+        const insidersBase = path.join(appData, 'Code - Insiders', 'User', 'globalStorage');
+        const stableBase = path.join(appData, 'Code', 'User', 'globalStorage');
+        const insidersTaskDir = path.join(insidersBase, extensionId, 'tasks');
+        globalStorageBase = fs.existsSync(insidersTaskDir) ? insidersBase : stableBase;
     } else if (platform === 'darwin') {
-        globalStorageBase = path.join(
-            os.homedir(), 'Library', 'Application Support', 'Code', 'User', 'globalStorage'
-        );
+        const home = os.homedir();
+        const insidersBase = path.join(home, 'Library', 'Application Support', 'Code - Insiders', 'User', 'globalStorage');
+        const stableBase = path.join(home, 'Library', 'Application Support', 'Code', 'User', 'globalStorage');
+        const insidersTaskDir = path.join(insidersBase, extensionId, 'tasks');
+        globalStorageBase = fs.existsSync(insidersTaskDir) ? insidersBase : stableBase;
     } else {
-        globalStorageBase = path.join(
-            process.env['XDG_CONFIG_HOME'] || path.join(os.homedir(), '.config'),
-            'Code', 'User', 'globalStorage'
-        );
+        const configHome = process.env['XDG_CONFIG_HOME'] || path.join(os.homedir(), '.config');
+        const insidersBase = path.join(configHome, 'Code - Insiders', 'User', 'globalStorage');
+        const stableBase = path.join(configHome, 'Code', 'User', 'globalStorage');
+        const insidersTaskDir = path.join(insidersBase, extensionId, 'tasks');
+        globalStorageBase = fs.existsSync(insidersTaskDir) ? insidersBase : stableBase;
     }
     return path.join(globalStorageBase, extensionId, 'tasks');
 }

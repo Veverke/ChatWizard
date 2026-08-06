@@ -13,9 +13,36 @@ export type SessionIndexEvent =
  * Convert a full Session to a lightweight SessionSummary.
  * Counts are computed from the messages array; message content is not retained.
  */
+/** Lightweight token estimate: word count divided by 4 (GPT-style approximation). */
+function estimateTokens(text: string): number {
+    // Split on whitespace — fast and allocation-minimal
+    let count = 0;
+    let inWord = false;
+    for (let i = 0; i < text.length; i++) {
+        const ch = text.charCodeAt(i);
+        const ws = ch === 32 || ch === 9 || ch === 10 || ch === 13;
+        if (!ws && !inWord) { count++; inWord = true; }
+        else if (ws) { inWord = false; }
+    }
+    return Math.ceil(count / 4);
+}
+
 export function toSummary(session: Session): SessionSummary {
-    const userMessageCount = session.messages.filter(m => m.role === 'user').length;
-    const assistantMessageCount = session.messages.filter(m => m.role === 'assistant').length;
+    let userMessageCount = 0;
+    let assistantMessageCount = 0;
+    let userTokens = 0;
+    let assistantTokens = 0;
+
+    for (const m of session.messages) {
+        if (m.role === 'user') {
+            userMessageCount++;
+            userTokens += estimateTokens(m.content);
+        } else {
+            assistantMessageCount++;
+            assistantTokens += estimateTokens(m.content);
+        }
+    }
+
     const lastMsg = session.messages[session.messages.length - 1];
     const interrupted = lastMsg?.role === 'user' ? true : undefined;
 
@@ -37,6 +64,9 @@ export function toSummary(session: Session): SessionSummary {
         hasParseErrors: (session.parseErrors?.length ?? 0) > 0 || undefined,
         archived: session.archived || undefined,
         userArchived: session.userArchived || undefined,
+        userTokens,
+        assistantTokens,
+        branch: session.gitContext?.branch ?? session.chronicleData?.branch ?? undefined,
     };
 }
 
@@ -63,9 +93,36 @@ export class SessionIndex {
     /** Preloaded sidecar metadata — set by `setSidecarCache()` after async load */
     private _sidecarCache: Map<string, SessionMetadata> | null = null;
     private _sidecarStore: SidecarMetadataStore | null = null;
+    /** Debounce handle — plain change listeners are coalesced within a 0 ms task boundary. */
+    private _notifyDebounce: ReturnType<typeof setTimeout> | null = null;
+
+    /** Session retention: suppress sessions older than this many days (0 = no limit) */
+    private _retentionDays = 0;
 
     constructor() {
         this.sessions = new Map();
+    }
+
+    /**
+     * Set the session retention window (days). When > 0, sessions older than
+     * this number of days are excluded from getAllSummaries(), search, and analytics.
+     * Source files are never touched. Pass 0 to disable filtering.
+     */
+    setRetentionDays(days: number): void {
+        const prev = this._retentionDays;
+        this._retentionDays = Math.max(0, Math.round(days));
+        if (prev !== this._retentionDays) {
+            this._invalidateCaches();
+            this._notifyListeners();
+        }
+    }
+
+    /** Returns true when a session falls within the current retention window. */
+    private _isWithinRetention(updatedAt: string): boolean {
+        if (this._retentionDays === 0) { return true; }
+        const cutoff = Date.now() - this._retentionDays * 86_400_000;
+        const sessionTime = new Date(updatedAt).getTime();
+        return !isNaN(sessionTime) && sessionTime >= cutoff;
     }
 
     /** Monotonically-increasing counter — incremented on every upsert, remove, or batchUpsert. */
@@ -113,6 +170,19 @@ export class SessionIndex {
         return this._sidecarCache?.get(sessionId);
     }
 
+    /**
+     * Refreshes a single sidecar metadata entry from the store into the cache.
+     * Call this after modifying bookmarks, annotations, ratings, etc. so that
+     * subsequent getSidecarMeta() calls return the latest data.
+     */
+    async refreshSidecarMeta(sessionId: string): Promise<void> {
+        if (!this._sidecarStore) { return; }
+        const meta = await this._sidecarStore.get(sessionId);
+        if (meta && this._sidecarCache) {
+            this._sidecarCache.set(sessionId, meta);
+        }
+    }
+
     /** Exposes the sidecar store for commands that need to write metadata. */
     get sidecarStore(): SidecarMetadataStore | null {
         return this._sidecarStore;
@@ -131,6 +201,7 @@ export class SessionIndex {
     private _notifyListeners(): void {
         for (const fn of this._changeListeners) { fn(); }
     }
+
 
     private _notifyTyped(event: SessionIndexEvent): void {
         for (const fn of this._typedChangeListeners) { fn(event); }
@@ -229,6 +300,7 @@ export class SessionIndex {
     /** Build (or rebuild) the sorted summary cache from current sessions. */
     private _buildSummaryCache(): void {
         this._summaryCache = Array.from(this.sessions.values())
+            .filter(s => this._isWithinRetention(s.updatedAt))
             .map(s => {
                 const summary = toSummary(s);
                 const custom = this._sidecarCache?.get(s.id)?.customTitle;
@@ -362,6 +434,11 @@ export class SessionIndex {
         const results: SessionSummary[] = [];
 
         for (const session of this.sessions.values()) {
+            // Apply retention filter
+            if (!this._isWithinRetention(session.updatedAt)) {
+                continue;
+            }
+
             if (sourceFilter !== undefined && session.source !== sourceFilter) {
                 continue;
             }

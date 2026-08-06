@@ -25,23 +25,58 @@ const EXPECTED_LEAF_COMMANDS: ReadonlySet<string> = new Set([
     'chatwizard.showTimeline',
     // Search
     'chatwizard.search',
+    'chatwizard.searchAnnotations',
     'chatwizard.semanticSearch',
     // Organise
     'chatwizard.filterSessions',
     'chatwizard.configureSortOrder',
     'chatwizard.filterCodeBlocks',
+    // Session
+    'chatwizard.setSessionStatus',
+    'chatwizard.filterByStatus',
+    'chatwizard.addBookmark',
+    'chatwizard.removeBookmark',
+    'chatwizard.addTag',
+    'chatwizard.removeTag',
+    'chatwizard.tagActiveSession',
+    'chatwizard.regenerateTitle',
+    'chatwizard.regenerateAllTitles',
+    'chatwizard.regenerateSummary',
+    'chatwizard.pinSession',
+    'chatwizard.unpinSession',
+    'chatwizard.groupSessions',
+    'chatwizard.injectAsContext',
+    'chatwizard.revealSessionInExplorer',
+    'chatwizard.addAnnotation',
+    'chatwizard.generateDigest',
     // Export
     'chatwizard.exportAll',
     'chatwizard.exportSelected',
     'chatwizard.exportExcerpt',
-    // Workspace
+    'chatwizard.exportSession',
+    'chatwizard.exportFromTreeSelection',
+    'chatwizard.exportToObsidian',
+    'chatwizard.exportToNotion',
+    'chatwizard.forgetNotionApiKey',
+    // Folder & Archive
+    'chatwizard.createFolder',
+    'chatwizard.createSubfolder',
+    'chatwizard.renameFolder',
+    'chatwizard.deleteFolder',
+    'chatwizard.moveSessionToFolder',
+    'chatwizard.archiveSession',
+    'chatwizard.deleteArchivedSession',
+    'chatwizard.showArchiveStats',
+    // Workspace / Settings
     'chatwizard.manageWatchedWorkspaces',
     'chatwizard.rescan',
-    // MCP server
     'chatwizard.startMcpServer',
     'chatwizard.stopMcpServer',
     'chatwizard.copyMcpConfig',
     'chatwizard.rotateMcpToken',
+    'chatwizard.setupGlobalInstructions',
+    'chatwizard.connectCopilot',
+    'chatwizard.showFileHistory',
 ]);
 
 // Authoritative set of top-level category command IDs contributed to the palette.
@@ -49,7 +84,9 @@ const EXPECTED_CATEGORY_IDS: ReadonlySet<string> = new Set([
     'chatwizard.views',
     'chatwizard.searchMenu',
     'chatwizard.organise',
+    'chatwizard.session',
     'chatwizard.export',
+    'chatwizard.folder',
     'chatwizard.workspace',
 ]);
 

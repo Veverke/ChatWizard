@@ -88,7 +88,7 @@ async function main(): Promise<void> {
 
     // ── Scenario 3: /mcp-config endpoint ─────────────────────────────────────────
     console.log('\nScenario 3: /mcp-config endpoint');
-    const mcpConfig = await httpGet('http://localhost:19999/mcp-config');
+    const mcpConfig = await httpGet('http://localhost:19999/mcp-config', { Authorization: `Bearer ${TOKEN}` });
     assert(mcpConfig.status === 200, `/mcp-config returns 200`);
     const configJson = JSON.parse(mcpConfig.body);
     assert(configJson.url.includes('19999'), `config includes correct port`);

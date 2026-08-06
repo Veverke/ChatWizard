@@ -48,7 +48,7 @@ function cap(value: string | null): string | null {
  * Falls back to newline/comma splitting for older or non-standard encodings.
  * Returns `undefined` when the value is null or empty.
  */
-function parseImportantFiles(raw: string | null): string[] | undefined {
+export function parseImportantFiles(raw: string | null): string[] | undefined {
     if (!raw || raw.trim() === '') { return undefined; }
     // Try JSON array first (standard Chronicle format)
     try {

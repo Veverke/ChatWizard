@@ -10,22 +10,37 @@ import { SEMANTIC_DIMS } from '../../src/search/semanticContracts';
 function makeMockFactory(
     embedding: Float32Array = new Float32Array(SEMANTIC_DIMS).fill(0.1),
     opts: { delay?: number; shouldThrow?: Error } = {},
-): { factory: PipelineFactory; callCount: number; lastText: string | undefined } {
-    const state = { callCount: 0, lastText: undefined as string | undefined };
+): { factory: PipelineFactory; callCount: number; lastText: string | undefined; lastTexts: string[] | undefined } {
+    const state = { callCount: 0, lastText: undefined as string | undefined, lastTexts: undefined as string[] | undefined };
     const factory: PipelineFactory = async (_cacheDir, _onProgress) => {
         if (opts.shouldThrow) {
             throw opts.shouldThrow;
         }
         state.callCount++;
-        return async (text: string, _options: Record<string, unknown>) => {
+        const pipeline = async (text: string | string[], _options: Record<string, unknown>) => {
+            if (Array.isArray(text)) {
+                state.lastText = text[text.length - 1];
+                state.lastTexts = text;
+                if (opts.delay) {
+                    await new Promise(r => setTimeout(r, opts.delay));
+                }
+                const batchSize = text.length;
+                const dims = embedding.length;
+                const flat = new Float32Array(batchSize * dims);
+                for (let i = 0; i < batchSize; i++) {
+                    flat.set(embedding, i * dims);
+                }
+                return { data: flat };
+            }
             state.lastText = text;
             if (opts.delay) {
                 await new Promise(r => setTimeout(r, opts.delay));
             }
             return { data: embedding };
         };
+        return pipeline;
     };
-    return Object.assign(state, { factory });
+    return Object.assign(state, { factory, lastTexts: undefined as string[] | undefined });
 }
 
 // ── isReady ───────────────────────────────────────────────────────────────────

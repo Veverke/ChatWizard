@@ -15,6 +15,15 @@ export default defineConfig({
                 timeout: 10000,
             },
         },
+        {
+            version,
+            files: ['out/test/unit/*.test.js'],
+            mocha: {
+                ui: 'tdd',
+                color: true,
+                timeout: 10000,
+            },
+        },
     ],
     coverage: {
         exclude: [

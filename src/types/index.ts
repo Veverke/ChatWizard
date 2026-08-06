@@ -1,7 +1,7 @@
 // src/types/index.ts
 
 /** Which AI chat extension produced the session */
-export type SessionSource = 'copilot' | 'claude' | 'cline' | 'roocode' | 'cursor' | 'windsurf' | 'aider' | 'antigravity' | 'continue' | 'amazonq' | 'geminiCodeAssist';
+export type SessionSource = 'copilot' | 'claude' | 'cline' | 'roocode' | 'cursor' | 'windsurf' | 'aider' | 'antigravity' | 'continue' | 'amazonq' | 'geminiCodeAssist' | 'zed' | 'tabnine';
 
 /** Role of a message participant */
 export type MessageRole = 'user' | 'assistant';
@@ -94,6 +94,22 @@ export interface Session {
      * Chronicle `checkpoints.important_files` (Feature 14).
      */
     importantFiles?: string[];
+    /**
+     * True when the Claude Code JSONL contains a `"type":"summary"` compaction entry,
+     * meaning earlier turns were compacted and are no longer available (Feature 45).
+     */
+    isCompacted?: boolean;
+    /**
+     * The prose summary text from the `"type":"summary"` compaction entry (Feature 45).
+     * Rendered as a "Context summary from earlier conversation" block at the top of the reader.
+     */
+    compactionSummary?: string;
+    /**
+     * Git branch and commit captured at the time the session was indexed (Feature 25).
+     * Distinct from chronicleData.branch which comes from Copilot's internal Chronicle DB.
+     * Populated by readGitContextAsync() during file indexing.
+     */
+    gitContext?: GitContext;
 }
 
 /** Copilot Chronicle checkpoint summary attached to a Copilot session */
@@ -175,6 +191,51 @@ export interface SessionSummary {
     archived?: boolean;
     /** True when the user explicitly archived this session via the context menu (vs. auto-archived due to source tool pruning) */
     userArchived?: boolean;
+    /** Pre-computed token estimate for all user messages (word-count / 4). Populated by toSummary(). */
+    userTokens?: number;
+    /** Pre-computed token estimate for all assistant messages (word-count / 4). Populated by toSummary(). */
+    assistantTokens?: number;
+    /** Git branch active at index time (from gitContext or chronicleData). Populated by toSummary(). */
+    branch?: string;
+}
+
+/**
+ * A folder node in the folder tree.
+ * Folders can be nested (parentId) and have an ordered list of session child IDs.
+ */
+export interface SessionFolder {
+    /** Unique identifier for the folder */
+    id: string;
+    /** Display name */
+    name: string;
+    /** Parent folder ID, or null for root-level folders */
+    parentId: string | null;
+    /** Ordered list of session IDs in this folder (not in subfolders) */
+    sessionIds: string[];
+    /** Ordered list of subfolder IDs */
+    childFolderIds: string[];
+    /** ISO timestamp of folder creation */
+    createdAt: string;
+    /** ISO timestamp of last modification */
+    updatedAt: string;
+}
+
+/** Computed stats for a folder, shown in the hover tooltip overlay. */
+export interface FolderStats {
+    /** Total number of session leaves at all nesting levels */
+    totalChats: number;
+    /** Sum of fileSizeBytes across all descendant sessions */
+    totalSizeBytes: number;
+    /** Formatted size string (e.g. "1.2 MB") */
+    totalSizeFormatted: string;
+    /** Unique source names across all descendant sessions */
+    sources: string[];
+    /** Unique model names across all descendant sessions */
+    models: string[];
+    /** Earliest updatedAt among descendant sessions (ISO date string) */
+    minDate?: string;
+    /** Latest updatedAt among descendant sessions (ISO date string) */
+    maxDate?: string;
 }
 
 /** Per-assistant request count within a WorkspaceUsage */
@@ -310,7 +371,7 @@ export interface SessionMetadata {
     status?: 'open' | 'resolved' | 'revisit';
     /** Pinned to top of tree view */
     isPinned?: boolean;
-    annotations?: SessionAnnotation[];
+    annotations?: MessageAnnotation[];
     /** Explicit forward/backward session links */
     linkedSessionIds?: string[];
     /** Sub-source discriminator (e.g. 'brain' | 'conversations' for Antigravity) */
@@ -325,6 +386,10 @@ export interface SessionMetadata {
     entities?: ExtractedEntities;
     /** Version of the entity extractor that produced `entities` (bump to invalidate cache) */
     entitiesVersion?: number;
+    /** Feature 29 — Bookmarks pointing to specific messages within a session */
+    bookmarks?: SessionBookmark[];
+    /** Feature 34 — Action items extracted from or manually added to a session */
+    actionItems?: ActionItem[];
 }
 
 /** An in-line annotation attached to a specific message in a session */
@@ -336,6 +401,48 @@ export interface SessionAnnotation {
     createdAt: string;
 }
 
+// ─── P3 Feature types ─────────────────────────────────────────────────────────
+
+/** Feature 30 — Inline annotation attached to a specific message (P3, richer version of SessionAnnotation) */
+export interface MessageAnnotation {
+    messageIndex: number;
+    text: string;
+    createdAt: string;      // ISO-8601
+    updatedAt?: string;
+}
+
+/** Feature 29 — Bookmark pointing to a specific message within a session */
+export interface SessionBookmark {
+    /** 0-based index into session.messages */
+    messageIndex: number;
+    note?: string;
+    /** ISO-8601 */
+    createdAt: string;
+}
+
+/** Feature 34 — Action item extracted from or manually added to a session */
+export interface ActionItem {
+    id: string;
+    text: string;
+    done: boolean;
+    createdAt: string;
+    source: 'extracted' | 'manual';
+    /** 0-based message index within the session — populated by heuristic extractor */
+    messageIndex?: number;
+    /** Whether this action item has been verified by an LLM pass */
+    verified?: boolean;
+}
+
+/** Feature 25 — Git context captured at session-open time */
+export interface GitContext {
+    branch: string;
+    headCommit?: string;   // short SHA (7 chars)
+    repoRoot?: string;
+}
+
+// Add gitContext to Session is done below (see Session interface)
+// This type lives here so it can be imported independently.
+
 /** Structured entities extracted from session content (Feature 19) */
 export interface ExtractedEntities {
     /** Source file paths mentioned in the session */
@@ -346,4 +453,6 @@ export interface ExtractedEntities {
     errors: string[];
     /** Decision phrases ("I decided to...", "we chose...", etc.) */
     decisions: string[];
+    /** Semantic entities from the LLM pass (frameworks, APIs, concepts, tools, languages) */
+    semantic?: string[];
 }

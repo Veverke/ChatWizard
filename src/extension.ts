@@ -13,6 +13,7 @@ import {
     SessionTreeItem,
     DateGroupTreeItem,
     ContextGroupTreeItem,
+    FolderGroupTreeItem,
     LoadMoreTreeItem,
     SortMode,
     SortKey,
@@ -28,7 +29,9 @@ import { CodeBlockTreeProvider, CodeBlockFilter, CbSortMode, CodeBlockSessionRef
 import { SessionWebviewPanel } from './views/sessionWebviewPanel';
 import { FullTextSearchEngine } from './search/fullTextEngine';
 import { SearchPanel } from './search/searchPanel';
+import { AnnotationSearchPanel } from './search/annotationSearchPanel';
 import { registerExportCommands, performExport } from './export/exportCommands';
+import { exportSessionAsHtml } from './export/sessionHtmlExporter';
 import { CodeBlockSearchEngine } from './codeblocks/codeBlockSearchEngine';
 import { CodeBlocksPanel } from './codeblocks/codeBlocksPanel';
 import { PromptLibraryPanel } from './prompts/promptLibraryPanel';
@@ -37,9 +40,11 @@ import { AnalyticsPanel } from './analytics/analyticsPanel';
 import { AnalyticsViewProvider } from './analytics/analyticsViewProvider';
 import { ModelUsageViewProvider } from './analytics/modelUsageViewProvider';
 import { TimelineViewProvider } from './timeline/timelineViewProvider';
+import { KbViewProvider } from './analytics/kbViewProvider';
 import { TelemetryRecorder } from './telemetry/telemetryRecorder';
 import { registerManageWorkspacesCommand } from './commands/manageWorkspaces';
 import { registerPaletteCommands } from './commands/paletteCommands';
+import { registerSessionLifecycleCommands } from './commands/sessionLifecycleCommands';
 import { SemanticIndexer, defaultVsCodeApi } from './search/semanticIndexer';
 import { EmbeddingEngine } from './search/embeddingEngine';
 import { SemanticIndex } from './search/semanticIndex';
@@ -57,9 +62,12 @@ import { ListSourcesTool } from './mcp/tools/listSourcesTool';
 import { ServerInfoTool } from './mcp/tools/serverInfoTool';
 import { QueryHistoryPrompt, ContinueFromHistoryPrompt, GetPromptsPrompt } from './mcp/prompts/contextPrompts';
 import { isNewerVersion } from './utils/semver';
+import { createLogger, getSharedChannel, type BoundLogger } from './utils/logger';
+import { loadUiState, saveUiState } from './utils/persistedUiState';
 import { registerChatParticipant } from './mcp/chatParticipant';
 import { NullSemanticIndexer, ISemanticIndexer } from './search/semanticContracts';
 import { SidecarMetadataStore } from './index/sidecarMetadataStore';
+import { FolderStore } from './index/folderStore';
 import { SessionArchive } from './archive/sessionArchive';
 import { SummaryGenerator, runSummaryBackgroundJob } from './analytics/summaryGenerator';
 import { runEntityExtractionJob } from './analytics/entityExtractor';
@@ -70,20 +78,42 @@ import { SessionsForBranchTool } from './mcp/tools/sessionsForBranchTool';
 import { SessionsForWorkItemTool } from './mcp/tools/sessionsForWorkItemTool';
 import { FileHistoryStatusBarItem } from './ui/fileHistoryStatusBar';
 import { BrandingStatusBarItem } from './ui/brandingStatusBar';
+import { DidYouKnowNudge } from './ui/didYouKnowNudge';
 import { FileHistoryCodeLensProvider } from './ui/fileHistoryCodeLens';
 import { FileHistoryPanel } from './views/fileHistoryPanel';
 import { discoverChronicleDbsAsync } from './readers/chronicleWorkspace';
 import { ActiveSessionTagButton } from './ui/activeSessionTagButton';
-import { SessionCostAdvisorNotifier } from './ui/sessionCostAdvisorNotifier';
 import { LiveSessionTracker } from './utils/liveSessionTracker';
 import { PromptAnalyzer } from './analytics/promptAnalyzer';
 import { readChronicleCheckpoints, readChronicleSessions } from './parsers/chronicle';
+import { CacheIntegration } from './cache/cacheIntegration';
+import { resolveSharedCacheDir } from './utils/sharedCachePath';
+import * as path from 'path';
+import { RestApiServer } from './api/restApiServer';
+import { CloudSyncManager } from './cloud/cloudSyncManager';
 
 let watcher: ChatWizardWatcher | undefined;
+/** Deferred reference — set after scopeManager is created so the archive listener
+ *  (registered before scopeManager) can filter restored sessions by workspace scope. */
+let _scopeManagerRef: WorkspaceScopeManager | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
-    const channel = vscode.window.createOutputChannel('Chat Wizard');
+    const startedAt = Date.now();
+
+    const channel = getSharedChannel();
     context.subscriptions.push(channel);
+    channel.appendLine('[Chat Wizard] activate() started.');
+
+    const log = createLogger(channel).withContext('Activate');
+    log.info('Extension activation started');
+
+    // Log all chatwizard.* config settings at startup
+    const cfg = vscode.workspace.getConfiguration('chatwizard');
+    const allCfg = cfg.inspect<unknown>('');
+    log.info('Configuration: enableSemanticSearch=%s logLevel=%s enableTelemetry=%s',
+        cfg.get('enableSemanticSearch', true),
+        cfg.get('logLevel', 'INFO'),
+        cfg.get('enableTelemetry', false));
 
     // Local telemetry recorder (opt-in, no external calls)
     const telemetry = new TelemetryRecorder(context.globalStorageUri.fsPath);
@@ -95,10 +125,44 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     const index = new SessionIndex();
 
+    // Feature 43: Apply session retention days from config (0 = no limit)
+    const retentionDays = vscode.workspace.getConfiguration('chatwizard').get<number>('sessionRetentionDays', 0);
+    if (retentionDays > 0) {
+        index.setRetentionDays(retentionDays);
+    }
+
+    // ── Feature 24: SQLite Persistent Cache ──────────────────────────────────
+    // Wrap in try/catch so a corrupt/unreadable DB does not block the entire
+    // extension startup — the extension can still function without the cache.
+    const enableCache = vscode.workspace.getConfiguration('chatwizard').get<boolean>('enablePersistentCache', true);
+    let cacheIntegration: CacheIntegration | undefined;
+    if (enableCache) {
+        channel.appendLine('[Chat Wizard] Initialising SQLite persistent cache…');
+        try {
+            // Feature 24b (shared cache): resolve the cache directory from the
+            // `chatwizard.sharedCacheDir` setting — empty string defaults to a
+            // cross-IDE location outside any IDE's own app-data.
+            const sharedDir = vscode.workspace.getConfiguration('chatwizard').get<string>('sharedCacheDir', '');
+            const cacheDir = resolveSharedCacheDir(sharedDir);
+            channel.appendLine(`[Chat Wizard] Cache directory: ${cacheDir}`);
+            cacheIntegration = new CacheIntegration(cacheDir);
+            channel.appendLine('[Chat Wizard] SQLite persistent cache initialised.');
+        } catch (err) {
+            channel.appendLine(`[Chat Wizard] SQLite cache init failed (continuing without cache): ${err}`);
+        }
+    }
+
     // Branding status-bar item — created early so all listeners below can call brandingBar.notify()
     const version = String(context.extension.packageJSON.version ?? '0.0.0');
     const brandingBar = new BrandingStatusBarItem(version);
     context.subscriptions.push(brandingBar);
+
+    // Did-You-Know nudge — parses section headings from user-guide.md and
+    // cycles through them on the squirrel mascot every 5 minutes.
+    const userGuidePath = path.join(context.extensionPath, 'docs', 'user-guide.md');
+    const didYouKnowNudge = new DidYouKnowNudge(brandingBar, userGuidePath, context.extensionPath);
+    context.subscriptions.push(didYouKnowNudge);
+    channel.appendLine('[Chat Wizard] DidYouKnow nudge initialised.');
 
     // Sidecar metadata store — persists pins, custom titles, tags etc. outside source files.
     const sidecarStore = new SidecarMetadataStore(context.globalStorageUri.fsPath);
@@ -107,6 +171,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     void sidecarStore.load().then(cache => {
         index.setSidecarStore(sidecarStore, cache);
     });
+    // Wire the sidecar store into SessionWebviewPanel so bookmark/annotation toggles work.
+    SessionWebviewPanel._sidecarStore = sidecarStore;
+    // Refresh the index sidecar cache after bookmark/annotation changes so re-opened sessions see the latest data.
+    SessionWebviewPanel._onSidecarChanged = async (sessionId: string) => {
+        await index.refreshSidecarMeta(sessionId);
+    };
 
     // Migrate legacy pin state from globalState → sidecarStore (run once, version-gated).
     if (context.globalState.get<string>('chatwizard.sidecarMigrationVersion') !== '1') {
@@ -154,6 +224,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const timelineViewProvider = new TimelineViewProvider(index, context);
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider(TimelineViewProvider.viewType, timelineViewProvider)
+    );
+
+    const kbViewProvider = new KbViewProvider(index, sidecarStore, context.globalState);
+    context.subscriptions.push(
+        vscode.window.registerWebviewViewProvider(KbViewProvider.viewType, kbViewProvider)
     );
 
     context.subscriptions.push(
@@ -210,35 +285,60 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     context.subscriptions.push(brandingSessionListener);
 
     // ── Semantic search ──────────────────────────────────────────────────────────
-    // Instantiated only when chatwizard.enableSemanticSearch is true.
+    // Instantiated only when chatwizard.enableSemanticSearch is true (default).
     // The typed change listener below keeps it in sync with the main session index.
-    const semanticEmbeddingsUri = vscode.Uri.joinPath(context.globalStorageUri, 'semantic-embeddings.bin');
+    const semanticEmbeddingsUri = vscode.Uri.joinPath(context.storageUri ?? context.globalStorageUri, 'semantic-embeddings.bin');
     let semanticIndexer: SemanticIndexer | null = null;
 
     function createAndInitSemanticIndexer(): void {
-        const indexer = new SemanticIndexer(
-            context.globalStorageUri.fsPath,
-            (cacheDir) => new EmbeddingEngine(cacheDir),
-            () => new SemanticIndex(),
-            defaultVsCodeApi(context.globalState),
-        );
-        semanticIndexer = indexer;
-        void indexer.initialize().then(() => {
-            // Schedule sessions already loaded into the main index (runtime-enable case)
-            for (const summary of index.getAllSummaries()) {
-                const session = index.get(summary.id);
-                if (session) {
-                    indexer.scheduleSession(session);
-                }
-            }
-        }).catch((err: unknown) => {
-            void vscode.window.showErrorMessage(
-                `Chat Wizard: Failed to initialize semantic search — ${String(err)}. Reload VS Code to retry.`
+        try {
+            const semanticLog = createLogger(channel).withContext('Semantic');
+            const indexer = new SemanticIndexer(
+                context.globalStorageUri.fsPath, // model cache dir (shared across workspaces)
+                (cacheDir) => new EmbeddingEngine(cacheDir, undefined, semanticLog),
+                () => new SemanticIndex(),
+                defaultVsCodeApi(context.globalState),
+                undefined, /* queueStartDebounceMs */
+                semanticLog,
+                semanticEmbeddingsUri.fsPath, // embeddings file (per-workspace)
             );
-        });
+            channel.appendLine('[Chat Wizard] SemanticIndexer constructed.');
+            // Feature 43: Apply semantic index max age from config
+            const maxAgeDays = vscode.workspace.getConfiguration('chatwizard').get<number>('semanticIndexMaxAgeDays', 365);
+            if (maxAgeDays > 0) {
+                indexer.setMaxAgeDays(maxAgeDays);
+                channel.appendLine(`[Chat Wizard] Semantic index max age set to ${maxAgeDays} days.`);
+            }
+            semanticIndexer = indexer;
+            void indexer.initialize().then(() => {
+                // Schedule sessions already loaded into the main index (runtime-enable case)
+                const summaries = index.getAllSummaries();
+                channel.appendLine(`[Chat Wizard] Semantic indexer ready — scheduling ${summaries.length} existing session(s).`);
+                let cachedCount = 0;
+                for (const summary of summaries) {
+                    const session = index.get(summary.id);
+                    if (session) {
+                        indexer.scheduleSession(session);
+                    }
+                }
+                // Notify user about cached embeddings (counted per-workspace)
+                cachedCount = indexer.indexedCount;
+                if (cachedCount > 0) {
+                    channel.appendLine(`[Chat Wizard] ${cachedCount} session(s) restored from cache for this workspace.`);
+                }
+            }).catch((err: unknown) => {
+                channel.appendLine(`[Chat Wizard] Semantic indexer init failed: ${err}`);
+                void vscode.window.showErrorMessage(
+                    `Chat Wizard: Failed to initialize semantic search — ${String(err)}. Reload VS Code to retry.`
+                );
+            });
+        } catch (err) {
+            channel.appendLine(`[Chat Wizard] Failed to construct SemanticIndexer: ${err}`);
+            // Don't throw — the extension can still function without semantic search.
+        }
     }
 
-    if (vscode.workspace.getConfiguration('chatwizard').get<boolean>('enableSemanticSearch') ?? false) {
+    if (vscode.workspace.getConfiguration('chatwizard').get<boolean>('enableSemanticSearch') ?? true) {
         createAndInitSemanticIndexer();
     }
 
@@ -260,7 +360,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             semanticIndexer.dispose();
             semanticIndexer = null;
             void vscode.workspace.fs.delete(semanticEmbeddingsUri).then(undefined, () => { /* ignore missing file */ });
-            if (vscode.workspace.getConfiguration('chatwizard').get<boolean>('enableSemanticSearch') ?? false) {
+            if (vscode.workspace.getConfiguration('chatwizard').get<boolean>('enableSemanticSearch') ?? true) {
                 createAndInitSemanticIndexer();
             }
         }
@@ -372,6 +472,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     });
     context.subscriptions.push(timelineListener);
 
+    const kbListener = index.addChangeListener(() => {
+        kbViewProvider.refresh();
+    });
+    context.subscriptions.push(kbListener);
+
     // ── Feature 12: Session archive ──────────────────────────────────────────
     // Registered here (before startWatcher) so it receives the initial batch event.
     const archive = new SessionArchive(context.globalStorageUri.fsPath);
@@ -395,15 +500,42 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                     const pruned = await archive.prune({ maxAgeDays, maxSizeMB });
 
                     // 12-D: restore sessions that exist in the archive but not in the live index
+                    // Workspace-scope filter: only restore sessions belonging to the currently
+                    // selected workspace(s). Sources whose workspaceId matches the scope IDs
+                    // (Copilot, Claude, Cursor, Windsurf) are filtered by ID. Sources with a
+                    // real workspacePath (Cline, Roo Code, Aider) are filtered by path against
+                    // the open VS Code workspace folders. Sources without a scoped workspaceId
+                    // or path (Antigravity, Continue, Amazon Q, Gemini, Tabnine) pass through
+                    // since they cannot be scoped.
+                    const scopeRef = _scopeManagerRef;
+                    const selectedIds = scopeRef?.getSelectedIds() ?? [];
+                    const openFolderPaths = scopeRef?.getOpenFolderPaths() ?? [];
+                    const idScopedSources = new Set<SessionSource>(['copilot', 'claude', 'cursor', 'windsurf']);
                     const allArchived = await archive.loadAllSources();
                     const archivedOnly: import('./types').Session[] = [];
+                    let scopedOut = 0;
                     for (const entry of allArchived) {
                         if (!index.get(entry.sessionId)) {
                             const raw = await archive.loadRaw(entry.sessionId, entry.source);
                             if (raw) {
                                 try {
                                     const session = { ...JSON.parse(raw) as import('./types').Session, archived: true as const };
-                                    archivedOnly.push(session);
+                                    // Apply workspace scope
+                                    let inScope = true;
+                                    if (selectedIds.length > 0 && idScopedSources.has(session.source as SessionSource)) {
+                                        inScope = session.workspaceId ? selectedIds.includes(session.workspaceId) : false;
+                                    }
+                                    if (inScope && openFolderPaths.length > 0 && session.workspacePath) {
+                                        const norm = path.normalize(session.workspacePath).toLowerCase();
+                                        inScope = openFolderPaths.some(p =>
+                                            norm === p || norm.startsWith(p + path.sep)
+                                        );
+                                    }
+                                    if (inScope) {
+                                        archivedOnly.push(session);
+                                    } else {
+                                        scopedOut++;
+                                    }
                                 } catch { /* ignore corrupt archive entries */ }
                             }
                         }
@@ -414,7 +546,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                         `[Archive] ${stats.totalSessions} session(s) archived ` +
                         `(${(stats.totalBytes / 1024).toFixed(1)} KB)` +
                         (pruned > 0 ? `, pruned ${pruned}` : '') +
-                        (archivedOnly.length > 0 ? `, restored ${archivedOnly.length} from archive` : '')
+                        (archivedOnly.length > 0 ? `, restored ${archivedOnly.length} from archive` : '') +
+                        (scopedOut > 0 ? `, ${scopedOut} scoped out by workspace filter` : '')
                     );
 
                     if (archivedOnly.length > 0) {
@@ -440,45 +573,44 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     });
     context.subscriptions.push(archiveListener);
 
+    // ── Feature 24: Cache listener — persist sessions to SQLite ──────────────
+    if (cacheIntegration) {
+        const cacheListener = index.addTypedChangeListener((event) => {
+            if (event.type === 'batch') {
+                cacheIntegration.ingestSessions(index, event.sessions);
+            } else if (event.type === 'upsert') {
+                cacheIntegration.ingestSessions(index, [event.session]);
+            } else if (event.type === 'remove') {
+                cacheIntegration.removeSession(event.sessionId);
+            } else if (event.type === 'clear') {
+                channel.appendLine('[Chat Wizard] Cache cleared due to index clear.');
+            }
+        });
+        context.subscriptions.push(cacheListener);
+
+        // Register dispose for cache on deactivation
+        context.subscriptions.push({ dispose: () => cacheIntegration.dispose() });
+    }
+
     const provider = new SessionTreeProvider(index, context.extensionUri);
 
-    // Restore persisted sort stack
-    const savedStackJson = context.globalState.get<string>('sortStack');
-    if (savedStackJson) {
-        try {
-            const saved = JSON.parse(savedStackJson) as SortStack;
-            provider.restoreStack(saved);
-        } catch { /* ignore corrupt state */ }
-    }
+    // Restore consolidated UI state (Item 10) — single globalState read instead of 5.
+    const uiState = loadUiState(context);
+    if (uiState.sortStack.length > 0) { provider.restoreStack(uiState.sortStack); }
+    if (uiState.pinnedIds.length > 0) { provider.setPinnedIds(uiState.pinnedIds); }
+    if (uiState.manualOrder.length > 0) { provider.setManualOrder(uiState.manualOrder); }
+    provider.setGroupMode(uiState.sessionGroupMode);
+    codeBlockProvider.setGroupMode(uiState.cbGroupMode);
 
-    // Restore persisted session group mode (default: 'date' — matches provider default)
-    const savedSessionGroupMode = context.globalState.get<string>('sessionGroupMode') as GroupMode | undefined;
-    if (savedSessionGroupMode === 'none' || savedSessionGroupMode === 'date' ||
-        savedSessionGroupMode === 'branch' || savedSessionGroupMode === 'workItem' ||
-        savedSessionGroupMode === 'tag') {
-        provider.setGroupMode(savedSessionGroupMode);
-    }
-
-    // Restore persisted code block group mode (default: 'language' — matches provider default)
-    const savedCbGroupMode = context.globalState.get<string>('cbGroupMode') as CbGroupMode | undefined;
-    if (savedCbGroupMode === 'none' || savedCbGroupMode === 'language') {
-        codeBlockProvider.setGroupMode(savedCbGroupMode);
-    }
-
-    // Restore persisted pinned IDs
-    const savedPinnedJson = context.globalState.get<string>('pinnedIds');
-    if (savedPinnedJson) {
-        try {
-            provider.setPinnedIds(JSON.parse(savedPinnedJson) as string[]);
-        } catch { /* ignore corrupt state */ }
-    }
-
-    // Restore persisted manual order (from drag-and-drop)
-    const savedManualOrderJson = context.globalState.get<string>('manualOrder');
-    if (savedManualOrderJson) {
-        try {
-            provider.setManualOrder(JSON.parse(savedManualOrderJson) as string[]);
-        } catch { /* ignore corrupt state */ }
+    // ── Feature: Folder store ────────────────────────────────────────────
+    const folderStore = new FolderStore(context.globalStorageUri.fsPath);
+    // Best-effort load so the in-memory cache is warm before folder tree render.
+    void folderStore.load().then(() => {
+        provider.setFolderStore(folderStore);
+    });
+    // If the store was already loaded (cache warm), attach immediately.
+    if (folderStore.getCached()) {
+        provider.setFolderStore(folderStore);
     }
 
     // Push current sort state to VS Code context (drives toolbar icon when clauses)
@@ -497,26 +629,92 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
     syncCbGroupContext();
 
-    function savePins(): void {
-        void context.globalState.update('pinnedIds', JSON.stringify(provider.getPinnedIds()));
-        void context.globalState.update('manualOrder', JSON.stringify(provider.getManualOrder()));
+    /** Persist all UI state in a single globalState write (Item 10). */
+    function saveUiStateNow(): void {
+        saveUiState(context, {
+            sortStack: provider.getSortStack(),
+            pinnedIds: provider.getPinnedIds(),
+            manualOrder: provider.getManualOrder(),
+            sessionGroupMode: provider.getGroupMode(),
+            cbGroupMode: codeBlockProvider.getGroupMode(),
+        });
     }
+    function savePins(): void { saveUiStateNow(); }
 
-    // Drag-and-drop controller for reordering tree items
-    const dragDropController: vscode.TreeDragAndDropController<SessionTreeItem> = {
-        dragMimeTypes: ['application/vnd.chatwizard.session'],
-        dropMimeTypes: ['application/vnd.chatwizard.session'],
+    // Drag-and-drop controller for reordering tree items and folder assignment
+    const dragDropController: vscode.TreeDragAndDropController<SessionTreeItem | FolderGroupTreeItem> = {
+        dragMimeTypes: ['application/vnd.chatwizard.session', 'application/vnd.chatwizard.folder'],
+        dropMimeTypes: ['application/vnd.chatwizard.session', 'application/vnd.chatwizard.folder'],
         handleDrag(items, dataTransfer) {
-            dataTransfer.set(
-                'application/vnd.chatwizard.session',
-                new vscode.DataTransferItem(items.map(i => i.summary.id))
-            );
+            const sessionIds: string[] = [];
+            const folderIds: string[] = [];
+            for (const item of items) {
+                if (item instanceof FolderGroupTreeItem) {
+                    folderIds.push(item.folder.id);
+                } else {
+                    sessionIds.push(item.summary.id);
+                }
+            }
+            if (sessionIds.length > 0) {
+                dataTransfer.set(
+                    'application/vnd.chatwizard.session',
+                    new vscode.DataTransferItem(sessionIds)
+                );
+            }
+            if (folderIds.length > 0) {
+                dataTransfer.set(
+                    'application/vnd.chatwizard.folder',
+                    new vscode.DataTransferItem(folderIds)
+                );
+            }
         },
         async handleDrop(target, dataTransfer) {
+            // Dropping session(s) onto a folder → move to folder
+            const draggedSessions = dataTransfer.get('application/vnd.chatwizard.session');
+            if (draggedSessions && target instanceof FolderGroupTreeItem) {
+                const ids = draggedSessions.value as string[];
+                for (const id of ids) {
+                    await folderStore.moveSessionToFolder(id, target.folder.id);
+                }
+                provider.refresh();
+                treeView.description = provider.getDescription();
+                return;
+            }
+
+            // Dropping session(s) onto (uncategorized) → remove from any folder
+            if (draggedSessions && target instanceof vscode.TreeItem && (target as vscode.TreeItem).id === 'folder:__uncategorized__') {
+                const ids = draggedSessions.value as string[];
+                for (const id of ids) {
+                    await folderStore.moveSessionToFolder(id, undefined);
+                }
+                provider.refresh();
+                treeView.description = provider.getDescription();
+                return;
+            }
+
+            // Dropping folder(s) onto a folder → make subfolder
+            const draggedFolders = dataTransfer.get('application/vnd.chatwizard.folder');
+            if (draggedFolders && target instanceof FolderGroupTreeItem) {
+                const ids = draggedFolders.value as string[];
+                for (const id of ids) {
+                    try {
+                        await folderStore.moveFolder(id, target.folder.id);
+                    } catch (err) {
+                        void vscode.window.showErrorMessage(`Failed to move folder: ${err}`);
+                    }
+                }
+                provider.refresh();
+                treeView.description = provider.getDescription();
+                return;
+            }
+
+            // Default: reorder sessions in flat/grouped list
             const dragged = dataTransfer.get('application/vnd.chatwizard.session');
             if (!dragged) { return; }
             const ids = dragged.value as string[];
-            provider.reorder(ids, target?.summary.id);
+            if (target && 'summary' in target) {
+                provider.reorder(ids, (target as SessionTreeItem).summary.id);
+            }
             treeView.description = provider.getDescription();
             provider.refresh();
             savePins();
@@ -530,6 +728,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     });
     treeView.description = provider.getDescription();
     context.subscriptions.push(treeView);
+
+    // ── Register session lifecycle commands (Features 28-32, 35) ──────────
+    registerSessionLifecycleCommands(context, sidecarStore, index, provider, treeView as vscode.TreeView<SessionTreeItem>);
 
     // Keep treeView description (session count + sort) fresh when index changes
     const sessionDescListener = index.addChangeListener(() => {
@@ -551,16 +752,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // to avoid accessing the const before its declaration (TDZ ReferenceError).
     let _prevCodeBlockCount = 0;
     const codeBlockListener = index.addChangeListener(() => {
-        const allBlocks = index.getAllCodeBlocks();
-        codeBlockEngine.index(allBlocks);
+        const blocks = index.getAllCodeBlocks(); // single allocation per event
+        codeBlockEngine.index(blocks);
         CodeBlocksPanel.refresh(index, codeBlockEngine);
         codeBlockTreeView.description = codeBlockProvider.getDescription();
-        codeBlockTreeView.message = allBlocks.length === 0 ? makeEmptyStateMsg('code blocks') : undefined;
-        if (allBlocks.length > _prevCodeBlockCount) {
-            const added = allBlocks.length - _prevCodeBlockCount;
+        codeBlockTreeView.message = blocks.length === 0 ? makeEmptyStateMsg('code blocks') : undefined;
+        if (blocks.length > _prevCodeBlockCount) {
+            const added = blocks.length - _prevCodeBlockCount;
             brandingBar.notify(`${added} new code block${added === 1 ? '' : 's'} extracted`, 'chatwizard.showCodeBlocks');
         }
-        _prevCodeBlockCount = allBlocks.length;
+        _prevCodeBlockCount = blocks.length;
     });
     context.subscriptions.push(codeBlockListener);
 
@@ -570,7 +771,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         treeView.description = provider.getDescription();
         provider.refresh();
         syncContext();
-        void context.globalState.update('sortStack', JSON.stringify(provider.getSortStack()));
+        saveUiStateNow();
     }
 
     /** Apply a full sort stack (from the sort builder). */
@@ -579,7 +780,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         treeView.description = provider.getDescription();
         provider.refresh();
         syncContext();
-        void context.globalState.update('sortStack', JSON.stringify(provider.getSortStack()));
+        saveUiStateNow();
     }
 
     /** Push current code block sort state to VS Code context (drives Code Blocks toolbar). */
@@ -738,6 +939,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                     description: current.onlyWithWarnings ? 'currently active' : undefined,
                 },
                 {
+                    id: 'status',
+                    label: '$(symbol-misc)  Session Status…',
+                    description: current.status
+                        ? `current: ${current.status}`
+                        : undefined,
+                },
+                {
                     id: 'tags',
                     label: '$(tag)  Tags…',
                     description: current.tags && current.tags.length > 0
@@ -847,6 +1055,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
             } else if (pick.id === 'onlyWithWarnings') {
                 newFilter.onlyWithWarnings = !current.onlyWithWarnings || undefined;
+
+            } else if (pick.id === 'status') {
+                type StatusItem = vscode.QuickPickItem & { value: 'open' | 'resolved' | 'revisit' | undefined };
+                const statusItems: StatusItem[] = [
+                    { label: '$(circle)  Open', value: 'open', description: current.status === 'open' ? 'current' : undefined },
+                    { label: '$(check)  Resolved', value: 'resolved', description: current.status === 'resolved' ? 'current' : undefined },
+                    { label: '$(refresh)  Revisit', value: 'revisit', description: current.status === 'revisit' ? 'current' : undefined },
+                    { label: '$(close)  Clear filter', value: undefined },
+                ];
+                const chosen = await vscode.window.showQuickPick(statusItems, {
+                    title: 'Filter by Session Status',
+                    placeHolder: 'Choose a status',
+                });
+                if (chosen === undefined) { return; }
+                newFilter.status = chosen.value;
 
             } else if (pick.id === 'tags') {
                 const allTags = await sidecarStore.getAllTags();
@@ -1104,6 +1327,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             const hasBranch = provider.hasBranchData();
             const hasWorkItems = provider.hasWorkItems();
             const hasTags = provider.hasTags();
+            const hasFolders = folderStore.getCached() !== null && folderStore.getCached()!.size > 0;
             const current = provider.getGroupMode();
             const workItemPattern = vscode.workspace.getConfiguration('chatwizard').get<string>('workItemPattern', '');
 
@@ -1114,6 +1338,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 { label: `$(bookmark) Group by Tag${!hasTags ? '  \u2014 tag sessions to populate' : ''}`, mode: 'tag' },
                 ...(workItemPattern ? [{ label: '$(tag) Group by Work Item', mode: 'workItem' as GroupMode,
                   description: hasWorkItems ? undefined : 'No work items found in sessions' }] : []),
+                { label: `$(folder) Group by Folder${!hasFolders ? '  \u2014 create folders to organize' : ''}`, mode: 'folder' as GroupMode },
             ];
 
             const activeLabel = {
@@ -1122,6 +1347,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 branch: `$(git-branch) Group by Branch${!hasBranch ? '  \u2014 open chats to populate' : ''}`,
                 tag: `$(bookmark) Group by Tag${!hasTags ? '  \u2014 tag sessions to populate' : ''}`,
                 workItem: workItemPattern ? '$(tag) Group by Work Item' : undefined,
+                folder: `$(folder) Group by Folder${!hasFolders ? '  \u2014 create folders to organize' : ''}`,
             }[current];
 
             const picked = await vscode.window.showQuickPick(
@@ -1165,6 +1391,144 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         })
     );
 
+    // ------------------------------------------------------------------
+    // Folder management commands
+    // ------------------------------------------------------------------
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.createFolder', async () => {
+            const name = await vscode.window.showInputBox({
+                title: 'Create New Folder',
+                placeHolder: 'Folder name',
+                prompt: 'Enter a name for the new folder',
+                validateInput: v => v && v.trim().length > 0 ? undefined : 'Name is required',
+            });
+            if (!name) { return; }
+            try {
+                const folder = await folderStore.createFolder(name);
+                // If folder store wasn't attached yet, attach it
+                if (!provider.getFolderStore()) {
+                    provider.setFolderStore(folderStore);
+                }
+                // Auto-switch to folder group mode
+                if (provider.getGroupMode() !== 'folder') {
+                    provider.setGroupMode('folder');
+                    void context.globalState.update('sessionGroupMode', 'folder');
+                    syncContext();
+                }
+                provider.refresh();
+                treeView.description = provider.getDescription();
+            } catch (err) {
+                void vscode.window.showErrorMessage(`Failed to create folder: ${err}`);
+            }
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.createSubfolder', async (item: FolderGroupTreeItem) => {
+            const name = await vscode.window.showInputBox({
+                title: 'Create Subfolder',
+                placeHolder: 'Subfolder name',
+                prompt: `Enter a name for the new subfolder under "${item.folder.name}"`,
+                validateInput: v => v && v.trim().length > 0 ? undefined : 'Name is required',
+            });
+            if (!name || !item.folder) { return; }
+            try {
+                const folder = await folderStore.createFolder(name, item.folder.id);
+                provider.refresh();
+                treeView.description = provider.getDescription();
+            } catch (err) {
+                void vscode.window.showErrorMessage(`Failed to create subfolder: ${err}`);
+            }
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.renameFolder', async (item: FolderGroupTreeItem) => {
+            if (!item.folder) { return; }
+            const name = await vscode.window.showInputBox({
+                title: 'Rename Folder',
+                placeHolder: 'New folder name',
+                value: item.folder.name,
+                validateInput: v => v && v.trim().length > 0 ? undefined : 'Name is required',
+            });
+            if (!name) { return; }
+            try {
+                await folderStore.renameFolder(item.folder.id, name);
+                provider.refresh();
+                treeView.description = provider.getDescription();
+            } catch (err) {
+                void vscode.window.showErrorMessage(`Failed to rename folder: ${err}`);
+            }
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.deleteFolder', async (item: FolderGroupTreeItem) => {
+            if (!item.folder) { return; }
+            const confirm = await vscode.window.showWarningMessage(
+                `Delete folder "${item.folder.name}"?\n\n` +
+                `Sessions inside the folder will be moved to (uncategorized). ` +
+                `Subfolders will also be removed. This cannot be undone.`,
+                { modal: true },
+                'Delete'
+            );
+            if (confirm !== 'Delete') { return; }
+            try {
+                await folderStore.deleteFolder(item.folder.id);
+                provider.refresh();
+                treeView.description = provider.getDescription();
+            } catch (err) {
+                void vscode.window.showErrorMessage(`Failed to delete folder: ${err}`);
+            }
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.moveSessionToFolder', async (item: SessionTreeItem) => {
+            const allFolders = await folderStore.getAll();
+            if (allFolders.size === 0) {
+                void vscode.window.showInformationMessage('No folders exist. Create one first.');
+                return;
+            }
+            const currentFolderId = await folderStore.getSessionFolderId(item.summary.id);
+            const picks = Array.from(allFolders.values())
+                .sort((a, b) => a.name.localeCompare(b.name))
+                .map(f => ({
+                    label: `${f.parentId ? '  ' : ''}📁 ${f.name}`,
+                    description: currentFolderId === f.id ? 'current' : undefined,
+                    folderId: f.id,
+                }));
+            picks.unshift({ label: '$(close) Remove from folder', description: currentFolderId ? undefined : 'current', folderId: '__none__' });
+
+            const chosen = await vscode.window.showQuickPick(picks, {
+                title: `Move "${item.summary.title}" to folder`,
+                placeHolder: 'Choose a folder',
+            });
+            if (!chosen) { return; }
+            try {
+                await folderStore.moveSessionToFolder(item.summary.id, chosen.folderId === '__none__' ? undefined : chosen.folderId);
+                provider.refresh();
+                treeView.description = provider.getDescription();
+            } catch (err) {
+                void vscode.window.showErrorMessage(`Failed to move session: ${err}`);
+            }
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.addSessionToFolder', async (item: SessionTreeItem, folderId?: string) => {
+            if (!folderId) { return; }
+            try {
+                await folderStore.moveSessionToFolder(item.summary.id, folderId);
+                provider.refresh();
+                treeView.description = provider.getDescription();
+            } catch (err) {
+                void vscode.window.showErrorMessage(`Failed to add session to folder: ${err}`);
+            }
+        })
+    );
+
     context.subscriptions.push(
         vscode.commands.registerCommand('chatwizard.toggleCbGrouping', () => {
             const next: CbGroupMode = codeBlockProvider.getGroupMode() === 'language' ? 'none' : 'language';
@@ -1202,7 +1566,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 return;
             }
             telemetry.record('session.opened', { source: session.source });
-            SessionWebviewPanel.show(context, session, searchTerm, false, undefined, undefined, undefined, highlightContainer, index.getSidecarMeta(session.id)?.tags, index.getSidecarMeta(session.id)?.entities, index.getSidecarMeta(session.id)?.summary);
+            const meta = index.getSidecarMeta(session.id);
+            // If the caller provided a message index (action item), scroll to it.
+            // Fallback: search session messages for the action item text.
+            let scrollToMsgIdx = summary.actionItemMsgIdx;
+            if (scrollToMsgIdx === undefined && summary.actionItemText) {
+                const lowerText = summary.actionItemText.toLowerCase();
+                for (let i = 0; i < session.messages.length; i++) {
+                    if (session.messages[i].content.toLowerCase().includes(lowerText)) {
+                        scrollToMsgIdx = i;
+                        break;
+                    }
+                }
+            }
+            SessionWebviewPanel.show(context, session, searchTerm, false, scrollToMsgIdx, undefined, undefined, highlightContainer, meta?.tags, meta?.entities, meta?.summary, meta?.status, meta?.bookmarks, meta?.annotations);
         })
     );
 
@@ -1219,7 +1596,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             const isLeaf = ref.blocks.length === 1;
             const targetMsgIdx = isLeaf ? ref.blocks[0].messageIndex : undefined;
             const targetBlockIdx = isLeaf ? (ref.blocks[0].blockIndexInMessage ?? 0) : undefined;
-            SessionWebviewPanel.show(context, session, undefined, isLeaf, targetMsgIdx, undefined, targetBlockIdx, undefined, index.getSidecarMeta(session.id)?.tags, index.getSidecarMeta(session.id)?.entities, index.getSidecarMeta(session.id)?.summary);
+            const meta2 = index.getSidecarMeta(session.id);
+            SessionWebviewPanel.show(context, session, undefined, isLeaf, targetMsgIdx, undefined, targetBlockIdx, undefined, meta2?.tags, meta2?.entities, meta2?.summary, meta2?.status, meta2?.bookmarks, meta2?.annotations);
         })
     );
 
@@ -1251,6 +1629,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
 
     context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.searchAnnotations', () => {
+            telemetry.record('searchAnnotations.opened');
+            AnnotationSearchPanel.show(context, index, sidecarStore);
+        })
+    );
+
+    context.subscriptions.push(
         vscode.commands.registerCommand('chatwizard.showCodeBlocks', () => {
             CodeBlocksPanel.show(context, index, codeBlockEngine);
         })
@@ -1275,8 +1660,73 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
 
     context.subscriptions.push(
-        vscode.commands.registerCommand('chatwizard.focusSessionTree', () => {
-            void vscode.commands.executeCommand('chatwizardSessions.focus');
+        vscode.commands.registerCommand('chatwizard.generateDigest', async () => {
+            const { buildDigest } = await import('./analytics/digestBuilder.js');
+            const summaries = index.getAllSummaries();
+            const sessions = summaries
+                .map(s => index.get(s.id))
+                .filter((s): s is NonNullable<typeof s> => s !== null);
+            if (sessions.length === 0) {
+                void vscode.window.showInformationMessage('No sessions found to generate digest.');
+                return;
+            }
+            // Prompt for time window
+            const windowPick = await vscode.window.showQuickPick(
+                [
+                    { label: 'Today',       description: 'Digest of sessions from today',       value: 'today' as const },
+                    { label: 'This Week',   description: 'Digest of sessions from this week',   value: 'thisWeek' as const },
+                    { label: 'This Sprint', description: 'Digest of sessions from this sprint', value: 'thisSprint' as const },
+                ],
+                { title: 'Digest Time Window', placeHolder: 'Select a time window for the digest' }
+            );
+            if (!windowPick) { return; }
+            // Load sidecar summaries for richer digest output
+            const metaCache = sidecarStore ? await sidecarStore.load() : undefined;
+            const summariesMap = new Map<string, string>();
+            if (metaCache) {
+                for (const [id, meta] of Object.entries(metaCache)) {
+                    if (meta.summary) summariesMap.set(id, meta.summary);
+                }
+            }
+            const result = buildDigest(sessions, windowPick.value, new Date(), summariesMap);
+            const doc = await vscode.workspace.openTextDocument({ content: result.markdown, language: 'markdown' });
+            await vscode.window.showTextDocument(doc);
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.shareSession', async (item?: SessionTreeItem) => {
+            const sessionId = item?.summary?.id;
+            if (!sessionId) {
+                const picked = await vscode.window.showInputBox({ prompt: 'Enter session ID to share' });
+                if (!picked?.trim()) { return; }
+                const s = index.get(picked.trim());
+                if (!s) { void vscode.window.showWarningMessage(`Session "${picked.trim()}" not found.`); return; }
+                await doShare(s);
+                return;
+            }
+            const session = index.get(sessionId);
+            if (!session) { void vscode.window.showWarningMessage(`Session "${sessionId}" not found.`); return; }
+            await doShare(session);
+
+            async function doShare(s: Session): Promise<void> {
+                const uri = await vscode.window.showSaveDialog({
+                    title: 'Export Session as HTML',
+                    defaultUri: vscode.Uri.file(`${s.title.replace(/[^a-zA-Z0-9_-]/g, '_')}.html`),
+                    filters: { 'HTML files': ['html'] },
+                });
+                if (!uri) { return; }
+                const meta = index.getSidecarMeta(s.id);
+                await exportSessionAsHtml(s, uri.fsPath, {
+                    includeAnnotations: true,
+                    annotations: meta?.annotations?.map(a => ({
+                        messageIndex: a.messageIndex,
+                        text: (a as any).text ?? (a as any).noteText ?? '',
+                        createdAt: a.createdAt,
+                    })),
+                });
+                void vscode.window.showInformationMessage(`Session exported to ${uri.fsPath}`);
+            }
         })
     );
 
@@ -1468,18 +1918,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 channel.appendLine('[Chat Wizard] Data path setting changed (' + pathKeys.join(', ') + ') — re-discovering workspaces and restarting index...');
                 void (async () => {
                     // Re-discover available workspaces under the new paths.
+                    channel.appendLine('[Chat Wizard] Re-discovering workspaces after path change…');
                     const [copilotWs, claudeWs, cursorWs, windsurfWs] = await Promise.all([
-                        discoverCopilotWorkspacesAsync().then(list =>
-                            list.map(ws => ({
-                                id: ws.workspaceId,
-                                source: 'copilot' as const,
-                                workspacePath: ws.workspacePath,
-                                storageDir: ws.storageDir,
-                            }) satisfies ScopedWorkspace)
+                        withTimeout(
+                            discoverCopilotWorkspacesAsync().then(list =>
+                                list.map(ws => ({
+                                    id: ws.workspaceId,
+                                    source: 'copilot' as const,
+                                    workspacePath: ws.workspacePath,
+                                    storageDir: ws.storageDir,
+                                }) satisfies ScopedWorkspace)
+                            ),
+                            15_000
                         ).catch(() => [] as ScopedWorkspace[]),
-                        discoverClaudeWorkspacesAsync().catch(() => [] as ScopedWorkspace[]),
-                        discoverCursorWorkspacesAsync().catch(() => [] as ScopedWorkspace[]),
-                        discoverWindsurfWorkspacesAsync().catch(() => [] as ScopedWorkspace[]),
+                        withTimeout(discoverClaudeWorkspacesAsync(), 15_000).catch(() => [] as ScopedWorkspace[]),
+                        withTimeout(discoverCursorWorkspacesAsync(), 15_000).catch(() => [] as ScopedWorkspace[]),
+                        withTimeout(discoverWindsurfWorkspacesAsync(), 15_000).catch(() => [] as ScopedWorkspace[]),
                     ]);
                     const allAvailable: ScopedWorkspace[] = [...copilotWs, ...claudeWs, ...cursorWs, ...windsurfWs];
 
@@ -1971,6 +2425,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     // Build the workspace scope manager (persists scope across VS Code restarts).
     const scopeManager = new WorkspaceScopeManager(context);
+    _scopeManagerRef = scopeManager;
 
     // Register the manage-workspaces command (scope changes take effect via watcher.restart()).
     registerManageWorkspacesCommand(context, scopeManager, () => watcher, channel, index);
@@ -1981,19 +2436,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // registered (empty) and will populate when batchUpsert() fires the change listeners.
     await new Promise<void>(resolve => setTimeout(resolve, 200));
     void (async () => {
+        channel.appendLine('[Chat Wizard] Starting workspace discovery…');
         // Discover all available workspaces to initialise the default scope.
         const [copilotWs, claudeWs, cursorWs, windsurfWs] = await Promise.all([
-            discoverCopilotWorkspacesAsync().then(list =>
-                list.map(ws => ({
-                    id: ws.workspaceId,
-                    source: 'copilot' as const,
-                    workspacePath: ws.workspacePath,
-                    storageDir: ws.storageDir,
-                }) satisfies ScopedWorkspace)
+            withTimeout(
+                discoverCopilotWorkspacesAsync().then(list =>
+                    list.map(ws => ({
+                        id: ws.workspaceId,
+                        source: 'copilot' as const,
+                        workspacePath: ws.workspacePath,
+                        storageDir: ws.storageDir,
+                    }) satisfies ScopedWorkspace)
+                ),
+                15_000
             ).catch(() => [] as ScopedWorkspace[]),
-            discoverClaudeWorkspacesAsync().catch(() => [] as ScopedWorkspace[]),
-            discoverCursorWorkspacesAsync().catch(() => [] as ScopedWorkspace[]),
-            discoverWindsurfWorkspacesAsync().catch(() => [] as ScopedWorkspace[]),
+            withTimeout(discoverClaudeWorkspacesAsync(), 15_000).catch(() => [] as ScopedWorkspace[]),
+            withTimeout(discoverCursorWorkspacesAsync(), 15_000).catch(() => [] as ScopedWorkspace[]),
+            withTimeout(discoverWindsurfWorkspacesAsync(), 15_000).catch(() => [] as ScopedWorkspace[]),
         ]);
         const allAvailable: ScopedWorkspace[] = [...copilotWs, ...claudeWs, ...cursorWs, ...windsurfWs];
         channel.appendLine(
@@ -2007,7 +2466,35 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             `[Chat Wizard] Workspace scope initialised — ${selectedIds.length} workspace(s) selected: ${selectedIds.join(', ')}`
         );
 
-        const w = await startWatcher(index, channel, scopeManager);
+        // ── Feature 23-H: Auto-classify KB on startup ─────────────────────────
+        // Register BEFORE loadIntoIndex/startWatcher so the one-shot batch
+        // listener catches the initial batch event.
+        {
+            let done = false;
+            const autoClassifyListener = index.addTypedChangeListener((event) => {
+                if (done) { return; }
+                if (event.type === 'batch') {
+                    done = true;
+                    autoClassifyListener.dispose();
+                    void kbViewProvider.preload();
+                }
+            });
+            context.subscriptions.push(autoClassifyListener);
+        }
+
+        // ── Feature 24: Try to load sessions from SQLite cache first ────────
+        if (cacheIntegration) {
+            const cachedCount = cacheIntegration.cacheManager.getSessionCount();
+            if (cachedCount > 0) {
+                channel.appendLine(`[Chat Wizard] Loading ${cachedCount} sessions from SQLite cache…`);
+                await cacheIntegration.loadIntoIndex(index, selectedIds);
+                channel.appendLine(`[Chat Wizard] Loaded ${cachedCount} cached sessions — only changed files will be re-parsed.`);
+            } else {
+                channel.appendLine('[Chat Wizard] Empty cache — will re-parse all source files.');
+            }
+        }
+
+        const w = await startWatcher(index, channel, scopeManager, cacheIntegration?.cacheManager);
         watcher = w;
         watcherRef.current = w;
         context.subscriptions.push(w);
@@ -2016,10 +2503,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         w.setLiveTracker(liveTracker);
         const activeSessionTagBtn = new ActiveSessionTagButton(liveTracker);
         context.subscriptions.push(activeSessionTagBtn);
-
-        // ── Feature 20-J: Session Cost Advisor (disabled for 1.5.0 — testing deferred to P3) ──
-        // const costAdvisorNotifier = new SessionCostAdvisorNotifier(liveTracker, index);
-        // context.subscriptions.push(costAdvisorNotifier);
 
         context.subscriptions.push(
             vscode.commands.registerCommand('chatwizard.tagActiveSession', async () => {
@@ -2048,6 +2531,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         channel.appendLine(
             `Chat Wizard activated — ${index.size} sessions indexed (${copilotCount} Copilot, ${claudeCount} Claude)`
         );
+        log.info('Activation complete — %d sessions in %dms', index.size, Date.now() - startedAt);
         telemetry.record('extension.activated', { sessionCount: index.size });
 
         // ── Feature 18: AI summaries background job ───────────────────────────
@@ -2093,15 +2577,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
         // ── Chronicle integration (branch + checkpoint data for branch grouping) ──
         // 1. Optionally enable Copilot's local index so sessions.branch gets populated.
+        //    Gracefully skip if the config key is not registered (e.g. Copilot not installed).
         const cwCfg = vscode.workspace.getConfiguration('chatwizard');
         if (cwCfg.get<boolean>('chronicle.enableLocalIndex', true)) {
             const currentValue = vscode.workspace.getConfiguration().get<boolean>('chat.localIndex.enabled');
             if (currentValue !== true) {
-                void vscode.workspace.getConfiguration().update(
+                vscode.workspace.getConfiguration().update(
                     'chat.localIndex.enabled',
                     true,
                     vscode.ConfigurationTarget.Global,
-                );
+                ).then(undefined, () => {
+                    // Setting may not be registered (e.g. Copilot not installed) — non-fatal.
+                });
             }
         }
 
@@ -2295,7 +2782,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                     canSelectFolders: true, canSelectFiles: false, openLabel: 'Select Obsidian vault folder',
                 });
                 if (!uri?.[0]) { return; }
-                const sessions = index.getAllSummaries().map(s => index.get(s.id)).filter((s): s is NonNullable<typeof s> => s != null);
+                const sessions = index.getAllSummaries().map(s => index.get(s.id)).filter((s): s is NonNullable<typeof s> => s !== null);
                 const exporter = new ObsidianExporter();
                 const result = await exporter.export(sessions, { targetDir: uri[0].fsPath, overwrite: false }, async (id) => {
                     return await sidecarStore.get(id) ?? undefined;
@@ -2315,7 +2802,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 }
                 const databaseId = await vscode.window.showInputBox({ prompt: 'Enter Notion database ID' });
                 if (!databaseId) { return; }
-                const sessions = index.getAllSummaries().map(s => index.get(s.id)).filter((s): s is NonNullable<typeof s> => s != null);
+                const sessions = index.getAllSummaries().map(s => index.get(s.id)).filter((s): s is NonNullable<typeof s> => s !== null);
                 const exporter = new NotionExporter();
                 void vscode.window.showInformationMessage(`Exporting ${sessions.length} sessions to Notion…`);
                 const result = await exporter.export(sessions, { databaseId, apiKey });
@@ -2324,6 +2811,25 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             vscode.commands.registerCommand('chatwizard.forgetNotionApiKey', async () => {
                 await context.secrets.delete('chatwizard.notionApiKey');
                 void vscode.window.showInformationMessage('Notion API key removed from SecretStorage.');
+            }),
+            // ── Feature 23: Generate Knowledge Base ─────────────────────────
+            vscode.commands.registerCommand('chatwizard.generateKnowledgeBase', async () => {
+                // Load all sessions + sidecar metadata
+                const summaries = index.getAllSummaries();
+                const sessions = summaries
+                    .map(s => index.get(s.id))
+                    .filter((s): s is NonNullable<typeof s> => s !== null);
+
+                if (sessions.length === 0) {
+                    void vscode.window.showInformationMessage('No sessions found to generate knowledge base.');
+                    return;
+                }
+
+                // Reveal the sidebar Knowledge Base view — it already computes
+                // and displays the dashboard on visibility change.
+                void vscode.commands.executeCommand('workbench.view.extension.chatwizard');
+                // Focus the KB view specifically
+                void vscode.commands.executeCommand('chatwizardKnowledgeBase.focus');
             }),
         );
 
@@ -2337,7 +2843,60 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 );
             }),
         );
-    })().catch(err => channel.appendLine(`[error] Watcher init failed: ${err}`));
+
+        // ── Feature 44: REST API Server ───────────────────────────────────────
+        const restCfg = vscode.workspace.getConfiguration('chatwizard');
+        const restApiEnabled = restCfg.get<boolean>('restApi.enabled', false);
+        let restApiServer: RestApiServer | undefined;
+        if (restApiEnabled) {
+            const restApiPort = restCfg.get<number>('restApi.port', 6790);
+            const restApiDocs = restCfg.get<boolean>('restApi.enableDocs', true);
+            restApiServer = new RestApiServer(
+                {
+                    enabled: true,
+                    port: restApiPort,
+                    tokenPath: mcpTokenPath,
+                    enableApiDocs: restApiDocs,
+                },
+                index,
+                extensionVersion,
+                (msg) => channel.appendLine(msg),
+            );
+            void restApiServer.start().catch((err: unknown) => {
+                channel.appendLine(`[Chat Wizard] REST API server failed to start: ${String(err)}`);
+            });
+            context.subscriptions.push({ dispose: () => void restApiServer?.stop() });
+            channel.appendLine(`[Chat Wizard] REST API server configured on port ${restApiPort}`);
+        }
+
+        // ── Feature 27: Cloud Sync (opt-in) ───────────────────────────────────
+        const cloudCfg = vscode.workspace.getConfiguration('chatwizard');
+        const cloudSyncEnabled = cloudCfg.get<boolean>('cloudSync.enabled', false);
+        let cloudSync: CloudSyncManager | undefined;
+        if (cloudSyncEnabled && cacheIntegration) {
+            const cloudSyncType = cloudCfg.get<string>('cloudSync.type', 'gist');
+            cloudSync = new CloudSyncManager(
+                index,
+                context.globalStorageUri.fsPath,
+                cloudSyncType,
+                (msg) => channel.appendLine(msg),
+            );
+            void cloudSync.initialize().catch((err: unknown) => {
+                channel.appendLine(`[Chat Wizard] Cloud sync init failed: ${String(err)}`);
+            });
+            // Also back up the local .db file to cloud storage
+            const dbPath = cacheIntegration.dbPath;
+            void cloudSync.syncDbBackup(dbPath).catch((err: unknown) => {
+                channel.appendLine(`[Chat Wizard] DB backup sync failed: ${String(err)}`);
+            });
+            context.subscriptions.push({ dispose: () => cloudSync?.dispose() });
+            channel.appendLine(`[Chat Wizard] Cloud sync (${cloudSyncType}) initialised.`);
+        }
+    })().catch(err => {
+        channel.appendLine(`[error] Watcher init failed: ${err}`);
+        // Fire an empty batch to clear the loading spinner in the tree view.
+        index.batchUpsert([]);
+    });
 }
 
 export function deactivate(): void {
@@ -2347,6 +2906,20 @@ export function deactivate(): void {
 
 function capitalise(s: string): string {
     return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/**
+ * Returns a promise that resolves with the given promise's value, or rejects
+ * with a TimeoutError after `ms` milliseconds — whichever comes first.
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`Timed out after ${ms}ms`)), ms);
+        promise.then(
+            (v) => { clearTimeout(timer); resolve(v); },
+            (e) => { clearTimeout(timer); reject(e); },
+        );
+    });
 }
 
 /** Quick-pick helper for tag/session commands that need a session ID. */

@@ -67,10 +67,10 @@ export class WorkspaceScopeManager {
     async initDefault(available: ScopedWorkspace[]): Promise<void> {
         const openFolderPaths = this._getOpenFolderPaths();
 
-        // No folder open — clear scope so initDefault() always re-detects from
-        // the open workspace. An empty result is correct for this scenario.
+        // No folder open — keep the existing persisted selection so the user
+        // does not lose a manually configured scope (e.g. Extension Dev Host
+        // launched without a workspace folder).
         if (openFolderPaths.length === 0) {
-            await this._context.globalState.update(STORAGE_KEY, []);
             return;
         }
 
@@ -84,6 +84,11 @@ export class WorkspaceScopeManager {
     /** Returns the currently persisted list of selected workspace IDs. */
     getSelectedIds(): string[] {
         return this._context.globalState.get<string[]>(STORAGE_KEY) ?? [];
+    }
+
+    /** Returns the normalised, lowercase paths of the currently open VS Code workspace folders. */
+    getOpenFolderPaths(): string[] {
+        return this._getOpenFolderPaths();
     }
 
     /** Persists a new selection of workspace IDs. */

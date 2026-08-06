@@ -1,6 +1,8 @@
 // test/suite/semanticIndexer.test.ts
 
 import * as assert from 'assert';
+import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { SemanticIndexer, SemanticIndexerVsCodeApi } from '../../src/search/semanticIndexer';
 import { IEmbeddingEngine, ISemanticIndex, SEMANTIC_DIMS, SemanticScope } from '../../src/search/semanticContracts';
@@ -74,9 +76,17 @@ function makeEngineStub(opts: {
             if (opts.embedError) { throw opts.embedError; }
             return opts.embedResult ?? new Float32Array(SEMANTIC_DIMS).fill(0.1);
         },
+        async embedBatch(texts: string[]): Promise<Float32Array[]> {
+            state.embedCallCount += texts.length;
+            state.lastEmbedText = texts[texts.length - 1];
+            if (opts.embedError) { throw opts.embedError; }
+            const base = opts.embedResult ?? new Float32Array(SEMANTIC_DIMS).fill(0.1);
+            return texts.map(() => new Float32Array(base));
+        },
         get loadCallCount() { return state.loadCallCount; },
         get embedCallCount() { return state.embedCallCount; },
         get lastEmbedText() { return state.lastEmbedText; },
+        dispose(): void { /* no-op in tests */ },
     };
 }
 
@@ -126,6 +136,10 @@ function makeIndexStub(): ISemanticIndex & {
             state.loadCalled++;
             state.lastLoadedPath = filePath;
         },
+        saveSync(filePath: string): void {
+            state.saveCalled++;
+            state.lastSavedPath = filePath;
+        },
     };
 }
 
@@ -134,15 +148,16 @@ async function makeReadyIndexer(engineOpts: Parameters<typeof makeEngineStub>[0]
     const engine = makeEngineStub(engineOpts);
     const index = makeIndexStub();
     const api = makeVsCodeApiStub({ isFirstUse: false });
+    const storageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'semantic-indexer-test-'));
     const indexer = new SemanticIndexer(
-        '/storage',
+        storageDir,
         (_cacheDir) => engine,
         () => index,
         api,
         0,
     );
     await indexer.initialize();
-    return { indexer, engine, index, api };
+    return { indexer, engine, index, api, storageDir };
 }
 
 // ── isReady / indexedCount ────────────────────────────────────────────────────
@@ -267,7 +282,7 @@ suite('SemanticIndexer.initialize', () => {
     test('calls loadModelWithProgress during model loading', async () => {
         const engine = makeEngineStub();
         const index = makeIndexStub();
-        const api = makeVsCodeApiStub({ isFirstUse: false });
+        const api = makeVsCodeApiStub({ isFirstUse: true });
         const indexer = new SemanticIndexer('/storage', () => engine, () => index, api);
         await indexer.initialize();
         assert.strictEqual(api.loadProgressCallCount, 1, 'loadModelWithProgress should be called once during initialize()');
@@ -341,35 +356,38 @@ suite('SemanticIndexer.scheduleSession', () => {
         indexer.dispose();
     });
 
-    test('continues processing queue after a single embed failure', async () => {
+    test('retries on transient embed failure and eventually indexes all sessions', async () => {
         let callCount = 0;
         const engine = makeEngineStub();
-        const originalEmbed = engine.embed.bind(engine);
-        // Make the first embed call throw, subsequent calls succeed
-        (engine as { embed: (text: string) => Promise<Float32Array> }).embed = async (text: string) => {
+        const originalEmbedBatch = engine.embedBatch.bind(engine);
+        // Make the first embedBatch call throw, subsequent calls succeed
+        (engine as { embedBatch: (texts: string[]) => Promise<Float32Array[]> }).embedBatch = async (texts: string[]) => {
             callCount++;
             if (callCount === 1) { throw new Error('transient error'); }
-            return originalEmbed(text);
+            return originalEmbedBatch(texts);
         };
         const index = makeIndexStub();
         const api = makeVsCodeApiStub({ isFirstUse: false });
-        const indexer = new SemanticIndexer('/storage', () => engine, () => index, api, 0);
+        const storageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'semantic-indexer-test-'));
+        const indexer = new SemanticIndexer(storageDir, () => engine, () => index, api, 0);
         await indexer.initialize();
 
-        // Use sessions with no title so each session produces exactly 1 embed entry;
-        // this ensures the single failing call fully prevents s1 from being indexed.
+        // Use sessions with no title so each session produces exactly 1 embed entry.
         const s1: Session = { id: 's1', title: '', source: 'copilot', workspaceId: 'ws',
-            messages: [{ id: 'm1', role: 'user', content: 'will fail', codeBlocks: [] }],
+            messages: [{ id: 'm1', role: 'user', content: 'will fail then retry', codeBlocks: [] }],
             filePath: '/fake/s1.jsonl', createdAt: '2025-01-01T00:00:00.000Z', updatedAt: '2025-01-01T00:00:00.000Z' };
         const s2: Session = { id: 's2', title: '', source: 'copilot', workspaceId: 'ws',
-            messages: [{ id: 'm2', role: 'user', content: 'will succeed', codeBlocks: [] }],
+            messages: [{ id: 'm2', role: 'user', content: 'will succeed on retry', codeBlocks: [] }],
             filePath: '/fake/s2.jsonl', createdAt: '2025-01-01T00:00:00.000Z', updatedAt: '2025-01-01T00:00:00.000Z' };
         indexer.scheduleSession(s1);
         indexer.scheduleSession(s2);
         await new Promise(r => setTimeout(r, 50));
 
-        assert.ok(!index.has('s1'), 's1 should not be in index after failed embed');
-        assert.ok(index.has('s2'), 's2 should be indexed after queue continues');
+        // With the batch-parallel approach, all sessions' entries are sent in a
+        // single embedBatch call. On transient failure the batch stays in the queue;
+        // on retry (second call) it succeeds, so both sessions get indexed.
+        assert.ok(index.has('s1'), 's1 should be indexed after retry');
+        assert.ok(index.has('s2'), 's2 should be indexed after retry');
         indexer.dispose();
     });
 
@@ -477,7 +495,8 @@ suite('SemanticIndexer.dispose', () => {
         const engine = makeEngineStub({ loadDelay: 0 });
         const index = makeIndexStub();
         const api = makeVsCodeApiStub({ isFirstUse: false });
-        const indexer = new SemanticIndexer('/storage', () => engine, () => index, api);
+        const storageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'semantic-indexer-test-'));
+        const indexer = new SemanticIndexer(storageDir, () => engine, () => index, api);
         await indexer.initialize();
 
         // Schedule many sessions, then immediately dispose

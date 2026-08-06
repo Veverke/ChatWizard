@@ -3,6 +3,7 @@
 import { IMcpTool, McpToolInput, McpToolResult } from '../mcpContracts';
 import { SessionIndex } from '../../index/sessionIndex';
 import { Session } from '../../types/index';
+import { stripCodeBlocks } from '../../utils/contentFilter';
 
 const DEFAULT_MAX_CHARS = 4000;
 const TRUNCATION_NOTE = '\n[truncated — use chatwizard_get_session_full for complete content]';
@@ -10,8 +11,9 @@ const TRUNCATION_NOTE = '\n[truncated — use chatwizard_get_session_full for co
 /**
  * Format a session as a readable conversation transcript.
  * Truncates to maxChars if provided (undefined = no truncation).
+ * When includeCode is false, strips fenced code blocks from message content.
  */
-export function formatSessionTranscript(session: Session, maxChars?: number): string {
+export function formatSessionTranscript(session: Session, maxChars?: number, includeCode = true): string {
     const header = [
         `Session: ${session.title}`,
         `Source: ${session.source}`,
@@ -24,7 +26,8 @@ export function formatSessionTranscript(session: Session, maxChars?: number): st
     for (const msg of session.messages) {
         const roleLabel = msg.role === 'user' ? 'User' : 'Assistant';
         const ts = msg.timestamp ? ` [${msg.timestamp}]` : '';
-        messageParts.push(`${roleLabel}${ts}:\n${msg.content}`);
+        const content = includeCode ? msg.content : stripCodeBlocks(msg.content);
+        messageParts.push(`${roleLabel}${ts}:\n${content}`);
     }
 
     const body = messageParts.join('\n\n');
@@ -62,6 +65,10 @@ export class GetSessionTool implements IMcpTool {
                 type: 'number',
                 description: `Maximum characters to return (default ${DEFAULT_MAX_CHARS}).`,
             },
+            includeCode: {
+                type: 'boolean',
+                description: 'When false, strips fenced code blocks from message content to reduce token usage (default: true).',
+            },
         },
         required: ['sessionId'],
     };
@@ -90,8 +97,10 @@ export class GetSessionTool implements IMcpTool {
             ? Math.round(rawMax)
             : DEFAULT_MAX_CHARS;
 
+        const includeCode = input['includeCode'] !== false; // default true
+
         return {
-            content: [{ type: 'text', text: formatSessionTranscript(session, maxChars) }],
+            content: [{ type: 'text', text: formatSessionTranscript(session, maxChars, includeCode) }],
         };
     }
 }

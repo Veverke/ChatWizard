@@ -2,7 +2,7 @@
   "name": "chatwizard",
   "displayName": "Chat Wizard",
   "description": "Browse, search, and analyze AI coding-assistant conversation history from GitHub Copilot, Claude Code, Cline, Roo Code, Cursor, Windsurf, Aider, and Google Antigravity. Chat history viewer, prompt library, code block browser, token analytics, and timeline — all in one extension.",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "publisher": "Veverke",
   "icon": "images/icon.png",
   "license": "SEE LICENSE IN LICENSE",
@@ -17,6 +17,8 @@
     "aider",
     "codeium",
     "antigravity",
+    "zed",
+    "tabnine",
     "ai",
     "chat",
     "history",
@@ -38,7 +40,22 @@
     "mcp-server",
     "model-context-protocol",
     "semantic-search",
+    "sqlite",
+    "knowledge-base",
+    "standup",
+    "digest",
+    "bookmarks",
+    "annotations",
+    "session-linking",
+    "action-items",
+    "export",
+    "rest-api",
+    "folders",
+    "cloud-sync",
+    "git",
+    "keyboard-navigation",
     "vscode",
+    "workflow",
     "ide"
   ],
   "repository": {
@@ -68,6 +85,7 @@
     "onView:chatwizardAnalytics",
     "onView:chatwizardModelUsage",
     "onView:chatwizardTimeline",
+    "onView:chatwizardKnowledgeBase",
     "onChatParticipant:Veverke.chatwizard"
   ],
   "main": "./dist/extension.js",
@@ -110,6 +128,11 @@
           "id": "chatwizardTimeline",
           "name": "Timeline",
           "type": "webview"
+        },
+        {
+          "id": "chatwizardKnowledgeBase",
+          "name": "Knowledge Base",
+          "type": "webview"
         }
       ]
     },
@@ -129,6 +152,12 @@
         "title": "Search",
         "category": "Chat Wizard",
         "icon": "$(search)"
+      },
+      {
+        "command": "chatwizard.searchAnnotations",
+        "title": "Search Annotations",
+        "category": "Chat Wizard",
+        "icon": "$(comment)"
       },
       {
         "command": "chatwizard.filterSessions",
@@ -530,6 +559,18 @@
         "icon": "$(folder-library)"
       },
       {
+        "command": "chatwizard.session",
+        "title": "Session…",
+        "category": "Chat Wizard",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "chatwizard.folder",
+        "title": "Folder & Archive…",
+        "category": "Chat Wizard",
+        "icon": "$(archive)"
+      },
+      {
         "command": "chatwizard.startMcpServer",
         "title": "Chat Wizard: Start MCP Server",
         "category": "Chat Wizard"
@@ -612,6 +653,97 @@
       {
         "command": "chatwizard.forgetNotionApiKey",
         "title": "Chat Wizard: Forget Notion API Key",
+        "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.setSessionStatus",
+        "title": "Chat Wizard: Set Session Status…",
+        "category": "Chat Wizard",
+        "icon": "$(symbol-misc)"
+      },
+      {
+        "command": "chatwizard.filterByStatus",
+        "title": "Chat Wizard: Filter by Status…",
+        "category": "Chat Wizard",
+        "icon": "$(filter)"
+      },
+      {
+        "command": "chatwizard.addBookmark",
+        "title": "Chat Wizard: Add Bookmark…",
+        "category": "Chat Wizard",
+        "icon": "$(bookmark)"
+      },
+      {
+        "command": "chatwizard.addAnnotation",
+        "title": "Chat Wizard: Add Annotation…",
+        "category": "Chat Wizard",
+        "icon": "$(comment)"
+      },
+      {
+        "command": "chatwizard.removeBookmark",
+        "title": "Chat Wizard: Remove Bookmark…",
+        "category": "Chat Wizard",
+        "icon": "$(bookmark)"
+      },
+      {
+        "command": "chatwizard.createFolder",
+        "title": "Chat Wizard: Create Folder",
+        "category": "Chat Wizard",
+        "icon": "$(new-folder)"
+      },
+      {
+        "command": "chatwizard.createSubfolder",
+        "title": "Chat Wizard: Create Subfolder",
+        "category": "Chat Wizard",
+        "icon": "$(new-folder)"
+      },
+      {
+        "command": "chatwizard.renameFolder",
+        "title": "Chat Wizard: Rename Folder",
+        "category": "Chat Wizard",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "chatwizard.deleteFolder",
+        "title": "Chat Wizard: Delete Folder",
+        "category": "Chat Wizard",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "chatwizard.moveSessionToFolder",
+        "title": "Chat Wizard: Move Session to Folder…",
+        "category": "Chat Wizard",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "chatwizard.addSessionToFolder",
+        "title": "Chat Wizard: Add Session to Folder",
+        "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.generateKnowledgeBase",
+        "title": "Chat Wizard: Generate Knowledge Base",
+        "category": "Chat Wizard",
+        "icon": "$(book)"
+      },
+      {
+        "command": "chatwizard.generateDigest",
+        "title": "Chat Wizard: Generate Digest",
+        "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.linkSession",
+        "title": "Chat Wizard: Link Session",
+        "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.unlinkSession",
+        "title": "Chat Wizard: Unlink Session",
+        "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.shareSession",
+        "title": "Chat Wizard: Share Session",
         "category": "Chat Wizard"
       }
     ],
@@ -732,6 +864,11 @@
           "group": "export@2"
         },
         {
+          "command": "chatwizard.generateKnowledgeBase",
+          "when": "view == chatwizardSessions",
+          "group": "export@3"
+        },
+        {
           "command": "chatwizard.filterCodeBlocks",
           "when": "view == chatwizardCodeBlocks",
           "group": "navigation@0"
@@ -820,6 +957,11 @@
           "command": "chatwizard.cbSortByLanguage.desc",
           "when": "view == chatwizardCodeBlocks && chatwizard.cbSortKey == 'language' && chatwizard.cbSortDir == 'desc'",
           "group": "navigation@5"
+        },
+        {
+          "command": "chatwizard.generateKnowledgeBase",
+          "when": "view == chatwizardKnowledgeBase",
+          "group": "navigation@0"
         }
       ],
       "view/item/context": [
@@ -839,14 +981,19 @@
           "group": "2_export@1"
         },
         {
-          "command": "chatwizard.exportFromTreeSelection",
+          "command": "chatwizard.generateKnowledgeBase",
           "when": "viewItem == session || viewItem == session.pinned",
           "group": "2_export@2"
         },
         {
-          "command": "chatwizard.injectAsContext",
+          "command": "chatwizard.exportFromTreeSelection",
           "when": "viewItem == session || viewItem == session.pinned",
           "group": "2_export@3"
+        },
+        {
+          "command": "chatwizard.injectAsContext",
+          "when": "viewItem == session || viewItem == session.pinned",
+          "group": "2_export@4"
         },
         {
           "command": "chatwizard.pinSession",
@@ -902,6 +1049,56 @@
           "command": "chatwizard.regenerateTitlesInGroup",
           "when": "viewItem == dateGroup",
           "group": "session@1"
+        },
+        {
+          "command": "chatwizard.setSessionStatus",
+          "when": "viewItem == session || viewItem == session.pinned || viewItem == session.archived || viewItem == session.userArchived",
+          "group": "6_status@1"
+        },
+        {
+          "command": "chatwizard.filterByStatus",
+          "when": "view == chatwizardSessions",
+          "group": "navigation@0"
+        },
+        {
+          "command": "chatwizard.createFolder",
+          "when": "view == chatwizardSessions",
+          "group": "navigation@9"
+        },
+        {
+          "command": "chatwizard.addBookmark",
+          "when": "viewItem == session || viewItem == session.pinned || viewItem == session.archived || viewItem == session.userArchived",
+          "group": "6_status@2"
+        },
+        {
+          "command": "chatwizard.removeBookmark",
+          "when": "viewItem == session || viewItem == session.pinned || viewItem == session.archived || viewItem == session.userArchived",
+          "group": "6_status@3"
+        },
+        {
+          "command": "chatwizard.createSubfolder",
+          "when": "viewItem == sessionFolder",
+          "group": "1_folder@1"
+        },
+        {
+          "command": "chatwizard.renameFolder",
+          "when": "viewItem == sessionFolder",
+          "group": "1_folder@2"
+        },
+        {
+          "command": "chatwizard.deleteFolder",
+          "when": "viewItem == sessionFolder",
+          "group": "1_folder@3"
+        },
+        {
+          "command": "chatwizard.createFolder",
+          "when": "viewItem == sessionFolder || viewItem == folderUncategorized",
+          "group": "0_new@1"
+        },
+        {
+          "command": "chatwizard.moveSessionToFolder",
+          "when": "viewItem == session || viewItem == session.pinned",
+          "group": "7_folder@1"
         }
       ],
       "commandPalette": [
@@ -923,6 +1120,18 @@
         },
         {
           "command": "chatwizard.search",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.searchAnnotations",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.addAnnotation",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.generateDigest",
           "when": "false"
         },
         {
@@ -1148,6 +1357,130 @@
         {
           "command": "chatwizard.rotateMcpToken",
           "when": "true"
+        },
+        {
+          "command": "chatwizard.createSubfolder",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.renameFolder",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.deleteFolder",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.moveSessionToFolder",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.addSessionToFolder",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.revealSessionInExplorer",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.archiveSession",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.deleteArchivedSession",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.groupSessions",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.focusSessionTree",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.regenerateTitle",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.regenerateAllTitles",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.startMcpServer",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.stopMcpServer",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.copyMcpConfig",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.connectCopilot",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.setupGlobalInstructions",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.addTag",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.removeTag",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.tagActiveSession",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.regenerateSummary",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.showFileHistory",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.showArchiveStats",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.exportToObsidian",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.exportToNotion",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.forgetNotionApiKey",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.setSessionStatus",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.filterByStatus",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.addBookmark",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.removeBookmark",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.createFolder",
+          "when": "false"
         }
       ]
     },
@@ -1224,6 +1557,39 @@
             "default": 1000000,
             "minimum": 10000,
             "description": "Maximum character length of a single JSONL line when parsing Claude sessions. Lines exceeding this limit are shown as a notice placeholder in the session viewer instead of being silently dropped. Increase this if large messages are being truncated; lower it to reduce memory usage when indexing."
+          },
+          "chatwizard.enablePersistentCache": {
+            "type": "boolean",
+            "default": true,
+            "description": "Enable the SQLite persistent cache (chatwizard-cache.db). When enabled, sessions are stored in a local SQLite database and loaded from it on startup — only changed source files are re-parsed. Disable to force full re-parsing on every activation."
+          },
+          "chatwizard.sharedCacheDir": {
+            "type": "string",
+            "default": "",
+            "description": "Custom directory for the shared SQLite cache (chatwizard-cache.db). When empty, uses a cross-IDE default: Windows → %LOCALAPPDATA%\\ChatWizard, macOS → ~/Library/Application Support/ChatWizard, Linux → ~/.local/share/chatwizard. All ChatWizard instances on the same machine converge on this location, so bookmarks, tags, notes, ratings, and parse state are shared across IDEs. Set this to a network or RAM-disk path for advanced scenarios."
+          },
+          "chatwizard.logLevel": {
+            "type": "string",
+            "default": "INFO",
+            "enum": ["DEBUG", "INFO", "WARN", "ERROR"],
+            "enumDescriptions": [
+              "Verbose diagnostic logging — all steps, timings, and decisions",
+              "Normal operational messages and warnings",
+              "Only warnings and errors",
+              "Only errors"
+            ],
+            "description": "Minimum log level shown in the Chat Wizard output channel. Set to DEBUG when troubleshooting startup, indexing, or embedding issues."
+          },
+          "chatwizard.didYouKnowInterval": {
+            "type": "integer",
+            "default": 300,
+            "minimum": 30,
+            "description": "Interval in seconds between 'Did you know?' squirrel notifications. Default is 300 (5 minutes). Set to 0 to disable the nudge entirely."
+          },
+          "chatwizard.kbAutoTagSessions": {
+            "type": "boolean",
+            "default": true,
+            "description": "When true, each session classified by the Knowledge Base automatically gets its KB category (and top-level group, if any) added as tags. E.g. a session classified as 'Git Push' under 'Git' gets tags 'git-push' and 'git'."
           }
         }
       },
@@ -1429,6 +1795,61 @@
         }
       },
       {
+        "title": "Chat Wizard: Retention",
+        "properties": {
+          "chatwizard.semanticIndexMaxAgeDays": {
+            "type": "number",
+            "default": 365,
+            "minimum": 0,
+            "description": "Exclude sessions older than this many days from the semantic (embedding) index. They remain in full-text search and the session tree. 0 = no age limit."
+          },
+          "chatwizard.sessionRetentionDays": {
+            "type": "number",
+            "default": 0,
+            "minimum": 0,
+            "description": "Suppress sessions older than this many days from all UI surfaces (tree, search, analytics). 0 = no limit. Source files are never deleted."
+          }
+        }
+      },
+      {
+        "title": "Chat Wizard: API",
+        "properties": {
+          "chatwizard.restApi.enabled": {
+            "type": "boolean",
+            "default": false,
+            "description": "Enable the read-only REST API server. When enabled, a local HTTP server providing JSON access to the session index is started on the configured port."
+          },
+          "chatwizard.restApi.port": {
+            "type": "integer",
+            "default": 6790,
+            "minimum": 1024,
+            "maximum": 65535,
+            "description": "Port for the REST API server. Must differ from the MCP server port."
+          },
+          "chatwizard.restApi.enableDocs": {
+            "type": "boolean",
+            "default": true,
+            "description": "Enable the API documentation endpoint (/) at the REST API root."
+          },
+          "chatwizard.cloudSync.enabled": {
+            "type": "boolean",
+            "default": false,
+            "description": "Enable encrypted cloud sync of the session index to user's own storage (S3/Azure Blob/GitHub Gist). Keys managed locally."
+          },
+          "chatwizard.cloudSync.type": {
+            "type": "string",
+            "default": "gist",
+            "enum": ["gist", "s3", "azure"],
+            "enumDescriptions": [
+              "GitHub Gist (requires GitHub token)",
+              "Amazon S3 (requires AWS credentials)",
+              "Azure Blob Storage (requires Azure connection string)"
+            ],
+            "description": "Cloud storage backend for session sync."
+          }
+        }
+      },
+      {
         "title": "Chat Wizard: Appearance",
         "properties": {
           "chatwizard.userMessageColor": {
@@ -1469,14 +1890,14 @@
     "vscode:prepublish": "npm run rebuild:native && npm run bundle && npm run validate:release",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "pretest": "npm run compile && npm run lint",
+    "pretest": "npm run compile && npm run lint && node test/copy-fixtures.mjs && npm run rebuild:native",
     "lint": "eslint \"src/**/*.ts\"",
     "test": "vscode-test",
     "pretest:integration": "npm run compile",
     "test:integration": "vscode-test --files \"out/test/e2e/integration/**/*.test.js\"",
     "rebuild:native": "node scripts/rebuild-native.js",
-    "bundle": "esbuild src/extension.ts --bundle --platform=node --external:vscode --external:better-sqlite3 --external:@xenova/transformers --outfile=dist/extension.js",
-    "bundle:watch": "esbuild src/extension.ts --bundle --platform=node --external:vscode --external:better-sqlite3 --external:@xenova/transformers --outfile=dist/extension.js --sourcemap --watch",
+    "bundle": "esbuild src/extension.ts --bundle --platform=node --external:vscode --external:better-sqlite3 --external:@xenova/transformers --outfile=dist/extension.js && esbuild src/search/embeddingWorker.ts --bundle --platform=node --external:@xenova/transformers --outfile=dist/embeddingWorker.js",
+    "bundle:watch": "esbuild src/extension.ts --bundle --platform=node --external:vscode --external:better-sqlite3 --external:@xenova/transformers --outfile=dist/extension.js --sourcemap --watch & esbuild src/search/embeddingWorker.ts --bundle --platform=node --external:@xenova/transformers --outfile=dist/embeddingWorker.js --sourcemap --watch",
     "pretest:coverage": "npm run compile",
     "test:coverage": "vscode-test --coverage --coverage-reporter lcov --coverage-reporter text --coverage-reporter json-summary && node -e \"const s=require('./coverage/coverage-summary.json'),T=90,EXCL=['fileWatcher.ts','sessionWebviewPanel.ts','analyticsPanel.ts','codeBlocksPanel.ts','mcpServer.ts','chatParticipant.ts','configPaths.ts','timelineViewProvider.ts','getContextTool.ts','cursor.ts','copilot.ts','antigravity.ts','copilotWorkspace.ts','sessionTreeProvider.ts','summaryGenerator.ts','amazonQWorkspace.ts','continueWorkspace.ts','geminiCodeAssistWorkspace.ts','sourceBrandIcons.ts','fileAnchorResolver.ts','promptLibraryPanel.ts','semanticSearchPanel.ts','semanticWiring.test.ts','semanticIndexer.test.ts'];function adj(k){let tot=s.total[k].total,cov=s.total[k].covered;for(const[f,d]of Object.entries(s)){if(f==='total')continue;const n=f.split(/[/\\\\\\\\]/).pop();if(EXCL.includes(n)){tot-=d[k].total;cov-=d[k].covered;}}return tot>0?cov/tot*100:100;}const f=['branches','functions','lines','statements'].filter(k=>adj(k)<T);if(f.length){console.error('\\nCoverage below '+T+'%: '+f.map(k=>k+' '+adj(k).toFixed(2)+'%').join(', '));process.exit(1);}console.log('Coverage OK (>='+T+'%)')\"",
     "test:flaky": "node scripts/detect-flaky.mjs",
@@ -1492,7 +1913,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@xenova/transformers": "^2.17.2",
-    "better-sqlite3": "^12.8.0"
+    "better-sqlite3": "github:WiseLibs/better-sqlite3#v12.11.0"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.3",

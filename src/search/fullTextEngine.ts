@@ -105,6 +105,12 @@ export class FullTextSearchEngine {
     /** sessionId → Session */
     private readonly sessions = new Map<string, Session>();
 
+    /**
+     * Content fingerprint: sessionId → `${updatedAt}:${messages.length}`
+     * Used to skip re-tokenization when neither timestamp nor message count changed.
+     */
+    private readonly _contentVersions = new Map<string, string>();
+
     /** token → Set of "sessionId:messageIndex" strings (docFreq ≥ MIN_DOC_FREQ) */
     private readonly invertedIndex = new Map<string, Set<string>>();
 
@@ -139,9 +145,27 @@ export class FullTextSearchEngine {
         this.sessionTokens.clear();
         this.tokenDocSessions.clear();
         this.hapaxStore.clear();
+        this._contentVersions.clear();
     }
 
     index(session: Session): void {
+        // Skip re-tokenization when content is unchanged (only metadata like title changed).
+        // Include a lightweight content hash so re-indexing the same session with
+        // different message content (same updatedAt + same count) forces re-tokenization.
+        // XOR-fold a simple djb2-style hash over each character to detect content changes
+        // that share the same total byte count (avoids false-unchanged on transpositions/swaps).
+        const contentHash = session.messages.reduce((acc, m) => {
+            let h = acc;
+            for (let i = 0; i < m.content.length; i++) { h = (Math.imul(h, 33) ^ m.content.charCodeAt(i)) >>> 0; }
+            return h;
+        }, 0);
+        const fingerprint = `${session.updatedAt}:${session.messages.length}:${contentHash}`;
+        if (this.sessions.has(session.id) && this._contentVersions.get(session.id) === fingerprint) {
+            // Content identical — just update the stored session reference (title may have changed)
+            this.sessions.set(session.id, session);
+            return;
+        }
+
         // Idempotency: remove previous entries for this session first.
         if (this.sessions.has(session.id)) {
             this._removeFromInvertedIndex(session.id);
@@ -157,6 +181,8 @@ export class FullTextSearchEngine {
         for (const token of tokenize(session.title)) {
             this._indexToken(token, session.id, titleEntry, tokenSet);
         }
+
+        this._contentVersions.set(session.id, fingerprint);
 
         for (let msgIdx = 0; msgIdx < session.messages.length; msgIdx++) {
             const message = session.messages[msgIdx];
@@ -225,6 +251,7 @@ export class FullTextSearchEngine {
     remove(sessionId: string): void {
         this._removeFromInvertedIndex(sessionId);
         this.sessions.delete(sessionId);
+        this._contentVersions.delete(sessionId);
     }
 
 

@@ -167,4 +167,176 @@ suite('SidecarMetadataStore', () => {
         const meta = await store.get('sess-sum');
         assert.strictEqual(meta?.summary, 'This is a summary.');
     });
+
+    // ── Feature 29: Bookmarks ─────────────────────────────────────────────────
+
+    test('addBookmark creates a bookmark with correct messageIndex', async () => {
+        const bm = { messageIndex: 5, createdAt: new Date().toISOString() };
+        await store.addBookmark('bm-sess', bm);
+        const bookmarks = await store.getBookmarks('bm-sess');
+        assert.strictEqual(bookmarks.length, 1);
+        assert.strictEqual(bookmarks[0].messageIndex, 5);
+        assert.ok(bookmarks[0].createdAt);
+    });
+
+    test('toggleBookmark off removes the bookmark', async () => {
+        const bm = { messageIndex: 3, note: 'Important', createdAt: new Date().toISOString() };
+        await store.addBookmark('bm-sess2', bm);
+        let bookmarks = await store.getBookmarks('bm-sess2');
+        assert.strictEqual(bookmarks.length, 1);
+
+        // Toggle off (removes)
+        const added = await store.toggleBookmark('bm-sess2', 3);
+        assert.strictEqual(added, false); // false = removed
+        bookmarks = await store.getBookmarks('bm-sess2');
+        assert.strictEqual(bookmarks.length, 0);
+    });
+
+    test('toggleBookmark on adds the bookmark', async () => {
+        // Toggle on (adds)
+        const added = await store.toggleBookmark('bm-sess3', 7, 'My note');
+        assert.strictEqual(added, true);
+        const bookmarks = await store.getBookmarks('bm-sess3');
+        assert.strictEqual(bookmarks.length, 1);
+        assert.strictEqual(bookmarks[0].messageIndex, 7);
+        assert.strictEqual(bookmarks[0].note, 'My note');
+    });
+
+    test('bookmarks survive serialization round-trip via sidecar JSON', async () => {
+        const createdAt = '2026-06-01T10:00:00.000Z';
+        await store.addBookmark('bm-roundtrip', { messageIndex: 2, note: 'Test note', createdAt });
+
+        // Read back
+        let bookmarks = await store.getBookmarks('bm-roundtrip');
+        assert.strictEqual(bookmarks.length, 1);
+        assert.strictEqual(bookmarks[0].messageIndex, 2);
+        assert.strictEqual(bookmarks[0].note, 'Test note');
+        assert.strictEqual(bookmarks[0].createdAt, createdAt);
+
+        // Simulate re-load from disk (new store instance)
+        const store2 = new (require('../../src/index/sidecarMetadataStore').SidecarMetadataStore)(tmpDir);
+        bookmarks = await store2.getBookmarks('bm-roundtrip');
+        assert.strictEqual(bookmarks.length, 1);
+        assert.strictEqual(bookmarks[0].messageIndex, 2);
+        assert.strictEqual(bookmarks[0].note, 'Test note');
+        assert.strictEqual(bookmarks[0].createdAt, createdAt);
+    });
+
+    test('removeBookmark removes bookmark for a given messageIndex', async () => {
+        await store.addBookmark('bm-sess4', { messageIndex: 1, createdAt: new Date().toISOString() });
+        await store.addBookmark('bm-sess4', { messageIndex: 2, createdAt: new Date().toISOString() });
+        let bookmarks = await store.getBookmarks('bm-sess4');
+        assert.strictEqual(bookmarks.length, 2);
+
+        await store.removeBookmark('bm-sess4', 1);
+        bookmarks = await store.getBookmarks('bm-sess4');
+        assert.strictEqual(bookmarks.length, 1);
+        assert.strictEqual(bookmarks[0].messageIndex, 2);
+    });
+
+    test('removeBookmark is a no-op for nonexistent messageIndex', async () => {
+        await store.addBookmark('bm-sess5', { messageIndex: 10, createdAt: new Date().toISOString() });
+        // Should not throw
+        await store.removeBookmark('bm-sess5', 999);
+        const bookmarks = await store.getBookmarks('bm-sess5');
+        assert.strictEqual(bookmarks.length, 1);
+    });
+
+    test('getBookmarks returns empty array for session with no bookmarks', async () => {
+        const bookmarks = await store.getBookmarks('nonexistent-bm');
+        assert.deepStrictEqual(bookmarks, []);
+    });
+
+    test('addBookmark replaces existing bookmark for the same messageIndex', async () => {
+        const createdAt1 = '2026-01-01T00:00:00.000Z';
+        const createdAt2 = '2026-06-01T00:00:00.000Z';
+        await store.addBookmark('bm-sess6', { messageIndex: 0, note: 'Old note', createdAt: createdAt1 });
+        await store.addBookmark('bm-sess6', { messageIndex: 0, note: 'New note', createdAt: createdAt2 });
+        const bookmarks = await store.getBookmarks('bm-sess6');
+        assert.strictEqual(bookmarks.length, 1); // replaced, not duplicated
+        assert.strictEqual(bookmarks[0].note, 'New note');
+    });
+
+    // ── Feature 30: Annotations ───────────────────────────────────────────────
+
+    test('getAnnotations returns empty array for session with no annotations', async () => {
+        const annotations = await store.getAnnotations('nonexistent-an');
+        assert.deepStrictEqual(annotations, []);
+    });
+
+    test('upsertAnnotation adds a new annotation with correct fields', async () => {
+        const annotation = { messageIndex: 2, text: 'This is my note', createdAt: '2026-06-01T10:00:00.000Z' };
+        await store.upsertAnnotation('an-sess1', annotation);
+        const annotations = await store.getAnnotations('an-sess1');
+        assert.strictEqual(annotations.length, 1);
+        assert.strictEqual(annotations[0].messageIndex, 2);
+        assert.strictEqual(annotations[0].text, 'This is my note');
+        assert.ok(annotations[0].createdAt);
+    });
+
+    test('upsertAnnotation replaces existing annotation for the same messageIndex and sets updatedAt', async () => {
+        const annotation1 = { messageIndex: 1, text: 'First note', createdAt: '2026-01-01T00:00:00.000Z' };
+        await store.upsertAnnotation('an-sess2', annotation1);
+        let annotations = await store.getAnnotations('an-sess2');
+        assert.strictEqual(annotations.length, 1);
+
+        const annotation2 = { messageIndex: 1, text: 'Updated note', createdAt: '2026-06-01T00:00:00.000Z' };
+        await store.upsertAnnotation('an-sess2', annotation2);
+        annotations = await store.getAnnotations('an-sess2');
+        assert.strictEqual(annotations.length, 1);
+        assert.strictEqual(annotations[0].text, 'Updated note');
+        assert.ok(annotations[0].updatedAt); // updatedAt should be set
+    });
+
+    test('upsertAnnotation preserves createdAt from original annotation on update', async () => {
+        const annotation1 = { messageIndex: 0, text: 'Original', createdAt: '2026-01-01T00:00:00.000Z' };
+        await store.upsertAnnotation('an-sess3', annotation1);
+        const annotations1 = await store.getAnnotations('an-sess3');
+        const originalCreatedAt = annotations1[0].createdAt;
+
+        const annotation2 = { messageIndex: 0, text: 'Updated', createdAt: '2026-06-01T00:00:00.000Z' };
+        await store.upsertAnnotation('an-sess3', annotation2);
+        const annotations2 = await store.getAnnotations('an-sess3');
+        assert.strictEqual(annotations2[0].createdAt, originalCreatedAt); // createdAt preserved
+        assert.strictEqual(annotations2[0].text, 'Updated');
+    });
+
+    test('removeAnnotation removes annotation for a given messageIndex', async () => {
+        await store.upsertAnnotation('an-sess4', { messageIndex: 1, text: 'Note 1', createdAt: new Date().toISOString() });
+        await store.upsertAnnotation('an-sess4', { messageIndex: 2, text: 'Note 2', createdAt: new Date().toISOString() });
+        let annotations = await store.getAnnotations('an-sess4');
+        assert.strictEqual(annotations.length, 2);
+
+        await store.removeAnnotation('an-sess4', 1);
+        annotations = await store.getAnnotations('an-sess4');
+        assert.strictEqual(annotations.length, 1);
+        assert.strictEqual(annotations[0].messageIndex, 2);
+    });
+
+    test('removeAnnotation is a no-op for nonexistent messageIndex', async () => {
+        await store.upsertAnnotation('an-sess5', { messageIndex: 10, text: 'Test note', createdAt: new Date().toISOString() });
+        await store.removeAnnotation('an-sess5', 999);
+        const annotations = await store.getAnnotations('an-sess5');
+        assert.strictEqual(annotations.length, 1);
+    });
+
+    test('annotations survive serialization round-trip via sidecar JSON', async () => {
+        const createdAt = '2026-06-01T10:00:00.000Z';
+        await store.upsertAnnotation('an-roundtrip', { messageIndex: 3, text: 'Persistent note', createdAt });
+
+        // Read back
+        let annotations = await store.getAnnotations('an-roundtrip');
+        assert.strictEqual(annotations.length, 1);
+        assert.strictEqual(annotations[0].messageIndex, 3);
+        assert.strictEqual(annotations[0].text, 'Persistent note');
+        assert.strictEqual(annotations[0].createdAt, createdAt);
+
+        // Simulate re-load from disk (new store instance)
+        const store2 = new (require('../../src/index/sidecarMetadataStore').SidecarMetadataStore)(tmpDir);
+        annotations = await store2.getAnnotations('an-roundtrip');
+        assert.strictEqual(annotations.length, 1);
+        assert.strictEqual(annotations[0].messageIndex, 3);
+        assert.strictEqual(annotations[0].text, 'Persistent note');
+        assert.strictEqual(annotations[0].createdAt, createdAt);
+    });
 });

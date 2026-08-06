@@ -1,6 +1,6 @@
 // src/analytics/analyticsEngine.ts
 
-import { Session, SessionSource } from '../types/index';
+import { Session, SessionSource, SessionSummary } from '../types/index';
 
 /** Token-count callback — injected so tests can use a trivial counter */
 export type CountTokensFn = (text: string, source: SessionSource) => number;
@@ -68,20 +68,45 @@ const STOP_WORDS = new Set([
     'they','will','been','more','also','into','than','just','your',
 ]);
 
-export function computeAnalytics(sessions: Session[], countTokens: CountTokensFn): AnalyticsData {
+/**
+ * Compute analytics from full sessions.
+ * When `summaries` are provided the pre-computed token counts are used (Item 6),
+ * avoiding a full re-tokenization on every refresh.
+ */
+export function computeAnalytics(
+    sessions: Session[],
+    countTokens: CountTokensFn,
+    summaries?: SessionSummary[]
+): AnalyticsData {
+    // Build a lookup so we can use pre-computed token counts in O(1) per session.
+    const summaryMap = new Map<string, SessionSummary>();
+    if (summaries) {
+        for (const s of summaries) { summaryMap.set(s.id, s); }
+    }
+
     const allMetrics: SessionMetrics[] = sessions.map(session => {
+        const cached = summaryMap.get(session.id);
         let userMessageCount = 0;
         let assistantMessageCount = 0;
         let userTokens = 0;
         let assistantTokens = 0;
 
-        for (const msg of session.messages) {
-            if (msg.role === 'user') {
-                userMessageCount++;
-                userTokens += countTokens(msg.content, session.source);
-            } else {
-                assistantMessageCount++;
-                assistantTokens += countTokens(msg.content, session.source);
+        if (cached?.userTokens !== undefined && cached?.assistantTokens !== undefined) {
+            // Fast path: use pre-computed values (O(1) per session, no string scan)
+            userMessageCount = cached.userMessageCount;
+            assistantMessageCount = cached.assistantMessageCount;
+            userTokens = cached.userTokens;
+            assistantTokens = cached.assistantTokens;
+        } else {
+            // Fallback: tokenize messages (keeps full accuracy for sources that deviate)
+            for (const msg of session.messages) {
+                if (msg.role === 'user') {
+                    userMessageCount++;
+                    userTokens += countTokens(msg.content, session.source);
+                } else {
+                    assistantMessageCount++;
+                    assistantTokens += countTokens(msg.content, session.source);
+                }
             }
         }
 

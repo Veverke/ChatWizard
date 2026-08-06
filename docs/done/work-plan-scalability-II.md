@@ -210,6 +210,26 @@ One `globalState.update('uiState', JSON.stringify(state))` call per user action.
 
 ---
 
+## Item 11 — Vector Embeddings Built on Every Window Load
+
+**Severity: High**
+**File**: `src/search/semanticIndex.ts`, `src/watcher/fileWatcher.ts`
+
+**Problem**
+Building vector embeddings for semantic search takes considerable time and happens on every window load, even when the underlying session data has not changed. This causes a noticeable delay at startup for users with large session corpora.
+
+- The embedding-build phase is computationally expensive and blocks or delays the semantic search feature from being available.
+- There is no persistence or cache layer for embeddings between VS Code window sessions, so all vectors are recomputed from scratch each time the extension activates.
+
+**Fix**
+- Persist the computed embeddings to disk (e.g. alongside the existing index files) and load them on startup instead of recomputing.
+- Invalidate and recompute only the embeddings for sessions that have changed since the last save (compare `updatedAt` or a content hash against a stored manifest).
+- Fall back to a full rebuild only when the persisted cache is missing or the schema version changes.
+
+**Measurable goal**: Cold-start embedding load time reduced to near-zero for unchanged sessions; only new/modified sessions are re-embedded on activation.
+
+---
+
 ## Tracking
 
 | # | Item | Status | Target version |
@@ -224,3 +244,4 @@ One `globalState.update('uiState', JSON.stringify(state))` call per user action.
 | 8 | Skip FTS re-tokenization for unchanged sessions | Not started | — |
 | 9 | Separate filter/sort cache invalidation + debounce | Not started | — |
 | 10 | Consolidated `globalState` persistence object | Not started | — |
+| 11 | Persist vector embeddings across window loads | Not started | — |

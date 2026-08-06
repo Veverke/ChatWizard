@@ -170,4 +170,130 @@ export class SidecarMetadataStore {
     async setSummary(sessionId: string, summary: string): Promise<void> {
         await this.patch(sessionId, { summary });
     }
-}
+
+    /** Shortcut: sets session status (open/resolved/revisit) */
+    async setStatus(sessionId: string, status: 'open' | 'resolved' | 'revisit' | undefined): Promise<void> {
+        await this.patch(sessionId, { status });
+    }
+
+    /** Returns all bookmarks for a session, or an empty array if none exist. */
+    async getBookmarks(sessionId: string): Promise<import('../types/index').SessionBookmark[]> {
+        const map = this.cache ?? await this.load();
+        const existing = map.get(sessionId);
+        return existing?.bookmarks ?? [];
+    }
+
+    /**
+     * Adds a bookmark pointing to a specific message in a session.
+     * Stores bookmarks as a list on the SessionMetadata.
+     * If a bookmark for the same messageIndex already exists, it is replaced (toggled off → on).
+     */
+    async addBookmark(sessionId: string, bookmark: import('../types/index').SessionBookmark): Promise<void> {
+        const map = this.cache ?? await this.load();
+        const existing = map.get(sessionId) ?? { sessionId };
+        const bookmarks: import('../types/index').SessionBookmark[] = existing.bookmarks ?? [];
+        // Replace existing bookmark for the same messageIndex if any
+        const idx = bookmarks.findIndex(b => b.messageIndex === bookmark.messageIndex);
+        if (idx >= 0) {
+            bookmarks[idx] = bookmark;
+        } else {
+            bookmarks.push(bookmark);
+        }
+        await this.patch(sessionId, { bookmarks } as import('../types/index').SessionMetadata);
+    }
+
+    /**
+     * Toggles a bookmark for the given message index.
+     * If a bookmark exists for that index, it is removed. Otherwise it is added.
+     * Returns true if the bookmark was added, false if removed.
+     */
+    async toggleBookmark(sessionId: string, messageIndex: number, note?: string): Promise<boolean> {
+        const existingBms = await this.getBookmarks(sessionId);
+        const existingIdx = existingBms.findIndex(b => b.messageIndex === messageIndex);
+        if (existingIdx >= 0) {
+            // Remove
+            await this.removeBookmark(sessionId, messageIndex);
+            return false;
+        } else {
+            // Add
+            const bookmark: import('../types/index').SessionBookmark = {
+                messageIndex,
+                note: note || undefined,
+                createdAt: new Date().toISOString(),
+            };
+            await this.addBookmark(sessionId, bookmark);
+            return true;
+        }
+    }
+
+    /** Removes all bookmarks for a given message index. */
+    async removeBookmark(sessionId: string, messageIndex: number): Promise<void> {
+        const map = this.cache ?? await this.load();
+        const existing = map.get(sessionId);
+        if (!existing) { return; }
+        const bookmarks: import('../types/index').SessionBookmark[] = (existing.bookmarks ?? []).filter(
+            (b: import('../types/index').SessionBookmark) => b.messageIndex !== messageIndex
+        );
+        await this.patch(sessionId, { bookmarks } as import('../types/index').SessionMetadata);
+    }
+
+    /** Returns all annotations for a session, or an empty array if none exist. */
+    async getAnnotations(sessionId: string): Promise<import('../types/index').MessageAnnotation[]> {
+        const map = this.cache ?? await this.load();
+        const existing = map.get(sessionId);
+        return existing?.annotations ?? [];
+    }
+
+    /**
+     * Upserts an annotation for a specific message.
+     * If an annotation for the same messageIndex already exists, it is replaced (updatedAt set).
+     * Otherwise a new annotation is added.
+     */
+    async upsertAnnotation(sessionId: string, annotation: import('../types/index').MessageAnnotation): Promise<void> {
+        const map = this.cache ?? await this.load();
+        const existing = map.get(sessionId) ?? { sessionId };
+        const annotations: import('../types/index').MessageAnnotation[] = existing.annotations ? [...existing.annotations] : [];
+        const idx = annotations.findIndex((a: import('../types/index').MessageAnnotation) => a.messageIndex === annotation.messageIndex);
+        if (idx >= 0) {
+            // Update existing: preserve createdAt, set updatedAt
+            annotations[idx] = {
+                ...annotation,
+                createdAt: annotations[idx].createdAt,
+                updatedAt: new Date().toISOString(),
+            };
+        } else {
+            // Add new
+            annotations.push(annotation);
+        }
+        await this.patch(sessionId, { annotations });
+    }
+
+    /** Removes all annotations for a given message index. */
+    async removeAnnotation(sessionId: string, messageIndex: number): Promise<void> {
+        const map = this.cache ?? await this.load();
+        const existing = map.get(sessionId);
+        if (!existing?.annotations) { return; }
+        const updated = existing.annotations.filter(a => a.messageIndex !== messageIndex);
+        await this.patch(sessionId, { annotations: updated });
+    }
+
+    /** Adds a linked session ID reference. */
+    async addLinkedSession(sessionId: string, linkedSessionId: string): Promise<void> {
+        const map = this.cache ?? await this.load();
+        const existing = map.get(sessionId) ?? { sessionId };
+        const links = existing.linkedSessionIds ?? [];
+        if (!links.includes(linkedSessionId)) {
+            await this.patch(sessionId, { linkedSessionIds: [...links, linkedSessionId] });
+        }
+    }
+
+    /** Removes a linked session ID reference. */
+    async removeLinkedSession(sessionId: string, linkedSessionId: string): Promise<void> {
+        const map = this.cache ?? await this.load();
+        const existing = map.get(sessionId);
+        if (!existing?.linkedSessionIds) { return; }
+        const updated = existing.linkedSessionIds.filter(id => id !== linkedSessionId);
+        await this.patch(sessionId, { linkedSessionIds: updated });
+    }
+
+    }

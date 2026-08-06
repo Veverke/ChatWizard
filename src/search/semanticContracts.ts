@@ -24,6 +24,10 @@ export interface IEmbeddingEngine {
     readonly isReady: boolean;
     load(onProgress?: (message: string) => void): Promise<void>;
     embed(text: string): Promise<Float32Array>;
+    /** Embed multiple texts in a single pipeline call. Falls back to sequential embed() if batching fails. */
+    embedBatch(texts: string[]): Promise<Float32Array[]>;
+    /** Release resources (e.g. terminate worker thread). */
+    dispose(): void;
 }
 
 /** In-memory vector store with binary file persistence */
@@ -34,6 +38,7 @@ export interface ISemanticIndex {
     has(sessionId: string): boolean;
     search(queryEmbedding: Float32Array, topK: number, minScore?: number, scope?: SemanticScope): SemanticMessageResult[];
     save(filePath: string): Promise<void>;
+    saveSync(filePath: string): void;
     load(filePath: string): Promise<void>;
 }
 

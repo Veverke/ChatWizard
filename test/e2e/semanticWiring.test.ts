@@ -5,6 +5,9 @@
 // through manual Extension Development Host testing (see docs/).
 
 import * as assert from 'assert';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { SemanticIndexer, SemanticIndexerVsCodeApi } from '../../src/search/semanticIndexer';
 import { IEmbeddingEngine, ISemanticIndex, SEMANTIC_DIMS } from '../../src/search/semanticContracts';
 import { SemanticMessageResult } from '../../src/search/types';
@@ -57,6 +60,11 @@ function makeEngineStub(): IEmbeddingEngine & { calls: EmbedCall[] } {
             calls.push({ text });
             return new Float32Array(SEMANTIC_DIMS).fill(0.1);
         },
+        async embedBatch(texts: string[]) {
+            for (const text of texts) { calls.push({ text }); }
+            return texts.map(() => new Float32Array(SEMANTIC_DIMS).fill(0.1));
+        },
+        dispose(): void { /* no-op */ },
         calls,
     };
 }
@@ -92,6 +100,7 @@ function makeIndexStub(): ISemanticIndex & { addCalls: IndexAddCall[] } {
             });
         },
         async save() {},
+        saveSync() {},
         async load() {},
     };
 }
@@ -100,9 +109,10 @@ async function makeReadyIndexer() {
     const engine = makeEngineStub();
     const index = makeIndexStub();
     const api = makeVsCodeApiStub();
-    const indexer = new SemanticIndexer('/storage', () => engine, () => index, api, 0);
+    const storageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'semantic-wiring-test-'));
+    const indexer = new SemanticIndexer(storageDir, () => engine, () => index, api, 0);
     await indexer.initialize();
-    return { indexer, engine, index };
+    return { indexer, engine, index, storageDir };
 }
 
 // ── scheduleSession() message splitting ────────────────────────────────────

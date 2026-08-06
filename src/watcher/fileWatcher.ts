@@ -14,6 +14,7 @@ import {
 import { Session, SessionSource } from '../types/index';
 import { resolveClaudeProjectsPath, resolveClineStoragePath, resolveRooCodeStoragePath, resolveCursorStoragePath, resolveWindsurfStoragePath, resolveAntigravityBrainPath } from './configPaths';
 import { WorkspaceScopeManager } from './workspaceScope';
+import { getSharedChannel } from '../utils/logger';
 import { discoverClineTasksAsync, discoverRooCodeTasksAsync } from '../readers/clineWorkspace';
 import { parseClineTask } from '../parsers/cline';
 import { discoverCursorWorkspacesAsync, getCursorGlobalDbPath } from '../readers/cursorWorkspace';
@@ -35,6 +36,10 @@ import { LiveSessionTracker } from '../utils/liveSessionTracker';
 import { parseAmazonQSession } from '../parsers/amazonQ';
 import { discoverGeminiCodeAssistSessionFilesAsync } from '../readers/geminiCodeAssistWorkspace';
 import { parseGeminiCodeAssistSession } from '../parsers/geminiCodeAssist';
+import { discoverTabnineConversationsAsync } from '../readers/tabnineWorkspace';
+import { parseTabnineConversation } from '../parsers/tabnine';
+import type { ICacheManager } from '../cache/cacheManager';
+import { readGitContextAsync, GitContextCache } from '../utils/gitContextReader';
 
 export class ChatWizardWatcher implements vscode.Disposable {
     private disposables: vscode.Disposable[] = [];
@@ -49,11 +54,16 @@ export class ChatWizardWatcher implements vscode.Disposable {
     private _loggedParseWarnings = new Set<string>();
     /** Optional live session tracker — fed by every live (non-batch) upsert. */
     private _liveTracker: LiveSessionTracker | undefined;
+    /** Feature 24: Optional cache manager for incremental parsing. */
+    private _cacheManager: ICacheManager | undefined;
+    /** Feature 25: Cached git context reader — avoids repeated subprocess calls. */
+    private _gitContextCache: GitContextCache;
 
     constructor(index: SessionIndex, channel: vscode.OutputChannel, scopeManager: WorkspaceScopeManager) {
         this.index = index;
         this.channel = channel;
         this.scopeManager = scopeManager;
+        this._gitContextCache = new GitContextCache(5 * 60_000);
     }
 
     // SEC-6: Symlink traversal guards — ensure resolved path stays within base directory.
@@ -97,6 +107,7 @@ export class ChatWizardWatcher implements vscode.Disposable {
         const indexContinue  = cfg.get<boolean>('indexContinue', true);
         const indexAmazonQ   = cfg.get<boolean>('indexAmazonQ', true);
         const indexGemini    = cfg.get<boolean>('indexGeminiCodeAssist', true);
+        const indexTabnine   = cfg.get<boolean>('indexTabnine', true);
 
         if (!enabled) {
             this.channel.appendLine('[Chat Wizard] Extension disabled via chatwizard.enabled setting — skipping indexing and file watching.');
@@ -105,7 +116,18 @@ export class ChatWizardWatcher implements vscode.Disposable {
             return;
         }
 
-        await this.buildInitialIndex(indexClaude, indexCopilot, indexCline, indexRooCode, indexCursor, indexWindsurf, indexAider, indexAntigravity, indexChronicle, indexContinue, indexAmazonQ, indexGemini);
+        // ── Cache-accelerated startup ─────────────────────────────────────
+        // If the index already has sessions (loaded from SQLite cache by
+        // extension.ts before calling start()), skip full re-parsing and only
+        // register file watchers. New/changed files will be indexed as they
+        // arrive. This cuts startup from minutes to <1 second.
+        const indexAlreadyPopulated = this.index.size > 0;
+        if (indexAlreadyPopulated) {
+            this.channel.appendLine(`[Chat Wizard] Index already has ${this.index.size} sessions from cache — skipping full re-parse.`);
+        } else {
+            this.channel.appendLine('[Chat Wizard] No cached sessions found — performing full re-parse of source files.');
+            await this.buildInitialIndex(indexClaude, indexCopilot, indexCline, indexRooCode, indexCursor, indexWindsurf, indexAider, indexAntigravity, indexChronicle, indexContinue, indexAmazonQ, indexGemini, indexTabnine);
+        }
 
         if (indexClaude) {
             // Watch Claude sessions
@@ -144,7 +166,7 @@ export class ChatWizardWatcher implements vscode.Disposable {
                     this._watchDirFast(projDir, '.jsonl', (fullPath) => {
                         if (!fs.existsSync(fullPath)) { return; }
                         if (!ChatWizardWatcher._isSafeFilePath(claudeBaseDir, fullPath)) { return; }
-                        this.indexFile(fullPath, 'claude');
+                        void this.indexFile(fullPath, 'claude');
                     });
                 }
             } catch { /* directory unreadable — skip */ }
@@ -190,7 +212,7 @@ export class ChatWizardWatcher implements vscode.Disposable {
                 const wsPath = workspace.workspacePath;
                 this._watchDirFast(chatSessionsDir, '.jsonl', (fullPath) => {
                     if (!fs.existsSync(fullPath)) { return; }
-                    this.indexFile(fullPath, 'copilot', wsId, wsPath);
+                    void this.indexFile(fullPath, 'copilot', wsId, wsPath);
                 });
             }
         }
@@ -423,7 +445,8 @@ this.index.remove(taskId);
         }
     }
 
-    private async buildInitialIndex(indexClaude: boolean, indexCopilot: boolean, indexCline: boolean, indexRooCode: boolean = true, indexCursor: boolean = true, indexWindsurf: boolean = true, indexAider: boolean = true, indexAntigravity: boolean = true, indexChronicle: boolean = true, indexContinue: boolean = true, indexAmazonQ: boolean = true, indexGemini: boolean = true): Promise<void> {
+    private async buildInitialIndex(indexClaude: boolean, indexCopilot: boolean, indexCline: boolean, indexRooCode: boolean = true, indexCursor: boolean = true, indexWindsurf: boolean = true, indexAider: boolean = true, indexAntigravity: boolean = true, indexChronicle: boolean = true, indexContinue: boolean = true, indexAmazonQ: boolean = true, indexGemini: boolean = true, indexTabnine: boolean = true): Promise<void> {
+        const startTime = Date.now();
         this.channel.appendLine('[Chat Wizard] buildInitialIndex() started');
         await vscode.window.withProgress(
             {
@@ -463,20 +486,21 @@ this.index.remove(taskId);
                 } else {
                     this.channel.appendLine(`[Chat Wizard] Building index with scope filter: [${selectedIds.join(', ')}]`);
                 }
-                const [claudeSessions, copilotSessions, clineSessions, rooCodeSessions, cursorSessions, windsurfSessions, aiderSessions, antigravitySessions, antigravityJsonSessions, continueSessions, amazonQSessions, geminiSessions] = await Promise.all([
+                const [claudeSessions, copilotSessions, clineSessions, rooCodeSessions, cursorSessions, windsurfSessions, aiderSessions, antigravitySessions, antigravityJsonSessions, continueSessions, amazonQSessions, geminiSessions, tabnineSessions] = await Promise.all([
                     // Always pass selectedIds (even empty array) — empty = index nothing, no fallback to all.
                     indexClaude       ? this.collectClaudeSessionsAsync(makeProgress('claude'),      selectedIds)  : Promise.resolve([]),
                     indexCopilot      ? this.collectCopilotSessionsAsync(makeProgress('copilot'),    selectedIds)  : Promise.resolve([]),
                     indexCline        ? this.collectClineTasksAsync(makeProgress('cline'))                         : Promise.resolve([]),
                     indexRooCode      ? this.collectRooCodeTasksAsync(makeProgress('roo'))                         : Promise.resolve([]),
-                    indexCursor       ? this.collectCursorSessionsAsync(makeProgress('cursor'))                    : Promise.resolve([]),
-                    indexWindsurf     ? this.collectWindsurfSessionsAsync(makeProgress('windsurf'))                : Promise.resolve([]),
+                    indexCursor       ? this.collectCursorSessionsAsync(makeProgress('cursor'), undefined, undefined, selectedIds)   : Promise.resolve([]),
+                    indexWindsurf     ? this.collectWindsurfSessionsAsync(makeProgress('windsurf'), undefined, selectedIds)           : Promise.resolve([]),
                     indexAider        ? this.collectAiderSessionsAsync(makeProgress('aider'))                      : Promise.resolve([]),
                     indexAntigravity  ? this.collectAntigravitySessionsAsync(makeProgress('antigravity'))          : Promise.resolve([]),
                     indexAntigravity  ? this.collectAntigravityJsonSessionsAsync()                                 : Promise.resolve([]),
                     indexContinue     ? this.collectContinueSessionsAsync()                                        : Promise.resolve([]),
                     indexAmazonQ      ? this.collectAmazonQSessionsAsync()                                         : Promise.resolve([]),
-                    indexGemini       ? this.collectGeminiSessionsAsync()                                          : Promise.resolve([]),
+                indexGemini       ? this.collectGeminiSessionsAsync()                                          : Promise.resolve([]),
+                    indexTabnine      ? this.collectTabnineSessionsAsync()                                        : Promise.resolve([]),
                 ]);
 
                 // Deduplicate: if a conversation UUID was already indexed from brain/, skip JSON version.
@@ -484,9 +508,60 @@ this.index.remove(taskId);
                 const deduplicatedJsonSessions = antigravityJsonSessions.filter(s => !brainIds.has(s.id));
 
                 const cfg = vscode.workspace.getConfiguration('chatwizard');
-                const all = applySessionFilters([...claudeSessions, ...copilotSessions, ...clineSessions, ...rooCodeSessions, ...cursorSessions, ...windsurfSessions, ...aiderSessions, ...antigravitySessions, ...deduplicatedJsonSessions, ...continueSessions, ...amazonQSessions, ...geminiSessions], cfg, this.channel);
-                this.index.batchUpsert(all);
-                this.channel.appendLine(`[init] Batch indexed ${all.length} sessions`);
+                const all = applySessionFilters([...claudeSessions, ...copilotSessions, ...clineSessions, ...rooCodeSessions, ...cursorSessions, ...windsurfSessions, ...aiderSessions, ...antigravitySessions, ...deduplicatedJsonSessions, ...continueSessions, ...amazonQSessions, ...geminiSessions, ...tabnineSessions], cfg, this.channel);
+
+                // Workspace-scope filtering for non-Copilot sources that carry a real
+                // workspace path (Cline, Roo Code, Aider). Copilot/Claude/Cursor/Windsurf
+                // are already filtered upstream via `selectedIds`. Sources that surface no
+                // workspace path (Antigravity, Continue, Amazon Q, Gemini, Tabnine) cannot
+                // be scoped by path and are kept as-is.
+                const openFolderPaths = this.scopeManager.getOpenFolderPaths();
+                const allScoped = filterSessionsByWorkspaceScope(
+                    all,
+                    selectedIds,
+                    openFolderPaths,
+                );
+
+                // Feature 25: Enrich sessions with git context (best-effort, non-blocking).
+                // Collect unique workspace paths that lack gitContext, fetch once per path, then apply.
+                {
+                    const wsPaths = new Set<string>();
+                    for (const s of allScoped) {
+                        const p = s.workspacePath;
+                        if (p && !s.gitContext) { wsPaths.add(p); }
+                    }
+                    if (wsPaths.size > 0) {
+                        const ctxMap = new Map<string, Awaited<ReturnType<typeof readGitContextAsync>>>();
+                        await Promise.all(Array.from(wsPaths).map(async (p) => {
+                            ctxMap.set(p, await this._gitContextCache.getOrFetch(p));
+                        }));
+                        let enriched = 0;
+                        for (const s of allScoped) {
+                            if (!s.gitContext && s.workspacePath) {
+                                const ctx = ctxMap.get(s.workspacePath);
+                                if (ctx) { s.gitContext = ctx; enriched++; }
+                            }
+                        }
+                        if (enriched > 0) {
+                            this.channel.appendLine(`[init] Enriched ${enriched} session(s) with git context`);
+                        }
+                    }
+                }
+
+                this.channel.appendLine(
+                    `[init] Discovered — Claude: ${claudeSessions.length}, ` +
+                    `Copilot: ${copilotSessions.length}, Cline: ${clineSessions.length}, ` +
+                    `Roo: ${rooCodeSessions.length}, Cursor: ${cursorSessions.length}, ` +
+                    `Windsurf: ${windsurfSessions.length}, Aider: ${aiderSessions.length}, ` +
+                    `Antigravity: ${antigravitySessions.length + deduplicatedJsonSessions.length}, ` +
+                    `Continue: ${continueSessions.length}, AmazonQ: ${amazonQSessions.length}, ` +
+                    `Gemini: ${geminiSessions.length}, Tabnine: ${tabnineSessions.length}`
+                );
+                this.channel.appendLine(
+                    `[init] Workspace scope applied — ${all.length} → ${allScoped.length} session(s) after path filtering`
+                );
+                this.index.batchUpsert(allScoped);
+                this.channel.appendLine(`[init] Batch indexed ${allScoped.length} sessions in ${Date.now() - startTime}ms`);
 
                 // Merge Chronicle checkpoint data for Copilot sessions (best-effort, non-blocking).
                 if (indexCopilot && indexChronicle) {
@@ -703,11 +778,15 @@ this.index.remove(taskId);
     async collectCursorSessionsAsync(
         onProgress?: (current: number, total: number) => void,
         _cursorRootOverride?: string,
-        _globalDbPathOverride?: string
+        _globalDbPathOverride?: string,
+        selectedIds?: string[]
     ): Promise<Session[]> {
         const root = _cursorRootOverride ?? resolveCursorStoragePath();
         try {
-            const workspaces = await discoverCursorWorkspacesAsync(root);
+            const ws = await discoverCursorWorkspacesAsync(root);
+            const workspaces = selectedIds
+                ? ws.filter(w => selectedIds.includes(w.id))
+                : ws;
             const total = workspaces.length;
             let current = 0;
 
@@ -805,11 +884,15 @@ this.index.remove(taskId);
     /** Async: parse all Windsurf sessions by reading state.vscdb files across discovered workspaces. */
     async collectWindsurfSessionsAsync(
         onProgress?: (current: number, total: number) => void,
-        _windsurfRootOverride?: string
+        _windsurfRootOverride?: string,
+        selectedIds?: string[]
     ): Promise<Session[]> {
         const root = _windsurfRootOverride ?? resolveWindsurfStoragePath();
         try {
-            const workspaces = await discoverWindsurfWorkspacesAsync(root);
+            const ws = await discoverWindsurfWorkspacesAsync(root);
+            const workspaces = selectedIds
+                ? ws.filter(w => selectedIds.includes(w.id))
+                : ws;
             const total = workspaces.length;
             let current = 0;
 
@@ -978,6 +1061,29 @@ this.index.remove(taskId);
             return sessions;
         } catch (err) {
             this.channel.appendLine(`[error] Failed to collect Amazon Q sessions: ${err}`);
+            return [];
+        }
+    }
+
+    async collectTabnineSessionsAsync(): Promise<Session[]> {
+        try {
+            const files = await discoverTabnineConversationsAsync();
+            const sessions: Session[] = [];
+            for (const filePath of files) {
+                try {
+                    const result = parseTabnineConversation(filePath);
+                    if (result.errors.length > 0) {
+                        this.channel.appendLine(`[tabnine] Parse errors for ${filePath}: ${result.errors.join('; ')}`);
+                    }
+                    if (result.session.messages.length > 0) { sessions.push(result.session); }
+                } catch (err) {
+                    this.channel.appendLine(`[tabnine] Failed to parse ${filePath}: ${err}`);
+                }
+            }
+            this.channel.appendLine(`[tabnine] Indexed ${sessions.length} session(s)`);
+            return sessions;
+        } catch (err) {
+            this.channel.appendLine(`[error] Failed to collect Tabnine sessions: ${err}`);
             return [];
         }
     }
@@ -1189,6 +1295,47 @@ this.index.remove(taskId);
         this._liveTracker = tracker;
     }
 
+    /** Feature 24: Set the cache manager for incremental parsing. */
+    setCacheManager(cm: ICacheManager | undefined): void {
+        this._cacheManager = cm;
+    }
+
+    /**
+     * Feature 24: Check if a file has changed since last parse using the cache's parse_state.
+     * Returns true when the file is unchanged and can be skipped (session is already in index).
+     */
+    private _isFileUnchanged(filePath: string): boolean {
+        if (!this._cacheManager) { return false; }
+        try {
+            const stat = fs.statSync(filePath);
+            const state = this._cacheManager.getParseState(filePath);
+            if (!state) { return false; }
+            // Compare mtime and size — if both match, the file hasn't changed
+            const mtimeMs = stat.mtimeMs;
+            const size = stat.size;
+            return Math.abs(state.lastMtime - mtimeMs) < 100 && state.lastSize === size;
+        } catch {
+            return false;
+        }
+    }
+
+    /**
+     * Feature 24: After parsing a file successfully, update the parse state in the cache.
+     */
+    private _updateParseState(filePath: string, source: string): void {
+        if (!this._cacheManager) { return; }
+        try {
+            const stat = fs.statSync(filePath);
+            this._cacheManager.setParseState(filePath, {
+                filePath,
+                source,
+                lastMtime: stat.mtimeMs,
+                lastSize: stat.size,
+                lastOffset: stat.size, // For JSONL: full file parsed
+            });
+        } catch { /* ignore */ }
+    }
+
     /**
      * Re-read and re-index a session by its ID.
      * Called by `/referMessage` to guarantee the index is up-to-date before a turn lookup.
@@ -1196,18 +1343,25 @@ this.index.remove(taskId);
     public refreshSessionById(sessionId: string): void {
         const session = this.index.get(sessionId);
         if (!session?.filePath) { return; }
-        this.indexFile(session.filePath, session.source, session.workspaceId, session.workspacePath);
+        void this.indexFile(session.filePath, session.source, session.workspaceId, session.workspacePath);
     }
 
     /** Parse and immediately upsert a single file into the index (used for live file-change events). */
-    private indexFile(
+    private async indexFile(
         filePath: string,
         source: SessionSource,
         workspaceId?: string,
         workspacePath?: string
-    ): Session | undefined {
+    ): Promise<Session | undefined> {
         const session = this.parseFile(filePath, source, workspaceId, workspacePath);
         if (session) {
+            // Feature 25: Attach git context (branch + commit) at index time.
+            // Try the session's own workspacePath first, then fall back to the configured workspace.
+            const wsPath = session.workspacePath ?? workspacePath;
+            if (!session.gitContext && wsPath) {
+                const gitCtx = await this._gitContextCache.getOrFetch(wsPath);
+                if (gitCtx) { session.gitContext = gitCtx; }
+            }
             this.index.upsert(session);
             return session;
         } else {
@@ -1470,14 +1624,14 @@ if (composerIdToWsInfo.has(result.session.id)) {
         }
     }
 
-    private onFileChanged(
+    private async onFileChanged(
         uri: vscode.Uri,
         source: SessionSource,
         workspaceId?: string,
         workspacePath?: string
-    ): void {
+    ): Promise<void> {
         const before = this.index.size;
-        const session = this.indexFile(uri.fsPath, source, workspaceId, workspacePath);
+        const session = await this.indexFile(uri.fsPath, source, workspaceId, workspacePath);
         if (session) { this._liveTracker?.record(session.source, session.id); }
         const sessionId = path.basename(uri.fsPath, '.jsonl');
         const verb = this.index.size > before ? 'added' : 'updated';
@@ -1528,9 +1682,10 @@ function applySessionFilters(
 export async function startWatcher(
     index: SessionIndex,
     channel?: vscode.OutputChannel,
-    scopeManager?: WorkspaceScopeManager
+    scopeManager?: WorkspaceScopeManager,
+    cacheManager?: ICacheManager
 ): Promise<ChatWizardWatcher> {
-    const ch = channel ?? vscode.window.createOutputChannel('Chat Wizard');
+    const ch = channel ?? getSharedChannel();
     // When no scope manager is provided (legacy / tests), create a no-op instance
     // whose empty selection triggers the all-workspace fallback inside start().
     const mgr = scopeManager ?? new WorkspaceScopeManager({
@@ -1540,6 +1695,65 @@ export async function startWatcher(
         },
     });
     const watcher = new ChatWizardWatcher(index, ch, mgr);
+    watcher.setCacheManager(cacheManager);
     await watcher.start();
     return watcher;
+}
+
+// ---------------------------------------------------------------------------
+// Workspace-scope path filtering (pure, unit-testable)
+// ---------------------------------------------------------------------------
+
+/**
+ * Sources that are scoped by the persisted selected workspace IDs upstream
+ * (in the collector methods). They are NOT re-filtered by path here.
+ */
+const ID_SCOPED_SOURCES = new Set<SessionSource>(['copilot', 'claude', 'cursor', 'windsurf']);
+
+/**
+ * Sources whose sessions carry a real `workspacePath` (extracted during parse)
+ * and therefore can be scoped by the VS Code open-folder paths.
+ */
+const PATH_SCOPED_SOURCES = new Set<SessionSource>(['cline', 'roocode', 'aider']);
+
+/**
+ * Apply workspace-scope filtering to a batch of freshly collected sessions.
+ *
+ * - ID-scoped sources (Copilot/Claude/Cursor/Windsurf) are already filtered in
+ *   their collectors via `selectedIds`, so they pass through unchanged here.
+ * - Path-scoped sources (Cline/Roo Code/Aider) are filtered to sessions whose
+ *   `workspacePath` falls under one of the open VS Code folders.
+ * - Sources that surface no workspace path (Antigravity, Continue, Amazon Q,
+ *   Gemini, Tabnine) cannot be scoped by path and are kept as-is.
+ *
+ * When both `selectedIds` and `openFolderPaths` are empty, no filtering is
+ * applied and `all` is returned unchanged.
+ */
+export function filterSessionsByWorkspaceScope(
+    all: Session[],
+    selectedIds: string[],
+    openFolderPaths: string[],
+): Session[] {
+    if (selectedIds.length === 0 && openFolderPaths.length === 0) {
+        return all;
+    }
+
+    if (openFolderPaths.length === 0) {
+        return all;
+    }
+
+    const normalizedOpen = openFolderPaths.map(p => path.normalize(p).toLowerCase());
+
+    return all.filter(s => {
+        if (!PATH_SCOPED_SOURCES.has(s.source)) {
+            // ID-scoped sources are already filtered upstream; non-scoped sources
+            // (no workspace path available) pass through.
+            return true;
+        }
+        if (!s.workspacePath) {
+            return false;
+        }
+        const norm = path.normalize(s.workspacePath).toLowerCase();
+        return normalizedOpen.some(p => norm === p || norm.startsWith(p + path.sep));
+    });
 }
