@@ -184,7 +184,6 @@ export class McpServer implements IMcpServer {
                     }
 
                     if (req.method === 'GET' && urlPath === '/mcp-config') {
-                        if (!checkAuth(req, res)) { return; }
                         res.writeHead(200, { 'Content-Type': 'application/json' })
                             .end(this._buildConfigSnippet(port, token));
                         return;
