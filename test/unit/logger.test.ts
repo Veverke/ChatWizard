@@ -90,5 +90,47 @@ suite('logger', () => {
             assert.ok(ch);
             assert.strictEqual(typeof ch.appendLine, 'function');
         });
+
+        test('info with format args invokes sprintf path', () => {
+            const { createLogger } = require('../../src/utils/logger');
+            const log = createLogger('Chat Wizard Test');
+            // %s, %d, %f, %j, %% should all work without throwing
+            log.info('fmt', 'string %s', 'hello');
+            log.info('fmt', 'number %d', 42);
+            log.info('fmt', 'float %f', 3.14);
+            log.info('fmt', 'json %j', { a: 1 });
+            log.info('fmt', 'percent %%');
+            // No assertion — just verify no crash and sprintf path is exercised
+        });
+
+        test('warn with format args exercises sprintf', () => {
+            const { createLogger } = require('../../src/utils/logger');
+            const log = createLogger('Chat Wizard Test');
+            log.warn('fmt', 'warning: %s', 'something');
+        });
+
+        test('error with format args exercises sprintf', () => {
+            const { createLogger } = require('../../src/utils/logger');
+            const log = createLogger('Chat Wizard Test');
+            log.error('fmt', 'error: %s', 'fail');
+        });
+
+        test('debug with format args exercises sprintf', () => {
+            const { createLogger } = require('../../src/utils/logger');
+            const log = createLogger('Chat Wizard Test');
+            log.setLevel('DEBUG');
+            log.debug('fmt', 'debug: %s', 'verbose');
+        });
+
+        test('bound logger with format args exercises sprintf', () => {
+            const { createLogger } = require('../../src/utils/logger');
+            const log = createLogger('Chat Wizard Test');
+            const bound = log.withContext('Sub');
+            bound.setLevel('DEBUG');
+            bound.info('info %s', 'arg');
+            bound.debug('debug %d', 1);
+            bound.warn('warn %j', { x: 1 });
+            bound.error('error %f', 2.5);
+        });
     });
 });

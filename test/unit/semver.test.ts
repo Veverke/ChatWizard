@@ -60,5 +60,25 @@ suite('semver', () => {
             // Current has more digits than candidate
             assert.strictEqual(isNewerVersion('1.2', '1.2.3'), false);
         });
+
+        test('pre-release candidate is not newer than same release version', () => {
+            assert.strictEqual(isNewerVersion('1.0.0-alpha', '1.0.0'), false);
+        });
+
+        test('release candidate is newer than same pre-release version', () => {
+            assert.strictEqual(isNewerVersion('1.0.0', '1.0.0-beta'), true);
+        });
+
+        test('pre-release vs pre-release compares by numeric parts only', () => {
+            assert.strictEqual(isNewerVersion('1.0.0-beta', '1.0.0-alpha'), false);
+        });
+
+        test('handles version with leading zeros in parts', () => {
+            assert.strictEqual(isNewerVersion('1.02.0', '1.01.0'), true);
+        });
+
+        test('handles non-numeric pre-release tags gracefully', () => {
+            assert.strictEqual(isNewerVersion('1.0.0-rc.1', '1.0.0-beta.2'), false);
+        });
     });
 });
