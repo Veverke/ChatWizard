@@ -117,6 +117,7 @@ export interface ICacheManager {
     searchFts(query: string, limit?: number): FtsResult[];
     addTag(sessionId: string, label: string): void;
     removeTag(sessionId: string, label: string): void;
+    clearTags(sessionId: string): void;
     getTagsForSession(sessionId: string): string[];
     addNote(sessionId: string, note: string): void;
     getNotes(sessionId: string): SessionNote[];
@@ -153,6 +154,7 @@ export class CacheManager implements ICacheManager {
         searchFts: BetterSqlite3.Statement;
         insertTag: BetterSqlite3.Statement;
         deleteTag: BetterSqlite3.Statement;
+        deleteTagsForSession: BetterSqlite3.Statement;
         getTags: BetterSqlite3.Statement;
         insertNote: BetterSqlite3.Statement;
         getNotes: BetterSqlite3.Statement;
@@ -307,6 +309,7 @@ export class CacheManager implements ICacheManager {
 
             insertTag: this.db.prepare('INSERT OR IGNORE INTO tags (session_id, label) VALUES (@sessionId, @label)'),
             deleteTag: this.db.prepare('DELETE FROM tags WHERE session_id = ? AND label = ?'),
+            deleteTagsForSession: this.db.prepare('DELETE FROM tags WHERE session_id = ?'),
             getTags: this.db.prepare('SELECT label FROM tags WHERE session_id = ? ORDER BY label'),
 
             insertNote: this.db.prepare('INSERT INTO session_notes (session_id, note) VALUES (@sessionId, @note)'),
@@ -571,6 +574,16 @@ export class CacheManager implements ICacheManager {
         if (!this.db || !this.stmt) { return; }
 
         this.stmt.deleteTag.run(sessionId, label.toLowerCase().trim());
+    }
+
+    /**
+     * Remove all tags from a session.
+     */
+    clearTags(sessionId: string): void {
+        if (!this.db || !this.stmt) { this.open(); }
+        if (!this.db || !this.stmt) { return; }
+
+        this.stmt.deleteTagsForSession.run(sessionId);
     }
 
     /**

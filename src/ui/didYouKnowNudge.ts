@@ -32,6 +32,8 @@ function headingToAnchor(text: string): string {
  * Parse section headings ("## ..." and "### ...") from the user-guide markdown
  * file. Returns a deduplicated list of {text, anchor} pairs,
  * excluding the top-level H1 and any empty or TOC-only headings.
+ * For H3 headings, the parent H2 section name is prepended so the
+ * nudge message includes context (e.g. "MCP Server & AI Integrations Quick Start").
  */
 function parseUserGuideSections(filePath: string): SectionHeading[] {
     try {
@@ -39,16 +41,27 @@ function parseUserGuideSections(filePath: string): SectionHeading[] {
         const lines = content.split('\n');
         const seen = new Set<string>();
         const headings: SectionHeading[] = [];
+        let currentH2 = '';
 
         for (const line of lines) {
             const trimmed = line.trim();
-            // Match "## Section Title" or "### Sub-section" but NOT "# H1"
-            if (/^#{2,3}\s+(?!\n)(.+)/.test(trimmed)) {
-                const text = trimmed.replace(/^#{2,3}\s+/, '').trim();
-                // Skip table of contents entries and empty headings
-                if (text && !text.startsWith('Table of Contents') && text.length > 2 && !seen.has(text)) {
+            if (/^##\s+(?!\n)(.+)/.test(trimmed)) {
+                const text = trimmed.replace(/^##\s+/, '').trim();
+                if (text && !text.startsWith('Table of Contents') && text.length > 2) {
+                    currentH2 = text;
+                    if (!seen.has(text)) {
+                        seen.add(text);
+                        headings.push({ text, anchor: headingToAnchor(text) });
+                    }
+                }
+            } else if (/^###\s+(?!\n)(.+)/.test(trimmed)) {
+                const text = trimmed.replace(/^###\s+/, '').trim();
+                if (text && text.length > 2 && !seen.has(text)) {
                     seen.add(text);
-                    headings.push({ text, anchor: headingToAnchor(text) });
+                    // Prepend parent H2 for context — use a shortened form (strip numbering prefix)
+                    const parentLabel = currentH2.replace(/^\d+\.\s+/, '');
+                    const displayText = parentLabel ? `${parentLabel} ${text}` : text;
+                    headings.push({ text: displayText, anchor: headingToAnchor(text) });
                 }
             }
         }
@@ -104,7 +117,7 @@ export class DidYouKnowNudge implements vscode.Disposable {
 
     private _start(): void {
         const cfg = vscode.workspace.getConfiguration('chatwizard');
-        const intervalSec = cfg.get<number>('didYouKnowInterval', 300);
+        const intervalSec = cfg.get<number>('didYouKnowInterval', 600);
         if (intervalSec <= 0) {
             return; // disabled via setting
         }
@@ -119,7 +132,7 @@ export class DidYouKnowNudge implements vscode.Disposable {
         }
 
         const item = this._queue.pop()!;
-        const msg = `🐿️ Are you familiar with ${item.text} functionality? Open user guide and learn more.`;
+        const msg = `🐿️ Want to learn about ${item.text}? Go ahead and look at it in user guide!`;
         this._brandingBar.notify(msg, 'workbench.view.extension.chatwizard');
 
         // Show notification with "Open User Guide" button (opens user-guide.md)

@@ -611,6 +611,11 @@
         "category": "Chat Wizard"
       },
       {
+        "command": "chatwizard.clearTags",
+        "title": "Chat Wizard: Clear All Tags from Session",
+        "category": "Chat Wizard"
+      },
+      {
         "command": "chatwizard.addTagFromTree",
         "title": "🏷️ Add Tag…",
         "category": "Chat Wizard"
@@ -618,6 +623,11 @@
       {
         "command": "chatwizard.removeTagFromTree",
         "title": "🏷️ Remove Tag…",
+        "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.clearTagsFromGroup",
+        "title": "🏷️ Clear All Tags…",
         "category": "Chat Wizard"
       },
       {
@@ -719,12 +729,6 @@
         "command": "chatwizard.addSessionToFolder",
         "title": "Chat Wizard: Add Session to Folder",
         "category": "Chat Wizard"
-      },
-      {
-        "command": "chatwizard.generateKnowledgeBase",
-        "title": "Chat Wizard: Generate Knowledge Base",
-        "category": "Chat Wizard",
-        "icon": "$(book)"
       },
       {
         "command": "chatwizard.generateDigest",
@@ -864,11 +868,6 @@
           "group": "export@2"
         },
         {
-          "command": "chatwizard.generateKnowledgeBase",
-          "when": "view == chatwizardSessions",
-          "group": "export@3"
-        },
-        {
           "command": "chatwizard.filterCodeBlocks",
           "when": "view == chatwizardCodeBlocks",
           "group": "navigation@0"
@@ -957,11 +956,6 @@
           "command": "chatwizard.cbSortByLanguage.desc",
           "when": "view == chatwizardCodeBlocks && chatwizard.cbSortKey == 'language' && chatwizard.cbSortDir == 'desc'",
           "group": "navigation@5"
-        },
-        {
-          "command": "chatwizard.generateKnowledgeBase",
-          "when": "view == chatwizardKnowledgeBase",
-          "group": "navigation@0"
         }
       ],
       "view/item/context": [
@@ -979,11 +973,6 @@
           "command": "chatwizard.exportSession",
           "when": "viewItem == session || viewItem == session.pinned",
           "group": "2_export@1"
-        },
-        {
-          "command": "chatwizard.generateKnowledgeBase",
-          "when": "viewItem == session || viewItem == session.pinned",
-          "group": "2_export@2"
         },
         {
           "command": "chatwizard.exportFromTreeSelection",
@@ -1034,6 +1023,11 @@
           "command": "chatwizard.removeTagFromTree",
           "when": "viewItem == session || viewItem == session.pinned || viewItem == session.archived || viewItem == session.userArchived",
           "group": "5_tags@2"
+        },
+        {
+          "command": "chatwizard.clearTagsFromGroup",
+          "when": "viewItem == dateGroup || viewItem == contextGroup || viewItem == sessionFolder || viewItem == folderUncategorized",
+          "group": "5_tags@4"
         },
         {
           "command": "chatwizard.regenerateSummary",
@@ -1108,6 +1102,10 @@
         },
         {
           "command": "chatwizard.removeTagFromTree",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.clearTagsFromGroup",
           "when": "false"
         },
         {
@@ -1435,6 +1433,14 @@
           "when": "false"
         },
         {
+          "command": "chatwizard.clearTags",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.clearTagsFromGroup",
+          "when": "false"
+        },
+        {
           "command": "chatwizard.tagActiveSession",
           "when": "false"
         },
@@ -1582,9 +1588,9 @@
           },
           "chatwizard.didYouKnowInterval": {
             "type": "integer",
-            "default": 300,
+            "default": 600,
             "minimum": 30,
-            "description": "Interval in seconds between 'Did you know?' squirrel notifications. Default is 300 (5 minutes). Set to 0 to disable the nudge entirely."
+            "description": "Interval in seconds between 'Did you know?' squirrel notifications. Default is 600 (10 minutes). Set to 0 to disable the nudge entirely."
           },
           "chatwizard.kbAutoTagSessions": {
             "type": "boolean",

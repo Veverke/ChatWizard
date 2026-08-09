@@ -38,4 +38,6 @@ export interface KbEntry {
     locked?: boolean;
     /** ISO-8601 creation timestamp */
     createdAt: string;
+    /** Whether this entry was classified using the LLM (vs heuristic fallback) */
+    usedLlm?: boolean;
 }

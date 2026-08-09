@@ -41,6 +41,7 @@ import { AnalyticsViewProvider } from './analytics/analyticsViewProvider';
 import { ModelUsageViewProvider } from './analytics/modelUsageViewProvider';
 import { TimelineViewProvider } from './timeline/timelineViewProvider';
 import { KbViewProvider } from './analytics/kbViewProvider';
+import { KbStore } from './analytics/kbStore';
 import { TelemetryRecorder } from './telemetry/telemetryRecorder';
 import { registerManageWorkspacesCommand } from './commands/manageWorkspaces';
 import { registerPaletteCommands } from './commands/paletteCommands';
@@ -48,6 +49,7 @@ import { registerSessionLifecycleCommands } from './commands/sessionLifecycleCom
 import { SemanticIndexer, defaultVsCodeApi } from './search/semanticIndexer';
 import { EmbeddingEngine } from './search/embeddingEngine';
 import { SemanticIndex } from './search/semanticIndex';
+import { extractWorkItemsFromSession } from './utils/workItemExtractor';
 import { SemanticSearchPanel } from './search/semanticSearchPanel';
 import { McpServer } from './mcp/mcpServer';
 import { McpAuthManager } from './mcp/mcpAuthManager';
@@ -226,7 +228,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         vscode.window.registerWebviewViewProvider(TimelineViewProvider.viewType, timelineViewProvider)
     );
 
-    const kbViewProvider = new KbViewProvider(index, sidecarStore, context.globalState);
+    const kbViewProvider = new KbViewProvider(index, sidecarStore, context.globalState, new KbStore(context.storageUri?.fsPath ?? context.globalStorageUri.fsPath));
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider(KbViewProvider.viewType, kbViewProvider)
     );
@@ -472,8 +474,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     });
     context.subscriptions.push(timelineListener);
 
-    const kbListener = index.addChangeListener(() => {
-        kbViewProvider.refresh();
+    const kbListener = index.addTypedChangeListener((event) => {
+        if (event.type === 'upsert') {
+            kbViewProvider.refreshForSession(event.session.id);
+        } else if (event.type === 'remove') {
+            kbViewProvider.removeSession(event.sessionId);
+        } else if (event.type === 'batch') {
+            // KB generation is user-initiated; no auto-run on batch load.
+        } else if (event.type === 'clear') {
+            // On clear, the next user-initiated generation will rebuild from scratch
+        }
     });
     context.subscriptions.push(kbListener);
 
@@ -2466,22 +2476,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             `[Chat Wizard] Workspace scope initialised — ${selectedIds.length} workspace(s) selected: ${selectedIds.join(', ')}`
         );
 
-        // ── Feature 23-H: Auto-classify KB on startup ─────────────────────────
-        // Register BEFORE loadIntoIndex/startWatcher so the one-shot batch
-        // listener catches the initial batch event.
-        {
-            let done = false;
-            const autoClassifyListener = index.addTypedChangeListener((event) => {
-                if (done) { return; }
-                if (event.type === 'batch') {
-                    done = true;
-                    autoClassifyListener.dispose();
-                    void kbViewProvider.preload();
-                }
-            });
-            context.subscriptions.push(autoClassifyListener);
-        }
-
         // ── Feature 24: Try to load sessions from SQLite cache first ────────
         if (cacheIntegration) {
             const cachedCount = cacheIntegration.cacheManager.getSessionCount();
@@ -2721,6 +2715,67 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 const reloadedCache = await sidecarStore.load();
                 index.setSidecarStore(sidecarStore, reloadedCache);
             }),
+            vscode.commands.registerCommand('chatwizard.clearTags', async (sessionId?: string) => {
+                const id = sessionId ?? await pickSessionId(index);
+                if (!id) { return; }
+                const existing = (await sidecarStore.get(id))?.tags ?? [];
+                if (existing.length === 0) { void vscode.window.showInformationMessage('No tags to clear.'); return; }
+                await sidecarStore.clearTags(id);
+                const reloadedCache = await sidecarStore.load();
+                index.setSidecarStore(sidecarStore, reloadedCache);
+                void vscode.window.showInformationMessage(`Cleared ${existing.length} tag${existing.length === 1 ? '' : 's'} from session.`);
+            }),
+            vscode.commands.registerCommand('chatwizard.clearTagsFromGroup', async (item: DateGroupTreeItem | ContextGroupTreeItem | FolderGroupTreeItem) => {
+                const all = provider.getSortedSummaries();
+                let ids: string[] = [];
+                if (item instanceof DateGroupTreeItem) {
+                    ids = all.filter(s => getDateBucket(s.updatedAt) === item.bucketLabel).map(s => s.id);
+                } else if (item instanceof ContextGroupTreeItem) {
+                    const pattern = vscode.workspace.getConfiguration('chatwizard').get<string>('workItemPattern', '');
+                    ids = all.filter(s => {
+                        if (item.groupMode === 'branch') {
+                            const session = index.get(s.id);
+                            if (!session) { return false; }
+                            const branch = session.chronicleData?.branch ?? '[no branch recorded]';
+                            return branch === item.groupKey;
+                        } else if (item.groupMode === 'tag') {
+                            const tags = (index.getSidecarMeta(s.id)?.tags) ?? [];
+                            return tags.length === 0 ? item.groupKey === '(untagged)' : tags.includes(item.groupKey);
+                        } else {
+                            const session = index.get(s.id);
+                            if (!session) { return false; }
+                            const keys = extractWorkItemsFromSession(session.title, session.messages, pattern || undefined);
+                            return keys.length === 0 ? item.groupKey === '(no work item)' : keys.includes(item.groupKey);
+                        }
+                    }).map(s => s.id);
+                } else if (item instanceof FolderGroupTreeItem) {
+                    const folderStore = provider.getFolderStore();
+                    const folders = folderStore?.getCached();
+                    if (folders) {
+                        const collect = (folderId: string, visited: Set<string>): string[] => {
+                            if (visited.has(folderId)) { return []; }
+                            visited.add(folderId);
+                            const f = folders.get(folderId);
+                            if (!f) { return []; }
+                            const result = [...f.sessionIds];
+                            for (const childId of f.childFolderIds) {
+                                result.push(...collect(childId, visited));
+                            }
+                            return result;
+                        };
+                        ids = collect(item.folder.id, new Set());
+                    } else {
+                        ids = [...item.folder.sessionIds];
+                    }
+                }
+                if (ids.length === 0) { void vscode.window.showInformationMessage('No sessions found in this group.'); return; }
+                const tagged = ids.filter(id => (index.getSidecarMeta(id)?.tags ?? []).length > 0);
+                if (tagged.length === 0) { void vscode.window.showInformationMessage('No tags to clear in this group.'); return; }
+                for (const id of tagged) { await sidecarStore.clearTags(id); }
+                const reloadedCache = await sidecarStore.load();
+                index.setSidecarStore(sidecarStore, reloadedCache);
+                void vscode.window.showInformationMessage(`Cleared tags from ${tagged.length} session${tagged.length === 1 ? '' : 's'} in "${item.label}".`);
+            }),
         );
 
         // ── Feature 18-E: Regenerate summary command ──────────────────────────
@@ -2812,25 +2867,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 await context.secrets.delete('chatwizard.notionApiKey');
                 void vscode.window.showInformationMessage('Notion API key removed from SecretStorage.');
             }),
-            // ── Feature 23: Generate Knowledge Base ─────────────────────────
-            vscode.commands.registerCommand('chatwizard.generateKnowledgeBase', async () => {
-                // Load all sessions + sidecar metadata
-                const summaries = index.getAllSummaries();
-                const sessions = summaries
-                    .map(s => index.get(s.id))
-                    .filter((s): s is NonNullable<typeof s> => s !== null);
-
-                if (sessions.length === 0) {
-                    void vscode.window.showInformationMessage('No sessions found to generate knowledge base.');
-                    return;
-                }
-
-                // Reveal the sidebar Knowledge Base view — it already computes
-                // and displays the dashboard on visibility change.
-                void vscode.commands.executeCommand('workbench.view.extension.chatwizard');
-                // Focus the KB view specifically
-                void vscode.commands.executeCommand('chatwizardKnowledgeBase.focus');
-            }),
         );
 
         // ── Feature 12: Archive stats command ─────────────────────────────────
@@ -2881,13 +2917,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 cloudSyncType,
                 (msg) => channel.appendLine(msg),
             );
-            void cloudSync.initialize().catch((err: unknown) => {
+            void cloudSync.initialize(cacheIntegration.dbPath).catch((err: unknown) => {
                 channel.appendLine(`[Chat Wizard] Cloud sync init failed: ${String(err)}`);
-            });
-            // Also back up the local .db file to cloud storage
-            const dbPath = cacheIntegration.dbPath;
-            void cloudSync.syncDbBackup(dbPath).catch((err: unknown) => {
-                channel.appendLine(`[Chat Wizard] DB backup sync failed: ${String(err)}`);
             });
             context.subscriptions.push({ dispose: () => cloudSync?.dispose() });
             channel.appendLine(`[Chat Wizard] Cloud sync (${cloudSyncType}) initialised.`);

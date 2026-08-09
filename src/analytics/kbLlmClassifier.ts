@@ -40,7 +40,8 @@ async function selectCopilotModel(): Promise<vscode.LanguageModelChat | undefine
             ),
         ]);
         if (anyLm?.[0]) {
-            log.debug(`Selected any-vendor model: ${anyLm[0].name || anyLm[0].family || 'unknown'}`);
+            const name = anyLm[0].name || anyLm[0].family || 'unknown';
+            log.info(`Selected any-vendor model: ${name}`);
             return anyLm[0];
         }
     } catch {
@@ -49,6 +50,7 @@ async function selectCopilotModel(): Promise<vscode.LanguageModelChat | undefine
 
     // 2) Try the explicit free Copilot model chain
     for (const filter of FREE_MODEL_CHAIN) {
+        log.info(`Trying Copilot model family: ${filter.family}`);
         try {
             const model = await Promise.race([
                 vscode.lm.selectChatModels({ vendor: 'copilot', ...filter }),
@@ -57,16 +59,19 @@ async function selectCopilotModel(): Promise<vscode.LanguageModelChat | undefine
                 ),
             ]);
             if (model?.[0]) {
-                log.debug(`Selected model: ${model[0].name || model[0].family || filter.family}`);
+                const name = model[0].name || model[0].family || filter.family;
+                log.info(`Selected model: ${name}`);
                 return model[0];
             }
+            log.info(`Model family ${filter.family} not available`);
         } catch {
-            // try next
+            log.info(`Model family ${filter.family} timed out or errored`);
         }
     }
 
     // 3) Fallback — any Copilot model at all
     try {
+        log.info('Trying any Copilot model as fallback');
         const any = await Promise.race([
             vscode.lm.selectChatModels({ vendor: 'copilot' }),
             new Promise<never>((_, reject) =>
@@ -74,12 +79,14 @@ async function selectCopilotModel(): Promise<vscode.LanguageModelChat | undefine
             ),
         ]);
         if (any?.[0]) {
-            log.debug(`Selected Copilot fallback model: ${any[0].name || any[0].family || 'unknown'}`);
+            const name = any[0].name || any[0].family || 'unknown';
+            log.info(`Selected Copilot fallback model: ${name}`);
             return any[0];
         }
     } catch {
         // no model available at all
     }
+    log.warn('No Copilot model available after trying all options');
     return undefined;
 }
 
@@ -342,6 +349,9 @@ export async function classifySessionWithLlm(
                 return null;
             }
 
+            const modelName = model.name || model.family || 'unknown';
+            log.info(`Classifying ${session.id} with model: ${modelName}`);
+
             const content = buildClassificationPrompt(session);
             const messages = [vscode.LanguageModelChatMessage.User(content)];
             const response = await model.sendRequest(messages);
@@ -367,7 +377,7 @@ export async function classifySessionWithLlm(
                     log.warn(`LLM returned unparseable output for ${session.id}: "${raw.slice(0, 100)}" — falling back to heuristic`);
                 }
             } else {
-                log.info(`Classified ${session.id} as "${parsed}"`);
+                log.info(`Classified ${session.id} as "${parsed}" (model: ${modelName})`);
             }
             return parsed;
         } catch (err) {

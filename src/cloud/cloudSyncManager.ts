@@ -42,6 +42,7 @@ const KEY_FILENAME = 'cloud-sync-key.bin';
 const SYNC_STATE_FILENAME = 'cloud-sync-state.json';
 const SESSION_SUMMARIES_FILENAME = 'chatwizard-sessions.json';
 const DB_BACKUP_FILENAME = 'chatwizard-cache.db.backup.enc';
+const README_FILENAME = 'README.md';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -240,6 +241,7 @@ export class CloudSyncManager {
     private syncTimer: ReturnType<typeof setInterval> | undefined;
     private readonly _onChangeListener: () => void;
     private _disposed = false;
+    private dbPath: string | null = null;
 
     constructor(
         private readonly index: SessionIndex,
@@ -255,7 +257,9 @@ export class CloudSyncManager {
         this.index.addChangeListener(this._onChangeListener);
     }
 
-    async initialize(): Promise<void> {
+    async initialize(dbPath?: string): Promise<void> {
+        this.dbPath = dbPath ?? null;
+
         // Load existing sync state
         try {
             if (fs.existsSync(this.statePath)) {
@@ -280,11 +284,14 @@ export class CloudSyncManager {
 
         this.logger(`[Chat Wizard] Cloud sync initialised (${this.backend.name})`);
 
-        // Start periodic sync (every 5 minutes)
-        this.syncTimer = setInterval(() => { void this.sync(); }, 5 * 60 * 1000);
+        // Start periodic sync (every 5 minutes) — syncs summaries + DB backup
+        this.syncTimer = setInterval(() => { void this._syncAll(); }, 5 * 60 * 1000);
 
-        // Initial sync
-        void this.sync();
+        // Initial sync — summaries first, then DB backup
+        await this.sync();
+        if (this.dbPath) {
+            await this.syncDbBackup(this.dbPath);
+        }
     }
 
     async sync(): Promise<void> {
@@ -307,6 +314,7 @@ export class CloudSyncManager {
 
             await this.backend.writeFiles({
                 [SESSION_SUMMARIES_FILENAME]: encrypted,
+                [README_FILENAME]: this._readmeContent(),
             });
 
             // Update state
@@ -384,6 +392,7 @@ export class CloudSyncManager {
 
             await this.backend.writeFiles({
                 [DB_BACKUP_FILENAME]: backupPayload,
+                [README_FILENAME]: this._readmeContent(),
             });
 
             this.logger(`[Chat Wizard] DB backup: ${(dbBuffer.length / 1024).toFixed(0)} KB backed up to cloud alongside summaries.`);
@@ -578,5 +587,73 @@ export class CloudSyncManager {
     private async _onIndexChanged(): Promise<void> {
         // Debounce — only sync every 30 seconds at most
         // The 5-minute timer handles the actual sync schedule
+    }
+
+    /** Generate README content for the Gist explaining how to decode the files. */
+    private _readmeContent(): Buffer {
+        const readme = `# ChatWizard Cloud Sync
+
+This Gist contains encrypted backups from the [ChatWizard](https://github.com/veverke/chatwizard) VS Code extension.
+
+## Files
+
+### \`chatwizard-sessions.json\`
+Session summaries (metadata only — titles, sources, token counts, timestamps).
+AES-256-GCM encrypted, then gzip compressed.
+
+### \`chatwizard-cache.db.backup.enc\`
+Full SQLite database backup (all sessions, messages, code blocks).
+AES-256-GCM encrypted (raw binary, no compression).
+
+## Decoding (requires the encryption key)
+
+Both files are encrypted with AES-256-GCM using a key stored locally in:
+\`\`\`
+%APPDATA%\Code\User\globalStorage\veverke.chatwizard\cloud-sync-key.bin
+\`\`\`
+
+### Decode \`chatwizard-sessions.json\`
+\`\`\`powershell
+node -e "
+const fs=require('fs'),crypto=require('crypto'),zlib=require('zlib');
+const key=fs.readFileSync('$env:APPDATA\\Code\\User\\globalStorage\\veverke.chatwizard\\cloud-sync-key.bin');
+const data=fs.readFileSync('chatwizard-sessions.json');
+const iv=data.subarray(0,16),tag=data.subarray(16,32),ct=data.subarray(32);
+const d=crypto.createDecipheriv('aes-256-gcm',key,iv); d.setAuthTag(tag);
+const dec=Buffer.concat([d.update(ct),d.final()]);
+console.log(zlib.gunzipSync(dec).toString('utf-8'));
+"
+\`\`\`
+
+### Decode \`chatwizard-cache.db.backup.enc\`
+The file has a 4-byte magic header \`DB01\` followed by the AES-256-GCM payload.
+\`\`\`powershell
+node -e "
+const fs=require('fs'),crypto=require('crypto');
+const key=fs.readFileSync('$env:APPDATA\\Code\\User\\globalStorage\\veverke.chatwizard\\cloud-sync-key.bin');
+const raw=fs.readFileSync('chatwizard-cache.db.backup.enc');
+const magic=raw.subarray(0,4).toString();
+if(magic!=='DB01'){console.error('Bad magic');process.exit(1);}
+const data=raw.subarray(4);
+const iv=data.subarray(0,16),tag=data.subarray(16,32),ct=data.subarray(32);
+const d=crypto.createDecipheriv('aes-256-gcm',key,iv); d.setAuthTag(tag);
+const db=Buffer.concat([d.update(ct),d.final()]);
+fs.writeFileSync('restored-chatwizard-cache.db',db);
+console.log('Written to restored-chatwizard-cache.db');
+"
+\`\`\`
+
+> **Security:** The encryption key never leaves your machine. Anyone with access to this Gist also needs the key file to decode the contents.
+`;
+
+        return Buffer.from(readme, 'utf-8');
+    }
+
+    /** Sync summaries then DB backup — called by the periodic timer. */
+    private async _syncAll(): Promise<void> {
+        await this.sync();
+        if (this.dbPath) {
+            await this.syncDbBackup(this.dbPath);
+        }
     }
 }

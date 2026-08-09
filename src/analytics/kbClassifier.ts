@@ -83,30 +83,26 @@ export function classifySession(session: Session): KbEntryType {
  * buckets. Falls back to heuristic phrase-matching (hardcoded types) only
  * when the model is unavailable.
  *
- * @returns The best-matching category name — either an LLM-invented label
- *          or a hardcoded type from the heuristic fallback.
+ * @returns An object with the best-matching category name and whether the LLM was used.
  */
 export async function classifySessionWithCategories(
     session: Session,
     categories: string[],
-): Promise<KbEntryType> {
+): Promise<{ type: KbEntryType; usedLlm: boolean }> {
     // Try LLM first — no predefined categories, it invents a label freely
     const llmResult = await classifySessionWithLlm(session);
     if (llmResult) {
-        // Normalise: if the LLM label looks like one of the known heuristic
-        // types, map it for consistency (e.g. "debugging" stays as is,
-        // but "architecture" maps to itself).
-        return llmResult;
+        return { type: llmResult, usedLlm: true };
     }
 
     // LLM unavailable — fall back to heuristic
     log.debug(`LLM returned null for session ${session.id} — using heuristic fallback`);
     const heuristic = classifySession(session);
     if (categories.includes(heuristic)) {
-        return heuristic;
+        return { type: heuristic, usedLlm: false };
     }
 
     // If even the heuristic result isn't in the requested categories,
     // return the first category as a safe default
-    return categories[0] ?? 'learning';
+    return { type: categories[0] ?? 'learning', usedLlm: false };
 }
