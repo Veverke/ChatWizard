@@ -25,26 +25,51 @@ const MAX_CONVERSATION_CHARS = 24_000;
  * Copilot LM models consistently honor the `systemPrompt` request option.
  * Embedding them in the user message guarantees the model sees them.
  *
- * The prompt asks for a top-level folder name — the broadest category that
- * groups similar chats together in a 2-level folder structure.
+ * The prompt asks for both the TOP-LEVEL folder (general topic) and the
+ * SECOND-LEVEL folder (particular subject) in a single pass. The LLM
+ * returns both at once since it already reads the full conversation.
+ *
+ * Response format: "TopLevel|SecondLevel" on a single line.
  */
 export function buildClassificationPrompt(session: Session): string {
     const intro = [
-        'You are a session categorizer. Read the conversation below.',
+        'You are a session categorizer for a software developer\'s chat history.',
+        'Read the conversation below and classify it into a 2-level folder structure.',
         '',
-        'I want to organize every chat into folders, grouping similar chats into the same folder.',
         'I use a 2-level folder structure:',
-        '  - Top-level folders capture the general chat topic (e.g. "Git", "Docker", "React", "Testing").',
-        '  - Second-level folders capture the particular subject within that topic.',
+        '  - Top-level folders capture the general topic (e.g. "Git", "Bugs", "Testing").',
+        '  - Second-level folders capture the particular subject within that topic',
+        '    (e.g. "Branch Management" under "Git", "UI Crash" under "Bugs").',
         '',
-        'Your task: give me the TOP-LEVEL folder name for this chat.',
+        'Since all chats are about software development, think in terms of both:',
+        '  - **Technology/tool** categories: "Git", "Docker", "React", "Python", "Vs Code", "CSS", "API", "Database", "Deployment"',
+        '  - **Activity/concept** categories: "Bugs" (problems, fixes, errors), "Testing" (test setup, fixes, additions),',
+        '    "Architecture" (plans, design decisions, brainstorming), "Refactoring" (code restructuring, cleanup),',
+        '    "Features" (planned features, intents, new capabilities), "Best Practices" (recommendations, patterns, conventions)',
+        '',
+        'Examples:',
+        '- Git branch management → "Git|Branch Management"',
+        '- Fixing a UI crash → "Bugs|UI Crash"',
+        '- Test fixture setup → "Testing|Fixture Setup"',
+        '- Restructuring a module → "Refactoring|Module Restructure"',
+        '- Planning a new MCP server → "Features|MCP Server"',
+        '- Coding conventions discussion → "Best Practices|Coding Conventions"',
+        '- Database schema design → "Architecture|Schema Design"',
+        '- Docker container config → "Docker|Container Config"',
+        '- Deployment pipeline → "Deployment|Pipeline Setup"',
+        '- Python debugging session → "Python|Debugging"',
         '',
         'Rules:',
-        '- Return ONLY the folder name — no commentary, no markdown, no punctuation.',
-        '- Use 1-2 words, Title Case.',
-        '- Keep it BROAD — it should group multiple related chats together.',
-        '- For example, use "Git" not "Git Rebase". Use "Python" not "Python Debugging".',
-        '- If the session has no clear subject, respond with "Other".',
+        '- Return ONLY one line — no commentary, no markdown, no punctuation.',
+        '- Format: TopLevel|SecondLevel (separated by a pipe character).',
+        '- Use 1-2 words for TopLevel, 1-3 words for SecondLevel, Title Case.',
+        '- Keep TopLevel BROAD — it should group multiple related chats together.',
+        '- Make SecondLevel SPECIFIC — it distinguishes this chat from others in the same folder.',
+        '- Use "Other" as TopLevel ONLY if the session truly does not fit any recognizable',
+        '  software development topic.',
+        '- Do NOT default to "Other" for sessions about bugs, testing, architecture,',
+        '  refactoring, features, or best practices — those are valid top-level categories.',
+        '- If unsure about the second level, return just "TopLevel" without a pipe.',
         '',
         '=== CONVERSATION ===',
         `Session title: ${session.title}`,
@@ -75,20 +100,26 @@ export function buildClassificationPrompt(session: Session): string {
 export function buildSystemPrompt(): string {
     // Kept for backwards compatibility with tests, but no longer used in the API call.
     return [
-        'You are a session categorizer. Read the conversation below.',
+        'You are a session categorizer for a software developer\'s chat history.',
+        'Read the conversation and identify the broad subject area it deals with.',
         '',
-        'I want to organize every chat into folders, grouping similar chats into the same folder.',
         'I use a 2-level folder structure:',
-        '  - Top-level folders capture the general chat topic (e.g. "Git", "Docker", "React", "Testing").',
+        '  - Top-level folders capture the general topic (e.g. "Git", "Bugs", "Testing").',
         '  - Second-level folders capture the particular subject within that topic.',
         '',
         'Your task: give me the TOP-LEVEL folder name for this chat.',
+        '',
+        'Since all chats are about software development, think in terms of both:',
+        '  - Technology/tool categories: "Git", "Docker", "React", "Python", "Vs Code", "CSS", "API", "Database", "Deployment"',
+        '  - Activity/concept categories: "Bugs", "Testing", "Architecture", "Refactoring", "Features", "Best Practices"',
         '',
         'Rules:',
         '- Return ONLY the folder name — no commentary, no markdown, no punctuation.',
         '- Use 1-2 words, Title Case.',
         '- Keep it BROAD — it should group multiple related chats together.',
-        '- If the session has no clear subject, respond with "Other".',
+        '- Use "Other" ONLY if the session truly does not fit any recognizable software development topic.',
+        '- Do NOT default to "Other" for sessions about bugs, testing, architecture, refactoring,',
+        '  features, or best practices — those are valid top-level categories.',
     ].join('\n');
 }
 
@@ -118,46 +149,57 @@ const REJECT_PATTERNS = [
     /^i can'?t/i,   // refusal
 ];
 
-export function parseClassification(raw: string): string | null {
+export function parseClassification(raw: string): { folder: string; subtype: string | null } | null {
     let cleaned = raw.trim();
 
-    // Strip markdown code fences (```language\n...\n```) before parsing —
-    // the LLM occasionally wraps output in fences despite the system prompt.
-    // Handle both closed fences (```...```) and unclosed fences (```... without closing).
+    // Strip markdown code fences
     const FENCE_PATTERN = /^```(?:\w+)?\n?([\s\S]*?)\n?```$/;
     const fenceMatch = cleaned.match(FENCE_PATTERN);
     if (fenceMatch) {
         cleaned = fenceMatch[1].trim();
     } else if (/^```(?:\w+)?/.test(cleaned)) {
-        // Unclosed fence — strip the opening fence line and take everything after it
-        cleaned = cleaned.replace(/^```(?:\w+)?\n?/, '').trim();
+        cleaned = cleaned.replace(/^```(?:\w+)?\n?/, '').replace(/```$/, '').trim();
     }
+
+    // Take the first line
+    const firstLine = cleaned.split('\n')[0].trim();
 
     // Empty or explicit no-topic markers
-    if (!cleaned || cleaned === '(none)' || cleaned === 'Other' || cleaned === 'other') {
-        return null;
-    }
-
-    // Take the first line only
-    const firstLine = cleaned.split('\n')[0].trim();
     if (!firstLine || firstLine === '(none)' || firstLine === 'Other' || firstLine === 'other') {
         return null;
     }
 
-    // Reject if too long (more than 2 words = too specific for a general subject)
-    const wordCount = firstLine.split(/\s+/).length;
-    if (wordCount > 2) {
+    // Try pipe-delimited format: "TopLevel|SecondLevel"
+    const pipeIndex = firstLine.indexOf('|');
+    if (pipeIndex > 0) {
+        const topLevel = firstLine.slice(0, pipeIndex).trim();
+        const secondLevel = firstLine.slice(pipeIndex + 1).trim();
+        if (topLevel && topLevel !== 'Other' && topLevel !== 'other' && topLevel !== '(none)') {
+            return {
+                folder: topLevel,
+                subtype: secondLevel && secondLevel !== 'General' ? secondLevel : null,
+            };
+        }
         return null;
     }
 
-    // Light reject patterns for obvious artifacts
+    // No pipe — treat entire response as top-level folder (backward compat)
+    if (!cleaned || cleaned === '(none)' || cleaned === 'Other' || cleaned === 'other') {
+        return null;
+    }
+
+    const wordCount = firstLine.split(/\s+/).length;
+    if (wordCount > 3) {
+        return null;
+    }
+
     for (const pattern of REJECT_PATTERNS) {
         if (pattern.test(firstLine)) {
             return null;
         }
     }
 
-    return firstLine;
+    return { folder: firstLine, subtype: null };
 }
 
 // ── Category refinement (2nd pass) ────────────────────────────────────────
@@ -228,12 +270,13 @@ export function parseRefineResponse(raw: string): Map<string, string> | null {
 }
 
 /**
- * Refine raw 1st-pass top-level folder labels by asking the LLM to merge similar labels,
+ * Refine raw 1st-pass category labels by asking the LLM to merge similar labels,
  * collapse variants, and subsume narrow categories into broader ones.
  *
- * This is the **2nd pass** of the 2-pass pipeline:
- *   1. classifySessionWithLlm — per-session top-level folder
- *   2. refineCategories — merge/deduplicate across all folders
+ * This is the **2nd pass** of the 3-pass pipeline:
+ *   1. classifySessionWithLlm — per-session free-form label
+ *   2. refineCategories — merge/deduplicate across all labels
+ *   3. classifyTopLevelCategories — build TL groupings
  *
  * Returns a Map<originalLabel, refinedLabel> or `null` on failure.
  */
@@ -276,6 +319,83 @@ export async function refineCategories(
     return null;
 }
 
+// ── Top-level grouping (3rd pass) ──────────────────────────────────────────
+
+/**
+ * Build the prompt for grouping fine-grained categories into broader top-level topics.
+ */
+export function buildTopLevelGroupingPrompt(categories: string[]): string {
+    return [
+        'You are a category organizer. Group the following fine-grained topic labels',
+        'into broader top-level categories. Each top-level category should represent',
+        'a distinct concern area — not a specific tool or library.',
+        '',
+        'Rules:',
+        '- Return ONLY a JSON object — no commentary, no markdown fences.',
+        '- Each key is a top-level category name (1-3 words, Title Case).',
+        '- Each value is an array of child categories that belong under it.',
+        '- Every input label must appear in exactly one group.',
+        '- Merge similar labels under the same parent (e.g. "Git Pull", "Git Push", "Git Ignore" → "Git").',
+        '- A parent MUST have at least 2 different child labels. Never put a label under itself.',
+        '- Use "Other" as a top-level group for anything that does not fit.',
+        '- Keep the total number of top-level groups between 3 and 12.',
+        '',
+        'Suggested top-level categories (you may use these or create your own):',
+        '- **Development** — coding, implementation, features, refactoring, language-specific work',
+        '- **DevOps / CI** — pipelines, deployment, infrastructure, GitHub Actions, Docker, cloud',
+        '- **Version Control** — Git, branching, merging, GitHub, GitLab, pull requests',
+        '- **Documentation** — writing docs, changelogs, README, comments, user guides',
+        '- **Testing** — unit tests, integration, fixtures, test setup, assertions',
+        '- **Configuration** — settings, environment, setup, dotfiles, project config',
+        '- **Architecture / Design** — system design, patterns, decisions, planning',
+        '- **Bug Fixes / Debugging** — troubleshooting, errors, root cause analysis',
+        '- **UI / Frontend** — components, styling, layout, React, CSS, templates',
+        '- **AI / Prompts** — LLM prompts, model configuration, AI features',
+        '- **Database** — schema, queries, migrations, data modeling',
+        '- **API** — endpoints, integration, REST, GraphQL, web services',
+        '',
+        'Example:',
+        'Input: ["Git Pull", "Git Push", "Docker Compose", "Docker Networking", "React Hooks", "React State", "Write README", "API Design"]',
+        'Output: {"Version Control":["Git Pull","Git Push"],"DevOps / CI":["Docker Compose","Docker Networking"],"UI / Frontend":["React Hooks","React State"],"Documentation":["Write README"],"API":["API Design"]}',
+        '',
+        '=== CATEGORIES TO GROUP ===',
+        categories.map(c => `- ${c}`).join('\n'),
+    ].join('\n');
+}
+
+/**
+ * Parse the JSON response from top-level grouping.
+ */
+export function parseTopLevelGrouping(raw: string): Map<string, string[]> | null {
+    const cleaned = raw.trim();
+
+    // Strip code fences if present
+    const FENCE_PATTERN = /^```(?:json)?\s*\n?([\s\S]*?)\n?\s*```$/;
+    const fenceMatch = cleaned.match(FENCE_PATTERN);
+    const jsonStr = fenceMatch ? fenceMatch[1].trim() : cleaned;
+
+    try {
+        const parsed = JSON.parse(jsonStr);
+        if (typeof parsed !== 'object' || parsed === null) { return null; }
+
+        const result = new Map<string, string[]>();
+        for (const [key, value] of Object.entries(parsed)) {
+            if (Array.isArray(value)) {
+                const children = value.filter(v => typeof v === 'string');
+                // Skip self-referential groups where parent === child (e.g. "Vs Code" → ["Vs Code"])
+                const nonSelf = children.filter(c => c !== key);
+                // Require at least 2 different children — a single child should just be a top-level label
+                if (nonSelf.length >= 2) {
+                    result.set(key, nonSelf);
+                }
+            }
+        }
+        return result.size > 0 ? result : null;
+    } catch {
+        return null;
+    }
+}
+
 // ── Public API ──────────────────────────────────────────────────────────────
 
 /**
@@ -298,17 +418,17 @@ async function delay(ms: number): Promise<void> {
 }
 
 /**
- * Classify a session into a free-form category label using the central llmClient.
+ * Classify a session into a 2-level folder structure using the Copilot LM API.
  *
- * The LLM generates a short category label (1-3 words) based on the conversation
- * content. There are no predefined categories — they emerge from the data.
+ * The LLM generates both the TOP-LEVEL folder (general topic) and the
+ * SECOND-LEVEL folder (particular subject) from the conversation content.
  *
- * Returns the category label on success, or `null` if no provider is available
+ * Returns `{ folder, subtype }` on success, or `null` if no provider is available
  * or the response could not be parsed.
  */
 export async function classifySessionWithLlm(
     session: Session,
-): Promise<string | null> {
+): Promise<{ folder: string; subtype: string | null } | null> {
     const content = buildClassificationPrompt(session);
 
     for (let attempt = 0; attempt <= MAX_RATE_LIMIT_RETRIES; attempt++) {
@@ -351,6 +471,55 @@ export async function classifySessionWithLlm(
             }
 
             log.warn(`LLM request failed for ${session.id}: ${err} — falling back to embedding`);
+            return null;
+        }
+    }
+
+    return null;
+}
+
+/**
+ * Group a list of fine-grained category labels into broader top-level categories.
+ *
+ * Uses a single LLM call via central llmClient to analyze all existing categories
+ * and produce a hierarchical grouping.
+ *
+ * Returns a Map<topLevelCategory, childCategories[]> or `null` on failure.
+ */
+export async function classifyTopLevelCategories(
+    categories: string[],
+): Promise<Map<string, string[]> | null> {
+    if (categories.length < 2) {
+        return null;
+    }
+
+    const filtered = categories.filter(c => c.toLowerCase() !== 'other');
+    if (filtered.length < 1) { return null; }
+
+    const content = buildTopLevelGroupingPrompt(filtered);
+
+    for (let attempt = 0; attempt <= MAX_RATE_LIMIT_RETRIES; attempt++) {
+        if (attempt > 0) {
+            const backoff = RATE_LIMIT_BASE_DELAY_MS * Math.pow(2, attempt - 1);
+            await delay(backoff);
+        }
+
+        try {
+            const raw = await promptLlm(undefined, content, { timeoutMs: 30_000 });
+            if (raw === null) { return null; }
+
+            const parsed = parseTopLevelGrouping(raw);
+            if (parsed && parsed.size > 0) {
+                log.info(`Generated ${parsed.size} top-level groups from ${filtered.length} categories`);
+                return parsed;
+            }
+
+            log.debug(`Top-level grouping returned unparseable result, attempt ${attempt + 1}`);
+        } catch (err) {
+            if (isRateLimitedError(err) && attempt < MAX_RATE_LIMIT_RETRIES) {
+                continue;
+            }
+            log.warn(`Top-level grouping failed: ${err}`);
             return null;
         }
     }

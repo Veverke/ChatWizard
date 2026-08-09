@@ -70,27 +70,41 @@ suite('kbLlmClassifier', () => {
         test('returns expected system prompt content', () => {
             const prompt = buildSystemPrompt();
             assert.ok(prompt.includes('session categorizer'));
-            assert.ok(prompt.includes('Examples:'));
             assert.ok(prompt.includes('Other'));
             assert.ok(prompt.includes('Title Case'));
+            assert.ok(prompt.includes('Bugs'));
+            assert.ok(prompt.includes('Testing'));
+            assert.ok(prompt.includes('Architecture'));
+            assert.ok(prompt.includes('Refactoring'));
+            assert.ok(prompt.includes('Features'));
+            assert.ok(prompt.includes('Best Practices'));
         });
     });
 
     suite('parseClassification', () => {
-        test('returns clean label as-is', () => {
-            assert.strictEqual(parseClassification('Bug Fixes'), 'Bug Fixes');
+        test('returns clean folder label as-is', () => {
+            const r = parseClassification('Bug Fixes');
+            assert.ok(r !== null);
+            assert.strictEqual(r!.folder, 'Bug Fixes');
+            assert.strictEqual(r!.subtype, null);
         });
 
         test('strips markdown code fences', () => {
-            assert.strictEqual(parseClassification('```\nBug Fixes\n```'), 'Bug Fixes');
+            const r = parseClassification('```\nBug Fixes\n```');
+            assert.ok(r !== null);
+            assert.strictEqual(r!.folder, 'Bug Fixes');
         });
 
         test('strips language-tagged code fences', () => {
-            assert.strictEqual(parseClassification('```markdown\nBug Fixes\n```'), 'Bug Fixes');
+            const r = parseClassification('```markdown\nBug Fixes\n```');
+            assert.ok(r !== null);
+            assert.strictEqual(r!.folder, 'Bug Fixes');
         });
 
         test('handles unclosed fences', () => {
-            assert.strictEqual(parseClassification('```\nBug Fixes'), 'Bug Fixes');
+            const r = parseClassification('```\nBug Fixes');
+            assert.ok(r !== null);
+            assert.strictEqual(r!.folder, 'Bug Fixes');
         });
 
         test('returns null for (none)', () => {
@@ -110,10 +124,44 @@ suite('kbLlmClassifier', () => {
         });
 
         test('takes first line only', () => {
-            assert.strictEqual(parseClassification('Bug Fixes\nSome extra text'), 'Bug Fixes');
+            const r = parseClassification('Bug Fixes\nSome extra text');
+            assert.ok(r !== null);
+            assert.strictEqual(r!.folder, 'Bug Fixes');
         });
 
-        test('returns null for >5 word labels', () => {
+        test('extracts 2-level pipe format', () => {
+            const r = parseClassification('Git|Branch Management');
+            assert.ok(r !== null);
+            assert.strictEqual(r!.folder, 'Git');
+            assert.strictEqual(r!.subtype, 'Branch Management');
+        });
+
+        test('extracts 2-level pipe format with second level', () => {
+            const r = parseClassification('Bugs|UI Crash');
+            assert.ok(r !== null);
+            assert.strictEqual(r!.folder, 'Bugs');
+            assert.strictEqual(r!.subtype, 'UI Crash');
+        });
+
+        test('ignores second level when it equals General', () => {
+            const r = parseClassification('Bugs|General');
+            assert.ok(r !== null);
+            assert.strictEqual(r!.folder, 'Bugs');
+            assert.strictEqual(r!.subtype, null);
+        });
+
+        test('returns null for Other|Something', () => {
+            assert.strictEqual(parseClassification('Other|Specific'), null);
+        });
+
+        test('handles 2-level from code fences', () => {
+            const r = parseClassification('```\nPython|Debugging\n```');
+            assert.ok(r !== null);
+            assert.strictEqual(r!.folder, 'Python');
+            assert.strictEqual(r!.subtype, 'Debugging');
+        });
+
+        test('returns null for >2 word labels (pipe-less)', () => {
             assert.strictEqual(parseClassification('This is a very long category label'), null);
         });
 
@@ -134,6 +182,9 @@ suite('kbLlmClassifier', () => {
         });
 
         test('handles whitespace wrapping', () => {
-            assert.strictEqual(parseClassification('  Bug Fixes  '), 'Bug Fixes');
+            const r = parseClassification('  Bug Fixes  ');
+            assert.ok(r !== null);
+            assert.strictEqual(r!.folder, 'Bug Fixes');
         });
     });
+});

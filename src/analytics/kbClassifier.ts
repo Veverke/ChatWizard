@@ -44,20 +44,20 @@ function resolveEngine(explicit?: IEmbeddingEngine | null): IEmbeddingEngine | n
  * @param categories The list of valid category names used for embedding fallback.
  * @param embeddingEngine Optional. If provided and ready, used as fallback
  *                        when LLM is unavailable.
- * @returns An object with the best-matching category name and whether the LLM was used.
+ * @returns An object with the best-matching category, optional subtype, and whether the LLM was used.
  */
 export async function classifySessionWithCategories(
     session: Session,
     categories: string[],
     embeddingEngine?: IEmbeddingEngine | null,
-): Promise<{ type: KbEntryType; usedLlm: boolean }> {
+): Promise<{ type: KbEntryType; subtype: string | null; usedLlm: boolean }> {
     // Resolve which embedding engine to use
     const engine = resolveEngine(embeddingEngine);
 
     // Try LLM first — no predefined categories, it invents a label freely
     const llmResult = await classifySessionWithLlm(session);
     if (llmResult) {
-        return { type: llmResult, usedLlm: true };
+        return { type: llmResult.folder, subtype: llmResult.subtype, usedLlm: true };
     }
 
     log.debug(`LLM returned null for session ${session.id} — trying embedding fallback`);
@@ -65,11 +65,11 @@ export async function classifySessionWithCategories(
     // Embedding fallback — uses local ONNX model when available
     const embeddingResult = await classifySessionWithEmbedding(engine, session, categories);
     if (embeddingResult) {
-        return { type: embeddingResult, usedLlm: false };
+        return { type: embeddingResult, subtype: null, usedLlm: false };
     }
 
     log.debug(`Embedding returned null for session ${session.id} — using "Other"`);
 
     // No LLM, no embedding — label as Other instead of leaking a heuristic type name
-    return { type: 'Other', usedLlm: false };
+    return { type: 'Other', subtype: null, usedLlm: false };
 }

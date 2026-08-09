@@ -79,8 +79,8 @@ suite('Feature 23 — LLM Classifier', () => {
             const session = makeSession({ messages });
             const prompt = buildClassificationPrompt(session);
             // Total would be 10*5000 = 50K chars, so truncation must happen
-            // The prompt should be under 25K total (header + truncated conversation)
-            assert.ok(prompt.length < 25000, `prompt length was ${prompt.length}`);
+            // The prompt should be under 30K total (header + truncated conversation)
+            assert.ok(prompt.length < 30000, `prompt length was ${prompt.length}`);
             // The most recent messages should be preserved
             assert.ok(prompt.includes('[USER]\n' + 'x'.repeat(5000)));
         });
@@ -97,41 +97,62 @@ suite('Feature 23 — LLM Classifier', () => {
             // Newest messages (high indices) should be present
             assert.ok(prompt.includes('Message number 9'));
             // Oldest messages (low indices) may be dropped
-            // At minimum the prompt should be under 25K
-            assert.ok(prompt.length < 25000);
+            // At minimum the prompt should be under 30K
+            assert.ok(prompt.length < 30000);
         });
     });
 
     suite('buildSystemPrompt', () => {
-        test('instructs to derive topic with up to 3 keywords', () => {
+        test('includes activity-based categories like Bugs, Testing, Architecture', () => {
             const prompt = buildSystemPrompt();
-            assert.ok(prompt.includes('up to 3 keywords'));
-            assert.ok(prompt.includes('Return ONLY the category label'));
+            assert.ok(prompt.includes('session categorizer'));
             assert.ok(prompt.includes('Other'));
-        });
-
-        test('includes example-driven format', () => {
-            const prompt = buildSystemPrompt();
-            assert.ok(prompt.includes('→'));
-            assert.ok(prompt.includes('Bug Fixes'));
-            assert.ok(prompt.includes('Logic Change'));
+            assert.ok(prompt.includes('Bugs'));
+            assert.ok(prompt.includes('Testing'));
+            assert.ok(prompt.includes('Architecture'));
+            assert.ok(prompt.includes('Refactoring'));
+            assert.ok(prompt.includes('Features'));
+            assert.ok(prompt.includes('Best Practices'));
         });
     });
 
     suite('parseClassification', () => {
-        test('returns the label as-is', () => {
+        test('returns folder+subtype for pipe-separated input', () => {
+            const r = parseClassification('Git|Branch Management');
+            assert.ok(r !== null);
+            assert.strictEqual(r!.folder, 'Git');
+            assert.strictEqual(r!.subtype, 'Branch Management');
+        });
+
+        test('returns null for pipe-separated with Other top level', () => {
+            assert.strictEqual(parseClassification('Other|Something'), null);
+        });
+
+        test('handles pipe with no second level (General omitted)', () => {
+            const r = parseClassification('Git|General');
+            assert.ok(r !== null);
+            assert.strictEqual(r!.folder, 'Git');
+            assert.strictEqual(r!.subtype, null);
+        });
+
+        test('returns folder as-is without pipe', () => {
             const result = parseClassification('Bug Fixes');
-            assert.strictEqual(result, 'Bug Fixes');
+            assert.ok(result !== null);
+            assert.strictEqual(result!.folder, 'Bug Fixes');
+            assert.strictEqual(result!.subtype, null);
         });
 
         test('trims whitespace', () => {
             const result = parseClassification('  Logic Change  ');
-            assert.strictEqual(result, 'Logic Change');
+            assert.ok(result !== null);
+            assert.strictEqual(result!.folder, 'Logic Change');
+            assert.strictEqual(result!.subtype, null);
         });
 
         test('takes first line only', () => {
             const result = parseClassification('Schema Design\nsome leftover');
-            assert.strictEqual(result, 'Schema Design');
+            assert.ok(result !== null);
+            assert.strictEqual(result!.folder, 'Schema Design');
         });
 
         test('returns null for "(none)" marker', () => {
@@ -157,25 +178,34 @@ suite('Feature 23 — LLM Classifier', () => {
         });
 
         test('strips markdown code fences and extracts content', () => {
-            assert.strictEqual(parseClassification('```markdown\nSchema Design\n```'), 'Schema Design');
-            assert.strictEqual(parseClassification('```\nBug Fixes\n```'), 'Bug Fixes');
-            assert.strictEqual(parseClassification("```typescript\nLogic Change\n```"), 'Logic Change');
+            checkPipeFence('```markdown\nSchema Design\n```', 'Schema Design', null);
+            checkPipeFence('```\nBug Fixes\n```', 'Bug Fixes', null);
+            checkPipeFence("```typescript\nGit|Branch Mgmt\n```", 'Git', 'Branch Mgmt');
         });
+
+        function checkPipeFence(raw: string, expFolder: string, expSubtype: string | null) {
+            const r = parseClassification(raw);
+            assert.ok(r !== null, `expected non-null for: "${raw}"`);
+            assert.strictEqual(r!.folder, expFolder);
+            assert.strictEqual(r!.subtype, expSubtype);
+        }
 
         test('strips fences with trailing text and takes first line', () => {
             const result = parseClassification("```markdown\nCode Review\n\nSome extra text\n```");
-            assert.strictEqual(result, 'Code Review');
+            assert.ok(result !== null);
+            assert.strictEqual(result!.folder, 'Code Review');
         });
 
         test('strips unclosed fences (no closing ```)', () => {
-            assert.strictEqual(parseClassification("```markdown\nSchema Design"), 'Schema Design');
-            assert.strictEqual(parseClassification("```\nBug Fixes"), 'Bug Fixes');
-            assert.strictEqual(parseClassification("```typescript\nLogic Change"), 'Logic Change');
+            assert.strictEqual(parseClassification("```markdown\nSchema Design")!.folder, 'Schema Design');
+            assert.strictEqual(parseClassification("```\nBug Fixes")!.folder, 'Bug Fixes');
+            assert.strictEqual(parseClassification("```typescript\nLogic Change")!.folder, 'Logic Change');
         });
 
         test('strips unclosed fences with extra text after first line', () => {
             const result = parseClassification("```markdown\nCode Review\n\nSome extra text");
-            assert.strictEqual(result, 'Code Review');
+            assert.ok(result !== null);
+            assert.strictEqual(result!.folder, 'Code Review');
         });
 
         test('rejects "Sorry," with comma (refusal variant)', () => {
@@ -228,19 +258,28 @@ suite('Feature 23 — LLM Classifier', () => {
             assert.strictEqual(parseClassification('🔴 Error'), null);
         });
 
-        test('rejects sentences with more than 5 words', () => {
+        test('rejects sentences with more than 2 words (pipe-less)', () => {
             assert.strictEqual(parseClassification('this is a sentence with many words'), null);
         });
 
-        test('accepts up to 5 words', () => {
-            const result = parseClassification('One Two Three Four Five');
-            assert.strictEqual(result, 'One Two Three Four Five');
+        test('accepts up to 2 words as folder (pipe-less)', () => {
+            const result = parseClassification('One Two');
+            assert.ok(result !== null);
+            assert.strictEqual(result!.folder, 'One Two');
+            assert.strictEqual(result!.subtype, null);
         });
 
-        test('accepts multi-word category labels', () => {
-            assert.strictEqual(parseClassification('Schema Design'), 'Schema Design');
-            assert.strictEqual(parseClassification('Deployment Debug'), 'Deployment Debug');
-            assert.strictEqual(parseClassification('Code Review'), 'Code Review');
+        test('accepts multi-word pipe output with up to 3 words second level', () => {
+            const r = parseClassification('Bugs|UI Crash Pattern');
+            assert.ok(r !== null);
+            assert.strictEqual(r!.folder, 'Bugs');
+            assert.strictEqual(r!.subtype, 'UI Crash Pattern');
+        });
+
+        test('accepts multi-word category labels without pipe', () => {
+            assert.strictEqual(parseClassification('Schema Design')!.folder, 'Schema Design');
+            assert.strictEqual(parseClassification('Deployment Debug')!.folder, 'Deployment Debug');
+            assert.strictEqual(parseClassification('Code Review')!.folder, 'Code Review');
         });
     });
 
@@ -276,9 +315,9 @@ suite('Feature 23 — LLM Classifier', () => {
             const prompt = buildClassificationPrompt(session);
             // Instructions are embedded inline (not systemPrompt) so the model always sees them
             assert.ok(prompt.includes('You are a session categorizer'));
-            assert.ok(prompt.includes('Return ONLY the category label'));
-            assert.ok(prompt.includes('=== CONVERSATION TO CLASSIFY ==='));
-            assert.ok(prompt.includes('Use Title Case'));
+            assert.ok(prompt.includes('TopLevel|SecondLevel'));
+            assert.ok(prompt.includes('=== CONVERSATION ==='));
+            assert.ok(prompt.includes('Title Case'));
         });
 
         test('prompt for bug-fix session includes all turns', () => {
@@ -332,7 +371,10 @@ suite('Feature 23 — LLM Classifier', () => {
         test('parseClassification extracts valid category from inline code fence', () => {
             // The LLM sometimes wraps a short category in an inline code fence
             // (no line breaks). The parser should strip the fences and accept it.
-            assert.strictEqual(parseClassification('```bug fix suggestion```'), 'fix suggestion');
+            const r = parseClassification('```bug fix suggestion```');
+            assert.ok(r != null);
+            assert.strictEqual(r.folder, 'fix suggestion');
+            assert.strictEqual(r.subtype, null);
         });
 
         test('parseClassification accepts valid category labels', () => {
@@ -351,8 +393,8 @@ suite('Feature 23 — LLM Classifier', () => {
             for (const label of validLabels) {
                 const result = parseClassification(label);
                 assert.ok(result !== null, `expected non-null for: "${label}"`);
-                // Must be ≤5 words
-                assert.ok(result!.split(/\s+/).length <= 5, `expected ≤5 words for: "${label}"`);
+                // Must be ≤2 words for pipe-less (backward compat)
+                assert.ok(result!.folder.split(/\s+/).length <= 2, `expected ≤2 words for: "${label}"`);
             }
         });
     });

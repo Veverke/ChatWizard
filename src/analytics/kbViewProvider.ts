@@ -126,7 +126,7 @@ export class KbViewProvider implements vscode.WebviewViewProvider {
 
         const cache = await this._sidecarStore.load();
         const useCategories = this._categories ?? DEFAULT_KB_TYPES;
-        const { type: entryType, usedLlm } = await classifySessionWithCategories(session, useCategories);
+        const { type: entryType, subtype, usedLlm } = await classifySessionWithCategories(session, useCategories);
         const meta = cache?.get(session.id);
         const tags = meta?.tags ?? [];
         const rawSummary = meta?.summary ?? session.title;
@@ -135,6 +135,7 @@ export class KbViewProvider implements vscode.WebviewViewProvider {
         const newEntry: KbEntry = {
             sessionId: session.id,
             type: entryType,
+            subtype: subtype ?? undefined,
             title: session.title,
             summary,
             tags,
@@ -182,6 +183,10 @@ export class KbViewProvider implements vscode.WebviewViewProvider {
 
     private async _handleGenerate(): Promise<void> {
         this._lastResult = null; // Force fresh computation
+
+        // Show the in-webview generating overlay (spinner + "Generating…")
+        this._view?.webview.postMessage({ type: 'generating' });
+        KbDashboardPanel.showGenerating();
 
         await vscode.window.withProgress(
             {

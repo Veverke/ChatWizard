@@ -21,23 +21,31 @@ const DEFAULT_COLORS = [
     '#2ecc71',  // architecture — green
 ];
 
-/** Extended palette for user-defined custom categories. */
+/**
+ * Extended palette for user-defined custom categories.
+ *
+ * Strategy: fills hue gaps around DEFAULT_COLORS so the full 20-color
+ * palette spans the entire hue wheel without adjacent-family neighbours.
+ * Where a CUSTOM color shares a broad hue sector with a DEFAULT entry
+ * (e.g. both "blue"), the CUSTOM variant uses a very different
+ * lightness level so they are clearly distinguishable on a chart.
+ */
 const CUSTOM_COLORS = [
-    '#e84393',  // hot pink
-    '#fdcb6e',  // amber
-    '#00cec9',  // teal
-    '#6c5ce7',  // deep purple
-    '#e17055',  // terracotta
-    '#55efc4',  // mint
-    '#fd79a8',  // rose
-    '#74b9ff',  // light blue
-    '#a29bfe',  // lavender
-    '#ffeaa7',  // cream
-    '#00b894',  // emerald
-    '#d63031',  // crimson
-    '#badc58',  // lime
-    '#55a3e8',  // sky blue
-    '#f19066',  // salmon
+    '#ffe119',  // bright yellow         unique hue
+    '#bfef45',  // lime                  unique hue
+    '#42d4f4',  // cyan                  unique hue
+    '#f032e6',  // magenta               unique hue
+    '#9a6324',  // brown                 muted, unique hue
+    '#9e9e9e',  // neutral grey          achromatic
+    '#fabed4',  // light pink            unique hue
+    '#469990',  // teal                  unique hue
+    '#808000',  // olive                 muted, unique hue
+    '#800000',  // maroon                l=25% vs red l=57%
+    '#aaffc3',  // mint                  l=84% vs green l=54%
+    '#ffd8b1',  // peach                 l=86% vs orange l=59%
+    '#bf360c',  // rust                  l=15% vs orange l=59%
+    '#000075',  // navy                  l=13% vs blue l=66%
+    '#4a148c',  // deep violet           l=20% vs purple l=71%
 ];
 
 const TYPE_ORDER: string[] = ['decision', 'architecture', 'pattern', 'gotcha', 'learning'];
@@ -182,19 +190,29 @@ export class KbDashboardPanel {
             tags: e.tags,
         });
 
-        // ── Top-level data: each type IS a top-level folder ─────────────
+        // ── Top-level data: each type IS a top-level folder with SUBTYPE children ──
         const topLevelData = allTypes.map((t) => {
             const rawEntries = result.grouped.get(t) ?? [];
+            // Group by subtype
+            const subtypeMap = new Map<string, KbEntry[]>();
+            for (const entry of rawEntries) {
+                const key = entry.subtype || 'General';
+                const arr = subtypeMap.get(key);
+                if (arr) { arr.push(entry); } else { subtypeMap.set(key, [entry]); }
+            }
+            const childEntries = Array.from(subtypeMap.entries()).map(([subtype, entries]) => ({
+                type: subtype,
+                label: subtype,
+                count: entries.length,
+                color: getTypeColor(t + '|' + subtype, 0),
+                entries: entries.map(mapEntry),
+            }));
+            // Sort children by count descending
+            childEntries.sort((a, b) => b.count - a.count);
             return {
                 parent: getTypeLabel(t),
                 parentColor: getTypeColor(t, allTypes.indexOf(t)),
-                childEntries: [{
-                    type: t,
-                    label: getTypeLabel(t),
-                    count: rawEntries.length,
-                    color: getTypeColor(t, allTypes.indexOf(t)),
-                    entries: rawEntries.map(mapEntry),
-                }],
+                childEntries,
             };
         });
 
@@ -386,6 +404,9 @@ export class KbDashboardPanel {
       text-align: center;
     }
 
+    /* ── Subtype level (pie chart drill) ── */
+    #subtype-view { display: none; }
+
     /* ── Table (drill-down) ── */
     #drilldown-view { display: none; }
     .data-table {
@@ -450,16 +471,6 @@ export class KbDashboardPanel {
       white-space: nowrap;
     }
 
-    .empty-state {
-      text-align: center;
-      opacity: 0.5;
-      padding: 40px 20px;
-      font-style: italic;
-    }
-    .generate-btn-wrap {
-      text-align: center;
-      padding: 40px 20px;
-    }
     .generate-btn {
       background: var(--cw-accent, #5B8AF5);
       color: #fff;
@@ -493,48 +504,83 @@ export class KbDashboardPanel {
     }
     #dashboard-content { display: none; }
     #empty-state { display: none; }
-    #loading-state { text-align: center; padding: 40px 20px; opacity: 0.6; }
+    #loading-state { display: none; }
+    /* ── Centered card container for loading/empty states ── */
+    .state-card {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 48px 24px;
+      text-align: center;
+      gap: 16px;
+    }
+    .state-card .state-icon {
+      font-size: 2.2em;
+      line-height: 1;
+      opacity: 0.5;
+    }
+    .state-card .state-title {
+      font-size: 1.05em;
+      font-weight: 600;
+      margin: 0;
+      opacity: 0.8;
+    }
+    .state-card .state-desc {
+      font-size: 0.88em;
+      margin: 0;
+      opacity: 0.5;
+      max-width: 280px;
+      line-height: 1.5;
+    }
+    .state-card .spinner {
+      width: 28px;
+      height: 28px;
+      border: 3px solid var(--cw-border, rgba(255,255,255,0.12));
+      border-top-color: var(--cw-accent, #5B8AF5);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
     /* ── Generating overlay ── */
     #generating-overlay {
       display: none;
       position: absolute;
       inset: 0;
-      background: rgba(26, 31, 46, 0.88);
+      background: color-mix(in srgb, var(--vscode-editor-background, #1e1e1e) 92%, transparent);
       z-index: 100;
       align-items: center;
       justify-content: center;
-      flex-direction: column;
     }
-    #generating-overlay .spinner {
-      display: inline-block;
-      width: 32px;
-      height: 32px;
-      border: 3px solid var(--cw-border, rgba(255,255,255,0.15));
-      border-top-color: var(--cw-accent, #5B8AF5);
-      border-radius: 50%;
-      animation: spin 0.8s linear infinite;
-      margin-bottom: 12px;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
   <div class="section">
     <!-- Generating overlay: shown over all content during generation -->
     <div id="generating-overlay">
-      <div class="spinner"></div>
-      <p>Generating knowledge base…</p>
+      <div class="state-card">
+        <div class="spinner"></div>
+        <p class="state-title">Generating knowledge base…</p>
+        <p class="state-desc">Classifying sessions by topic. This may take a moment.</p>
+      </div>
     </div>
 
     <!-- Loading state: shown before sessions are indexed -->
     <div id="loading-state">
-      <p>Waiting for sessions to be indexed…</p>
+      <div class="state-card">
+        <div class="spinner"></div>
+        <p class="state-title">Waiting for sessions</p>
+        <p class="state-desc">Session indexing is in progress. The knowledge base will be available once complete.</p>
+      </div>
     </div>
 
     <!-- Empty state: shown when KB has never been generated (total === 0) -->
     <div id="empty-state">
-      <div class="generate-btn-wrap">
-        <p style="opacity:0.7;margin:0 0 16px 0;">No knowledge base entries yet.</p>
+      <div class="state-card">
+        <div class="state-icon">📘</div>
+        <p class="state-title">No knowledge base yet</p>
+        <p class="state-desc">Generate a knowledge base from your chat history to discover patterns, decisions, and recurring topics.</p>
         <button class="generate-btn" id="generateKbBtn">⚡ Generate Knowledge Base</button>
       </div>
     </div>
@@ -557,6 +603,9 @@ export class KbDashboardPanel {
         </div>
         <div class="legend-row" id="legend-row"></div>
       </div>
+
+      <!-- Subtype level placeholder (pie chart replaces content dynamically) -->
+      <div id="subtype-view"></div>
 
       <!-- Drill-down table -->
       <div id="drilldown-view">
@@ -586,7 +635,11 @@ export class KbDashboardPanel {
 
       function showPieView() {
         hideGeneratingOverlay();
+        document.getElementById('drilldown-view').style.display = 'none';
+        document.getElementById('pie-view').style.display = 'block';
+        renderBreadcrumbs(['Dashboard']);
         var st = vscode.getState && vscode.getState() || {};
+        st._navLevel = 'top';
         vscode.setState(st);
         // Re-render using the stored payload
         if (st.lastPayload) {
@@ -594,17 +647,56 @@ export class KbDashboardPanel {
         }
       }
 
-      function renderBreadcrumbs(currentLabel) {
+      function showSubtypeChart(parentLabel, childData) {
+        document.getElementById('drilldown-view').style.display = 'none';
+        document.getElementById('pie-view').style.display = 'block';
+        renderBreadcrumbs(['Dashboard', parentLabel]);
+
+        // Save navigation state
+        var st = vscode.getState && vscode.getState() || {};
+        st._navLevel = 'subtype';
+        st._subtypeCategory = parentLabel;
+        st._subtypeChildren = childData;
+        vscode.setState(st);
+
+        // Build chart from childData
+        var labels = childData.map(function(c) { return c.label + ' (' + c.count + ')'; });
+        var data   = childData.map(function(c) { return c.count; });
+        var colors = childData.map(function(c) { return c.color; });
+
+        // Legend chips
+        var chipsHtml = childData.map(function(c) {
+          return '<span class="legend-chip" data-type="' + escHtml(c.type) + '">' +
+            '<span class="dot" style="background:' + c.color + '"></span>' +
+            escHtml(c.label) +
+            ' <span class="count-badge">' + c.count + '</span>' +
+            '</span>';
+        }).join('');
+        document.getElementById('legend-row').innerHTML = chipsHtml;
+
+        // Update chart data (chart and onClick already exist from renderDashboard)
+        var ctx = document.getElementById('kbChart').getContext('2d');
+        if (kbChart) {
+          kbChart.data.labels = labels;
+          kbChart.data.datasets[0].data = data;
+          kbChart.data.datasets[0].backgroundColor = colors;
+          kbChart.update('none');
+        }
+      }
+
+      function renderBreadcrumbs(path) {
         var el = document.getElementById('breadcrumbs');
         if (!el) return;
-        if (!currentLabel) {
-          el.innerHTML = '<span class="crumb active">Dashboard</span>';
-          return;
+        path = path || [];
+        var html = '';
+        for (var i = 0; i < path.length; i++) {
+          if (i > 0) {
+            html += '<span class="sep">›</span>';
+          }
+          var isLast = (i === path.length - 1);
+          html += '<span class="crumb' + (isLast ? ' active' : '') + '" data-idx="' + i + '">' + escHtml(path[i]) + '</span>';
         }
-        el.innerHTML =
-          '<span class="crumb" data-crumb="root">Dashboard</span>' +
-          '<span class="sep">›</span>' +
-          '<span class="crumb active">' + escHtml(currentLabel) + '</span>';
+        el.innerHTML = html;
       }
 
       function showGeneratingOverlay() {
@@ -636,13 +728,23 @@ export class KbDashboardPanel {
         document.getElementById('pie-view').style.display = 'none';
         document.getElementById('drilldown-view').style.display = 'block';
 
-        // Render breadcrumbs with current drill label
-        renderBreadcrumbs(typeLabel);
+        // Determine breadcrumb path: if label contains " / ", it's category / subtype
+        var parts = typeLabel.split(' / ');
+        if (parts.length > 1) {
+          renderBreadcrumbs(['Dashboard', parts[0], parts[1]]);
+        } else {
+          renderBreadcrumbs(['Dashboard', typeLabel]);
+        }
 
-        // Save current drill payload so sort can re-render; preserve lastPayload
+        // Save current drill payload so sort can re-render and breadcrumbs can navigate back; preserve lastPayload
         var cur = vscode.getState && vscode.getState() || {};
+        cur._navLevel = 'drill';
         cur._drillPayload = { label: typeLabel, entries: entries };
         vscode.setState(cur);
+
+        // Clear sort state on new drill
+        _sortCol = null;
+        _sortAsc = true;
 
         // Apply current sort if any
         if (_sortCol) {
@@ -726,8 +828,8 @@ export class KbDashboardPanel {
         }
         document.getElementById('dashboard-content').style.display = 'block';
 
-        // Render breadcrumbs (cleared — no multi-level drill)
-        renderBreadcrumbs();
+        // Render breadcrumbs (reset to root)
+        renderBreadcrumbs(['Dashboard']);
 
         // Decide which slices to render in the chart
         var chartSlices = null;
@@ -834,10 +936,23 @@ export class KbDashboardPanel {
               onClick: function(e, items) {
                 if (items.length > 0) {
                   var idx = items[0].index;
-                  // Read current state for overviewSlices
                   var st2 = vscode.getState && vscode.getState() || {};
+                  var navLevel = st2._navLevel || 'top';
+
+                  if (navLevel === 'subtype') {
+                    // Subtype chart — clicking a slice opens the drill table
+                    var children = st2._subtypeChildren;
+                    if (children && children[idx]) {
+                      var child = children[idx];
+                      if (child.entries && child.entries.length > 0) {
+                        showDrillView(st2._subtypeCategory + ' / ' + child.label, child.entries);
+                      }
+                    }
+                    return;
+                  }
+
+                  // Top-level navigation
                   var topTl = st2._topLevelData;
-                  // Build current chartSlices the same way as renderDashboard
                   var curSlices;
                   if (topTl) {
                     curSlices = topTl.map(function(tl) {
@@ -855,14 +970,16 @@ export class KbDashboardPanel {
                   }
                   var sl = curSlices && curSlices[idx];
                   if (sl && sl.count > 0) {
-                    if (sl.isTopLevel) {
-                      // Top-level slice: gather all entries from the sole child
-                      var allEntries = sl.entries;
-                      if (allEntries && allEntries.length > 0) {
-                        showDrillView(sl.label, allEntries);
+                    if (sl.isTopLevel && sl.childData && sl.childData.length > 1) {
+                      // Multiple subtypes — show subtype pie chart
+                      showSubtypeChart(sl.label, sl.childData);
+                    } else if (sl.isTopLevel && sl.childData && sl.childData.length === 1) {
+                      // Single subtype — go straight to table
+                      var entries = sl.childData[0].entries;
+                      if (entries && entries.length > 0) {
+                        showDrillView(sl.label, entries);
                       }
                     } else if (sl.entries) {
-                      // Show drill-down table
                       showDrillView(sl.label, sl.entries);
                     }
                   }
@@ -875,26 +992,42 @@ export class KbDashboardPanel {
 
       // ── Event wiring ──────────────────────────────────────────────────────
 
-      // Legend chip click → drill down
+      // Legend chip click → drill to subtype chart or table
       document.getElementById('legend-row').addEventListener('click', function(e) {
         var chip = e.target && e.target.closest ? e.target.closest('.legend-chip') : null;
         if (!chip) { return; }
         var type = chip.dataset.type;
         var st = vscode.getState && vscode.getState() || {};
+        var navLevel = st._navLevel || 'top';
+
+        if (navLevel === 'subtype') {
+          // Subtype level — clicking a legend chip opens the drill table
+          var children = st._subtypeChildren;
+          if (children) {
+            var child = children.find(function(c) { return c.type === type; });
+            if (child && child.entries && child.entries.length > 0) {
+              showDrillView(st._subtypeCategory + ' / ' + child.label, child.entries);
+            }
+          }
+          return;
+        }
+
+        // Top-level navigation
         var topTl = st._topLevelData;
         var payload = st.lastPayload;
-
         if (topTl) {
-          // Find the top-level group and show its entries
           var tlG = topTl.find(function(t) { return t.parent === type; });
           if (tlG && tlG.childEntries.length > 0) {
-            var allEntries = tlG.childEntries[0].entries;
-            if (allEntries && allEntries.length > 0) {
-              showDrillView(tlG.parent, allEntries);
+            if (tlG.childEntries.length > 1) {
+              showSubtypeChart(tlG.parent, tlG.childEntries);
+            } else {
+              var entries = tlG.childEntries[0].entries;
+              if (entries && entries.length > 0) {
+                showDrillView(tlG.parent, entries);
+              }
             }
           }
         } else {
-          // Flat view fallback: find slice by type
           if (payload) {
             var sl = payload.slices.find(function(s) { return s.type === type; });
             if (sl && sl.count > 0) { showDrillView(sl.label, sl.entries); }
@@ -902,14 +1035,49 @@ export class KbDashboardPanel {
         }
       });
 
-      // Breadcrumb clicks
+      // Subtype pie chart legend chip click → drill to table
+      // (handled by the same legend-row listener, no separate listener needed)
+
+      // Breadcrumb clicks — support 3 levels: Dashboard (0) → Category (1) → Subtype (2)
       document.getElementById('breadcrumbs').addEventListener('click', function(e) {
         var crumb = e.target && e.target.closest ? e.target.closest('.crumb') : null;
         if (!crumb) return;
-        var idx = crumb.dataset.crumb;
-        if (idx === 'root') {
+        var idx = parseInt(crumb.dataset.idx, 10);
+        if (idx === 0) {
           showPieView();
           return;
+        }
+        if (idx === 1) {
+          // Go back to subtype pie chart for this category
+          var st = vscode.getState && vscode.getState() || {};
+          var topTl = st._topLevelData;
+          if (topTl) {
+            // Determine which category — check drill payload or subtype state
+            var catLabel;
+            var drillPayload = st._drillPayload;
+            if (drillPayload && drillPayload.label) {
+              var parts = drillPayload.label.split(' / ');
+              catLabel = parts[0];
+            } else if (st._subtypeCategory) {
+              catLabel = st._subtypeCategory;
+            }
+            if (catLabel) {
+              var tlG = topTl.find(function(t) { return t.parent === catLabel; });
+              if (tlG && tlG.childEntries.length > 0) {
+                if (tlG.childEntries.length > 1) {
+                  showSubtypeChart(tlG.parent, tlG.childEntries);
+                } else {
+                  var entries = tlG.childEntries[0].entries;
+                  if (entries && entries.length > 0) {
+                    showDrillView(tlG.parent, entries);
+                  }
+                }
+                return;
+              }
+            }
+          }
+          // Last resort: just go back to pie
+          showPieView();
         }
       });
 
