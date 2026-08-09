@@ -27,8 +27,6 @@ export interface KbEntry {
     sessionId: string;
     /** Top-level folder — classified by LLM (pass 1) */
     type: KbEntryType;
-    /** Specific subject within the top-level folder — classified lazily (pass 3) */
-    subtype?: string;
     /** Human-readable title — derived from session title or first user message */
     title: string;
     /** 1–3 sentence summary of the knowledge */

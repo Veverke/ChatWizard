@@ -94,11 +94,14 @@ export function cleanSummary(summary: string): string {
 /**
  * Build KB entries from all sessions and their sidecar metadata.
  *
- * The 3-pass pipeline:
+ * The 2-pass pipeline:
  *   1. Each session is classified into a **top-level folder** (broad topic).
  *      LLM is tried first, then embedding fallback, then "Other".
  *   2. All top-level folder labels are refined/deduplicated via a single LLM call.
- *   3. (Lazy) Subtypes are extracted per-session when the user drills into a folder.
+ *
+ * The 1st-pass prompt already reads the full conversation and returns both the
+ * top-level folder (general) and the 2nd-level folder (particular) at once,
+ * so there is no need for a separate 3rd LLM pass.
  *
  * @param sessions    All hydrated sessions (must have messages loaded).
  * @param cache       Sidecar metadata map (sessionId → SessionMetadata), or null.
@@ -191,6 +194,5 @@ export async function buildKbEntries(
     }
 
     // No topLevelGrouping needed — types ARE the top-level folders.
-    // Subtypes are extracted lazily on drill-down (pass 3).
     return { entries, grouped, total: entries.length, usedLlm: anyLlm };
 }

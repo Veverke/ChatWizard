@@ -594,10 +594,17 @@ export class KbDashboardPanel {
         }
       }
 
-      function renderBreadcrumbs() {
+      function renderBreadcrumbs(currentLabel) {
         var el = document.getElementById('breadcrumbs');
         if (!el) return;
-        el.innerHTML = '';
+        if (!currentLabel) {
+          el.innerHTML = '<span class="crumb active">Dashboard</span>';
+          return;
+        }
+        el.innerHTML =
+          '<span class="crumb" data-crumb="root">Dashboard</span>' +
+          '<span class="sep">›</span>' +
+          '<span class="crumb active">' + escHtml(currentLabel) + '</span>';
       }
 
       function showGeneratingOverlay() {
@@ -628,6 +635,9 @@ export class KbDashboardPanel {
       function showDrillView(typeLabel, entries) {
         document.getElementById('pie-view').style.display = 'none';
         document.getElementById('drilldown-view').style.display = 'block';
+
+        // Render breadcrumbs with current drill label
+        renderBreadcrumbs(typeLabel);
 
         // Save current drill payload so sort can re-render; preserve lastPayload
         var cur = vscode.getState && vscode.getState() || {};

@@ -231,10 +231,9 @@ export function parseRefineResponse(raw: string): Map<string, string> | null {
  * Refine raw 1st-pass top-level folder labels by asking the LLM to merge similar labels,
  * collapse variants, and subsume narrow categories into broader ones.
  *
- * This is the **2nd pass** of the 3-pass pipeline:
+ * This is the **2nd pass** of the 2-pass pipeline:
  *   1. classifySessionWithLlm — per-session top-level folder
  *   2. refineCategories — merge/deduplicate across all folders
- *   3. classifySubtype — per-session specific subject (lazy, on drill-down)
  *
  * Returns a Map<originalLabel, refinedLabel> or `null` on failure.
  */
@@ -270,94 +269,6 @@ export async function refineCategories(
                 continue;
             }
             log.warn(`Category refinement failed: ${err}`);
-            return null;
-        }
-    }
-
-    return null;
-}
-
-// ── Subtype extraction (3rd pass, lazy) ────────────────────────────────
-
-/**
- * Build the prompt for extracting the specific subject of a chat within its
- * top-level folder.
- */
-export function buildSubtypePrompt(session: Session, topLevelFolder: string): string {
-    return [
-        'You are a session categorizer. Read the conversation below.',
-        '',
-        'This chat belongs to the top-level folder "' + topLevelFolder + '".',
-        'Your task: give me the SECOND-LEVEL folder name — the particular subject',
-        'this chat deals with within "' + topLevelFolder + '".',
-        '',
-        'Rules:',
-        '- Return ONLY the folder name — no commentary, no markdown, no punctuation.',
-        '- Use 1-3 words, Title Case.',
-        '- Be SPECIFIC — this should distinguish this chat from other chats in the same folder.',
-        '- For example, if the top-level folder is "Git", good subtypes are "Rebase Strategy",',
-        '  "Branch Management", "Stash Operations".',
-        '- If the session has no clear specific subject, respond with "General".',
-        '',
-        '=== CONVERSATION ===',
-        `Session title: ${session.title}`,
-        '',
-    ].join('\n');
-}
-
-/**
- * Parse the response from subtype extraction.
- */
-export function parseSubtypeResponse(raw: string): string | null {
-    const trimmed = raw.trim();
-    if (!trimmed) return null;
-
-    // Reject code fences, markdown headings, lists
-    if (/^```/.test(trimmed)) return null;
-    if (/^#/.test(trimmed)) return null;
-    if (/^[*\-] /.test(trimmed)) return null;
-
-    // Take the first line only
-    const firstLine = trimmed.split('\n')[0].trim();
-    if (!firstLine || firstLine.length > 50) return null;
-
-    return firstLine;
-}
-
-/**
- * Extract the specific subject (subtype) of a session within its top-level folder.
- * This is the **3rd pass** — called lazily when the user drills into a folder.
- *
- * Returns the subtype string or `null` on failure.
- */
-export async function classifySubtype(
-    session: Session,
-    topLevelFolder: string,
-): Promise<string | null> {
-    const content = buildSubtypePrompt(session, topLevelFolder);
-
-    for (let attempt = 0; attempt <= MAX_RATE_LIMIT_RETRIES; attempt++) {
-        if (attempt > 0) {
-            const backoff = RATE_LIMIT_BASE_DELAY_MS * Math.pow(2, attempt - 1);
-            await delay(backoff);
-        }
-
-        try {
-            const raw = await promptLlm(undefined, content, { timeoutMs: 30_000 });
-            if (raw === null) { return null; }
-
-            const parsed = parseSubtypeResponse(raw);
-            if (parsed) {
-                log.info(`Subtype for ${session.id} in "${topLevelFolder}": "${parsed}"`);
-                return parsed;
-            }
-
-            log.debug(`Subtype response unparseable for ${session.id}, attempt ${attempt + 1}`);
-        } catch (err) {
-            if (isRateLimitedError(err) && attempt < MAX_RATE_LIMIT_RETRIES) {
-                continue;
-            }
-            log.warn(`Subtype extraction failed for ${session.id}: ${err}`);
             return null;
         }
     }

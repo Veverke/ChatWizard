@@ -183,10 +183,6 @@ export class KbViewProvider implements vscode.WebviewViewProvider {
     private async _handleGenerate(): Promise<void> {
         this._lastResult = null; // Force fresh computation
 
-        // Notify the webview to show generating overlay
-        this._postMessage({ type: 'generating' });
-        KbDashboardPanel.showGenerating();
-
         await vscode.window.withProgress(
             {
                 location: vscode.ProgressLocation.Notification,
@@ -269,7 +265,7 @@ export class KbViewProvider implements vscode.WebviewViewProvider {
         if (!this._lastResult) {
             const summaries = this._index.getAllSummaries();
             const sessionsReady = summaries.length > 0;
-            this._postMessage({
+            void this._view.webview.postMessage({
                 type: 'update',
                 payload: { slices: [], total: 0, sessionsReady },
             });
@@ -277,19 +273,13 @@ export class KbViewProvider implements vscode.WebviewViewProvider {
         }
 
         const result = this._lastResult;
-        this._postMessage({
+        void this._view.webview.postMessage({
             type: 'update',
             payload: {
                 ...KbDashboardPanel.buildPayload(result),
                 sessionsReady: true,
             },
         });
-    }
-
-    /** Convenience wrapper around webview postMessage. */
-    private _postMessage(msg: unknown): void {
-        if (!this._view) { return; }
-        void this._view.webview.postMessage(msg);
     }
 
     /**
