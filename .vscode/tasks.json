@@ -23,11 +23,6 @@
 			"presentation": {
 				"reveal": "never"
 			}
-		},
-		{
-			"label": "Check TypeScript compilation",
-			"type": "shell",
-			"command": ""
 		}
 	]
 }
