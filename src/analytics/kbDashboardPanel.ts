@@ -707,6 +707,9 @@ export class KbDashboardPanel {
       function hideGeneratingOverlay() {
         var el = document.getElementById('generating-overlay');
         if (el) el.style.display = 'none';
+        // Re-enable the Generate button if it was disabled
+        var btn = document.getElementById('generateKbBtn');
+        if (btn) { btn.disabled = false; btn.style.opacity = ''; btn.style.cursor = ''; }
       }
 
       var _sortCol = null;
@@ -1086,8 +1089,10 @@ export class KbDashboardPanel {
         vscode.postMessage({ command: 'export' });
       });
 
-      // Generate KB button
+      // Generate KB button — disable immediately to prevent double-clicks
       document.getElementById('generateKbBtn').addEventListener('click', function() {
+        var btn = document.getElementById('generateKbBtn');
+        if (btn) { btn.disabled = true; btn.style.opacity = '0.4'; btn.style.cursor = 'default'; }
         vscode.postMessage({ command: 'generateKb' });
       });
 
