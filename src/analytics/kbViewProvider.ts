@@ -10,7 +10,6 @@ import { classifySessionWithCategories } from './kbClassifier';
 import { clusterEntries } from './kbClusterer';
 import { exportKbAsync } from '../export/kbExporter';
 import { KbDashboardPanel } from './kbDashboardPanel';
-import { configureFallbackCategories } from './kbCategoryConfigurator';
 import { DEFAULT_KB_TYPES } from '../types/kb';
 import { KbStore } from './kbStore';
 
@@ -172,13 +171,21 @@ export class KbViewProvider implements vscode.WebviewViewProvider {
         this._categories = categories;
     }
 
-    private async _handleGenerate(): Promise<void> {
-        const fallbackCategories = await configureFallbackCategories();
-        // `undefined` = auto-detect (LLM generates freely; heuristic fallback uses built-in types)
-        // `string[]` = custom fallback categories for when LLM is unavailable
+    /**
+     * Refresh the webview with the current state (loading, empty, or data).
+     * Called when the index finishes building so the view transitions from
+     * "Waiting for sessions to be indexed…" to the appropriate state.
+     */
+    refreshView(): void {
+        this._sendToView();
+    }
 
-        this._categories = fallbackCategories;
+    private async _handleGenerate(): Promise<void> {
         this._lastResult = null; // Force fresh computation
+
+        // Notify the webview to show generating overlay
+        this._postMessage({ type: 'generating' });
+        KbDashboardPanel.showGenerating();
 
         await vscode.window.withProgress(
             {
@@ -229,25 +236,13 @@ export class KbViewProvider implements vscode.WebviewViewProvider {
 
         const cache = await this._sidecarStore.load();
         const useCategories = this._categories ?? DEFAULT_KB_TYPES;
-        const result = await buildKbEntries(sessions, cache, useCategories, onProgress);
+        const refineLabels = vscode.workspace.getConfiguration('chatwizard').get<boolean>('kbRefineLabels', true);
+        const result = await buildKbEntries(sessions, cache, useCategories, onProgress, refineLabels);
         this._lastResult = result;
 
         // ── Auto-tag sessions with KB categories ─────────────────────────
         const autoTagEnabled = vscode.workspace.getConfiguration('chatwizard').get<boolean>('kbAutoTagSessions', true);
         if (autoTagEnabled && result.entries.length > 0) {
-            // Build a reverse map: child category → parent group
-            const childToParent = new Map<string, string>();
-            if (result.topLevelGrouping) {
-                for (const [parent, children] of result.topLevelGrouping.entries()) {
-                    for (const child of children) {
-                        // Keep the more general parent if a child appears in multiple groups
-                        if (!childToParent.has(child)) {
-                            childToParent.set(child, parent);
-                        }
-                    }
-                }
-            }
-
             // Tag each entry concurrently
             await Promise.all(result.entries.map(async (entry) => {
                 // Remove prior KB tags first to avoid accumulation across generations
@@ -258,16 +253,9 @@ export class KbViewProvider implements vscode.WebviewViewProvider {
                     await this._sidecarStore.patch(entry.sessionId, { tags: nonKbTags });
                 }
 
-                // Tag: kb-category:<fine-grained-category>
-                const fineTag = `kb-category:${entry.type.toLowerCase().replace(/\s+/g, '-')}`;
-                await this._sidecarStore.addTag(entry.sessionId, fineTag);
-
-                // Tag: kb-group:<top-level-group> (if applicable)
-                const parentGroup = childToParent.get(entry.type);
-                if (parentGroup) {
-                    const groupTag = `kb-group:${parentGroup.toLowerCase().replace(/\s+/g, '-')}`;
-                    await this._sidecarStore.addTag(entry.sessionId, groupTag);
-                }
+                // Tag: kb-category:<top-level-folder>
+                const folderTag = `kb-category:${entry.type.toLowerCase().replace(/\s+/g, '-')}`;
+                await this._sidecarStore.addTag(entry.sessionId, folderTag);
             }));
         }
     }
@@ -281,7 +269,7 @@ export class KbViewProvider implements vscode.WebviewViewProvider {
         if (!this._lastResult) {
             const summaries = this._index.getAllSummaries();
             const sessionsReady = summaries.length > 0;
-            void this._view.webview.postMessage({
+            this._postMessage({
                 type: 'update',
                 payload: { slices: [], total: 0, sessionsReady },
             });
@@ -289,13 +277,19 @@ export class KbViewProvider implements vscode.WebviewViewProvider {
         }
 
         const result = this._lastResult;
-        void this._view.webview.postMessage({
+        this._postMessage({
             type: 'update',
             payload: {
                 ...KbDashboardPanel.buildPayload(result),
                 sessionsReady: true,
             },
         });
+    }
+
+    /** Convenience wrapper around webview postMessage. */
+    private _postMessage(msg: unknown): void {
+        if (!this._view) { return; }
+        void this._view.webview.postMessage(msg);
     }
 
     /**

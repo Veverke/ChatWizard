@@ -42,6 +42,8 @@ import { ModelUsageViewProvider } from './analytics/modelUsageViewProvider';
 import { TimelineViewProvider } from './timeline/timelineViewProvider';
 import { KbViewProvider } from './analytics/kbViewProvider';
 import { KbStore } from './analytics/kbStore';
+import { setKbEmbeddingEngine } from './analytics/kbClassifier';
+import { maybeNotifyCursorAgentMissing } from './analytics/llmClient';
 import { TelemetryRecorder } from './telemetry/telemetryRecorder';
 import { registerManageWorkspacesCommand } from './commands/manageWorkspaces';
 import { registerPaletteCommands } from './commands/paletteCommands';
@@ -98,8 +100,6 @@ let watcher: ChatWizardWatcher | undefined;
 /** Deferred reference — set after scopeManager is created so the archive listener
  *  (registered before scopeManager) can filter restored sessions by workspace scope. */
 let _scopeManagerRef: WorkspaceScopeManager | undefined;
-/** Module-level reference so deactivate() can clear persisted KB data on uninstall. */
-let _kbStoreRef: KbStore | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
     const startedAt = Date.now();
@@ -110,6 +110,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     const log = createLogger(channel).withContext('Activate');
     log.info('Extension activation started');
+
+    // Notify once if running in Cursor without the agent CLI
+    maybeNotifyCursorAgentMissing(context.globalState, vscode.env.appName, process.execPath);
 
     // Log all chatwizard.* config settings at startup
     const cfg = vscode.workspace.getConfiguration('chatwizard');
@@ -230,8 +233,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         vscode.window.registerWebviewViewProvider(TimelineViewProvider.viewType, timelineViewProvider)
     );
 
-    const kbStore = new KbStore(context.storageUri?.fsPath ?? context.globalStorageUri.fsPath);
-    _kbStoreRef = kbStore;
+    const kbStore = new KbStore(context.globalStorageUri.fsPath);
     const kbViewProvider = new KbViewProvider(index, sidecarStore, context.globalState, kbStore);
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider(KbViewProvider.viewType, kbViewProvider)
@@ -316,6 +318,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 channel.appendLine(`[Chat Wizard] Semantic index max age set to ${maxAgeDays} days.`);
             }
             semanticIndexer = indexer;
+            // Wire the embedding engine into KB classifier for embedding-based fallback
+            setKbEmbeddingEngine(indexer.embeddingEngine);
+            channel.appendLine('[Chat Wizard] KB embedding engine registered via SemanticIndexer.');
             void indexer.initialize().then(() => {
                 // Schedule sessions already loaded into the main index (runtime-enable case)
                 const summaries = index.getAllSummaries();
@@ -485,8 +490,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             kbViewProvider.removeSession(event.sessionId);
         } else if (event.type === 'batch') {
             // KB generation is user-initiated; no auto-run on batch load.
+            // But refresh the view so it transitions from "Waiting for sessions
+            // to be indexed…" to the empty state (with generate button).
+            kbViewProvider.refreshView();
         } else if (event.type === 'clear') {
             // On clear, the next user-initiated generation will rebuild from scratch
+            kbViewProvider.refreshView();
         }
     });
     context.subscriptions.push(kbListener);
@@ -2935,8 +2944,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 }
 
 export function deactivate(): void {
-    // Clear persisted KB data on uninstall (KB is a regenerable cache derived from sessions)
-    void _kbStoreRef?.clear();
     watcher?.dispose();
     watcher = undefined;
 }

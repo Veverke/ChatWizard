@@ -9,8 +9,6 @@ import {
     buildClassificationPrompt,
     buildSystemPrompt,
     parseClassification,
-    buildTopLevelGroupingPrompt,
-    parseTopLevelGrouping,
 } from '../../src/analytics/kbLlmClassifier';
 import type { Session, Message } from '../../src/types/index';
 
@@ -139,54 +137,3 @@ suite('kbLlmClassifier', () => {
             assert.strictEqual(parseClassification('  Bug Fixes  '), 'Bug Fixes');
         });
     });
-
-    suite('buildTopLevelGroupingPrompt', () => {
-        test('includes input categories', () => {
-            const prompt = buildTopLevelGroupingPrompt(['Git Pull', 'Docker Compose']);
-            assert.ok(prompt.includes('Git Pull'));
-            assert.ok(prompt.includes('Docker Compose'));
-        });
-
-        test('includes example output format', () => {
-            const prompt = buildTopLevelGroupingPrompt([]);
-            assert.ok(prompt.includes('JSON'));
-            assert.ok(prompt.includes('Title Case'));
-        });
-    });
-
-    suite('parseTopLevelGrouping', () => {
-        test('parses valid JSON grouping', () => {
-            const raw = '{"Git":["Git Pull","Git Push"],"Docker":["Docker Compose"]}';
-            const result = parseTopLevelGrouping(raw);
-            assert.ok(result !== null);
-            assert.strictEqual(result!.size, 2);
-            assert.deepStrictEqual(result!.get('Git'), ['Git Pull', 'Git Push']);
-        });
-
-        test('strips code fences', () => {
-            const raw = '```json\n{"Git":["Git Pull"]}\n```';
-            const result = parseTopLevelGrouping(raw);
-            assert.ok(result !== null);
-            assert.strictEqual(result!.size, 1);
-        });
-
-        test('returns null for empty object', () => {
-            assert.strictEqual(parseTopLevelGrouping('{}'), null);
-        });
-
-        test('returns null for invalid JSON', () => {
-            assert.strictEqual(parseTopLevelGrouping('not json'), null);
-        });
-
-        test('filters out non-string children', () => {
-            const raw = '{"Git":["Git Pull", 42, null]}';
-            const result = parseTopLevelGrouping(raw);
-            assert.ok(result !== null);
-            assert.deepStrictEqual(result!.get('Git'), ['Git Pull']);
-        });
-
-        test('returns null for non-object JSON', () => {
-            assert.strictEqual(parseTopLevelGrouping('"string"'), null);
-        });
-    });
-});

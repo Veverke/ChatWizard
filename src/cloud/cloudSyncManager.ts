@@ -31,6 +31,7 @@ import * as os from 'os';
 import * as zlib from 'zlib';
 import { SessionIndex } from '../index/sessionIndex';
 import type { SessionSummary } from '../types/index';
+import BetterSqlite3 from 'better-sqlite3';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -43,6 +44,10 @@ const SYNC_STATE_FILENAME = 'cloud-sync-state.json';
 const SESSION_SUMMARIES_FILENAME = 'chatwizard-sessions.json';
 const DB_BACKUP_FILENAME = 'chatwizard-cache.db.backup.enc';
 const README_FILENAME = 'README.md';
+
+// GitHub Gist max file size is 50 MB (52,428,800 bytes) for free accounts.
+// The API may reject earlier due to total gist size limits.
+const GIST_MAX_FILE_SIZE = 50 * 1024 * 1024;
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -371,10 +376,45 @@ export class CloudSyncManager {
                 return;
             }
 
-            const dbBuffer = fs.readFileSync(resolvedPath);
+            // Copy to a temp file and VACUUM to reclaim free pages.
+            // SQLite doesn't reclaim space on DELETE — VACUUM rebuilds the file.
+            const tmpPath = resolvedPath + '.vacuum.tmp';
+            try {
+                fs.copyFileSync(resolvedPath, tmpPath);
+                const db = new BetterSqlite3(tmpPath);
+                db.pragma('journal_mode = OFF');
+                db.exec('VACUUM;');
+                db.close();
+            } catch (vacuumErr) {
+                this.logger(`[Chat Wizard] DB backup: VACUUM failed (${String(vacuumErr)}), proceeding with original file.`);
+                // If temp copy exists, clean it up
+                try { if (fs.existsSync(tmpPath)) { fs.unlinkSync(tmpPath); } } catch { /* ignore */ }
+            }
 
-            // Encrypt the raw .db file (no compression — already binary)
-            const encrypted = this._encrypt(dbBuffer);
+            let dbBuffer: Buffer;
+            const vacuumedPath = fs.existsSync(tmpPath) ? tmpPath : resolvedPath;
+            try {
+                dbBuffer = fs.readFileSync(vacuumedPath);
+            } finally {
+                // Clean up temp file if it exists and differs from original
+                if (vacuumedPath !== resolvedPath) {
+                    try { fs.unlinkSync(vacuumedPath); } catch { /* ignore */ }
+                }
+            }
+
+            // Compress before encrypting — SQLite DBs are highly compressible.
+            // AES output is random (incompressible), so compression must come first.
+            const compressed = zlib.gzipSync(dbBuffer);
+            const compressedSizeMb = compressed.length / 1024 / 1024;
+
+            // Check size — GitHub Gist has a 50 MB per-file limit
+            if (compressed.length > GIST_MAX_FILE_SIZE) {
+                this.logger(`[Chat Wizard] DB backup: compressed .db is ${compressedSizeMb.toFixed(1)} MB — still exceeds Gist 50 MB limit. Skipping DB backup.`);
+                return;
+            }
+
+            // Encrypt the compressed data
+            const encrypted = this._encrypt(compressed);
 
             // Write as a separate named blob via the backend.
             // Since our ICloudBackend interface only supports a single named file,
@@ -385,8 +425,9 @@ export class CloudSyncManager {
 
             // Write the DB backup file to the Gist.
             // Summaries are uploaded separately by sync() — do not overwrite them.
+            // Magic header: DB02 = gzip-compressed + AES-256-GCM encrypted
             const backupPayload = Buffer.concat([
-                Buffer.from('DB01'),  // magic header + version
+                Buffer.from('DB02'),
                 encrypted,
             ]);
 
@@ -395,7 +436,7 @@ export class CloudSyncManager {
                 [README_FILENAME]: this._readmeContent(),
             });
 
-            this.logger(`[Chat Wizard] DB backup: ${(dbBuffer.length / 1024).toFixed(0)} KB backed up to cloud alongside summaries.`);
+            this.logger(`[Chat Wizard] DB backup: ${(dbBuffer.length / 1024 / 1024).toFixed(1)} MB → ${compressedSizeMb.toFixed(1)} MB compressed, backed up to cloud.`);
         } catch (err) {
             this.logger(`[Chat Wizard] DB backup error: ${String(err)}`);
         }
@@ -591,62 +632,64 @@ export class CloudSyncManager {
 
     /** Generate README content for the Gist explaining how to decode the files. */
     private _readmeContent(): Buffer {
-        const readme = `# ChatWizard Cloud Sync
-
-This Gist contains encrypted backups from the [ChatWizard](https://github.com/veverke/chatwizard) VS Code extension.
-
-## Files
-
-### \`chatwizard-sessions.json\`
-Session summaries (metadata only — titles, sources, token counts, timestamps).
-AES-256-GCM encrypted, then gzip compressed.
-
-### \`chatwizard-cache.db.backup.enc\`
-Full SQLite database backup (all sessions, messages, code blocks).
-AES-256-GCM encrypted (raw binary, no compression).
-
-## Decoding (requires the encryption key)
-
-Both files are encrypted with AES-256-GCM using a key stored locally in:
-\`\`\`
-%APPDATA%\Code\User\globalStorage\veverke.chatwizard\cloud-sync-key.bin
-\`\`\`
-
-### Decode \`chatwizard-sessions.json\`
-\`\`\`powershell
-node -e "
-const fs=require('fs'),crypto=require('crypto'),zlib=require('zlib');
-const key=fs.readFileSync('$env:APPDATA\\Code\\User\\globalStorage\\veverke.chatwizard\\cloud-sync-key.bin');
-const data=fs.readFileSync('chatwizard-sessions.json');
-const iv=data.subarray(0,16),tag=data.subarray(16,32),ct=data.subarray(32);
-const d=crypto.createDecipheriv('aes-256-gcm',key,iv); d.setAuthTag(tag);
-const dec=Buffer.concat([d.update(ct),d.final()]);
-console.log(zlib.gunzipSync(dec).toString('utf-8'));
-"
-\`\`\`
-
-### Decode \`chatwizard-cache.db.backup.enc\`
-The file has a 4-byte magic header \`DB01\` followed by the AES-256-GCM payload.
-\`\`\`powershell
-node -e "
-const fs=require('fs'),crypto=require('crypto');
-const key=fs.readFileSync('$env:APPDATA\\Code\\User\\globalStorage\\veverke.chatwizard\\cloud-sync-key.bin');
-const raw=fs.readFileSync('chatwizard-cache.db.backup.enc');
-const magic=raw.subarray(0,4).toString();
-if(magic!=='DB01'){console.error('Bad magic');process.exit(1);}
-const data=raw.subarray(4);
-const iv=data.subarray(0,16),tag=data.subarray(16,32),ct=data.subarray(32);
-const d=crypto.createDecipheriv('aes-256-gcm',key,iv); d.setAuthTag(tag);
-const db=Buffer.concat([d.update(ct),d.final()]);
-fs.writeFileSync('restored-chatwizard-cache.db',db);
-console.log('Written to restored-chatwizard-cache.db');
-"
-\`\`\`
-
-> **Security:** The encryption key never leaves your machine. Anyone with access to this Gist also needs the key file to decode the contents.
-`;
-
-        return Buffer.from(readme, 'utf-8');
+        const lines = [
+            '# ChatWizard Cloud Sync',
+            '',
+            'This Gist contains encrypted backups from the [ChatWizard](https://github.com/veverke/chatwizard) VS Code extension.',
+            '',
+            '## Files',
+            '',
+            '### `chatwizard-sessions.json`',
+            'Session summaries (metadata only — titles, sources, token counts, timestamps).',
+            'AES-256-GCM encrypted, then gzip compressed.',
+            '',
+            '### `chatwizard-cache.db.backup.enc`',
+            'Full SQLite database backup (all sessions, messages, code blocks).',
+            'Gzip-compressed, then AES-256-GCM encrypted.',
+            '',
+            '## Decoding (requires the encryption key)',
+            '',
+            'Both files are encrypted with AES-256-GCM using a key stored locally in:',
+            '```',
+            '%APPDATA%\\Code\\User\\globalStorage\\veverke.chatwizard\\cloud-sync-key.bin',
+            '```',
+            '',
+            '### Decode `chatwizard-sessions.json`',
+            '```powershell',
+            'node -e "',
+            'const fs=require(\'fs\'),crypto=require(\'crypto\'),zlib=require(\'zlib\');',
+            'const key=fs.readFileSync(\'$env:APPDATA\\Code\\User\\globalStorage\\veverke.chatwizard\\cloud-sync-key.bin\');',
+            'const data=fs.readFileSync(\'chatwizard-sessions.json\');',
+            'const iv=data.subarray(0,16),tag=data.subarray(16,32),ct=data.subarray(32);',
+            'const d=crypto.createDecipheriv(\'aes-256-gcm\',key,iv); d.setAuthTag(tag);',
+            'const dec=Buffer.concat([d.update(ct),d.final()]);',
+            'console.log(zlib.gunzipSync(dec).toString(\'utf-8\'));',
+            '"',
+            '```',
+            '',
+            '### Decode `chatwizard-cache.db.backup.enc`',
+            'The file has a 4-byte magic header `DB02` followed by gzip-compressed + AES-256-GCM encrypted data.',
+            '```powershell',
+            'node -e "',
+            'const fs=require(\'fs\'),crypto=require(\'crypto\'),zlib=require(\'zlib\');',
+            'const key=fs.readFileSync(\'$env:APPDATA\\Code\\User\\globalStorage\\veverke.chatwizard\\cloud-sync-key.bin\');',
+            'const raw=fs.readFileSync(\'chatwizard-cache.db.backup.enc\');',
+            'const magic=raw.subarray(0,4).toString();',
+            'if(magic!==\'DB02\'){console.error(\'Bad magic (expected DB02)\');process.exit(1);}',
+            'const data=raw.subarray(4);',
+            'const iv=data.subarray(0,16),tag=data.subarray(16,32),ct=data.subarray(32);',
+            'const d=crypto.createDecipheriv(\'aes-256-gcm\',key,iv); d.setAuthTag(tag);',
+            'const dec=Buffer.concat([d.update(ct),d.final()]);',
+            'const db=zlib.gunzipSync(dec);',
+            'fs.writeFileSync(\'restored-chatwizard-cache.db\',db);',
+            'console.log(\'Written to restored-chatwizard-cache.db\');',
+            '"',
+            '```',
+            '',
+            '> **Security:** The encryption key never leaves your machine. Anyone with access to this Gist also needs the key file to decode the contents.',
+            '',
+        ];
+        return Buffer.from(lines.join('\n'), 'utf-8');
     }
 
     /** Sync summaries then DB backup — called by the periodic timer. */

@@ -13,6 +13,18 @@ interface SectionHeading {
     text: string;
     /** 0-based line number in the source markdown file. */
     lineNumber: number;
+    /** Anchor fragment for navigating in markdown preview, e.g. "19-did-you-know-tips". */
+    anchor: string;
+}
+
+function toAnchor(heading: string): string {
+    // GitHub-style anchor: lowercase, remove non-alnum/non-space/non-hyphen,
+    // replace spaces with hyphens, collapse consecutive hyphens.
+    return heading
+        .toLowerCase()
+        .replace(/[^a-z0-9\s-]/g, '')
+        .replace(/\s+/g, '-')
+        .replace(/-+/g, '-');
 }
 
 /**
@@ -39,7 +51,7 @@ function parseUserGuideSections(filePath: string): SectionHeading[] {
                     const displayText = text.replace(/^\d+\.\s+/, '');
                     if (!seen.has(displayText)) {
                         seen.add(displayText);
-                        headings.push({ text: displayText, lineNumber: i });
+                        headings.push({ text: displayText, lineNumber: i, anchor: toAnchor(text) });
                     }
                 }
             } else if (/^###\s+(?!\n)(.+)/.test(trimmed)) {
@@ -49,7 +61,7 @@ function parseUserGuideSections(filePath: string): SectionHeading[] {
                     // Prepend parent H2 for context — strip numbering prefix from both
                     const parentLabel = currentH2.replace(/^\d+\.\s+/, '');
                     const displayText = parentLabel ? `${parentLabel} ${text}` : text;
-                    headings.push({ text: displayText, lineNumber: i });
+                    headings.push({ text: displayText, lineNumber: i, anchor: toAnchor(text) });
                 }
             }
         }
@@ -89,14 +101,14 @@ export class DidYouKnowNudge implements vscode.Disposable {
         if (this._items.length === 0) {
             // Fallback: a few built-in items if parsing fails
             this._items = [
-                { text: 'Search past sessions by keyword', lineNumber: 0 },
-                { text: 'Tag sessions for quick filtering', lineNumber: 0 },
-                { text: 'Export sessions to Markdown or Obsidian', lineNumber: 0 },
-                { text: 'Use @chatwizard in Copilot Chat', lineNumber: 0 },
-                { text: 'Connect Claude Desktop via MCP server', lineNumber: 0 },
-                { text: 'View per-model usage stats', lineNumber: 0 },
-                { text: 'Browse AI-generated code blocks', lineNumber: 0 },
-                { text: 'See which files a session touched', lineNumber: 0 },
+                { text: 'Search past sessions by keyword', lineNumber: 0, anchor: 'search' },
+                { text: 'Tag sessions for quick filtering', lineNumber: 0, anchor: 'tag' },
+                { text: 'Export sessions to Markdown or Obsidian', lineNumber: 0, anchor: 'export' },
+                { text: 'Use @chatwizard in Copilot Chat', lineNumber: 0, anchor: 'chatwizard' },
+                { text: 'Connect Claude Desktop via MCP server', lineNumber: 0, anchor: 'mcp' },
+                { text: 'View per-model usage stats', lineNumber: 0, anchor: 'usage' },
+                { text: 'Browse AI-generated code blocks', lineNumber: 0, anchor: 'codeblocks' },
+                { text: 'See which files a session touched', lineNumber: 0, anchor: 'files' },
             ];
         }
         this._queue = shuffle(this._items);
@@ -130,12 +142,14 @@ export class DidYouKnowNudge implements vscode.Disposable {
             if (selection === 'Open User Guide') {
                 const userGuidePath = path.join(this._extensionPath, 'docs', 'user-guide.md');
                 const uri = vscode.Uri.file(userGuidePath);
+                // Open source file, reveal the heading line, then open preview —
+                // VS Code syncs the preview to the cursor position in the source.
                 void vscode.workspace.openTextDocument(uri).then(doc => {
                     void vscode.window.showTextDocument(doc).then(editor => {
-                        // Reveal the heading line and place cursor at the start of it
                         const pos = new vscode.Position(item.lineNumber, 0);
                         editor.selection = new vscode.Selection(pos, pos);
                         editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.AtTop);
+                        void vscode.commands.executeCommand('markdown.showPreview', uri);
                     });
                 });
             } else if (selection === "Don't show again") {

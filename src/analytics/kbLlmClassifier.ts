@@ -25,34 +25,28 @@ const MAX_CONVERSATION_CHARS = 24_000;
  * Copilot LM models consistently honor the `systemPrompt` request option.
  * Embedding them in the user message guarantees the model sees them.
  *
- * The prompt targets extracting the overall subject or topic area of the
- * conversation — precise granularity is deferred to the 2nd-pass
- * top-level grouping step (classifyTopLevelCategories).
+ * The prompt asks for a top-level folder name — the broadest category that
+ * groups similar chats together in a 2-level folder structure.
  */
 export function buildClassificationPrompt(session: Session): string {
     const intro = [
-        'You are a session categorizer. Read the conversation below and identify',
-        'the broad subject area or topic it deals with. Respond with a short',
-        'label (1-2 words) describing the general subject.',
+        'You are a session categorizer. Read the conversation below.',
         '',
-        'Examples:',
-        '- Chat about Git branch management → "Git"',
-        '- Chat about Docker container configuration → "Docker"',
-        '- Chat about React component design → "React"',
-        '- Chat about Python debugging → "Python Debugging"',
-        '- Chat about database schema changes → "Database"',
-        '- Chat about API design decisions → "API Design"',
-        '- Chat about test setup and fixtures → "Testing"',
-        '- Chat about deployment pipeline → "Deployment"',
+        'I want to organize every chat into folders, grouping similar chats into the same folder.',
+        'I use a 2-level folder structure:',
+        '  - Top-level folders capture the general chat topic (e.g. "Git", "Docker", "React", "Testing").',
+        '  - Second-level folders capture the particular subject within that topic.',
+        '',
+        'Your task: give me the TOP-LEVEL folder name for this chat.',
         '',
         'Rules:',
-        '- Return ONLY the category label — no commentary, no markdown, no punctuation.',
-        '- Respond with exactly 1-2 words.',
-        '- Use Title Case.',
-        '- Focus on the general subject area, not a specific action or task.',
+        '- Return ONLY the folder name — no commentary, no markdown, no punctuation.',
+        '- Use 1-2 words, Title Case.',
+        '- Keep it BROAD — it should group multiple related chats together.',
+        '- For example, use "Git" not "Git Rebase". Use "Python" not "Python Debugging".',
         '- If the session has no clear subject, respond with "Other".',
         '',
-        '=== CONVERSATION TO CLASSIFY ===',
+        '=== CONVERSATION ===',
         `Session title: ${session.title}`,
         '',
     ].join('\n');
@@ -81,25 +75,19 @@ export function buildClassificationPrompt(session: Session): string {
 export function buildSystemPrompt(): string {
     // Kept for backwards compatibility with tests, but no longer used in the API call.
     return [
-        'You are a session categorizer. Read the conversation and identify',
-        'the broad subject area or topic it deals with. Respond with a short',
-        'label (1-2 words) describing the general subject.',
+        'You are a session categorizer. Read the conversation below.',
         '',
-        'Examples:',
-        '- Chat about Git branch management → "Git"',
-        '- Chat about Docker container configuration → "Docker"',
-        '- Chat about React component design → "React"',
-        '- Chat about Python debugging → "Python Debugging"',
-        '- Chat about database schema changes → "Database"',
-        '- Chat about API design decisions → "API Design"',
-        '- Chat about test setup and fixtures → "Testing"',
-        '- Chat about deployment pipeline → "Deployment"',
+        'I want to organize every chat into folders, grouping similar chats into the same folder.',
+        'I use a 2-level folder structure:',
+        '  - Top-level folders capture the general chat topic (e.g. "Git", "Docker", "React", "Testing").',
+        '  - Second-level folders capture the particular subject within that topic.',
+        '',
+        'Your task: give me the TOP-LEVEL folder name for this chat.',
         '',
         'Rules:',
-        '- Return ONLY the category label — no commentary, no markdown, no punctuation.',
-        '- Respond with exactly 1-2 words.',
-        '- Use Title Case.',
-        '- Focus on the general subject area, not a specific action or task.',
+        '- Return ONLY the folder name — no commentary, no markdown, no punctuation.',
+        '- Use 1-2 words, Title Case.',
+        '- Keep it BROAD — it should group multiple related chats together.',
         '- If the session has no clear subject, respond with "Other".',
     ].join('\n');
 }
@@ -172,63 +160,209 @@ export function parseClassification(raw: string): string | null {
     return firstLine;
 }
 
-// ── Top-level grouping ───────────────────────────────────────────────────
+// ── Category refinement (2nd pass) ────────────────────────────────────────
 
 /**
- * Build the prompt for grouping fine-grained categories into broader top-level topics.
+ * Build the prompt for refining and deduplicating the raw 1st-pass category labels.
+ * The LLM sees all labels at once and merges variants (e.g. "Git Pull" + "Git Push" → "Git"),
+ * subsumptions (e.g. "Error Handling" ⊂ "Debugging"), and exact duplicates.
  */
-export function buildTopLevelGroupingPrompt(categories: string[]): string {
+export function buildRefinePrompt(labels: string[]): string {
     return [
-        'You are a category organizer. Group the following fine-grained topic labels',
-        'into broader top-level categories. Each top-level category should be a general',
-        'area (e.g. "Git", "Docker", "React", "Testing", "Deployment").',
+        'You are a category refinement expert. Below is the complete list of category',
+        'labels assigned to individual chat sessions. Your job is to merge/refine them',
+        'so that:',
+        '',
+        '- **Variants** of the same topic are merged (e.g. "Git Pull" and "Git Push" → "Git")',
+        '- **Sub-categories** that belong under a broader category are merged upward',
+        '  (e.g. "Error Handling" under "Debugging")',
+        '- **Typos / near-duplicates** are collapsed into one canonical label',
+        '- Labels that are **already unique and self-consistent** are kept as-is',
         '',
         'Rules:',
         '- Return ONLY a JSON object — no commentary, no markdown fences.',
-        '- Each key is a top-level category name (1-3 words, Title Case).',
-        '- Each value is an array of child categories that belong under it.',
-        '- Every input label must appear in exactly one group.',
-        '- Merge similar labels under the same parent (e.g. "Git Pull", "Git Push", "Git Ignore" → "Git").',
-        '- Use "Other" as a top-level group for anything that does not fit.',
-        '- Keep the total number of top-level groups between 3 and 12.',
+        '- The output is a mapping: each **input label** → **refined label**.',
+        '- Every input label must appear as a key in the output.',
+        '- If a label is already fine as-is, map it to itself.',
+        '- Refined labels should be Title Case, 1-3 words, broad enough to cover variants.',
+        '- Do NOT create more than 20 distinct refined labels.',
+        '- If unsure, keep labels as-is rather than over-merging.',
         '',
         'Example:',
-        'Input: ["Git Pull", "Git Push", "Git Ignore", "Docker Compose", "Docker Networking", "React Hooks", "React State"]',
-        'Output: {"Git":["Git Pull","Git Push","Git Ignore"],"Docker":["Docker Compose","Docker Networking"],"React":["React Hooks","React State"]}',
+        'Input: ["Git Pull", "Git Push", "Error Handling", "Debugging Strategy", "Docker", "Docker Compose"]',
+        'Output: {"Git Pull":"Git","Git Push":"Git","Error Handling":"Debugging","Debugging Strategy":"Debugging","Docker":"Docker","Docker Compose":"Docker"}',
         '',
-        '=== CATEGORIES TO GROUP ===',
-        categories.map(c => `- ${c}`).join('\n'),
+        '=== LABELS TO REFINE ===',
+        labels.map(l => `- "${l}"`).join('\n'),
     ].join('\n');
 }
 
 /**
- * Parse the JSON response from top-level grouping.
+ * Parse the JSON response from the refinement pass.
+ * Returns a Map<inputLabel, refinedLabel> or null on failure.
  */
-export function parseTopLevelGrouping(raw: string): Map<string, string[]> | null {
+export function parseRefineResponse(raw: string): Map<string, string> | null {
     const cleaned = raw.trim();
-
-    // Strip code fences if present
     const FENCE_PATTERN = /^```(?:json)?\s*\n?([\s\S]*?)\n?\s*```$/;
     const fenceMatch = cleaned.match(FENCE_PATTERN);
     const jsonStr = fenceMatch ? fenceMatch[1].trim() : cleaned;
 
+    // Reject if the output is too large (>50 entries) — likely an LLM artifact
     try {
         const parsed = JSON.parse(jsonStr);
         if (typeof parsed !== 'object' || parsed === null) { return null; }
 
-        const result = new Map<string, string[]>();
-        for (const [key, value] of Object.entries(parsed)) {
-            if (Array.isArray(value)) {
-                const children = value.filter(v => typeof v === 'string');
-                if (children.length > 0) {
-                    result.set(key, children);
-                }
+        const keys = Object.keys(parsed);
+        if (keys.length > 50) { return null; }
+
+        const result = new Map<string, string>();
+        for (const [input, refined] of Object.entries(parsed)) {
+            if (typeof refined === 'string' && refined.trim()) {
+                result.set(input, refined.trim());
             }
         }
         return result.size > 0 ? result : null;
     } catch {
         return null;
     }
+}
+
+/**
+ * Refine raw 1st-pass top-level folder labels by asking the LLM to merge similar labels,
+ * collapse variants, and subsume narrow categories into broader ones.
+ *
+ * This is the **2nd pass** of the 3-pass pipeline:
+ *   1. classifySessionWithLlm — per-session top-level folder
+ *   2. refineCategories — merge/deduplicate across all folders
+ *   3. classifySubtype — per-session specific subject (lazy, on drill-down)
+ *
+ * Returns a Map<originalLabel, refinedLabel> or `null` on failure.
+ */
+export async function refineCategories(
+    labels: string[],
+): Promise<Map<string, string> | null> {
+    if (labels.length < 2) { return null; }
+
+    const unique = [...new Set(labels)];
+    if (unique.length < 2) { return null; }
+
+    const content = buildRefinePrompt(unique);
+
+    for (let attempt = 0; attempt <= MAX_RATE_LIMIT_RETRIES; attempt++) {
+        if (attempt > 0) {
+            const backoff = RATE_LIMIT_BASE_DELAY_MS * Math.pow(2, attempt - 1);
+            await delay(backoff);
+        }
+
+        try {
+            const raw = await promptLlm(undefined, content, { timeoutMs: 30_000 });
+            if (raw === null) { return null; }
+
+            const parsed = parseRefineResponse(raw);
+            if (parsed && parsed.size > 0) {
+                log.info(`Refined ${unique.length} unique labels → ${new Set(parsed.values()).size} canonical labels`);
+                return parsed;
+            }
+
+            log.debug(`Refine response unparseable, attempt ${attempt + 1}`);
+        } catch (err) {
+            if (isRateLimitedError(err) && attempt < MAX_RATE_LIMIT_RETRIES) {
+                continue;
+            }
+            log.warn(`Category refinement failed: ${err}`);
+            return null;
+        }
+    }
+
+    return null;
+}
+
+// ── Subtype extraction (3rd pass, lazy) ────────────────────────────────
+
+/**
+ * Build the prompt for extracting the specific subject of a chat within its
+ * top-level folder.
+ */
+export function buildSubtypePrompt(session: Session, topLevelFolder: string): string {
+    return [
+        'You are a session categorizer. Read the conversation below.',
+        '',
+        'This chat belongs to the top-level folder "' + topLevelFolder + '".',
+        'Your task: give me the SECOND-LEVEL folder name — the particular subject',
+        'this chat deals with within "' + topLevelFolder + '".',
+        '',
+        'Rules:',
+        '- Return ONLY the folder name — no commentary, no markdown, no punctuation.',
+        '- Use 1-3 words, Title Case.',
+        '- Be SPECIFIC — this should distinguish this chat from other chats in the same folder.',
+        '- For example, if the top-level folder is "Git", good subtypes are "Rebase Strategy",',
+        '  "Branch Management", "Stash Operations".',
+        '- If the session has no clear specific subject, respond with "General".',
+        '',
+        '=== CONVERSATION ===',
+        `Session title: ${session.title}`,
+        '',
+    ].join('\n');
+}
+
+/**
+ * Parse the response from subtype extraction.
+ */
+export function parseSubtypeResponse(raw: string): string | null {
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+
+    // Reject code fences, markdown headings, lists
+    if (/^```/.test(trimmed)) return null;
+    if (/^#/.test(trimmed)) return null;
+    if (/^[*\-] /.test(trimmed)) return null;
+
+    // Take the first line only
+    const firstLine = trimmed.split('\n')[0].trim();
+    if (!firstLine || firstLine.length > 50) return null;
+
+    return firstLine;
+}
+
+/**
+ * Extract the specific subject (subtype) of a session within its top-level folder.
+ * This is the **3rd pass** — called lazily when the user drills into a folder.
+ *
+ * Returns the subtype string or `null` on failure.
+ */
+export async function classifySubtype(
+    session: Session,
+    topLevelFolder: string,
+): Promise<string | null> {
+    const content = buildSubtypePrompt(session, topLevelFolder);
+
+    for (let attempt = 0; attempt <= MAX_RATE_LIMIT_RETRIES; attempt++) {
+        if (attempt > 0) {
+            const backoff = RATE_LIMIT_BASE_DELAY_MS * Math.pow(2, attempt - 1);
+            await delay(backoff);
+        }
+
+        try {
+            const raw = await promptLlm(undefined, content, { timeoutMs: 30_000 });
+            if (raw === null) { return null; }
+
+            const parsed = parseSubtypeResponse(raw);
+            if (parsed) {
+                log.info(`Subtype for ${session.id} in "${topLevelFolder}": "${parsed}"`);
+                return parsed;
+            }
+
+            log.debug(`Subtype response unparseable for ${session.id}, attempt ${attempt + 1}`);
+        } catch (err) {
+            if (isRateLimitedError(err) && attempt < MAX_RATE_LIMIT_RETRIES) {
+                continue;
+            }
+            log.warn(`Subtype extraction failed for ${session.id}: ${err}`);
+            return null;
+        }
+    }
+
+    return null;
 }
 
 // ── Public API ──────────────────────────────────────────────────────────────
@@ -277,7 +411,7 @@ export async function classifySessionWithLlm(
             const raw = await promptLlm(undefined, content, { timeoutMs: 30_000 });
 
             if (raw === null) {
-                log.warn(`No response from any LLM provider for ${session.id} — falling back to heuristic`);
+                log.warn(`No response from any LLM provider for ${session.id} — falling back to embedding`);
                 return null;
             }
 
@@ -292,9 +426,9 @@ export async function classifySessionWithLlm(
                     /^sorry/i.test(trimmed) ||
                     /^i can'?t/i.test(trimmed);
                 if (isExpectedRefusal) {
-                    log.debug(`LLM returned expected refusal/empty for ${session.id} — falling back to heuristic`);
+                    log.debug(`LLM returned expected refusal/empty for ${session.id} — falling back to embedding`);
                 } else {
-                    log.warn(`LLM returned unparseable output for ${session.id}: "${raw.slice(0, 100)}" — falling back to heuristic`);
+                    log.warn(`LLM returned unparseable output for ${session.id}: "${raw.slice(0, 100)}" — falling back to embedding`);
                 }
             } else {
                 log.info(`Classified ${session.id} as "${parsed}"`);
@@ -305,56 +439,7 @@ export async function classifySessionWithLlm(
                 continue;
             }
 
-            log.warn(`LLM request failed for ${session.id}: ${err} — falling back to heuristic`);
-            return null;
-        }
-    }
-
-    return null;
-}
-
-/**
- * Group a list of fine-grained category labels into broader top-level categories.
- *
- * Uses a single LLM call via central llmClient to analyze all existing categories
- * and produce a hierarchical grouping.
- *
- * Returns a Map<topLevelCategory, childCategories[]> or `null` on failure.
- */
-export async function classifyTopLevelCategories(
-    categories: string[],
-): Promise<Map<string, string[]> | null> {
-    if (categories.length < 2) {
-        return null;
-    }
-
-    const filtered = categories.filter(c => c.toLowerCase() !== 'other');
-    if (filtered.length < 1) { return null; }
-
-    const content = buildTopLevelGroupingPrompt(filtered);
-
-    for (let attempt = 0; attempt <= MAX_RATE_LIMIT_RETRIES; attempt++) {
-        if (attempt > 0) {
-            const backoff = RATE_LIMIT_BASE_DELAY_MS * Math.pow(2, attempt - 1);
-            await delay(backoff);
-        }
-
-        try {
-            const raw = await promptLlm(undefined, content, { timeoutMs: 30_000 });
-            if (raw === null) { return null; }
-
-            const parsed = parseTopLevelGrouping(raw);
-            if (parsed && parsed.size > 0) {
-                log.info(`Generated ${parsed.size} top-level groups from ${filtered.length} categories`);
-                return parsed;
-            }
-
-            log.debug(`Top-level grouping returned unparseable result, attempt ${attempt + 1}`);
-        } catch (err) {
-            if (isRateLimitedError(err) && attempt < MAX_RATE_LIMIT_RETRIES) {
-                continue;
-            }
-            log.warn(`Top-level grouping failed: ${err}`);
+            log.warn(`LLM request failed for ${session.id}: ${err} — falling back to embedding`);
             return null;
         }
     }

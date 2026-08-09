@@ -13,8 +13,6 @@ const TYPE_LABELS: Record<string, string> = {
     gotcha:       'Gotchas',
     architecture: 'Architecture',
 };
-
-/** Distinct slice colours — same order as typeOrder below. */
 const DEFAULT_COLORS = [
     '#5B8AF5',  // decision   — blue
     '#a67bf0',  // learning   — purple
@@ -25,9 +23,21 @@ const DEFAULT_COLORS = [
 
 /** Extended palette for user-defined custom categories. */
 const CUSTOM_COLORS = [
-    '#e84393', '#00cec9', '#6c5ce7', '#fd79a8', '#00b894',
-    '#0984e3', '#e17055', '#636e72', '#b2bec3', '#d63031',
-    '#fdcb6e', '#e056fd', '#badc58', '#f19066', '#3dc1d3',
+    '#e84393',  // hot pink
+    '#fdcb6e',  // amber
+    '#00cec9',  // teal
+    '#6c5ce7',  // deep purple
+    '#e17055',  // terracotta
+    '#55efc4',  // mint
+    '#fd79a8',  // rose
+    '#74b9ff',  // light blue
+    '#a29bfe',  // lavender
+    '#ffeaa7',  // cream
+    '#00b894',  // emerald
+    '#d63031',  // crimson
+    '#badc58',  // lime
+    '#55a3e8',  // sky blue
+    '#f19066',  // salmon
 ];
 
 const TYPE_ORDER: string[] = ['decision', 'architecture', 'pattern', 'gotcha', 'learning'];
@@ -125,6 +135,13 @@ export class KbDashboardPanel {
         KbDashboardPanel._panel?.dispose();
     }
 
+    /** Send a 'generating' message to the standalone panel if open. */
+    static showGenerating(): void {
+        if (KbDashboardPanel._panel) {
+            void KbDashboardPanel._panel.webview.postMessage({ type: 'generating' });
+        }
+    }
+
     // ── Public API (used by KbViewProvider) ────────────────────────────────
 
     static getShellHtml(): string {
@@ -138,14 +155,9 @@ export class KbDashboardPanel {
     // ── Payload builder ─────────────────────────────────────────────────────
 
     private static _buildPayload(result: KbEngineResult): object {
-        const HEURISTIC_TYPES = new Set(['decision', 'learning', 'pattern', 'gotcha', 'architecture']);
-
-        // Determine mode: all LLM, all heuristic, or mixed
+        // Determine mode: any LLM or all embedding fallback
         const hasEntries = result.entries.length > 0;
-        const allLlm = hasEntries && result.entries.every(e => e.usedLlm);
-        const allHeuristic = hasEntries && result.entries.every(e => !e.usedLlm);
-        const mixed = hasEntries && !allLlm && !allHeuristic;
-        const mode: 'llm' | 'heuristic' | 'mixed' = allHeuristic ? 'heuristic' : mixed ? 'mixed' : 'llm';
+        const mode: 'llm' | 'fallback' = hasEntries && result.usedLlm ? 'llm' : 'fallback';
 
         // Collect all types present in the result
         const presentTypes = new Set<string>();
@@ -161,19 +173,6 @@ export class KbDashboardPanel {
 
         const allTypes = [...knownTypes, ...customTypes];
 
-        // ── Top-level grouping ───────────────────────────────────────────
-        let topLevelData: Array<{
-            parent: string;
-            parentColor: string;
-            childEntries: Array<{
-                type: string;
-                label: string;
-                count: number;
-                color: string;
-                entries: object[];
-            }>;
-        }> | null = null;
-
         // Helper: map entry to display object
         const mapEntry = (e: KbEntry) => ({
             sessionId: e.sessionId,
@@ -183,120 +182,23 @@ export class KbDashboardPanel {
             tags: e.tags,
         });
 
-        // Helper: build child entry from type
-        const buildChildEntry = (t: string, colorIdx: number) => {
+        // ── Top-level data: each type IS a top-level folder ─────────────
+        const topLevelData = allTypes.map((t) => {
             const rawEntries = result.grouped.get(t) ?? [];
-            if (rawEntries.length === 0) return null;
             return {
-                type: t,
-                label: getTypeLabel(t),
-                count: rawEntries.length,
-                color: getTypeColor(t, colorIdx >= 0 ? colorIdx : allTypes.length),
-                entries: rawEntries.map(mapEntry),
+                parent: getTypeLabel(t),
+                parentColor: getTypeColor(t, allTypes.indexOf(t)),
+                childEntries: [{
+                    type: t,
+                    label: getTypeLabel(t),
+                    count: rawEntries.length,
+                    color: getTypeColor(t, allTypes.indexOf(t)),
+                    entries: rawEntries.map(mapEntry),
+                }],
             };
-        };
+        });
 
-        const tlColors = ['#5B8AF5', '#e74c3c', '#2ecc71', '#f0883e', '#a67bf0', '#e84393', '#00cec9', '#6c5ce7', '#fd79a8', '#00b894', '#0984e3', '#e17055'];
-
-        function getTlColor(label: string): string {
-            const hash = Array.from(label.toLowerCase()).reduce((acc, c) => acc + c.charCodeAt(0), 0);
-            return tlColors[hash % tlColors.length];
-        }
-
-        if (result.topLevelGrouping && result.topLevelGrouping.size > 0) {
-            topLevelData = [];
-
-            // Collect all child labels covered by top-level groups
-            const coveredChildren = new Set<string>();
-            for (const childLabels of result.topLevelGrouping.values()) {
-                for (const cl of childLabels) { coveredChildren.add(cl); }
-            }
-
-            // Find types that exist but aren't covered by any group
-            const uncoveredTypes = Array.from(presentTypes).filter(t => !coveredChildren.has(t));
-
-            // Heuristic types that are uncovered
-            const heuristicUncovered = uncoveredTypes.filter(t => HEURISTIC_TYPES.has(t));
-
-            // Non-heuristic uncovered types (LLM categories the LLM forgot to group)
-            const llmUncovered = uncoveredTypes.filter(t => !HEURISTIC_TYPES.has(t));
-
-            // Build top-level groups from the LLM result.
-            for (const [parentLabel, childLabels] of result.topLevelGrouping.entries()) {
-                const isOther = parentLabel.toLowerCase() === 'other';
-                const childEntries: Array<{
-                    type: string; label: string; count: number; color: string; entries: object[];
-                }> = [];
-
-                // Add LLM children — skip children whose label matches the parent
-                // (self-referential pair, e.g. "Vs Code" → ["Vs Code", "Vs Code Config"])
-                for (const childLabel of childLabels) {
-                    if (childLabel === parentLabel) continue;
-                    const child = buildChildEntry(childLabel, allTypes.indexOf(childLabel));
-                    if (child) childEntries.push(child);
-                }
-
-                // If all children were self-referential, treat the parent as uncovered
-                // so it renders as a flat slice instead of disappearing.
-                let allSelfReferential = false;
-                if (childEntries.length === 0 && childLabels.length > 0) {
-                    allSelfReferential = true;
-                    coveredChildren.delete(parentLabel);
-                }
-
-                if (childEntries.length === 0) continue;
-
-                if (isOther) {
-                    // "Other" is not a meaningful group name — flatten its LLM children
-                    // as individual top-level slices in all modes.
-                    for (const child of childEntries) {
-                        topLevelData.push({
-                            parent: child.label,
-                            parentColor: getTlColor(child.label),
-                            childEntries: [child],
-                        });
-                    }
-                } else {
-                    // Normal group: add as a top-level group with sub-children
-                    topLevelData.push({
-                        parent: parentLabel,
-                        parentColor: getTlColor(parentLabel),
-                        childEntries,
-                    });
-                }
-            }
-
-            // In mixed mode: add heuristic uncovered types under "Other"
-            if (mixed && heuristicUncovered.length > 0) {
-                const otherChildren: Array<{
-                    type: string; label: string; count: number; color: string; entries: object[];
-                }> = [];
-                for (const ht of heuristicUncovered) {
-                    const child = buildChildEntry(ht, allTypes.indexOf(ht));
-                    if (child) otherChildren.push(child);
-                }
-                if (otherChildren.length > 0) {
-                    topLevelData.push({
-                        parent: 'Other',
-                        parentColor: getTlColor('Other'),
-                        childEntries: otherChildren,
-                    });
-                }
-            }
-
-            // Add any LLM-uncovered types as individual top-level slices (all modes)
-            for (const t of llmUncovered) {
-                const child = buildChildEntry(t, allTypes.indexOf(t));
-                if (!child) continue;
-                topLevelData.push({
-                    parent: getTypeLabel(t),
-                    parentColor: getTlColor(getTypeLabel(t)),
-                    childEntries: [child],
-                });
-            }
-        }
-
-        // ── Flat slices (fallback / child drill view) ────────────────────
+        // ── Flat slices (used as fallback / child drill view) ───────────
         const slices = allTypes.map((t, i) => {
             const entries = result.grouped.get(t) ?? [];
             return {
@@ -308,11 +210,7 @@ export class KbDashboardPanel {
             };
         });
 
-        // In all-heuristic mode, signal that clicking a pie slice should go
-        // directly to the drill-down table, not a sub-pie chart.
-        const skipChildPieChart = allHeuristic;
-
-        return { slices, total: result.total, topLevelData, usedLlm: result.usedLlm, mode, skipChildPieChart };
+        return { slices, total: result.total, topLevelData, usedLlm: result.usedLlm, mode };
     }
 
     // ── Shell HTML ──────────────────────────────────────────────────────────
@@ -589,21 +487,45 @@ export class KbDashboardPanel {
       background: #2ecc71;
       color: #fff;
     }
-    .mode-badge.heuristic {
+    .mode-badge.fallback {
       background: #f0883e;
-      color: #fff;
-    }
-    .mode-badge.mixed {
-      background: #e67e22;
       color: #fff;
     }
     #dashboard-content { display: none; }
     #empty-state { display: none; }
     #loading-state { text-align: center; padding: 40px 20px; opacity: 0.6; }
+    /* ── Generating overlay ── */
+    #generating-overlay {
+      display: none;
+      position: absolute;
+      inset: 0;
+      background: rgba(26, 31, 46, 0.88);
+      z-index: 100;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+    }
+    #generating-overlay .spinner {
+      display: inline-block;
+      width: 32px;
+      height: 32px;
+      border: 3px solid var(--cw-border, rgba(255,255,255,0.15));
+      border-top-color: var(--cw-accent, #5B8AF5);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-bottom: 12px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
   <div class="section">
+    <!-- Generating overlay: shown over all content during generation -->
+    <div id="generating-overlay">
+      <div class="spinner"></div>
+      <p>Generating knowledge base…</p>
+    </div>
+
     <!-- Loading state: shown before sessions are indexed -->
     <div id="loading-state">
       <p>Waiting for sessions to be indexed…</p>
@@ -663,8 +585,8 @@ export class KbDashboardPanel {
       }
 
       function showPieView() {
+        hideGeneratingOverlay();
         var st = vscode.getState && vscode.getState() || {};
-        st._drillStack = [];
         vscode.setState(st);
         // Re-render using the stored payload
         if (st.lastPayload) {
@@ -672,26 +594,20 @@ export class KbDashboardPanel {
         }
       }
 
-      function renderBreadcrumbs(drillStack, topLevelData) {
+      function renderBreadcrumbs() {
         var el = document.getElementById('breadcrumbs');
         if (!el) return;
-        if (!drillStack || drillStack.length === 0) {
-          el.innerHTML = '';
-          return;
-        }
-        var parts = [];
-        // "All Categories" crumb
-        parts.push('<span class="crumb" data-crumb="root">All Categories</span>');
-        parts.push('<span class="sep">›</span>');
-        // Drill stack: each level is a crumb
-        drillStack.forEach(function(level, idx) {
-          var isLast = idx === drillStack.length - 1;
-          parts.push('<span class="crumb' + (isLast ? ' active' : '') + '" data-crumb="' + idx + '">' + escHtml(level) + '</span>');
-          if (!isLast) {
-            parts.push('<span class="sep">›</span>');
-          }
-        });
-        el.innerHTML = parts.join('');
+        el.innerHTML = '';
+      }
+
+      function showGeneratingOverlay() {
+        var el = document.getElementById('generating-overlay');
+        if (el) el.style.display = 'flex';
+      }
+
+      function hideGeneratingOverlay() {
+        var el = document.getElementById('generating-overlay');
+        if (el) el.style.display = 'none';
       }
 
       var _sortCol = null;
@@ -716,13 +632,6 @@ export class KbDashboardPanel {
         // Save current drill payload so sort can re-render; preserve lastPayload
         var cur = vscode.getState && vscode.getState() || {};
         cur._drillPayload = { label: typeLabel, entries: entries };
-
-        // Render breadcrumbs with current label appended for display only
-        // (don't mutate persistent _drillStack, so breadcrumb navigation still works)
-        var parentStack = cur._drillStack || [];
-        var displayStack = parentStack.concat([typeLabel + ' (' + entries.length + ')']);
-        var topTl = cur._topLevelData;
-        renderBreadcrumbs(displayStack, topTl);
         vscode.setState(cur);
 
         // Apply current sort if any
@@ -780,12 +689,12 @@ export class KbDashboardPanel {
         var sessionsReady = payload.sessionsReady === true;
         var topLevelData = payload.topLevelData || null;
         var usedLlm = payload.usedLlm === true;
-        var mode = payload.mode || (usedLlm ? 'llm' : 'heuristic');
+        var mode = payload.mode || (usedLlm ? 'llm' : 'fallback');
 
         // Update mode badge
         var badge = document.getElementById('mode-badge');
         if (total > 0) {
-          var modeLabel = mode === 'mixed' ? 'LLM+Heuristics' : mode === 'llm' ? 'LLM' : 'Heuristic';
+          var modeLabel = mode === 'fallback' ? 'Fallback' : 'LLM';
           badge.textContent = modeLabel;
           badge.className = 'mode-badge ' + mode;
         } else {
@@ -807,16 +716,13 @@ export class KbDashboardPanel {
         }
         document.getElementById('dashboard-content').style.display = 'block';
 
-        var st = vscode.getState && vscode.getState() || {};
-        var drillStack = st._drillStack || [];
-
-        // Render breadcrumbs
-        renderBreadcrumbs(drillStack, topLevelData);
+        // Render breadcrumbs (cleared — no multi-level drill)
+        renderBreadcrumbs();
 
         // Decide which slices to render in the chart
         var chartSlices = null;
 
-        if (drillStack.length === 0 && topLevelData) {
+        if (topLevelData) {
           // ── Top-level overview ──
           chartSlices = topLevelData.map(function(tl, idx) {
             var childCount = tl.childEntries.reduce(function(sum, c) { return sum + c.count; }, 0);
@@ -825,36 +731,23 @@ export class KbDashboardPanel {
               label: tl.parent,
               count: childCount,
               color: tl.parentColor,
-              entries: null,
+              entries: tl.childEntries[0] && tl.childEntries[0].entries,
               childData: tl.childEntries,
               isTopLevel: true,
             };
           });
+          var st = vscode.getState && vscode.getState() || {};
           st._topLevelData = topLevelData;
           vscode.setState(st);
-        } else if (drillStack.length > 0 && topLevelData) {
-          // ── Child level: drillStack[0] is the selected parent ──
-          var activeParent = drillStack[0];
-          var tlGroup = topLevelData.find(function(t) { return t.parent === activeParent; });
-          if (tlGroup) {
-            chartSlices = tlGroup.childEntries.map(function(c) {
-              return {
-                type: c.type,
-                label: c.label,
-                count: c.count,
-                color: c.color,
-                entries: c.entries,
-                childData: null,
-                isTopLevel: false,
-              };
-            });
-          } else {
-            chartSlices = slices;
-          }
         } else {
           // ── Flat fallback (no hierarchy) ──
           chartSlices = slices;
         }
+
+        // Sort slices alphabetically by label for consistent chip order
+        chartSlices.sort(function(a, b) {
+          return a.label.localeCompare(b.label);
+        });
 
         // ── Render chart ──
         var labels = chartSlices.map(function(s) { return s.label + ' (' + s.count + ')'; });
@@ -934,39 +827,30 @@ export class KbDashboardPanel {
                   // Read current state for overviewSlices
                   var st2 = vscode.getState && vscode.getState() || {};
                   var topTl = st2._topLevelData;
-                  var dStack = st2._drillStack || [];
                   // Build current chartSlices the same way as renderDashboard
                   var curSlices;
-                  if (dStack.length === 0 && topTl) {
+                  if (topTl) {
                     curSlices = topTl.map(function(tl) {
                       return {
                         type: tl.parent,
                         label: tl.parent,
                         count: tl.childEntries.reduce(function(s, c) { return s + c.count; }, 0),
-                        entries: null,
+                        entries: tl.childEntries[0] && tl.childEntries[0].entries,
                         childData: tl.childEntries,
                         isTopLevel: true,
                       };
                     });
-                  } else if (dStack.length > 0 && topTl) {
-                    var activeP = dStack[0];
-                    var tlG = topTl.find(function(t) { return t.parent === activeP; });
-                    curSlices = tlG ? tlG.childEntries.map(function(c) {
-                      return { type: c.type, label: c.label, count: c.count, color: c.color, entries: c.entries, isTopLevel: false };
-                    }) : (st2.lastPayload && st2.lastPayload.slices || []);
                   } else {
                     curSlices = st2.lastPayload && st2.lastPayload.slices || [];
                   }
                   var sl = curSlices && curSlices[idx];
                   if (sl && sl.count > 0) {
-                    if (sl.isTopLevel && sl.childData) {
-                      // Drill into top-level → show child pie chart
-                      var newStack = [sl.type];
-                      var ns = vscode.getState && vscode.getState() || {};
-                      ns._drillStack = newStack;
-                      vscode.setState(ns);
-                      // Re-render with stored payload
-                      if (ns.lastPayload) { renderDashboard(ns.lastPayload); }
+                    if (sl.isTopLevel) {
+                      // Top-level slice: gather all entries from the sole child
+                      var allEntries = sl.entries;
+                      if (allEntries && allEntries.length > 0) {
+                        showDrillView(sl.label, allEntries);
+                      }
                     } else if (sl.entries) {
                       // Show drill-down table
                       showDrillView(sl.label, sl.entries);
@@ -988,25 +872,15 @@ export class KbDashboardPanel {
         var type = chip.dataset.type;
         var st = vscode.getState && vscode.getState() || {};
         var topTl = st._topLevelData;
-        var dStack = st._drillStack || [];
         var payload = st.lastPayload;
 
-        if (dStack.length === 0 && topTl) {
-          // Top-level: find the parent group and drill
+        if (topTl) {
+          // Find the top-level group and show its entries
           var tlG = topTl.find(function(t) { return t.parent === type; });
           if (tlG && tlG.childEntries.length > 0) {
-            st._drillStack = [type];
-            vscode.setState(st);
-            if (payload) { renderDashboard(payload); }
-          }
-        } else if (dStack.length > 0 && topTl) {
-          // Child level: find the child slice entries
-          var activeP = dStack[0];
-          var tlG2 = topTl.find(function(t) { return t.parent === activeP; });
-          if (tlG2) {
-            var child = tlG2.childEntries.find(function(c) { return c.type === type; });
-            if (child && child.entries && child.count > 0) {
-              showDrillView(child.label, child.entries);
+            var allEntries = tlG.childEntries[0].entries;
+            if (allEntries && allEntries.length > 0) {
+              showDrillView(tlG.parent, allEntries);
             }
           }
         } else {
@@ -1026,16 +900,6 @@ export class KbDashboardPanel {
         if (idx === 'root') {
           showPieView();
           return;
-        }
-        idx = parseInt(idx, 10);
-        if (isNaN(idx)) return;
-        var st = vscode.getState && vscode.getState() || {};
-        var dStack = st._drillStack || [];
-        if (idx < dStack.length - 1) {
-          // Navigate to that level
-          st._drillStack = dStack.slice(0, idx + 1);
-          vscode.setState(st);
-          if (st.lastPayload) { renderDashboard(st.lastPayload); }
         }
       });
 
@@ -1069,12 +933,18 @@ export class KbDashboardPanel {
       // ── Message handler ──────────────────────────────────────────────────
       window.addEventListener('message', function(event) {
         var msg = event.data;
+        if (msg && msg.type === 'generating') {
+          showGeneratingOverlay();
+          return;
+        }
         if (msg && msg.type === 'update') {
           renderDashboard(msg.payload);
+          hideGeneratingOverlay();
+          hideGeneratingOverlay();
           // Persist payload so legend chip clicks can drill down; preserve existing state
           var existing = vscode.getState && vscode.getState() || {};
           existing.lastPayload = msg.payload;
-          // Preserve _drillStack if set; if payload has topLevelData, store it
+          // If payload has topLevelData, store it
           if (msg.payload.topLevelData) {
             existing._topLevelData = msg.payload.topLevelData;
           }

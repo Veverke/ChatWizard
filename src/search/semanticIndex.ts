@@ -145,9 +145,10 @@ export class SemanticIndex implements ISemanticIndex {
             buf.writeUInt32LE(keyBuf.byteLength, offset); offset += 4;
             keyBuf.copy(buf, offset); offset += keyBuf.byteLength;
 
-            for (let d = 0; d < SEMANTIC_DIMS; d++) {
-                buf.writeFloatLE(embedding[d], offset); offset += 4;
-            }
+            // Bulk-write the 384 float32 values via a TypedArray view into the
+            // same underlying Buffer — avoids 384 individual writeFloatLE calls.
+            new Float32Array(buf.buffer, buf.byteOffset + offset, SEMANTIC_DIMS).set(embedding);
+            offset += SEMANTIC_DIMS * 4;
         }
 
         // Atomic write: write to a temp file first, then rename.
@@ -195,9 +196,10 @@ export class SemanticIndex implements ISemanticIndex {
             buf.writeUInt32LE(keyBuf.byteLength, offset); offset += 4;
             keyBuf.copy(buf, offset); offset += keyBuf.byteLength;
 
-            for (let d = 0; d < SEMANTIC_DIMS; d++) {
-                buf.writeFloatLE(embedding[d], offset); offset += 4;
-            }
+            // Bulk-write the 384 float32 values via a TypedArray view into the
+            // same underlying Buffer — avoids 384 individual writeFloatLE calls.
+            new Float32Array(buf.buffer, buf.byteOffset + offset, SEMANTIC_DIMS).set(embedding);
+            offset += SEMANTIC_DIMS * 4;
         }
 
         // Ensure parent directory exists
@@ -266,6 +268,8 @@ export class SemanticIndex implements ISemanticIndex {
             this._store.clear();
             this._indexedSessions.clear();
 
+            const embeddingBytes = SEMANTIC_DIMS * 4;
+
             for (let i = 0; i < N; i++) {
                 if (offset + 4 > raw.byteLength) {
                     throw new Error(`Unexpected end of file reading entry ${i} key length`);
@@ -278,16 +282,20 @@ export class SemanticIndex implements ISemanticIndex {
                 const key = raw.toString('utf8', offset, offset + keyLen);
                 offset += keyLen;
 
-                const embeddingBytes = SEMANTIC_DIMS * 4;
                 if (offset + embeddingBytes > raw.byteLength) {
                     throw new Error(`Unexpected end of file reading entry ${i} embedding`);
                 }
-                const embedding = new Float32Array(SEMANTIC_DIMS);
-                for (let d = 0; d < SEMANTIC_DIMS; d++) {
-                    embedding[d] = raw.readFloatLE(offset); offset += 4;
-                }
+                // Bulk-read the 384 float32 values via a TypedArray view into the
+                // underlying ArrayBuffer — avoids 384 individual readFloatLE calls
+                // per entry, which was causing a 10-second timeout on large indexes.
+                const embedding = new Float32Array(
+                    raw.buffer,
+                    raw.byteOffset + offset,
+                    SEMANTIC_DIMS,
+                );
+                offset += embeddingBytes;
 
-                this._store.set(key, embedding);
+                this._store.set(key, new Float32Array(embedding));
                 // Rebuild _indexedSessions from loaded keys
                 const parsed = parseKey(key);
                 if (parsed) { this._indexedSessions.add(parsed.sessionId); }

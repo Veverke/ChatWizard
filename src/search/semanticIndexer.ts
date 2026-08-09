@@ -283,6 +283,11 @@ export class SemanticIndexer implements ISemanticIndexer {
         return this._queueRunning;
     }
 
+    /** Expose the embedding engine for downstream consumers (e.g. KB classification fallback). */
+    get embeddingEngine(): IEmbeddingEngine {
+        return this.engine;
+    }
+
     // ── initialize() ────────────────────────────────────────────────────────
 
     /**

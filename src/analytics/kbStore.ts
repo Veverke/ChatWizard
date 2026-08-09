@@ -14,7 +14,6 @@ interface KbStoreData {
     grouped: Record<string, KbEntry[]>;
     total: number;
     usedLlm: boolean;
-    topLevelGrouping: Record<string, string[]> | null;
 }
 
 export class KbStore {
@@ -39,17 +38,11 @@ export class KbStore {
                 grouped.set(key, entries);
             }
 
-            let topLevelGrouping: Map<string, string[]> | null = null;
-            if (data.topLevelGrouping) {
-                topLevelGrouping = new Map(Object.entries(data.topLevelGrouping));
-            }
-
             return {
                 entries: data.entries,
                 grouped,
                 total: data.total,
                 usedLlm: data.usedLlm,
-                topLevelGrouping,
             };
         } catch {
             return null;
@@ -69,17 +62,11 @@ export class KbStore {
                 grouped[key] = entries;
             }
 
-            let topLevelGrouping: Record<string, string[]> | null = null;
-            if (result.topLevelGrouping) {
-                topLevelGrouping = Object.fromEntries(result.topLevelGrouping);
-            }
-
             const data: KbStoreData = {
                 entries: result.entries,
                 grouped,
                 total: result.total,
                 usedLlm: result.usedLlm,
-                topLevelGrouping,
             };
 
             const tmpPath = this.filePath + '.tmp';

@@ -5,9 +5,14 @@
 // instead of duplicating model selection and sendRequest() logic.
 
 import * as vscode from 'vscode';
+import * as fs from 'fs';
+import { execSync, execFile } from 'child_process';
 import { createLogger } from '../utils/logger';
 
 const log = createLogger().withContext('LLM');
+
+// ── Cached agent path ──────────────────────────────────────────────────────
+let _cachedAgentPath: string | null | undefined; // undefined = not yet checked
 
 /**
  * Detect whether the extension host is Cursor (not VS Code).
@@ -173,7 +178,7 @@ async function tryCursorCli(
     // Find the agent binary
     const agentPath = findCursorAgent();
     if (!agentPath) {
-        log.warn('Cursor CLI: agent binary not found — checked hardcoded paths and PATH');
+        log.debug('Cursor CLI: agent not available (skipping)');
         return null;
     }
     log.info(`Cursor CLI: found agent at ${agentPath}`);
@@ -195,9 +200,6 @@ async function tryCursorCli(
     log.info(`Cursor CLI: running agent with workspace=${workspacePath}`);
 
     try {
-        // Disable Node's auto-loading of .env files, and use a short
-        // timeout so we don't block forever if the agent hangs.
-        const { execFile } = await import('child_process');
         const result = await new Promise<string | null>((resolve, reject) => {
             const child = execFile(
                 agentPath,
@@ -251,12 +253,18 @@ async function tryCursorCli(
  * Returns the full path or null if not found.
  */
 function findCursorAgent(): string | null {
+    // Return cached result if already checked
+    if (_cachedAgentPath !== undefined) {
+        return _cachedAgentPath;
+    }
+
     // Environment variable override
     if (process.env.CURSOR_AGENT_PATH) {
         const custom = process.env.CURSOR_AGENT_PATH;
         try {
-            if (require('fs').existsSync(custom)) {
+            if (fs.existsSync(custom)) {
                 log.info(`Cursor CLI: found via CURSOR_AGENT_PATH: ${custom}`);
+                _cachedAgentPath = custom;
                 return custom;
             }
         } catch { /* ignore */ }
@@ -284,8 +292,9 @@ function findCursorAgent(): string | null {
 
     for (const candidate of candidates) {
         try {
-            if (require('fs').existsSync(candidate)) {
+            if (fs.existsSync(candidate)) {
                 log.info(`Cursor CLI: found at hardcoded path: ${candidate}`);
+                _cachedAgentPath = candidate;
                 return candidate;
             }
         } catch { /* ignore */ }
@@ -295,18 +304,19 @@ function findCursorAgent(): string | null {
     try {
         const cmd = isWin ? 'where agent' : 'which agent';
         // Use execSync since this runs during startup, not inside request handling
-        const { execSync } = require('child_process');
         const pathResult = execSync(cmd, { encoding: 'utf8', timeout: 2_000, windowsHide: true })
             .trim()
             .split(/\r?\n/)[0]; // take first match
-        if (pathResult && require('fs').existsSync(pathResult)) {
+        if (pathResult && fs.existsSync(pathResult)) {
             log.info(`Cursor CLI: found via PATH: ${pathResult}`);
+            _cachedAgentPath = pathResult;
             return pathResult;
         }
     } catch {
         // not on PATH
     }
 
+    _cachedAgentPath = null;
     return null;
 }
 
@@ -348,6 +358,10 @@ export async function promptLlm(
 
     // 'auto' — when running in Cursor, skip VS Code LM (it's never available)
     if (isRunningInCursor()) {
+        // Quick early-exit: if we already know agent is missing, don't log anything
+        if (_cachedAgentPath === null) {
+            return null;
+        }
         log.info('Cursor detected in auto mode — trying Cursor CLI directly');
         return await tryCursorCli(systemPrompt, userContent, timeoutMs);
     }
@@ -383,4 +397,48 @@ export async function isLlmAvailable(timeoutMs = 2_000): Promise<boolean> {
 
     // Check: is Cursor CLI available?
     return findCursorAgent() !== null;
+}
+
+/**
+ * Show a one-time notification if the user is running Cursor but the `agent`
+ * CLI binary is not installed. Uses a globalState flag to avoid nagging on
+ * every startup.
+ *
+ * Call once during extension activation (extension.ts).
+ */
+export function maybeNotifyCursorAgentMissing(
+    globalState: vscode.Memento,
+    appName: string,
+    execPath: string,
+): void {
+    // Only trigger in Cursor
+    const isCursor = /cursor/i.test(appName) || execPath.toLowerCase().includes('cursor');
+    log.info(`maybeNotifyCursorAgentMissing: isCursor=${isCursor} appName="${appName}" execPath="${execPath}"`);
+    if (!isCursor) { return; }
+
+    // Already nagged once — don't repeat
+    const FLAG = 'chatwizard.cursorAgentNagShown.v2';
+    if (globalState.get<boolean>(FLAG)) {
+        log.info('maybeNotifyCursorAgentMissing: nag already shown, skipping');
+        return;
+    }
+
+    // Quick check: is agent already on PATH?
+    if (findCursorAgent()) {
+        log.info('maybeNotifyCursorAgentMissing: agent CLI found, skipping notification');
+        return;
+    }
+
+    log.info('maybeNotifyCursorAgentMissing: showing notification');
+    // Defer to next tick — showInformationMessage can be suppressed during
+    // early extension activation.
+    void globalState.update(FLAG, true);
+    setTimeout(() => {
+        void vscode.window.showInformationMessage(
+            'Chat Wizard: The Cursor `agent` CLI is not installed. ' +
+            'Install it via "irm \'https://cursor.com/install?win32=true\' | iex" ' +
+            '(Windows PowerShell) or visit https://cursor.com for other platforms. ' +
+            'This enables free LLM fallback for KB classification.',
+        );
+    }, 1_000);
 }
