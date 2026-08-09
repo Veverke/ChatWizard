@@ -29,7 +29,8 @@ export interface KbEngineResult {
 
 /**
  * Merge new entries into an existing result, replacing any entries with the same sessionId.
- * Re-runs the 2nd-pass top-level grouping on the merged category set.
+ * Preserves the existing top-level grouping structure. Only adds genuinely new
+ * top-level groups when a new category type appears that doesn't fit any existing group.
  * Returns a new KbEngineResult (does not mutate the original).
  */
 export async function mergeIntoResult(
@@ -53,14 +54,11 @@ export async function mergeIntoResult(
         if (group) { group.push(entry); } else { grouped.set(entry.type, [entry]); }
     }
 
-    // Re-run 2nd-pass top-level grouping on merged category set
-    // Heuristic fallback types are meta-categories, not topic labels — exclude them.
+    // Preserve existing top-level grouping — only handle genuinely new category types.
+    // This prevents categories/colors from changing drastically on incremental updates.
     const HEURISTIC_TYPES = new Set(['decision', 'learning', 'pattern', 'gotcha', 'architecture']);
-    const llmCategories = Array.from(new Set(merged.map(e => e.type)))
-        .filter(t => !HEURISTIC_TYPES.has(t))
-        .sort();
-    const topLevelGrouping = llmCategories.length > 1
-        ? await classifyTopLevelCategories(llmCategories).catch(() => null)
+    const topLevelGrouping = existing.topLevelGrouping
+        ? await _addNewCategoriesToGrouping(existing.topLevelGrouping, merged, HEURISTIC_TYPES)
         : undefined;
 
     return {
@@ -70,6 +68,72 @@ export async function mergeIntoResult(
         usedLlm: existing.usedLlm,
         topLevelGrouping,
     };
+}
+
+/**
+ * Preserve the existing top-level grouping and only add categories that don't
+ * yet appear in any group. Categories already covered by the existing grouping
+ * remain unchanged — no regrouping occurs.
+ */
+async function _addNewCategoriesToGrouping(
+    existingGrouping: Map<string, string[]>,
+    mergedEntries: KbEntry[],
+    heuristicTypes: Set<string>,
+): Promise<Map<string, string[]> | null> {
+    // Collect all category labels already covered by the existing grouping
+    const coveredLabels = new Set<string>();
+    for (const children of existingGrouping.values()) {
+        for (const child of children) {
+            coveredLabels.add(child);
+        }
+    }
+
+    // Find LLM-generated types that are NOT yet covered
+    const allTypes = Array.from(new Set(mergedEntries.map(e => e.type)))
+        .filter(t => !heuristicTypes.has(t));
+    const uncovered = allTypes.filter(t => !coveredLabels.has(t));
+
+    if (uncovered.length === 0) {
+        // No new categories — keep the existing grouping as-is
+        return existingGrouping;
+    }
+
+    // Only add uncovered categories — try to group them via LLM, or add individually
+    try {
+        const { classifyTopLevelCategories } = await import('./kbLlmClassifier.js');
+        const newGrouping = await classifyTopLevelCategories(uncovered);
+        if (newGrouping && newGrouping.size > 0) {
+            // Merge new groups into the existing grouping
+            const result = new Map(existingGrouping);
+            for (const [parent, children] of newGrouping) {
+                if (result.has(parent)) {
+                    // Add to existing group
+                    const existing = result.get(parent)!;
+                    const toAdd = children.filter((c: string) => !existing.includes(c));
+                    if (toAdd.length > 0) {
+                        result.set(parent, [...existing, ...toAdd]);
+                    }
+                } else {
+                    result.set(parent, children);
+                }
+            }
+            return result;
+        }
+    } catch {
+        // LLM unavailable — fall through to add individually
+    }
+
+    // Fallback: add each uncovered category as a standalone top-level group.
+    // Skip self-referential pairs where parent === child (e.g. "Vs Code" → ["Vs Code"]).
+    const result = new Map(existingGrouping);
+    for (const label of uncovered) {
+        // Only add if the label isn't already a child of an existing group
+        const alreadyChild = Array.from(result.values()).some(children => children.includes(label));
+        if (!alreadyChild) {
+            result.set(label, [label]);
+        }
+    }
+    return result;
 }
 
 /**

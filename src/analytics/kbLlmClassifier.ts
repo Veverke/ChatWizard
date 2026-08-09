@@ -1,94 +1,13 @@
 // src/analytics/kbLlmClassifier.ts
 // Feature 23 — LLM-based KB entry classification.
-// Uses the VS Code Copilot Language Model API to freely generate category labels
-// from session content. No predefined categories — they emerge from the data.
-// Falls back gracefully when the LM API is unavailable.
+// Uses the central llmClient (VS Code LM API → Cursor CLI) to freely generate
+// category labels from session content. Falls back gracefully when unavailable.
 
-import * as vscode from 'vscode';
 import type { Session } from '../types/index';
 import { createLogger } from '../utils/logger';
+import { promptLlm } from './llmClient';
 
 const log = createLogger().withContext('KB-LLM');
-
-// ── Model selection ──────────────────────────────────────────────────────────
-
-/**
- * Pool of free models to try, in priority order.
- * The classifier walks this chain and uses the first model that is available.
- * Each entry is passed as a filter to `vscode.lm.selectChatModels`, so
- * `family` matches the Copilot model family (e.g. "o4-mini", "gpt-4o-mini").
- */
-const FREE_MODEL_CHAIN = [
-    { family: 'o4-mini' },
-    { family: 'gpt-4o-mini' },
-    { family: 'gpt-4.1-mini' },
-    { family: 'gpt-4o' },
-    { family: 'gpt-4.1' },
-    { family: 'gpt-3.5-turbo' },
-];
-
-async function selectCopilotModel(): Promise<vscode.LanguageModelChat | undefined> {
-    // Quick timeout helper
-    const TIMEOUT_MS = 2000;
-
-    // 1) Try ANY available model (vendor-agnostic) — catches Cursor, etc.
-    try {
-        const anyLm = await Promise.race([
-            vscode.lm.selectChatModels({}),
-            new Promise<never>((_, reject) =>
-                setTimeout(() => reject(new Error('timeout')), TIMEOUT_MS),
-            ),
-        ]);
-        if (anyLm?.[0]) {
-            const name = anyLm[0].name || anyLm[0].family || 'unknown';
-            log.info(`Selected any-vendor model: ${name}`);
-            return anyLm[0];
-        }
-    } catch {
-        // fall through
-    }
-
-    // 2) Try the explicit free Copilot model chain
-    for (const filter of FREE_MODEL_CHAIN) {
-        log.info(`Trying Copilot model family: ${filter.family}`);
-        try {
-            const model = await Promise.race([
-                vscode.lm.selectChatModels({ vendor: 'copilot', ...filter }),
-                new Promise<never>((_, reject) =>
-                    setTimeout(() => reject(new Error('timeout')), TIMEOUT_MS),
-                ),
-            ]);
-            if (model?.[0]) {
-                const name = model[0].name || model[0].family || filter.family;
-                log.info(`Selected model: ${name}`);
-                return model[0];
-            }
-            log.info(`Model family ${filter.family} not available`);
-        } catch {
-            log.info(`Model family ${filter.family} timed out or errored`);
-        }
-    }
-
-    // 3) Fallback — any Copilot model at all
-    try {
-        log.info('Trying any Copilot model as fallback');
-        const any = await Promise.race([
-            vscode.lm.selectChatModels({ vendor: 'copilot' }),
-            new Promise<never>((_, reject) =>
-                setTimeout(() => reject(new Error('timeout')), TIMEOUT_MS),
-            ),
-        ]);
-        if (any?.[0]) {
-            const name = any[0].name || any[0].family || 'unknown';
-            log.info(`Selected Copilot fallback model: ${name}`);
-            return any[0];
-        }
-    } catch {
-        // no model available at all
-    }
-    log.warn('No Copilot model available after trying all options');
-    return undefined;
-}
 
 // ── Prompt building ─────────────────────────────────────────────────────────
 
@@ -105,25 +24,33 @@ const MAX_CONVERSATION_CHARS = 24_000;
  * Instructions are embedded INLINE (not as systemPrompt) because not all
  * Copilot LM models consistently honor the `systemPrompt` request option.
  * Embedding them in the user message guarantees the model sees them.
+ *
+ * The prompt targets extracting the overall subject or topic area of the
+ * conversation — precise granularity is deferred to the 2nd-pass
+ * top-level grouping step (classifyTopLevelCategories).
  */
 export function buildClassificationPrompt(session: Session): string {
     const intro = [
-        'You are a session categorizer. Read the conversation below and derive the main',
-        'topic or subject it deals with. Render it as up to 3 keywords.',
+        'You are a session categorizer. Read the conversation below and identify',
+        'the broad subject area or topic it deals with. Respond with a short',
+        'label (1-2 words) describing the general subject.',
         '',
         'Examples:',
-        '- Chat discussing adopting a different approach to solve a problem → "Logic Change"',
-        '- Chat about fixing bugs → "Bug Fixes"',
-        '- Chat about discussing or exploring new features → "New Features"',
-        '- Chat about database schema design decisions → "Schema Design"',
-        '- Chat about troubleshooting a deployment issue → "Deployment Debug"',
-        '- Chat about code review feedback → "Code Review"',
+        '- Chat about Git branch management → "Git"',
+        '- Chat about Docker container configuration → "Docker"',
+        '- Chat about React component design → "React"',
+        '- Chat about Python debugging → "Python Debugging"',
+        '- Chat about database schema changes → "Database"',
+        '- Chat about API design decisions → "API Design"',
+        '- Chat about test setup and fixtures → "Testing"',
+        '- Chat about deployment pipeline → "Deployment"',
         '',
         'Rules:',
         '- Return ONLY the category label — no commentary, no markdown, no punctuation.',
-        '- Respond with exactly 1-3 words.',
+        '- Respond with exactly 1-2 words.',
         '- Use Title Case.',
-        '- If the session has no clear topic, respond with "Other".',
+        '- Focus on the general subject area, not a specific action or task.',
+        '- If the session has no clear subject, respond with "Other".',
         '',
         '=== CONVERSATION TO CLASSIFY ===',
         `Session title: ${session.title}`,
@@ -154,22 +81,26 @@ export function buildClassificationPrompt(session: Session): string {
 export function buildSystemPrompt(): string {
     // Kept for backwards compatibility with tests, but no longer used in the API call.
     return [
-        'You are a session categorizer. Read the conversation and derive the main',
-        'topic or subject it deals with. Render it as up to 3 keywords.',
+        'You are a session categorizer. Read the conversation and identify',
+        'the broad subject area or topic it deals with. Respond with a short',
+        'label (1-2 words) describing the general subject.',
         '',
         'Examples:',
-        '- Chat discussing adopting a different approach to solve a problem → "Logic Change"',
-        '- Chat about fixing bugs → "Bug Fixes"',
-        '- Chat about discussing or exploring new features → "New Features"',
-        '- Chat about database schema design decisions → "Schema Design"',
-        '- Chat about troubleshooting a deployment issue → "Deployment Debug"',
-        '- Chat about code review feedback → "Code Review"',
+        '- Chat about Git branch management → "Git"',
+        '- Chat about Docker container configuration → "Docker"',
+        '- Chat about React component design → "React"',
+        '- Chat about Python debugging → "Python Debugging"',
+        '- Chat about database schema changes → "Database"',
+        '- Chat about API design decisions → "API Design"',
+        '- Chat about test setup and fixtures → "Testing"',
+        '- Chat about deployment pipeline → "Deployment"',
         '',
         'Rules:',
         '- Return ONLY the category label — no commentary, no markdown, no punctuation.',
-        '- Respond with exactly 1-3 words.',
+        '- Respond with exactly 1-2 words.',
         '- Use Title Case.',
-        '- If the session has no clear topic, respond with "Other".',
+        '- Focus on the general subject area, not a specific action or task.',
+        '- If the session has no clear subject, respond with "Other".',
     ].join('\n');
 }
 
@@ -225,9 +156,9 @@ export function parseClassification(raw: string): string | null {
         return null;
     }
 
-    // Reject if too long (more than 5 words = sentence, not a category)
+    // Reject if too long (more than 2 words = too specific for a general subject)
     const wordCount = firstLine.split(/\s+/).length;
-    if (wordCount > 5) {
+    if (wordCount > 2) {
         return null;
     }
 
@@ -322,18 +253,18 @@ async function delay(ms: number): Promise<void> {
 }
 
 /**
- * Classify a session into a free-form category label using the VS Code LM API.
+ * Classify a session into a free-form category label using the central llmClient.
  *
  * The LLM generates a short category label (1-3 words) based on the conversation
  * content. There are no predefined categories — they emerge from the data.
  *
- * Returns the category label on success, or `null` if the LM API is unavailable
+ * Returns the category label on success, or `null` if no provider is available
  * or the response could not be parsed.
  */
 export async function classifySessionWithLlm(
     session: Session,
 ): Promise<string | null> {
-    let lastError: Error | undefined;
+    const content = buildClassificationPrompt(session);
 
     for (let attempt = 0; attempt <= MAX_RATE_LIMIT_RETRIES; attempt++) {
         if (attempt > 0) {
@@ -343,22 +274,11 @@ export async function classifySessionWithLlm(
         }
 
         try {
-            const model = await selectCopilotModel();
-            if (!model) {
-                log.warn(`No model available for ${session.id} — falling back to heuristic`);
+            const raw = await promptLlm(undefined, content, { timeoutMs: 30_000 });
+
+            if (raw === null) {
+                log.warn(`No response from any LLM provider for ${session.id} — falling back to heuristic`);
                 return null;
-            }
-
-            const modelName = model.name || model.family || 'unknown';
-            log.info(`Classifying ${session.id} with model: ${modelName}`);
-
-            const content = buildClassificationPrompt(session);
-            const messages = [vscode.LanguageModelChatMessage.User(content)];
-            const response = await model.sendRequest(messages);
-
-            let raw = '';
-            for await (const chunk of response.text) {
-                raw += chunk;
             }
 
             const parsed = parseClassification(raw);
@@ -377,18 +297,14 @@ export async function classifySessionWithLlm(
                     log.warn(`LLM returned unparseable output for ${session.id}: "${raw.slice(0, 100)}" — falling back to heuristic`);
                 }
             } else {
-                log.info(`Classified ${session.id} as "${parsed}" (model: ${modelName})`);
+                log.info(`Classified ${session.id} as "${parsed}"`);
             }
             return parsed;
         } catch (err) {
-            lastError = err instanceof Error ? err : new Error(String(err));
-
             if (isRateLimitedError(err) && attempt < MAX_RATE_LIMIT_RETRIES) {
-                // Retry with backoff
                 continue;
             }
 
-            // Non-retryable or exhausted retries
             log.warn(`LLM request failed for ${session.id}: ${err} — falling back to heuristic`);
             return null;
         }
@@ -400,8 +316,8 @@ export async function classifySessionWithLlm(
 /**
  * Group a list of fine-grained category labels into broader top-level categories.
  *
- * Uses a single LLM call to analyze all existing categories and produce a
- * hierarchical grouping (e.g. {"Git": ["Git Pull", "Git Push"], ...}).
+ * Uses a single LLM call via central llmClient to analyze all existing categories
+ * and produce a hierarchical grouping.
  *
  * Returns a Map<topLevelCategory, childCategories[]> or `null` on failure.
  */
@@ -409,15 +325,14 @@ export async function classifyTopLevelCategories(
     categories: string[],
 ): Promise<Map<string, string[]> | null> {
     if (categories.length < 2) {
-        // No grouping needed for 0-1 categories
         return null;
     }
 
-    // Filter out generic "Other" from being grouped
     const filtered = categories.filter(c => c.toLowerCase() !== 'other');
     if (filtered.length < 1) { return null; }
 
-    // Use the same model selection and retry logic
+    const content = buildTopLevelGroupingPrompt(filtered);
+
     for (let attempt = 0; attempt <= MAX_RATE_LIMIT_RETRIES; attempt++) {
         if (attempt > 0) {
             const backoff = RATE_LIMIT_BASE_DELAY_MS * Math.pow(2, attempt - 1);
@@ -425,17 +340,8 @@ export async function classifyTopLevelCategories(
         }
 
         try {
-            const model = await selectCopilotModel();
-            if (!model) { return null; }
-
-            const content = buildTopLevelGroupingPrompt(filtered);
-            const messages = [vscode.LanguageModelChatMessage.User(content)];
-            const response = await model.sendRequest(messages);
-
-            let raw = '';
-            for await (const chunk of response.text) {
-                raw += chunk;
-            }
+            const raw = await promptLlm(undefined, content, { timeoutMs: 30_000 });
+            if (raw === null) { return null; }
 
             const parsed = parseTopLevelGrouping(raw);
             if (parsed && parsed.size > 0) {

@@ -6,49 +6,21 @@
 
 import * as vscode from 'vscode';
 
+const DEFAULT_HEURISTIC_CATEGORIES = ['decision', 'learning', 'pattern', 'gotcha', 'architecture'];
+
 /**
- * Prompt the user to optionally configure custom fallback categories.
+ * Prompt the user to define heuristic categories to be used.
  *
- * Since the LLM now generates categories freely from session content,
- * pre-configured categories are only used when the AI model is unavailable
- * and the heuristic fallback kicks in.
- *
- * Shows a QuickPick with two options:
- * 1. Use built-in heuristic fallback categories automatically
- * 2. Specify custom fallback categories
+ * Shows an input box pre-filled with the current hardcoded categories.
+ * The user can add, remove, or edit categories as needed.
  *
  * @returns An array of category names, or `undefined` if the user cancelled.
  */
 export async function configureFallbackCategories(): Promise<string[] | undefined> {
-    const choice = await vscode.window.showQuickPick(
-        [
-            {
-                label: '$(check) Use auto-detected categories (recommended)',
-                description: 'LLM will generate categories from session content; built-in fallback if unavailable',
-            },
-            {
-                label: '$(settings) Configure custom fallback categories…',
-                description: 'Specify categories used only when the AI model is unavailable',
-            },
-        ],
-        {
-            placeHolder: 'Categories are automatically generated from session content by AI.',
-            matchOnDescription: true,
-            title: 'Knowledge Base — Category Strategy',
-        },
-    );
-
-    if (!choice) { return undefined; }
-
-    // "Auto-detect" (default) — no predefined categories needed
-    if (choice.label.includes('auto-detected') || choice.label.includes('Auto-detect')) {
-        return undefined;
-    }
-
-    // Custom fallback categories
     const input = await vscode.window.showInputBox({
-        prompt: 'Enter fallback categories (comma-separated) — only used when AI model is unavailable',
-        placeHolder: 'e.g. architecture, decision, gotcha, learning, pattern',
+        prompt: 'Define fallback heuristic mode categories to be used (comma-separated)',
+        value: DEFAULT_HEURISTIC_CATEGORIES.join(', '),
+        placeHolder: DEFAULT_HEURISTIC_CATEGORIES.join(', '),
         validateInput: (value: string) => {
             const items = value.split(',').map(s => s.trim()).filter(Boolean);
             return items.length >= 2 ? null : 'Enter at least 2 comma-separated categories';

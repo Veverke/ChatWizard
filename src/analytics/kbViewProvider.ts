@@ -103,7 +103,7 @@ export class KbViewProvider implements vscode.WebviewViewProvider {
     /**
      * Incremental KB update for a single session. Called when a session is
      * upserted. Debounced per-sessionId: if multiple upserts fire for the same
-     * session within 2 seconds, only the last one triggers a refresh.
+     * session within 5 minutes, only the last one triggers a refresh.
      */
     async refreshForSession(sessionId: string): Promise<void> {
         // Cancel any pending debounce for this sessionId
@@ -116,7 +116,7 @@ export class KbViewProvider implements vscode.WebviewViewProvider {
                 this._refreshDebounceTimers.delete(sessionId);
                 await this._doRefreshForSession(sessionId);
                 resolve();
-            }, 2000);
+            }, 300000); // 5 minutes
             this._refreshDebounceTimers.set(sessionId, timer);
         });
     }

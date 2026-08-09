@@ -98,6 +98,8 @@ let watcher: ChatWizardWatcher | undefined;
 /** Deferred reference — set after scopeManager is created so the archive listener
  *  (registered before scopeManager) can filter restored sessions by workspace scope. */
 let _scopeManagerRef: WorkspaceScopeManager | undefined;
+/** Module-level reference so deactivate() can clear persisted KB data on uninstall. */
+let _kbStoreRef: KbStore | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
     const startedAt = Date.now();
@@ -228,7 +230,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         vscode.window.registerWebviewViewProvider(TimelineViewProvider.viewType, timelineViewProvider)
     );
 
-    const kbViewProvider = new KbViewProvider(index, sidecarStore, context.globalState, new KbStore(context.storageUri?.fsPath ?? context.globalStorageUri.fsPath));
+    const kbStore = new KbStore(context.storageUri?.fsPath ?? context.globalStorageUri.fsPath);
+    _kbStoreRef = kbStore;
+    const kbViewProvider = new KbViewProvider(index, sidecarStore, context.globalState, kbStore);
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider(KbViewProvider.viewType, kbViewProvider)
     );
@@ -2931,6 +2935,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 }
 
 export function deactivate(): void {
+    // Clear persisted KB data on uninstall (KB is a regenerable cache derived from sessions)
+    void _kbStoreRef?.clear();
     watcher?.dispose();
     watcher = undefined;
 }

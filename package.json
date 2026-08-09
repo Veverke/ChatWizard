@@ -1596,6 +1596,17 @@
             "type": "boolean",
             "default": true,
             "description": "When true, each session classified by the Knowledge Base automatically gets its KB category (and top-level group, if any) added as tags. E.g. a session classified as 'Git Push' under 'Git' gets tags 'git-push' and 'git'."
+          },
+          "chatwizard.llmProvider": {
+            "type": "string",
+            "default": "auto",
+            "enum": ["auto", "vscode", "cursor"],
+            "enumDescriptions": [
+              "Auto-detect: try VS Code LM API first, fall back to Cursor CLI",
+              "VS Code LM API only (Copilot free models)",
+              "Cursor CLI only (agent -p --model auto)"
+            ],
+            "description": "Which LLM provider to use for Knowledge Base features (classification, entity extraction, tag verification). 'auto' tries VS Code's LM API first, then falls back to Cursor CLI."
           }
         }
       },

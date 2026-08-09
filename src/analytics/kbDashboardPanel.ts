@@ -36,9 +36,18 @@ function getTypeLabel(type: string): string {
     return TYPE_LABELS[type] ?? type.charAt(0).toUpperCase() + type.slice(1);
 }
 
-function getTypeColor(type: string, index: number): string {
-    if (index < DEFAULT_COLORS.length) { return DEFAULT_COLORS[index]; }
-    return CUSTOM_COLORS[(index - DEFAULT_COLORS.length) % CUSTOM_COLORS.length];
+/**
+ * Deterministic color assignment based on type name.
+ * Ensures the same category always gets the same color,
+ * even when new categories are added or the result is regenerated.
+ */
+function getTypeColor(type: string, _index?: number): string {
+    // Simple hash of the type string for deterministic selection
+    const hash = Array.from(type.toLowerCase()).reduce((acc, c) => {
+        return acc + c.charCodeAt(0);
+    }, 0);
+    const palette = [...DEFAULT_COLORS, ...CUSTOM_COLORS];
+    return palette[hash % palette.length];
 }
 
 export class KbDashboardPanel {
@@ -189,9 +198,13 @@ export class KbDashboardPanel {
 
         const tlColors = ['#5B8AF5', '#e74c3c', '#2ecc71', '#f0883e', '#a67bf0', '#e84393', '#00cec9', '#6c5ce7', '#fd79a8', '#00b894', '#0984e3', '#e17055'];
 
+        function getTlColor(label: string): string {
+            const hash = Array.from(label.toLowerCase()).reduce((acc, c) => acc + c.charCodeAt(0), 0);
+            return tlColors[hash % tlColors.length];
+        }
+
         if (result.topLevelGrouping && result.topLevelGrouping.size > 0) {
             topLevelData = [];
-            let tlIdx = 0;
 
             // Collect all child labels covered by top-level groups
             const coveredChildren = new Set<string>();
@@ -215,10 +228,20 @@ export class KbDashboardPanel {
                     type: string; label: string; count: number; color: string; entries: object[];
                 }> = [];
 
-                // Add LLM children
+                // Add LLM children — skip children whose label matches the parent
+                // (self-referential pair, e.g. "Vs Code" → ["Vs Code", "Vs Code Config"])
                 for (const childLabel of childLabels) {
+                    if (childLabel === parentLabel) continue;
                     const child = buildChildEntry(childLabel, allTypes.indexOf(childLabel));
                     if (child) childEntries.push(child);
+                }
+
+                // If all children were self-referential, treat the parent as uncovered
+                // so it renders as a flat slice instead of disappearing.
+                let allSelfReferential = false;
+                if (childEntries.length === 0 && childLabels.length > 0) {
+                    allSelfReferential = true;
+                    coveredChildren.delete(parentLabel);
                 }
 
                 if (childEntries.length === 0) continue;
@@ -229,19 +252,17 @@ export class KbDashboardPanel {
                     for (const child of childEntries) {
                         topLevelData.push({
                             parent: child.label,
-                            parentColor: tlColors[tlIdx % tlColors.length],
+                            parentColor: getTlColor(child.label),
                             childEntries: [child],
                         });
-                        tlIdx++;
                     }
                 } else {
                     // Normal group: add as a top-level group with sub-children
                     topLevelData.push({
                         parent: parentLabel,
-                        parentColor: tlColors[tlIdx % tlColors.length],
+                        parentColor: getTlColor(parentLabel),
                         childEntries,
                     });
-                    tlIdx++;
                 }
             }
 
@@ -257,10 +278,9 @@ export class KbDashboardPanel {
                 if (otherChildren.length > 0) {
                     topLevelData.push({
                         parent: 'Other',
-                        parentColor: tlColors[tlIdx % tlColors.length],
+                        parentColor: getTlColor('Other'),
                         childEntries: otherChildren,
                     });
-                    tlIdx++;
                 }
             }
 
@@ -270,10 +290,9 @@ export class KbDashboardPanel {
                 if (!child) continue;
                 topLevelData.push({
                     parent: getTypeLabel(t),
-                    parentColor: tlColors[tlIdx % tlColors.length],
+                    parentColor: getTlColor(getTypeLabel(t)),
                     childEntries: [child],
                 });
-                tlIdx++;
             }
         }
 
@@ -350,22 +369,6 @@ export class KbDashboardPanel {
       border-bottom: none;
       opacity: 0.85;
     }
-
-    .back-btn {
-      background: var(--cw-accent, #5B8AF5);
-      border: none;
-      color: #fff;
-      border-radius: var(--cw-radius-sm, 5px);
-      padding: 6px 14px;
-      cursor: pointer;
-      font-size: 0.85em;
-      font-weight: 600;
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      transition: opacity 0.15s;
-    }
-    .back-btn:hover { opacity: 0.85; }
 
     /* ── Breadcrumbs ── */
     #breadcrumbs {
@@ -487,16 +490,6 @@ export class KbDashboardPanel {
 
     /* ── Table (drill-down) ── */
     #drilldown-view { display: none; }
-    #drilldown-title {
-      margin: 0;
-      font-size: 1.05em;
-      font-weight: 700;
-      color: var(--cw-accent, #5B8AF5);
-      background: var(--cw-surface-subtle, #252b40);
-      padding: 6px 12px;
-      border-radius: var(--cw-radius-sm, 5px);
-      border-left: 4px solid var(--cw-accent, #5B8AF5);
-    }
     .data-table {
       width: 100%;
       border-collapse: collapse;
@@ -632,7 +625,6 @@ export class KbDashboardPanel {
       <!-- Toolbar row (right-aligned) -->
       <div class="toolbar-row">
         <span style="font-size:0.75em;opacity:0.6;margin-right:auto;">Mode: <span id="mode-badge" class="mode-badge"></span></span>
-        <button class="action-btn" id="generateBtn">⚡ Generate</button>
         <button class="action-btn" id="exportBtn">📤 Export to Markdown</button>
       </div>
 
@@ -646,10 +638,6 @@ export class KbDashboardPanel {
 
       <!-- Drill-down table -->
       <div id="drilldown-view">
-        <div class="section-header">
-          <button class="back-btn" id="backBtn">← Back to Overview</button>
-          <h3 id="drilldown-title"></h3>
-        </div>
         <table class="data-table">
           <thead>
             <tr><th>#</th><th data-col="title">Title<span class="sort-arrow"></span></th><th data-col="tags">Tags<span class="sort-arrow"></span></th><th data-col="description">Description</th><th data-col="createdAt">Chat Date<span class="sort-arrow"></span></th></tr>
@@ -724,12 +712,17 @@ export class KbDashboardPanel {
       function showDrillView(typeLabel, entries) {
         document.getElementById('pie-view').style.display = 'none';
         document.getElementById('drilldown-view').style.display = 'block';
-        document.getElementById('backBtn').style.display = 'inline-block';
-        document.getElementById('drilldown-title').textContent = typeLabel + ' (' + entries.length + ' entries)';
 
         // Save current drill payload so sort can re-render; preserve lastPayload
         var cur = vscode.getState && vscode.getState() || {};
         cur._drillPayload = { label: typeLabel, entries: entries };
+
+        // Render breadcrumbs with current label appended for display only
+        // (don't mutate persistent _drillStack, so breadcrumb navigation still works)
+        var parentStack = cur._drillStack || [];
+        var displayStack = parentStack.concat([typeLabel + ' (' + entries.length + ')']);
+        var topTl = cur._topLevelData;
+        renderBreadcrumbs(displayStack, topTl);
         vscode.setState(cur);
 
         // Apply current sort if any
@@ -878,14 +871,6 @@ export class KbDashboardPanel {
         }).join('');
         document.getElementById('legend-row').innerHTML = chipsHtml;
 
-        // Back button (only shown in drill-down table view)
-        if (drillStack.length > 0) {
-          document.getElementById('backBtn').style.display = 'inline-block';
-          document.getElementById('backBtn').innerHTML = '← Back to Overview';
-        } else {
-          document.getElementById('backBtn').style.display = 'none';
-        }
-
         // Ensure pie-view is visible and drilldown is hidden
         document.getElementById('pie-view').style.display = 'block';
         document.getElementById('drilldown-view').style.display = 'none';
@@ -1033,11 +1018,6 @@ export class KbDashboardPanel {
         }
       });
 
-      // Back button (drill-down table)
-      document.getElementById('backBtn').addEventListener('click', function() {
-        showPieView();
-      });
-
       // Breadcrumb clicks
       document.getElementById('breadcrumbs').addEventListener('click', function(e) {
         var crumb = e.target && e.target.closest ? e.target.closest('.crumb') : null;
@@ -1057,11 +1037,6 @@ export class KbDashboardPanel {
           vscode.setState(st);
           if (st.lastPayload) { renderDashboard(st.lastPayload); }
         }
-      });
-
-      // Generate button
-      document.getElementById('generateBtn').addEventListener('click', function() {
-        vscode.postMessage({ command: 'generateKb' });
       });
 
       // Export button
