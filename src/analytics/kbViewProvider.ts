@@ -24,6 +24,8 @@ export class KbViewProvider implements vscode.WebviewViewProvider {
     private _lastUpdated = '';
     /** Debounce map: sessionId → timer for refreshForSession */
     private _refreshDebounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+    /** Guards against re-entrant KB generation (double-click on Generate). */
+    private _generating = false;
 
     constructor(
         private readonly _index: SessionIndex,
@@ -187,35 +189,41 @@ export class KbViewProvider implements vscode.WebviewViewProvider {
     }
 
     private async _handleGenerate(): Promise<void> {
+        if (this._generating) { return; }
+        this._generating = true;
         this._lastResult = null; // Force fresh computation
 
         // Show the in-webview generating overlay (spinner + "Generating…")
         this._view?.webview.postMessage({ type: 'generating' });
         KbDashboardPanel.showGenerating();
 
-        await vscode.window.withProgress(
-            {
-                location: vscode.ProgressLocation.Notification,
-                title: 'Chat Wizard: Generating knowledge base…',
-                cancellable: false,
-            },
-            async (progress) => {
-                await this._computeResult((done, total) => {
-                    progress.report({
-                        message: `${done} / ${total} sessions classified`,
-                        increment: 100 / total,
+        try {
+            await vscode.window.withProgress(
+                {
+                    location: vscode.ProgressLocation.Notification,
+                    title: 'Chat Wizard: Generating knowledge base…',
+                    cancellable: false,
+                },
+                async (progress) => {
+                    await this._computeResult((done, total) => {
+                        progress.report({
+                            message: `${done} / ${total} sessions classified`,
+                            increment: 100 / total,
+                        });
                     });
-                });
-            },
-        );
+                },
+            );
 
-        this._saveState();
-        if (this._lastResult) {
-            this._lastUpdated = new Date().toISOString();
-            void this._kbStore.save(this._lastResult, this._lastUpdated);
+            this._saveState();
+            if (this._lastResult) {
+                this._lastUpdated = new Date().toISOString();
+                void this._kbStore.save(this._lastResult, this._lastUpdated);
+            }
+            this._sendToView();
+            this._notifyDashboardPanel();
+        } finally {
+            this._generating = false;
         }
-        this._sendToView();
-        this._notifyDashboardPanel();
     }
 
     /** Forward the latest result to the standalone dashboard panel if open. */
