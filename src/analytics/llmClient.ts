@@ -66,25 +66,7 @@ async function tryVsCodeLm(
     userContent: string,
     timeoutMs: number,
 ): Promise<string | null> {
-    // 1) Try ANY available model (vendor-agnostic) — catches Cursor LM providers, etc.
-    try {
-        const anyLm = await Promise.race([
-            vscode.lm.selectChatModels({}),
-            new Promise<never>((_, reject) =>
-                setTimeout(() => reject(new Error('timeout')), MODEL_TIMEOUT_MS),
-            ),
-        ]);
-        if (anyLm?.[0]) {
-            const name = anyLm[0].name || anyLm[0].family || 'unknown';
-            log.info(`VS Code LM: selected any-vendor model: ${name}`);
-            const raw = await doSendRequest(anyLm[0], systemPrompt, userContent, timeoutMs);
-            if (raw !== null) return raw;
-        }
-    } catch {
-        // fall through
-    }
-
-    // 2) Try the explicit free Copilot model chain
+    // 1) Try the explicit free Copilot model chain
     for (const filter of VSCODE_MODEL_CHAIN) {
         log.info(`VS Code LM: trying ${filter.vendor}/${filter.family}`);
         try {
@@ -98,7 +80,11 @@ async function tryVsCodeLm(
                 const name = model[0].name || model[0].family || filter.family;
                 log.info(`VS Code LM: selected ${name}`);
                 const raw = await doSendRequest(model[0], systemPrompt, userContent, timeoutMs);
-                if (raw !== null) return raw;
+                if (raw === null) {
+                    log.warn(`VS Code LM: selected ${name} but sendRequest failed`);
+                } else {
+                    return raw;
+                }
             }
             log.info(`VS Code LM: ${filter.family} not available`);
         } catch {
@@ -106,7 +92,7 @@ async function tryVsCodeLm(
         }
     }
 
-    // 3) Fallback — any Copilot model at all
+    // 2) Fallback — any Copilot model at all
     try {
         log.info('VS Code LM: trying any Copilot model as fallback');
         const any = await Promise.race([
@@ -117,9 +103,13 @@ async function tryVsCodeLm(
         ]);
         if (any?.[0]) {
             const name = any[0].name || any[0].family || 'unknown';
-            log.info(`VS Code LM: selected fallback: ${name}`);
+            log.info(`VS Code LM: any-Copilot-model fallback selected ${name}`);
             const raw = await doSendRequest(any[0], systemPrompt, userContent, timeoutMs);
-            if (raw !== null) return raw;
+            if (raw === null) {
+                log.warn(`VS Code LM: any-Copilot-model fallback ${name} sendRequest failed`);
+            } else {
+                return raw;
+            }
         }
     } catch {
         // no model available at all
@@ -153,7 +143,7 @@ async function doSendRequest(
 
         return raw || null;
     } catch (err) {
-        log.debug(`VS Code LM sendRequest failed: ${err}`);
+        log.warn(`VS Code LM sendRequest failed: ${err}`);
         return null;
     }
 }

@@ -65,10 +65,11 @@ export async function classifySessionWithCategories(
     // Embedding fallback — uses local ONNX model when available
     const embeddingResult = await classifySessionWithEmbedding(engine, session, categories);
     if (embeddingResult) {
+        log.info(`KB: embedding fallback classified ${session.id} as "${embeddingResult}"`);
         return { type: embeddingResult, subtype: null, usedLlm: false };
     }
 
-    log.debug(`Embedding returned null for session ${session.id} — using "Other"`);
+    log.warn(`LLM and embedding both unavailable for session ${session.id} — using "Other"`);
 
     // No LLM, no embedding — label as Other instead of leaking a heuristic type name
     return { type: 'Other', subtype: null, usedLlm: false };

@@ -462,7 +462,7 @@ export async function classifySessionWithLlm(
                     log.warn(`LLM returned unparseable output for ${session.id}: "${raw.slice(0, 100)}" — falling back to embedding`);
                 }
             } else {
-                log.info(`Classified ${session.id} as "${parsed}"`);
+                log.info(`Classified ${session.id} as "${parsed.folder}|${parsed.subtype}"`);
             }
             return parsed;
         } catch (err) {
