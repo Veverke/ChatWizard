@@ -4,6 +4,7 @@
 // category labels from session content. Falls back gracefully when unavailable.
 
 import type { Session } from '../types/index';
+import type { KbEntry } from '../types/kb';
 import { createLogger } from '../utils/logger';
 import { promptLlm } from './llmClient';
 
@@ -276,7 +277,7 @@ export function parseRefineResponse(raw: string): Map<string, string> | null {
  * This is the **2nd pass** of the 3-pass pipeline:
  *   1. classifySessionWithLlm — per-session free-form label
  *   2. refineCategories — merge/deduplicate across all labels
- *   3. classifyTopLevelCategories — build TL groupings
+ *   3. refineSubtypes — consolidate subtypes per parent category
  *
  * Returns a Map<originalLabel, refinedLabel> or `null` on failure.
  */
@@ -319,57 +320,56 @@ export async function refineCategories(
     return null;
 }
 
-// ── Top-level grouping (3rd pass) ──────────────────────────────────────────
+// ── Subtype refinement (3rd pass) ─────────────────────────────────────────
 
 /**
- * Build the prompt for grouping fine-grained categories into broader top-level topics.
+ * Build the prompt for refining second-level (subtype) labels within a parent category.
+ * Shows all entries under one parent with their titles, summaries, and current subtypes,
+ * asking the LLM to consolidate into broader, reusable labels.
  */
-export function buildTopLevelGroupingPrompt(categories: string[]): string {
+export function buildSubtypeRefinePrompt(
+    parentType: string,
+    childEntries: { title: string; summary: string; subtype?: string | null | undefined }[],
+): string {
+    const entryBlock = childEntries.map((e, i) =>
+        [
+            `Entry ${i + 1}:`,
+            `  Title:   ${e.title}`,
+            `  Summary: ${e.summary.slice(0, 300)}`,
+            `  Current: ${e.subtype ?? '(none)'}`,
+        ].join('\n'),
+    ).join('\n\n');
+
     return [
-        'You are a category organizer. Group the following fine-grained topic labels',
-        'into broader top-level categories. Each top-level category should represent',
-        'a distinct concern area — not a specific tool or library.',
+        'You are a label consolidator. Below are entries under the parent category',
+        `"${parentType}". Each entry has a title, summary, and current second-level label.`,
+        'Your job is to consolidate these fine-grained second-level labels into broader,',
+        'reusable labels that can group multiple entries together.',
         '',
         'Rules:',
         '- Return ONLY a JSON object — no commentary, no markdown fences.',
-        '- Each key is a top-level category name (1-3 words, Title Case).',
-        '- Each value is an array of child categories that belong under it.',
-        '- Every input label must appear in exactly one group.',
-        '- Merge similar labels under the same parent (e.g. "Git Pull", "Git Push", "Git Ignore" → "Git").',
-        '- A parent MUST have at least 2 different child labels. Never put a label under itself.',
-        '- Use "Other" as a top-level group for anything that does not fit.',
-        '- Keep the total number of top-level groups between 3 and 12.',
-        '',
-        'Suggested top-level categories (you may use these or create your own):',
-        '- **Development** — coding, implementation, features, refactoring, language-specific work',
-        '- **DevOps / CI** — pipelines, deployment, infrastructure, GitHub Actions, Docker, cloud',
-        '- **Version Control** — Git, branching, merging, GitHub, GitLab, pull requests',
-        '- **Documentation** — writing docs, changelogs, README, comments, user guides',
-        '- **Testing** — unit tests, integration, fixtures, test setup, assertions',
-        '- **Configuration** — settings, environment, setup, dotfiles, project config',
-        '- **Architecture / Design** — system design, patterns, decisions, planning',
-        '- **Bug Fixes / Debugging** — troubleshooting, errors, root cause analysis',
-        '- **UI / Frontend** — components, styling, layout, React, CSS, templates',
-        '- **AI / Prompts** — LLM prompts, model configuration, AI features',
-        '- **Database** — schema, queries, migrations, data modeling',
-        '- **API** — endpoints, integration, REST, GraphQL, web services',
+        '- Each key is a CURRENT second-level label (exactly as shown).',
+        '- Each value is the CONSOLIDATED label you want to map it to.',
+        '- Merge similar labels under the same consolidated name.',
+        '- Use Title Case for consolidated labels, 1-3 words.',
+        '- If a label is already good, map it to itself.',
+        '- Use "General" for entries that lack a specific second-level focus.',
         '',
         'Example:',
-        'Input: ["Git Pull", "Git Push", "Docker Compose", "Docker Networking", "React Hooks", "React State", "Write README", "API Design"]',
-        'Output: {"Version Control":["Git Pull","Git Push"],"DevOps / CI":["Docker Compose","Docker Networking"],"UI / Frontend":["React Hooks","React State"],"Documentation":["Write README"],"API":["API Design"]}',
+        'Input entries with labels: ["Git Pull", "Git Push", "Error Handling", "Debugging Strategy", "Docker", "Docker Compose"]',
+        'Output: {"Git Pull":"Git","Git Push":"Git","Error Handling":"Debugging","Debugging Strategy":"Debugging","Docker":"Docker","Docker Compose":"Docker"}',
         '',
-        '=== CATEGORIES TO GROUP ===',
-        categories.map(c => `- ${c}`).join('\n'),
+        '=== ENTRIES UNDER "' + parentType + '" ===',
+        entryBlock,
     ].join('\n');
 }
 
 /**
- * Parse the JSON response from top-level grouping.
+ * Parse the JSON response from the subtype refinement pass.
+ * Returns a Map<currentSubtypeOrNull, refinedSubtype> or null on failure.
  */
-export function parseTopLevelGrouping(raw: string): Map<string, string[]> | null {
+export function parseSubtypeRefineResponse(raw: string): Map<string, string> | null {
     const cleaned = raw.trim();
-
-    // Strip code fences if present
     const FENCE_PATTERN = /^```(?:json)?\s*\n?([\s\S]*?)\n?\s*```$/;
     const fenceMatch = cleaned.match(FENCE_PATTERN);
     const jsonStr = fenceMatch ? fenceMatch[1].trim() : cleaned;
@@ -378,16 +378,10 @@ export function parseTopLevelGrouping(raw: string): Map<string, string[]> | null
         const parsed = JSON.parse(jsonStr);
         if (typeof parsed !== 'object' || parsed === null) { return null; }
 
-        const result = new Map<string, string[]>();
-        for (const [key, value] of Object.entries(parsed)) {
-            if (Array.isArray(value)) {
-                const children = value.filter(v => typeof v === 'string');
-                // Skip self-referential groups where parent === child (e.g. "Vs Code" → ["Vs Code"])
-                const nonSelf = children.filter(c => c !== key);
-                // Require at least 2 different children — a single child should just be a top-level label
-                if (nonSelf.length >= 2) {
-                    result.set(key, nonSelf);
-                }
+        const result = new Map<string, string>();
+        for (const [current, refined] of Object.entries(parsed)) {
+            if (typeof refined === 'string' && refined.trim()) {
+                result.set(current, refined.trim());
             }
         }
         return result.size > 0 ? result : null;
@@ -396,7 +390,79 @@ export function parseTopLevelGrouping(raw: string): Map<string, string[]> | null
     }
 }
 
-// ── Public API ──────────────────────────────────────────────────────────────
+/**
+ * Refine second-level (subtype) labels across all entries.
+ *
+ * For each parent category, asks the LLM to consolidate fine-grained per-session
+ * subtypes into broader reusable labels — the true 3rd pass of the pipeline:
+ *   1. classifySessionWithLlm — per-session free-form label + subtype
+ *   2. refineCategories — merge/deduplicate top-level labels
+ *   3. refineSubtypes — consolidate subtypes per parent category
+ *
+ * Returns a Map<currentSubtypeOrNull, refinedSubtype> or `null` on failure.
+ */
+export async function refineSubtypes(
+    entries: KbEntry[],
+): Promise<Map<string, string> | null> {
+    // Group entries by parent type
+    const byParent = new Map<string, KbEntry[]>();
+    for (const entry of entries) {
+        const arr = byParent.get(entry.type);
+        if (arr) { arr.push(entry); } else { byParent.set(entry.type, [entry]); }
+    }
+
+    const allMappings = new Map<string, string>();
+
+    for (const [parentType, parentEntries] of byParent) {
+        // Skip parents with too few entries — no consolidation needed
+        if (parentEntries.length < 2) { continue; }
+
+        const content = buildSubtypeRefinePrompt(parentType, parentEntries);
+
+        let success = false;
+        for (let attempt = 0; attempt <= MAX_RATE_LIMIT_RETRIES; attempt++) {
+            if (attempt > 0) {
+                const backoff = RATE_LIMIT_BASE_DELAY_MS * Math.pow(2, attempt - 1);
+                await delay(backoff);
+            }
+
+            try {
+                const raw = await promptLlm(undefined, content, { timeoutMs: 30_000 });
+                if (raw === null) { break; }
+
+                const parsed = parseSubtypeRefineResponse(raw);
+                if (parsed && parsed.size > 0) {
+                    // Merge per-parent mappings into the global map
+                    for (const [current, refined] of parsed) {
+                        allMappings.set(current, refined);
+                    }
+                    log.info(
+                        `Refined ${parentEntries.length} subtypes under "${parentType}" → ` +
+                        `${new Set(parsed.values()).size} distinct labels`,
+                    );
+                    success = true;
+                    break;
+                }
+
+                log.debug(`Subtype refine unparseable for "${parentType}", attempt ${attempt + 1}`);
+            } catch (err) {
+                if (isRateLimitedError(err) && attempt < MAX_RATE_LIMIT_RETRIES) {
+                    continue;
+                }
+                log.warn(`Subtype refinement failed for "${parentType}": ${err}`);
+                break;
+            }
+        }
+
+        if (!success) {
+            log.debug(`Skipped subtype refinement for "${parentType}" — LLM unavailable`);
+        }
+    }
+
+    return allMappings.size > 0 ? allMappings : null;
+}
+
+// ── Shared utilities for LLM retry logic ──────────────────────────────────
 
 /**
  * Maximum number of retries for rate-limited requests.
@@ -471,55 +537,6 @@ export async function classifySessionWithLlm(
             }
 
             log.warn(`LLM request failed for ${session.id}: ${err} — falling back to embedding`);
-            return null;
-        }
-    }
-
-    return null;
-}
-
-/**
- * Group a list of fine-grained category labels into broader top-level categories.
- *
- * Uses a single LLM call via central llmClient to analyze all existing categories
- * and produce a hierarchical grouping.
- *
- * Returns a Map<topLevelCategory, childCategories[]> or `null` on failure.
- */
-export async function classifyTopLevelCategories(
-    categories: string[],
-): Promise<Map<string, string[]> | null> {
-    if (categories.length < 2) {
-        return null;
-    }
-
-    const filtered = categories.filter(c => c.toLowerCase() !== 'other');
-    if (filtered.length < 1) { return null; }
-
-    const content = buildTopLevelGroupingPrompt(filtered);
-
-    for (let attempt = 0; attempt <= MAX_RATE_LIMIT_RETRIES; attempt++) {
-        if (attempt > 0) {
-            const backoff = RATE_LIMIT_BASE_DELAY_MS * Math.pow(2, attempt - 1);
-            await delay(backoff);
-        }
-
-        try {
-            const raw = await promptLlm(undefined, content, { timeoutMs: 30_000 });
-            if (raw === null) { return null; }
-
-            const parsed = parseTopLevelGrouping(raw);
-            if (parsed && parsed.size > 0) {
-                log.info(`Generated ${parsed.size} top-level groups from ${filtered.length} categories`);
-                return parsed;
-            }
-
-            log.debug(`Top-level grouping returned unparseable result, attempt ${attempt + 1}`);
-        } catch (err) {
-            if (isRateLimitedError(err) && attempt < MAX_RATE_LIMIT_RETRIES) {
-                continue;
-            }
-            log.warn(`Top-level grouping failed: ${err}`);
             return null;
         }
     }
