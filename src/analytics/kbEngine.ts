@@ -25,6 +25,8 @@ export interface KbEngineResult {
      * When null/undefined, the UI shows a flat view.
      */
     topLevelGrouping?: Map<string, string[]> | null;
+    /** ISO-8601 timestamp of the last KB update (generation or incremental refresh). */
+    lastUpdated?: string;
 }
 
 /**
@@ -66,6 +68,7 @@ export async function mergeIntoResult(
         total: merged.length,
         usedLlm: existing.usedLlm,
         topLevelGrouping,
+        lastUpdated: existing.lastUpdated,
     };
 }
 
@@ -156,6 +159,7 @@ export function removeFromResult(
         total: filtered.length,
         usedLlm: existing.usedLlm,
         topLevelGrouping: existing.topLevelGrouping,
+        lastUpdated: existing.lastUpdated,
     };
 }
 

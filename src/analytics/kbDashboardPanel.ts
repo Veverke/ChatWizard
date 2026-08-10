@@ -71,21 +71,24 @@ function getTypeColor(type: string, _index?: number): string {
 export class KbDashboardPanel {
     private static _panel: vscode.WebviewPanel | undefined;
     private static _currentResult: KbEngineResult | null = null;
+    private static _lastUpdated = '';
     private static _exportCb: (() => Promise<void>) | null = null;
 
     static show(
         context: vscode.ExtensionContext,
         result: KbEngineResult,
         exportFn: () => Promise<void>,
+        lastUpdated?: string,
     ): void {
         KbDashboardPanel._currentResult = result;
+        KbDashboardPanel._lastUpdated = lastUpdated ?? '';
         KbDashboardPanel._exportCb = exportFn;
 
         if (KbDashboardPanel._panel) {
             KbDashboardPanel._panel.reveal(vscode.ViewColumn.One);
             void KbDashboardPanel._panel.webview.postMessage({
                 type: 'update',
-                payload: KbDashboardPanel._buildPayload(result),
+                payload: KbDashboardPanel._buildPayload(result, lastUpdated),
             });
             return;
         }
@@ -106,7 +109,7 @@ export class KbDashboardPanel {
                     if (KbDashboardPanel._panel && KbDashboardPanel._currentResult) {
                         void KbDashboardPanel._panel.webview.postMessage({
                             type: 'update',
-                            payload: KbDashboardPanel._buildPayload(KbDashboardPanel._currentResult),
+                            payload: KbDashboardPanel._buildPayload(KbDashboardPanel._currentResult, KbDashboardPanel._lastUpdated),
                         });
                     }
                 });
@@ -129,13 +132,14 @@ export class KbDashboardPanel {
         }, null, context.subscriptions);
     }
 
-    static refresh(result: KbEngineResult, exportFn: () => Promise<void>): void {
+    static refresh(result: KbEngineResult, exportFn: () => Promise<void>, lastUpdated?: string): void {
         KbDashboardPanel._currentResult = result;
+        KbDashboardPanel._lastUpdated = lastUpdated ?? '';
         KbDashboardPanel._exportCb = exportFn;
         if (!KbDashboardPanel._panel) { return; }
         void KbDashboardPanel._panel.webview.postMessage({
             type: 'update',
-            payload: KbDashboardPanel._buildPayload(result),
+            payload: KbDashboardPanel._buildPayload(result, lastUpdated),
         });
     }
 
@@ -156,13 +160,13 @@ export class KbDashboardPanel {
         return KbDashboardPanel._getShellHtml();
     }
 
-    static buildPayload(result: KbEngineResult): object {
-        return KbDashboardPanel._buildPayload(result);
+    static buildPayload(result: KbEngineResult, lastUpdated?: string): object {
+        return KbDashboardPanel._buildPayload(result, lastUpdated);
     }
 
     // ── Payload builder ─────────────────────────────────────────────────────
 
-    private static _buildPayload(result: KbEngineResult): object {
+    private static _buildPayload(result: KbEngineResult, lastUpdated?: string): object {
         // Determine mode: any LLM or all embedding fallback
         const hasEntries = result.entries.length > 0;
         const mode: 'llm' | 'fallback' = hasEntries && result.usedLlm ? 'llm' : 'fallback';
@@ -228,7 +232,7 @@ export class KbDashboardPanel {
             };
         });
 
-        return { slices, total: result.total, topLevelData, usedLlm: result.usedLlm, mode };
+        return { slices, total: result.total, topLevelData, usedLlm: result.usedLlm, mode, lastUpdated: lastUpdated ?? '' };
     }
 
     // ── Shell HTML ──────────────────────────────────────────────────────────
@@ -593,6 +597,7 @@ export class KbDashboardPanel {
       <!-- Toolbar row (right-aligned) -->
       <div class="toolbar-row">
         <span style="font-size:0.75em;opacity:0.6;margin-right:auto;">Mode: <span id="mode-badge" class="mode-badge"></span></span>
+        <span id="last-updated-label" style="font-size:0.72em;opacity:0.5;margin-right:8px;"></span>
         <button class="action-btn" id="exportBtn">📤 Export to Markdown</button>
       </div>
 
@@ -707,9 +712,6 @@ export class KbDashboardPanel {
       function hideGeneratingOverlay() {
         var el = document.getElementById('generating-overlay');
         if (el) el.style.display = 'none';
-        // Re-enable the Generate button if it was disabled
-        var btn = document.getElementById('generateKbBtn');
-        if (btn) { btn.disabled = false; btn.style.opacity = ''; btn.style.cursor = ''; }
       }
 
       var _sortCol = null;
@@ -805,6 +807,7 @@ export class KbDashboardPanel {
         var topLevelData = payload.topLevelData || null;
         var usedLlm = payload.usedLlm === true;
         var mode = payload.mode || (usedLlm ? 'llm' : 'fallback');
+        var lastUpdated = payload.lastUpdated || '';
 
         // Update mode badge
         var badge = document.getElementById('mode-badge');
@@ -815,6 +818,17 @@ export class KbDashboardPanel {
         } else {
           badge.textContent = '';
           badge.className = 'mode-badge';
+        }
+
+        // Update "Last Updated" label
+        var lastUpdatedEl = document.getElementById('last-updated-label');
+        if (total > 0 && lastUpdated) {
+          var d = new Date(lastUpdated);
+          var dateStr = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+          var timeStr = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+          lastUpdatedEl.textContent = 'Last updated: ' + dateStr + ' ' + timeStr;
+        } else {
+          lastUpdatedEl.textContent = '';
         }
 
         document.getElementById('loading-state').style.display = 'none';
@@ -1089,10 +1103,8 @@ export class KbDashboardPanel {
         vscode.postMessage({ command: 'export' });
       });
 
-      // Generate KB button — disable immediately to prevent double-clicks
+      // Generate KB button
       document.getElementById('generateKbBtn').addEventListener('click', function() {
-        var btn = document.getElementById('generateKbBtn');
-        if (btn) { btn.disabled = true; btn.style.opacity = '0.4'; btn.style.cursor = 'default'; }
         vscode.postMessage({ command: 'generateKb' });
       });
 

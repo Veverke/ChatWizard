@@ -442,7 +442,7 @@ export async function classifySessionWithLlm(
             const raw = await promptLlm(undefined, content, { timeoutMs: 30_000 });
 
             if (raw === null) {
-                log.warn(`No response from any LLM provider for ${session.id} — falling back to embedding`);
+                log.debug(`No response from any LLM provider for ${session.id} — falling back to embedding`);
                 return null;
             }
 
@@ -462,7 +462,7 @@ export async function classifySessionWithLlm(
                     log.warn(`LLM returned unparseable output for ${session.id}: "${raw.slice(0, 100)}" — falling back to embedding`);
                 }
             } else {
-                log.info(`Classified ${session.id} as "${parsed.folder}|${parsed.subtype}"`);
+                log.info(`Classified ${session.id} as "${parsed}"`);
             }
             return parsed;
         } catch (err) {

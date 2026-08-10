@@ -20,7 +20,7 @@ let _cachedAgentPath: string | null | undefined; // undefined = not yet checked
  * vscode API, but since that may not be available at module-load time we
  * also check for known Cursor-specific environment markers.
  */
-function isRunningInCursor(): boolean {
+export function isRunningInCursor(): boolean {
     try {
         const appName = vscode.env.appName;
         if (appName && /cursor/i.test(appName)) { return true; }
@@ -417,7 +417,7 @@ export function maybeNotifyCursorAgentMissing(
     if (!isCursor) { return; }
 
     // Already nagged once — don't repeat
-    const FLAG = 'chatwizard.cursorAgentNagShown.v2';
+    const FLAG = 'chatwizard.cursorAgentNagShown.v3';
     if (globalState.get<boolean>(FLAG)) {
         log.info('maybeNotifyCursorAgentMissing: nag already shown, skipping');
         return;
@@ -431,14 +431,18 @@ export function maybeNotifyCursorAgentMissing(
 
     log.info('maybeNotifyCursorAgentMissing: showing notification');
     // Defer to next tick — showInformationMessage can be suppressed during
-    // early extension activation.
-    void globalState.update(FLAG, true);
+    // early extension activation. Set the flag AFTER the notification resolves
+    // so a crash/close before the user sees it doesn't permanently suppress it.
     setTimeout(() => {
         void vscode.window.showInformationMessage(
             'Chat Wizard: The Cursor `agent` CLI is not installed. ' +
             'Install it via "irm \'https://cursor.com/install?win32=true\' | iex" ' +
             '(Windows PowerShell) or visit https://cursor.com for other platforms. ' +
-            'This enables free LLM fallback for KB classification.',
-        );
+            'This enables free LLM calls for KB classification.',
+        ).then(() => {
+            void globalState.update(FLAG, true);
+        }, () => {
+            void globalState.update(FLAG, true);
+        });
     }, 1_000);
 }

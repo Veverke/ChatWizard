@@ -234,8 +234,8 @@ suite('SemanticIndex — save() / load() round-trip', () => {
             assert.strictEqual(buf[1], 0x57);
             assert.strictEqual(buf[2], 0x53);
             assert.strictEqual(buf[3], 0x45);
-            // Version 3
-            assert.strictEqual(buf.readUInt32LE(4), 3);
+            // Version 4
+            assert.strictEqual(buf.readUInt32LE(4), 4);
             // Dims 384
             assert.strictEqual(buf.readUInt32LE(8), 384);
             // Count 0

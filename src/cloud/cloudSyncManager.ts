@@ -98,8 +98,8 @@ export interface ICloudBackend {
     readonly name: string;
     /** Read the current stored data for the default (summaries) entry. Returns null if none exists. */
     read(): Promise<Buffer | null>;
-    /** Write (overwrite) entries. Each key is a filename, value is the content. */
-    writeFiles(files: Record<string, Buffer>): Promise<void>;
+    /** Write (overwrite) entries. Each key is a filename, value is the content (string for plain text, Buffer for binary). */
+    writeFiles(files: Record<string, string | Buffer>): Promise<void>;
     /** Test connectivity and credentials. */
     test(): Promise<boolean>;
 }
@@ -139,10 +139,12 @@ class GitHubGistBackend implements ICloudBackend {
         }
     }
 
-    async writeFiles(files: Record<string, Buffer>): Promise<void> {
+    async writeFiles(files: Record<string, string | Buffer>): Promise<void> {
         const filesPayload: Record<string, { content: string }> = {};
         for (const [name, data] of Object.entries(files)) {
-            filesPayload[name] = { content: data.toString('base64') };
+            filesPayload[name] = typeof data === 'string'
+                ? { content: data }
+                : { content: data.toString('base64') };
         }
 
         const body = {
@@ -151,33 +153,50 @@ class GitHubGistBackend implements ICloudBackend {
             files: filesPayload,
         };
 
-        try {
-            const url = this.gistId
-                ? `https://api.github.com/gists/${this.gistId}`
-                : 'https://api.github.com/gists';
+        const url = this.gistId
+            ? `https://api.github.com/gists/${this.gistId}`
+            : 'https://api.github.com/gists';
 
-            const response = await fetch(url, {
-                method: this.gistId ? 'PATCH' : 'POST',
-                headers: { Authorization: `Bearer ${this.token}`, Accept: 'application/vnd.github.v3+json', 'Content-Type': 'application/json' },
-                body: JSON.stringify(body),
-            });
+        // Retry up to 3 times with exponential backoff for transient failures
+        const maxRetries = 3;
+        let lastError: Error | undefined;
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), 120_000); // 2 min timeout
 
-            if (!response.ok) {
-                throw new Error(`GitHub API returned ${response.status}: ${await response.text()}`);
+                const response = await fetch(url, {
+                    method: this.gistId ? 'PATCH' : 'POST',
+                    headers: { Authorization: `Bearer ${this.token}`, Accept: 'application/vnd.github.v3+json', 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                    signal: controller.signal,
+                });
+                clearTimeout(timeout);
+
+                if (!response.ok) {
+                    throw new Error(`GitHub API returned ${response.status}: ${await response.text()}`);
+                }
+
+                const gist = await response.json() as { id?: string };
+                if (gist.id) {
+                    this.gistId = gist.id;
+                    // Persist gist ID
+                    const statePath = path.join(this.stateDir, 'gist-state.json');
+                    const dir = path.dirname(statePath);
+                    if (!fs.existsSync(dir)) { fs.mkdirSync(dir, { recursive: true }); }
+                    fs.writeFileSync(statePath, JSON.stringify({ gistId: this.gistId }, null, 2));
+                }
+                return; // Success
+            } catch (err) {
+                lastError = err instanceof Error ? err : new Error(String(err));
+                if (attempt < maxRetries) {
+                    // Exponential backoff: 2s, 4s, 8s
+                    const delay = Math.pow(2, attempt) * 1000;
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                }
             }
-
-            const gist = await response.json() as { id?: string };
-            if (gist.id) {
-                this.gistId = gist.id;
-                // Persist gist ID
-                const statePath = path.join(this.stateDir, 'gist-state.json');
-                const dir = path.dirname(statePath);
-                if (!fs.existsSync(dir)) { fs.mkdirSync(dir, { recursive: true }); }
-                fs.writeFileSync(statePath, JSON.stringify({ gistId: this.gistId }, null, 2));
-            }
-        } catch (err) {
-            throw new Error(`Failed to write to GitHub Gist: ${err}`);
         }
+        throw new Error(`Failed to write to GitHub Gist: ${lastError}`);
     }
 
     async test(): Promise<boolean> {
@@ -204,7 +223,7 @@ class S3Backend implements ICloudBackend {
         return null;
     }
 
-    async writeFiles(_files: Record<string, Buffer>): Promise<void> {
+    async writeFiles(_files: Record<string, string | Buffer>): Promise<void> {
         // Placeholder — S3 SDK is not bundled
         throw new Error('S3 backend requires the @aws-sdk/client-s3 package. Install it manually.');
     }
@@ -226,7 +245,7 @@ class AzureBlobBackend implements ICloudBackend {
         return null;
     }
 
-    async writeFiles(_files: Record<string, Buffer>): Promise<void> {
+    async writeFiles(_files: Record<string, string | Buffer>): Promise<void> {
         // Placeholder — Azure SDK is not bundled
         throw new Error('Azure Blob backend requires the @azure/storage-blob package. Install it manually.');
     }
@@ -631,8 +650,8 @@ export class CloudSyncManager {
     }
 
     /** Generate README content for the Gist explaining how to decode the files. */
-    private _readmeContent(): Buffer {
-        const lines = [
+    private _readmeContent(): string {
+        return [
             '# ChatWizard Cloud Sync',
             '',
             'This Gist contains encrypted backups from the [ChatWizard](https://github.com/veverke/chatwizard) VS Code extension.',
@@ -688,8 +707,7 @@ export class CloudSyncManager {
             '',
             '> **Security:** The encryption key never leaves your machine. Anyone with access to this Gist also needs the key file to decode the contents.',
             '',
-        ];
-        return Buffer.from(lines.join('\n'), 'utf-8');
+        ].join('\n');
     }
 
     /** Sync summaries then DB backup — called by the periodic timer. */

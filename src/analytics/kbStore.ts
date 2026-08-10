@@ -14,6 +14,8 @@ interface KbStoreData {
     grouped: Record<string, KbEntry[]>;
     total: number;
     usedLlm: boolean;
+    /** ISO-8601 timestamp of the last KB update (generation or incremental refresh). */
+    lastUpdated?: string;
 }
 
 export class KbStore {
@@ -27,7 +29,7 @@ export class KbStore {
      * Load a persisted KbEngineResult from disk.
      * Returns null if no persisted data exists or it cannot be read.
      */
-    async load(): Promise<KbEngineResult | null> {
+    async load(): Promise<(KbEngineResult & { lastUpdated?: string }) | null> {
         try {
             const raw = await fs.promises.readFile(this.filePath, 'utf-8');
             const data: KbStoreData = JSON.parse(raw);
@@ -43,6 +45,7 @@ export class KbStore {
                 grouped,
                 total: data.total,
                 usedLlm: data.usedLlm,
+                lastUpdated: data.lastUpdated,
             };
         } catch {
             return null;
@@ -52,7 +55,7 @@ export class KbStore {
     /**
      * Persist a KbEngineResult to disk (atomic write via temp file + rename).
      */
-    async save(result: KbEngineResult): Promise<void> {
+    async save(result: KbEngineResult, lastUpdated?: string): Promise<void> {
         try {
             await fs.promises.mkdir(path.dirname(this.filePath), { recursive: true });
 
@@ -67,6 +70,7 @@ export class KbStore {
                 grouped,
                 total: result.total,
                 usedLlm: result.usedLlm,
+                lastUpdated: lastUpdated ?? new Date().toISOString(),
             };
 
             const tmpPath = this.filePath + '.tmp';

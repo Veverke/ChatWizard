@@ -20,10 +20,10 @@ export class KbViewProvider implements vscode.WebviewViewProvider {
     private _lastResult: import('./kbEngine').KbEngineResult | null = null;
     private _categories: string[] | undefined;
     private _classifiedSessionIds: string[] | undefined;
+    /** ISO-8601 timestamp of the last KB update (generation or incremental refresh). */
+    private _lastUpdated = '';
     /** Debounce map: sessionId → timer for refreshForSession */
     private _refreshDebounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
-    /** Guards against re-entrant KB generation (double-click on Generate). */
-    private _generating = false;
 
     constructor(
         private readonly _index: SessionIndex,
@@ -48,6 +48,7 @@ export class KbViewProvider implements vscode.WebviewViewProvider {
             const persisted = await this._kbStore.load();
             if (persisted && persisted.entries.length > 0) {
                 this._lastResult = persisted;
+                this._lastUpdated = persisted.lastUpdated ?? new Date().toISOString();
                 this._sendToView();
                 this._notifyDashboardPanel();
             }
@@ -95,7 +96,8 @@ export class KbViewProvider implements vscode.WebviewViewProvider {
     async generateForAllChats(): Promise<void> {
         await this._computeResult();
         if (this._lastResult) {
-            void this._kbStore.save(this._lastResult);
+            this._lastUpdated = new Date().toISOString();
+            void this._kbStore.save(this._lastResult, this._lastUpdated);
         }
         this._sendToView();
         this._notifyDashboardPanel();
@@ -148,7 +150,8 @@ export class KbViewProvider implements vscode.WebviewViewProvider {
         if (this._lastResult) {
             this._lastResult = await mergeIntoResult(this._lastResult, [newEntry]);
             if (usedLlm) { this._lastResult.usedLlm = true; }
-            void this._kbStore.save(this._lastResult);
+            this._lastUpdated = new Date().toISOString();
+            void this._kbStore.save(this._lastResult, this._lastUpdated);
         }
         // No _lastResult yet = user hasn't generated KB; don't auto-create one.
 
@@ -184,46 +187,41 @@ export class KbViewProvider implements vscode.WebviewViewProvider {
     }
 
     private async _handleGenerate(): Promise<void> {
-        if (this._generating) { return; }
-        this._generating = true;
         this._lastResult = null; // Force fresh computation
 
         // Show the in-webview generating overlay (spinner + "Generating…")
         this._view?.webview.postMessage({ type: 'generating' });
         KbDashboardPanel.showGenerating();
 
-        try {
-            await vscode.window.withProgress(
-                {
-                    location: vscode.ProgressLocation.Notification,
-                    title: 'Chat Wizard: Generating knowledge base…',
-                    cancellable: false,
-                },
-                async (progress) => {
-                    await this._computeResult((done, total) => {
-                        progress.report({
-                            message: `${done} / ${total} sessions classified`,
-                            increment: 100 / total,
-                        });
+        await vscode.window.withProgress(
+            {
+                location: vscode.ProgressLocation.Notification,
+                title: 'Chat Wizard: Generating knowledge base…',
+                cancellable: false,
+            },
+            async (progress) => {
+                await this._computeResult((done, total) => {
+                    progress.report({
+                        message: `${done} / ${total} sessions classified`,
+                        increment: 100 / total,
                     });
-                },
-            );
+                });
+            },
+        );
 
-            this._saveState();
-            if (this._lastResult) {
-                void this._kbStore.save(this._lastResult);
-            }
-            this._sendToView();
-            this._notifyDashboardPanel();
-        } finally {
-            this._generating = false;
+        this._saveState();
+        if (this._lastResult) {
+            this._lastUpdated = new Date().toISOString();
+            void this._kbStore.save(this._lastResult, this._lastUpdated);
         }
+        this._sendToView();
+        this._notifyDashboardPanel();
     }
 
     /** Forward the latest result to the standalone dashboard panel if open. */
     private _notifyDashboardPanel(): void {
         if (this._lastResult) {
-            KbDashboardPanel.refresh(this._lastResult, () => this._handleExport());
+            KbDashboardPanel.refresh(this._lastResult, () => this._handleExport(), this._lastUpdated);
         }
     }
 
@@ -280,7 +278,7 @@ export class KbViewProvider implements vscode.WebviewViewProvider {
             const sessionsReady = summaries.length > 0;
             void this._view.webview.postMessage({
                 type: 'update',
-                payload: { slices: [], total: 0, sessionsReady },
+                payload: { slices: [], total: 0, sessionsReady, lastUpdated: this._lastUpdated },
             });
             return;
         }
@@ -289,7 +287,7 @@ export class KbViewProvider implements vscode.WebviewViewProvider {
         void this._view.webview.postMessage({
             type: 'update',
             payload: {
-                ...KbDashboardPanel.buildPayload(result),
+                ...KbDashboardPanel.buildPayload(result, this._lastUpdated),
                 sessionsReady: true,
             },
         });

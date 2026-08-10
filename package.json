@@ -74,8 +74,8 @@
     "vscode": "^1.85.0"
   },
   "categories": [
-    "Machine Learning",
-    "Visualization"
+    "Chat",
+    "AI"
   ],
   "activationEvents": [
     "onStartupFinished",
@@ -132,7 +132,8 @@
         {
           "id": "chatwizardKnowledgeBase",
           "name": "Knowledge Base",
-          "type": "webview"
+          "type": "webview",
+          "when": "chatwizard:isVSCode"
         }
       ]
     },

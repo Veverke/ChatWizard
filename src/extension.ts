@@ -322,20 +322,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             setKbEmbeddingEngine(indexer.embeddingEngine);
             channel.appendLine('[Chat Wizard] KB embedding engine registered via SemanticIndexer.');
             void indexer.initialize().then(() => {
-                // Schedule sessions already loaded into the main index (runtime-enable case)
-                const summaries = index.getAllSummaries();
-                channel.appendLine(`[Chat Wizard] Semantic indexer ready — scheduling ${summaries.length} existing session(s).`);
-                let cachedCount = 0;
-                for (const summary of summaries) {
-                    const session = index.get(summary.id);
-                    if (session) {
-                        indexer.scheduleSession(session);
-                    }
-                }
-                // Notify user about cached embeddings (counted per-workspace)
-                cachedCount = indexer.indexedCount;
+                const cachedCount = indexer.indexedCount;
                 if (cachedCount > 0) {
-                    channel.appendLine(`[Chat Wizard] ${cachedCount} session(s) restored from cache for this workspace.`);
+                    // Index was loaded from disk — all sessions are already embedded.
+                    // No need to schedule anything; the live listener handles new sessions.
+                    channel.appendLine(`[Chat Wizard] Semantic indexer ready — ${cachedCount} session(s) restored from cache for this workspace.`);
+                } else {
+                    // First run or index was empty — schedule all existing sessions.
+                    const summaries = index.getAllSummaries();
+                    channel.appendLine(`[Chat Wizard] Semantic indexer ready — scheduling ${summaries.length} existing session(s).`);
+                    for (const summary of summaries) {
+                        const session = index.get(summary.id);
+                        if (session) {
+                            indexer.scheduleSession(session);
+                        }
+                    }
                 }
             }).catch((err: unknown) => {
                 channel.appendLine(`[Chat Wizard] Semantic indexer init failed: ${err}`);

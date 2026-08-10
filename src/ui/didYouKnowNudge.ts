@@ -132,7 +132,7 @@ export class DidYouKnowNudge implements vscode.Disposable {
         }
 
         const item = this._queue.pop()!;
-        const msg = `🐿️ Want to learn about ${item.text}? Go ahead and look at it in user guide!`;
+        const msg = `🐿️ Want to learn about ${item.text}?`;
         this._brandingBar.notify(msg, 'workbench.view.extension.chatwizard');
 
         // Show notification with "Open User Guide" button (opens user-guide.md)

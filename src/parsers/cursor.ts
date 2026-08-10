@@ -404,6 +404,88 @@ interface BubbleRow {
 }
 
 /**
+ * Parse a protobuf `conversationState` string (base64-encoded repeated field 1,
+ * wire type 2, each value 32 bytes = SHA-256 hash) into an array of hex hashes.
+ */
+function parseConversationStateBlobHashes(conversationState: string): string[] {
+    const decoded = Buffer.from(conversationState, 'base64');
+    const hashes: string[] = [];
+    let offset = 0;
+    while (offset < decoded.length) {
+        const tag = decoded[offset];
+        if ((tag & 7) !== 2) { break; } // wire type 2 (length-delimited)
+        offset++;
+        let length = 0;
+        let shift = 0;
+        while (offset < decoded.length) {
+            const byte = decoded[offset];
+            length |= (byte & 0x7f) << shift;
+            shift += 7;
+            offset++;
+            if (!(byte & 0x80)) { break; }
+        }
+        if (length === 32) {
+            hashes.push(decoded.slice(offset, offset + 32).toString('hex'));
+        }
+        offset += length;
+    }
+    return hashes;
+}
+
+/**
+ * Try to recover messages from `conversationState` → `agentKv:blob:<hash>` entries.
+ * Returns messages for user/assistant blobs (skipping system/tool roles).
+ * Returns undefined when no blobs can be recovered.
+ */
+function recoverMessagesFromBlobs(
+    composerId: string,
+    conversationState: string,
+    blobContentByHash: Map<string, string>
+): Message[] | undefined {
+    const blobHashes = parseConversationStateBlobHashes(conversationState);
+    if (blobHashes.length === 0) { return undefined; }
+
+    const messages: Message[] = [];
+    for (const hash of blobHashes) {
+        const raw = blobContentByHash.get(hash);
+        if (!raw) { continue; }
+
+        let parsed: { role?: string; content?: unknown };
+        try { parsed = JSON.parse(raw); } catch { continue; }
+
+        const role = parsed.role;
+        if (role !== 'user' && role !== 'assistant') { continue; }
+
+        let text = '';
+        if (typeof parsed.content === 'string') {
+            text = parsed.content;
+        } else if (Array.isArray(parsed.content)) {
+            text = parsed.content
+                .map((c: unknown) => {
+                    if (typeof c === 'object' && c !== null) {
+                        const obj = c as Record<string, unknown>;
+                        return typeof obj.text === 'string' ? obj.text : '';
+                    }
+                    return '';
+                })
+                .filter(Boolean)
+                .join('\n');
+        }
+        if (!text.trim()) { continue; }
+
+        const messageIndex = messages.length;
+        messages.push({
+            id: `${composerId}-blob-${messageIndex}`,
+            role: role as 'user' | 'assistant',
+            content: text,
+            codeBlocks: extractCursorCodeBlocks(text, composerId, messageIndex),
+        });
+    }
+
+    return messages.length > 0 ? messages : undefined;
+}
+
+/**
  * Reads Cursor's **global** `state.vscdb` and returns one `ParseResult` per
  * composer found in the `cursorDiskKV` table.
  *
@@ -421,6 +503,7 @@ export async function parseCursorGlobalDb(
 ): Promise<ParseResult[]> {
     let composerRows: Array<{ key: string; value: string }> = [];
     let bubbleRows:   Array<{ key: string; value: string }> = [];
+    let blobRows:     Array<{ key: string; value: string | Buffer }> = [];
 
     try {
         // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -440,6 +523,10 @@ export async function parseCursorGlobalDb(
             bubbleRows = db.prepare(
                 "SELECT key, value FROM cursorDiskKV WHERE key LIKE 'bubbleId:%'"
             ).all() as Array<{ key: string; value: string }>;
+
+            blobRows = db.prepare(
+                "SELECT key, value FROM cursorDiskKV WHERE key LIKE 'agentKv:blob:%'"
+            ).all() as Array<{ key: string; value: string | Buffer }>;
         } finally {
             db.close();
         }
@@ -449,6 +536,17 @@ export async function parseCursorGlobalDb(
     }
 
     if (composerRows.length === 0) { return []; }
+
+    // ── Build blob hash → content map (for conversationState recovery) ──────
+    const blobContentByHash = new Map<string, string>();
+    for (const row of blobRows) {
+        const hash = row.key.slice('agentKv:blob:'.length);
+        if (hash) {
+            // Blob values are stored as BLOB in SQLite; convert Buffer to string.
+            const content = typeof row.value === 'string' ? row.value : row.value.toString('utf-8');
+            blobContentByHash.set(hash, content);
+        }
+    }
 
     // ── Build composerId → bubble list map ───────────────────────────────────
     // Key format: bubbleId:<composerId>:<bubbleId>
@@ -491,7 +589,21 @@ export async function parseCursorGlobalDb(
         try { composerMeta = JSON.parse(row.value); } catch { continue; }
 
         const rawBubbles = bubblesByComposer.get(composerId) ?? [];
-        if (rawBubbles.length === 0) { continue; }
+
+        // ── Try to recover messages from conversationState blobs ──────────────
+        // Cursor 0.46+ stores real content in agentKv:blob entries referenced by
+        // the protobuf-encoded conversationState field. BubbleId rows become stubs
+        // with empty text. When most bubbles have no text, attempt blob recovery.
+        const conversationState = typeof composerMeta.conversationState === 'string'
+            ? composerMeta.conversationState
+            : undefined;
+        const blobMessages = conversationState
+            ? recoverMessagesFromBlobs(composerId, conversationState, blobContentByHash)
+            : undefined;
+        const useBlobMessages = blobMessages !== undefined;
+
+        // Skip if we have no bubbles AND no blob messages to recover
+        if (rawBubbles.length === 0 && !useBlobMessages) { continue; }
 
         // Order bubbles using `fullConversationHeadersOnly` when available,
         // falling back to timestamp sort.
@@ -517,17 +629,22 @@ export async function parseCursorGlobalDb(
         }
 
         // ── Build Message list ────────────────────────────────────────────────
-        const messages: Message[] = [];
-        for (const bubble of orderedBubbles) {
-            const role: 'user' | 'assistant' = bubble.type === 1 ? 'user' : 'assistant';
-            const messageIndex = messages.length;
-            messages.push({
-                id: `${composerId}-${messageIndex}`,
-                role,
-                content: bubble.text,
-                codeBlocks: extractCursorCodeBlocks(bubble.text, composerId, messageIndex),
-                timestamp: bubble.unixMs !== undefined ? new Date(bubble.unixMs).toISOString() : undefined,
-            });
+        let messages: Message[];
+        if (useBlobMessages && blobMessages) {
+            messages = blobMessages;
+        } else {
+            messages = [];
+            for (const bubble of orderedBubbles) {
+                const role: 'user' | 'assistant' = bubble.type === 1 ? 'user' : 'assistant';
+                const messageIndex = messages.length;
+                messages.push({
+                    id: `${composerId}-${messageIndex}`,
+                    role,
+                    content: bubble.text,
+                    codeBlocks: extractCursorCodeBlocks(bubble.text, composerId, messageIndex),
+                    timestamp: bubble.unixMs !== undefined ? new Date(bubble.unixMs).toISOString() : undefined,
+                });
+            }
         }
 
         // ── Derive title ──────────────────────────────────────────────────────

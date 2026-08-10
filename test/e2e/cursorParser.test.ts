@@ -414,7 +414,8 @@ suite('Cursor Parser', () => {
 function createGlobalDb(
     dbPath: string,
     rows: Array<{ key: string; value: string }>,
-    createTable = true
+    createTable = true,
+    blobRows: Array<{ key: string; value: Buffer }> = []
 ): void {
     const db = new Database(dbPath);
     if (createTable) {
@@ -422,6 +423,11 @@ function createGlobalDb(
         const stmt = db.prepare('INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)');
         for (const row of rows) {
             stmt.run(row.key, row.value);
+        }
+        // BLOB values need a separate insert since the type matters
+        const blobStmt = db.prepare('INSERT OR REPLACE INTO cursorDiskKV (key, value) VALUES (?, ?)');
+        for (const brow of blobRows) {
+            blobStmt.run(brow.key, brow.value);
         }
     } else {
         // Create a different table so cursorDiskKV is missing
@@ -626,6 +632,120 @@ suite('parseCursorGlobalDb', () => {
         ]);
         const results = await parseCursorGlobalDb(dbPath);
         assert.ok(results[0].session.title.length <= 130, 'title should be truncated');
+    });
+
+    // ── conversationState / agentKv blob recovery ────────────────────────────
+
+    /** Build a protobuf conversationState from a list of 32-byte hash buffers. */
+    function buildConversationState(hashes: Buffer[]): string {
+        const parts: Buffer[] = [];
+        for (const h of hashes) {
+            parts.push(Buffer.from([0x0a, h.length])); // field 1, wire type 2, len
+            parts.push(h);
+        }
+        return Buffer.concat(parts).toString('base64');
+    }
+
+    test('recovers messages from agentKv blobs when bubbles have empty text', async () => {
+        const composerId = 'composer-blobs';
+        const dbPath = path.join(tmpDir, 'blobs.db');
+
+        // Two blobs: user + assistant
+        const userHash = Buffer.alloc(32, 0x01);
+        const asstHash = Buffer.alloc(32, 0x02);
+        const hoverHash = Buffer.alloc(32, 0x03); // not referenced
+
+        const conversationState = buildConversationState([userHash, asstHash]);
+
+        createGlobalDb(
+            dbPath,
+            [
+                {
+                    key: `composerData:${composerId}`,
+                    // bubbles are stubs (empty text) like Cursor 0.46+
+                    value: JSON.stringify({
+                        name: 'Knowledge Base issue',
+                        createdAt: 1700000000000,
+                        conversationState,
+                    }),
+                },
+                { key: `bubbleId:${composerId}:b1`, value: JSON.stringify({ type: 1, text: '', unixMs: 1700000001000 }) },
+                { key: `bubbleId:${composerId}:b2`, value: JSON.stringify({ type: 2, text: '', unixMs: 1700000002000 }) },
+            ],
+            true,
+            [
+                { key: `agentKv:blob:${userHash.toString('hex')}`, value: Buffer.from(JSON.stringify({ role: 'user', content: 'What is the Knowledge Base feature?' })) },
+                { key: `agentKv:blob:${asstHash.toString('hex')}`, value: Buffer.from(JSON.stringify({ role: 'assistant', content: 'It handles free model triggering.' })) },
+                { key: `agentKv:blob:${hoverHash.toString('hex')}`, value: Buffer.from(JSON.stringify({ role: 'tool', content: 'ignored' })) },
+            ]
+        );
+
+        const results = await parseCursorGlobalDb(dbPath);
+        assert.strictEqual(results.length, 1);
+        assert.strictEqual(results[0].session.title, 'Knowledge Base issue');
+        assert.strictEqual(results[0].session.messages.length, 2);
+        assert.strictEqual(results[0].session.messages[0].role, 'user');
+        assert.strictEqual(results[0].session.messages[0].content, 'What is the Knowledge Base feature?');
+        assert.strictEqual(results[0].session.messages[1].role, 'assistant');
+        assert.strictEqual(results[0].session.messages[1].content, 'It handles free model triggering.');
+    });
+
+    test('recovers multi-part content and skips system/tool blobs', async () => {
+        const composerId = 'composer-multipart';
+        const dbPath = path.join(tmpDir, 'multipart.db');
+
+        const sysHash = Buffer.alloc(32, 0x11);
+        const userHash = Buffer.alloc(32, 0x12);
+        const conversationState = buildConversationState([sysHash, userHash]);
+
+        createGlobalDb(
+            dbPath,
+            [
+                {
+                    key: `composerData:${composerId}`,
+                    value: JSON.stringify({ name: 'Multi', createdAt: 1700000000000, conversationState }),
+                },
+            ],
+            true,
+            [
+                { key: `agentKv:blob:${sysHash.toString('hex')}`, value: Buffer.from(JSON.stringify({ role: 'system', content: 'You are an AI.' })) },
+                { key: `agentKv:blob:${userHash.toString('hex')}`, value: Buffer.from(JSON.stringify({ role: 'user', content: [{ type: 'text', text: 'Part one' }, { type: 'text', text: 'Part two' }] })) },
+            ]
+        );
+
+        const results = await parseCursorGlobalDb(dbPath);
+        assert.strictEqual(results.length, 1);
+        assert.strictEqual(results[0].session.messages.length, 1);
+        assert.strictEqual(results[0].session.messages[0].role, 'user');
+        assert.strictEqual(results[0].session.messages[0].content, 'Part one\nPart two');
+    });
+
+    test('falls back to bubble text when blob recovery yields no user/assistant messages', async () => {
+        const composerId = 'composer-blob-fallback';
+        const dbPath = path.join(tmpDir, 'blob-fallback.db');
+
+        const toolHash = Buffer.alloc(32, 0x21);
+        const conversationState = buildConversationState([toolHash]);
+
+        createGlobalDb(
+            dbPath,
+            [
+                {
+                    key: `composerData:${composerId}`,
+                    value: JSON.stringify({ name: 'Fallback', createdAt: 1700000000000, conversationState }),
+                },
+                { key: `bubbleId:${composerId}:b-001`, value: JSON.stringify({ type: 1, text: 'Real bubble text', unixMs: 1700000001000 }) },
+            ],
+            true,
+            [
+                { key: `agentKv:blob:${toolHash.toString('hex')}`, value: Buffer.from(JSON.stringify({ role: 'tool', content: 'tool result' })) },
+            ]
+        );
+
+        const results = await parseCursorGlobalDb(dbPath);
+        assert.strictEqual(results.length, 1);
+        assert.strictEqual(results[0].session.messages.length, 1);
+        assert.strictEqual(results[0].session.messages[0].content, 'Real bubble text');
     });
 });
 
