@@ -1919,6 +1919,8 @@
     "package:vsix:linux-x64": "npm run rebuild:native && npm run bundle && node scripts/package-vsix.mjs linux-x64",
     "package:vsix:darwin-x64": "npm run rebuild:native && npm run bundle && node scripts/package-vsix.mjs darwin-x64",
     "package:vsix:darwin-arm64": "npm run rebuild:native && npm run bundle && node scripts/package-vsix.mjs darwin-arm64",
+    "build:install:vscode": "powershell -ExecutionPolicy Bypass -File scripts/build-and-install.ps1 -Target vscode",
+    "build:install:cursor": "powershell -ExecutionPolicy Bypass -File scripts/build-and-install.ps1 -Target cursor",
     "install:stable": "code --install-extension chatwizard-win32-x64.vsix --force",
     "install:insiders": "code-insiders --install-extension chatwizard-win32-x64.vsix --force"
   },

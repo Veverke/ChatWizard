@@ -43,7 +43,7 @@ import { TimelineViewProvider } from './timeline/timelineViewProvider';
 import { KbViewProvider } from './analytics/kbViewProvider';
 import { KbStore } from './analytics/kbStore';
 import { setKbEmbeddingEngine } from './analytics/kbClassifier';
-import { maybeNotifyCursorAgentMissing } from './analytics/llmClient';
+import { maybeNotifyCursorAgentMissing, isRunningInCursor } from './analytics/llmClient';
 import { TelemetryRecorder } from './telemetry/telemetryRecorder';
 import { registerManageWorkspacesCommand } from './commands/manageWorkspaces';
 import { registerPaletteCommands } from './commands/paletteCommands';
@@ -113,6 +113,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     // Notify once if running in Cursor without the agent CLI
     maybeNotifyCursorAgentMissing(context.globalState, vscode.env.appName, process.execPath);
+
+    // Context key so the Knowledge Base view tab only shows in VS Code.
+    // Await so the `when` clause in package.json is active before the view container renders.
+    await vscode.commands.executeCommand('setContext', 'chatwizard:isVSCode', !isRunningInCursor());
 
     // Log all chatwizard.* config settings at startup
     const cfg = vscode.workspace.getConfiguration('chatwizard');
@@ -234,10 +238,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
 
     const kbStore = new KbStore(context.globalStorageUri.fsPath);
-    const kbViewProvider = new KbViewProvider(index, sidecarStore, context.globalState, kbStore);
-    context.subscriptions.push(
-        vscode.window.registerWebviewViewProvider(KbViewProvider.viewType, kbViewProvider)
-    );
+    // KB view is VS Code-only — Cursor and other IDEs don't support it yet
+    let kbViewProvider: KbViewProvider | undefined;
+    if (!isRunningInCursor()) {
+        kbViewProvider = new KbViewProvider(index, sidecarStore, context.globalState, kbStore);
+        context.subscriptions.push(
+            vscode.window.registerWebviewViewProvider(KbViewProvider.viewType, kbViewProvider)
+        );
+    }
 
     context.subscriptions.push(
         vscode.window.registerFileDecorationProvider(new SessionParseWarningDecorationProvider())
@@ -484,6 +492,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     context.subscriptions.push(timelineListener);
 
     const kbListener = index.addTypedChangeListener((event) => {
+        if (!kbViewProvider) return;
         if (event.type === 'upsert') {
             kbViewProvider.refreshForSession(event.session.id);
         } else if (event.type === 'remove') {
