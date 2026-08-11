@@ -89,6 +89,9 @@ const CURSOR_CONTEXT_TAGS = [
     'agent_transcripts',
     'rules',
     'available_skills',
+    'agent_skills',
+    'mcp_meta_tool_servers',
+    'mcp_meta_tools',
     'open_and_recently_viewed_files',
     'timestamp',
 ] as const;
