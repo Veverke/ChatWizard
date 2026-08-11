@@ -43,7 +43,7 @@ import { TimelineViewProvider } from './timeline/timelineViewProvider';
 import { KbViewProvider } from './analytics/kbViewProvider';
 import { KbStore } from './analytics/kbStore';
 import { setKbEmbeddingEngine } from './analytics/kbClassifier';
-import { maybeNotifyCursorAgentMissing, isRunningInCursor } from './analytics/llmClient';
+import { isRunningInCursor } from './analytics/llmClient';
 import { TelemetryRecorder } from './telemetry/telemetryRecorder';
 import { registerManageWorkspacesCommand } from './commands/manageWorkspaces';
 import { registerPaletteCommands } from './commands/paletteCommands';
@@ -112,7 +112,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     log.info('Extension activation started');
 
     // Notify once if running in Cursor without the agent CLI
-    maybeNotifyCursorAgentMissing(context.globalState, vscode.env.appName, process.execPath);
+    // TEMPORARILY DISABLED: the Cursor agent CLI is unreliable. KB classification
+    // falls back to the embedding-based semantic search model instead.
+    //
+    // Changed to allow release of 1.6 without further testing: LLMs for VSC,
+    // fallback to embedding-based semantic search on Cursor/alikes.
+    // maybeNotifyCursorAgentMissing(context.globalState, vscode.env.appName, process.execPath);
 
     // Context key so the Knowledge Base view tab only shows in VS Code.
     // Await so the `when` clause in package.json is active before the view container renders.
