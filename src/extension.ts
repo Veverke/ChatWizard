@@ -83,6 +83,7 @@ import { SessionsForWorkItemTool } from './mcp/tools/sessionsForWorkItemTool';
 import { FileHistoryStatusBarItem } from './ui/fileHistoryStatusBar';
 import { BrandingStatusBarItem } from './ui/brandingStatusBar';
 import { DidYouKnowNudge } from './ui/didYouKnowNudge';
+import { startUserSurveyPrompt, showSurveyPromptManually } from './ui/userSurveyPrompt';
 import { FileHistoryCodeLensProvider } from './ui/fileHistoryCodeLens';
 import { FileHistoryPanel } from './views/fileHistoryPanel';
 import { discoverChronicleDbsAsync } from './readers/chronicleWorkspace';
@@ -2912,6 +2913,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                     `Archive: ${stats.totalSessions} session(s), ${(stats.totalBytes / 1024).toFixed(1)} KB` +
                     (stats.oldestDate ? `, oldest: ${stats.oldestDate.slice(0, 10)}` : '')
                 );
+            }),
+        );
+
+        // ── User Survey Prompt ─────────────────────────────────────────────────
+        // Show a one-time-per-day notification to fill in the user survey,
+        // 30 minutes after extension activation.
+        context.subscriptions.push(startUserSurveyPrompt(context));
+        context.subscriptions.push(
+            vscode.commands.registerCommand('chatwizard.showSurvey', () => {
+                showSurveyPromptManually(context);
             }),
         );
 

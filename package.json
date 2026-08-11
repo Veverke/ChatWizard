@@ -651,6 +651,11 @@
         "category": "Chat Wizard"
       },
       {
+        "command": "chatwizard.showSurvey",
+        "title": "Chat Wizard: Show User Survey",
+        "category": "Chat Wizard"
+      },
+      {
         "command": "chatwizard.exportToObsidian",
         "title": "Chat Wizard: Export Sessions to Obsidian",
         "category": "Chat Wizard"
@@ -1454,6 +1459,10 @@
         },
         {
           "command": "chatwizard.showArchiveStats",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.showSurvey",
           "when": "false"
         },
         {
