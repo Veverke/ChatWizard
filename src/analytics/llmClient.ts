@@ -191,15 +191,18 @@ async function tryCursorCli(
 
     try {
         const result = await new Promise<string | null>((resolve, reject) => {
+            const isWinCmd = process.platform === 'win32' && agentPath.endsWith('.cmd');
             const child = execFile(
-                agentPath,
-                [
-                    '-p',
-                    '--trust',
-                    '--workspace', workspacePath,
-                    '--model', 'auto',
-                    finalContent,
-                ],
+                isWinCmd ? process.env.COMSPEC || 'cmd.exe' : agentPath,
+                isWinCmd
+                    ? ['/c', agentPath, '-p', '--trust', '--workspace', workspacePath, '--model', 'auto', finalContent]
+                    : [
+                        '-p',
+                        '--trust',
+                        '--workspace', workspacePath,
+                        '--model', 'auto',
+                        finalContent,
+                    ],
                 {
                     timeout: timeoutMs,
                     maxBuffer: 1_000_000,

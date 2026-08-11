@@ -76,7 +76,7 @@ suite('Feature 23 — KB Engine', () => {
             assert.strictEqual(result.grouped.size, 0);
         });
 
-        test('classifies sessions with default categories (heuristic)', async () => {
+        test('classifies sessions — all fallback to "Other" in test env', async () => {
             const sessions = [
                 makeSession('We decided to use PostgreSQL for the trade-off benefits'),
                 makeSession('Watch out for this footgun — it is tricky'),
@@ -88,21 +88,17 @@ suite('Feature 23 — KB Engine', () => {
             assert.strictEqual(result.total, 3);
             assert.strictEqual(result.entries.length, 3);
 
-            // decision, gotcha, architecture
-            assert.strictEqual(result.entries[0].type, 'decision');
-            assert.strictEqual(result.entries[1].type, 'gotcha');
-            assert.strictEqual(result.entries[2].type, 'architecture');
+            // No LLM or embedding engine in test env → all "Other"
+            assert.strictEqual(result.entries[0].type, 'Other');
+            assert.strictEqual(result.entries[1].type, 'Other');
+            assert.strictEqual(result.entries[2].type, 'Other');
 
             // grouped map
-            assert.ok(result.grouped.has('decision'));
-            assert.ok(result.grouped.has('gotcha'));
-            assert.ok(result.grouped.has('architecture'));
-            assert.strictEqual(result.grouped.get('decision')!.length, 1);
-            assert.strictEqual(result.grouped.get('gotcha')!.length, 1);
-            assert.strictEqual(result.grouped.get('architecture')!.length, 1);
+            assert.ok(result.grouped.has('Other'));
+            assert.strictEqual(result.grouped.get('Other')!.length, 3);
         });
 
-        test('groups multiple entries of the same type together', async () => {
+        test('groups multiple entries into "Other" in test env', async () => {
             const sessions = [
                 makeSession('boring neutral content'),
                 makeSession('also boring — no keywords at all'),
@@ -111,28 +107,27 @@ suite('Feature 23 — KB Engine', () => {
 
             const result = await buildKbEntries(sessions, null);
 
-            // First two should be 'learning' (fallthrough)
-            assert.strictEqual(result.entries[0].type, 'learning');
-            assert.strictEqual(result.entries[1].type, 'learning');
-            assert.strictEqual(result.entries[2].type, 'decision');
+            // All "Other" in test env (no LLM, no embedding engine)
+            assert.strictEqual(result.entries[0].type, 'Other');
+            assert.strictEqual(result.entries[1].type, 'Other');
+            assert.strictEqual(result.entries[2].type, 'Other');
 
-            assert.strictEqual(result.grouped.get('learning')!.length, 2);
-            assert.strictEqual(result.grouped.get('decision')!.length, 1);
+            assert.strictEqual(result.grouped.get('Other')!.length, 3);
         });
 
         test('applies default categories when none provided', async () => {
             const sessions = [makeSession('boring neutral content')];
             const result = await buildKbEntries(sessions, null);
-            assert.strictEqual(result.entries[0].type, 'learning');
+            assert.strictEqual(result.entries[0].type, 'Other');
         });
 
         test('applies custom categories when provided', async () => {
             // With custom categories, classifySessionWithCategories will try LLM,
-            // fail (no LM API in test), then fallback to heuristic → first category
+            // fail (no LM API in test), then fallback to embedding (not available),
+            // then return "Other".
             const sessions = [makeSession('boring neutral content')];
             const result = await buildKbEntries(sessions, null, ['bug', 'feature', 'learning']);
-            // The heuristic fallback would return 'learning' which IS in the custom list
-            assert.strictEqual(result.entries[0].type, 'learning');
+            assert.strictEqual(result.entries[0].type, 'Other');
         });
 
         test('uses sidecar cache for tags and summary', async () => {

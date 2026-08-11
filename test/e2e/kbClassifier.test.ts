@@ -20,28 +20,30 @@ function makeSession(content: string): Session {
 
 suite('Feature 23 — KB Classifier', () => {
     suite('classifySessionWithCategories', () => {
-        test('tries LLM first, falls back to default when LLM unavailable', async () => {
+        test('tries LLM first, falls back to "Other" when LLM and embedding unavailable', async () => {
             const session = makeSession('We decided to use PostgreSQL for the trade-off benefits.');
             const result = await classifySessionWithCategories(session, ['decision', 'learning', 'pattern', 'gotcha', 'architecture']);
-            assert.strictEqual(result.type, 'decision');
+            // Both LLM and embedding engine are unavailable in test env,
+            // so the final safety net returns "Other".
+            assert.strictEqual(result.type, 'Other');
         });
 
-        test('returns first category when LLM and embedding unavailable', async () => {
+        test('returns "Other" when LLM and embedding both unavailable', async () => {
             const session = makeSession('We decided to use PostgreSQL.');
             const result = await classifySessionWithCategories(session, ['bug', 'decision', 'feature']);
-            assert.strictEqual(result.type, 'bug');
+            assert.strictEqual(result.type, 'Other');
         });
 
-        test('returns first category when result is not in custom list', async () => {
+        test('returns "Other" when result is not in custom list', async () => {
             const session = makeSession('We decided to use PostgreSQL.');
             const result = await classifySessionWithCategories(session, ['bug', 'feature']);
-            assert.strictEqual(result.type, 'bug');
+            assert.strictEqual(result.type, 'Other');
         });
 
-        test('falls back to "learning" when categories are empty', async () => {
+        test('falls back to "Other" when categories are empty', async () => {
             const session = makeSession('boring content');
             const result = await classifySessionWithCategories(session, []);
-            assert.strictEqual(result.type, 'learning');
+            assert.strictEqual(result.type, 'Other');
         });
     });
 });

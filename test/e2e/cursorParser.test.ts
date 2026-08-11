@@ -549,6 +549,50 @@ suite('parseCursorGlobalDb', () => {
         assert.strictEqual(results[0].session.messages[0].content, 'Real message');
     });
 
+    test('richText Lexical JSON used as fallback when text is empty', async () => {
+        const composerId = 'composer-richtext-global';
+        const dbPath = path.join(tmpDir, 'richtext-global.db');
+
+        // Lexical JSON structure: nested children with text and linebreak nodes
+        const lexicalJson = JSON.stringify({
+            root: {
+                children: [{
+                    children: [
+                        { text: 'Hello from ' },
+                        { text: 'Lexical', bold: true },
+                        { type: 'linebreak' },
+                        { text: 'rich text editor' },
+                    ],
+                }],
+            },
+        });
+
+        createGlobalDb(dbPath, [
+            { key: `composerData:${composerId}`, value: JSON.stringify({ name: 'RichText Chat', createdAt: 1700000000000 }) },
+            { key: `bubbleId:${composerId}:bubble-001`, value: JSON.stringify({ type: 1, text: '', richText: lexicalJson, unixMs: 1700000001000 }) },
+            { key: `bubbleId:${composerId}:bubble-002`, value: JSON.stringify({ type: 2, text: 'Assistant reply', unixMs: 1700000002000 }) },
+        ]);
+        const results = await parseCursorGlobalDb(dbPath);
+        assert.strictEqual(results.length, 1);
+        assert.strictEqual(results[0].session.messages.length, 2);
+        assert.strictEqual(results[0].session.messages[0].role, 'user');
+        assert.strictEqual(results[0].session.messages[0].content, 'Hello from Lexical\nrich text editor');
+        assert.strictEqual(results[0].session.messages[1].content, 'Assistant reply');
+    });
+
+    test('richText fallback handles empty richText gracefully', async () => {
+        const composerId = 'composer-empty-rt';
+        const dbPath = path.join(tmpDir, 'empty-rt.db');
+        createGlobalDb(dbPath, [
+            { key: `composerData:${composerId}`, value: JSON.stringify({ name: 'Empty RT', createdAt: 1700000000000 }) },
+            { key: `bubbleId:${composerId}:bubble-001`, value: JSON.stringify({ type: 1, text: '', richText: '', unixMs: 1700000001000 }) },
+            { key: `bubbleId:${composerId}:bubble-002`, value: JSON.stringify({ type: 1, text: 'Fallback message', unixMs: 1700000002000 }) },
+        ]);
+        const results = await parseCursorGlobalDb(dbPath);
+        assert.strictEqual(results[0].session.messages.length, 1);
+        assert.strictEqual(results[0].session.messages[0].content, 'Fallback message');
+    });
+
     test('bubbles with unsupported type (not 1 or 2) are skipped', async () => {
         const composerId = 'composer-bad-type';
         const dbPath = path.join(tmpDir, 'bad-type.db');

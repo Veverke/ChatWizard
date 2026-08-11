@@ -464,7 +464,42 @@ interface BubbleRow {
     bubbleId: string;
     type: number;      // 1 = user, 2 = assistant
     text: string;
+    richText?: string; // Lexical editor state JSON (newer Cursor builds)
     unixMs?: number;
+}
+
+/**
+ * Extract plain text from a Lexical rich-text editor state JSON string.
+ * Cursor 0.48+ stores user bubble content as Lexical JSON in the `richText`
+ * field instead of plain text in the `text` field.
+ */
+function extractLexicalText(richTextJson: string): string {
+    try {
+        const state = JSON.parse(richTextJson);
+        const root = state.root ?? state;
+        const parts: string[] = [];
+        walkLexicalNode(root, parts);
+        return parts.join('');
+    } catch {
+        return '';
+    }
+}
+
+function walkLexicalNode(node: Record<string, unknown>, out: string[]): void {
+    if (typeof node.text === 'string') {
+        out.push(node.text);
+    }
+    if (node.type === 'linebreak') {
+        out.push('\n');
+    }
+    const children = node.children;
+    if (Array.isArray(children)) {
+        for (const child of children) {
+            if (typeof child === 'object' && child !== null) {
+                walkLexicalNode(child as Record<string, unknown>, out);
+            }
+        }
+    }
 }
 
 /**
@@ -629,8 +664,17 @@ export async function parseCursorGlobalDb(
         try { parsed = JSON.parse(row.value); } catch { continue; }
 
         const type  = typeof parsed.type   === 'number' ? parsed.type   : 0;
-        const text  = typeof parsed.text   === 'string' ? parsed.text.trim() : '';
         const unixMs = (typeof parsed.unixMs === 'number' && parsed.unixMs > 0) ? parsed.unixMs : undefined;
+
+        // Extract text: prefer `text` field, fall back to `richText` (Lexical JSON).
+        // Cursor 0.48+ stores user bubble content as Lexical rich-text state.
+        let text = typeof parsed.text === 'string' ? parsed.text.trim() : '';
+        if (!text) {
+            const rawRich = typeof parsed.richText === 'string' ? parsed.richText.trim() : '';
+            if (rawRich) {
+                text = extractLexicalText(rawRich).trim();
+            }
+        }
 
         if (!text || (type !== 1 && type !== 2)) { continue; }
 

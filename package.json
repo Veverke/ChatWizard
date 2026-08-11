@@ -132,8 +132,7 @@
         {
           "id": "chatwizardKnowledgeBase",
           "name": "Knowledge Base",
-          "type": "webview",
-          "when": "chatwizard:isVSCode"
+          "type": "webview"
         }
       ]
     },

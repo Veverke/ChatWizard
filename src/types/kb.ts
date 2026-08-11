@@ -14,6 +14,34 @@ export type KbEntryType = string;
 export const DEFAULT_KB_TYPES: KbEntryType[] = ['decision', 'learning', 'pattern', 'gotcha', 'architecture'];
 
 /**
+ * Broad topic categories used by the embedding fallback classifier.
+ *
+ * The LLM prompt suggests these same topics (Git, Docker, React, …). When the
+ * LLM is unavailable (e.g. Cursor without the agent CLI), the embedding
+ * classifier needs the same broad vocabulary — the legacy five types
+ * ("decision", "learning", …) are too abstract to match real sessions, which
+ * is why nearly everything collapsed into "Other".
+ */
+export const EMBEDDING_FALLBACK_CATEGORIES: string[] = [
+    'Git',
+    'Docker',
+    'React',
+    'Python',
+    'Vs Code',
+    'CSS',
+    'API',
+    'Database',
+    'Deployment',
+    'Bugs',
+    'Testing',
+    'Architecture',
+    'Refactoring',
+    'Features',
+    'Best Practices',
+    'Other',
+];
+
+/**
  * Set of the five legacy KB entry types for fast lookup.
  */
 export const DEFAULT_KB_TYPE_SET = new Set<KbEntryType>(DEFAULT_KB_TYPES);

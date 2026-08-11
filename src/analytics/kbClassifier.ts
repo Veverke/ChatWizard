@@ -8,6 +8,7 @@
 
 import type { Session } from '../types/index';
 import type { KbEntryType } from '../types/kb';
+import { EMBEDDING_FALLBACK_CATEGORIES } from '../types/kb';
 import type { IEmbeddingEngine } from '../search/semanticContracts';
 import { classifySessionWithLlm } from './kbLlmClassifier';
 import { classifySessionWithEmbedding } from './kbEmbeddingClassifier';
@@ -41,7 +42,9 @@ function resolveEngine(explicit?: IEmbeddingEngine | null): IEmbeddingEngine | n
  * as a safe default.
  *
  * @param session    The session to classify.
- * @param categories The list of valid category names used for embedding fallback.
+ * @param categories  The list of valid category names used for the embedding fallback
+ *                     (defaults to EMBEDDING_FALLBACK_CATEGORIES, which is broader
+ *                     than the legacy five built-in types).
  * @param embeddingEngine Optional. If provided and ready, used as fallback
  *                        when LLM is unavailable.
  * @returns An object with the best-matching category, optional subtype, and whether the LLM was used.
@@ -62,8 +65,12 @@ export async function classifySessionWithCategories(
 
     log.debug(`LLM returned null for session ${session.id} — trying embedding fallback`);
 
-    // Embedding fallback — uses local ONNX model when available
-    const embeddingResult = await classifySessionWithEmbedding(engine, session, categories);
+    // Embedding fallback — uses local ONNX model when available.
+    // Uses the broad EMBEDDING_FALLBACK_CATEGORIES (Git, Docker, React, Bugs, …)
+    // rather than the caller-provided `categories` (legacy 5 types like
+    // "decision", "learning", …) because those are too abstract for embedding
+    // similarity to match real session content.
+    const embeddingResult = await classifySessionWithEmbedding(engine, session, EMBEDDING_FALLBACK_CATEGORIES);
     if (embeddingResult) {
         log.info(`KB: embedding fallback classified ${session.id} as "${embeddingResult}"`);
         return { type: embeddingResult, subtype: null, usedLlm: false };
