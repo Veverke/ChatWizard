@@ -143,11 +143,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
 
     // ── Feature 24: SQLite Persistent Cache ──────────────────────────────────
+    // Only enable the native better-sqlite3 cache in VS Code proper.
+    // Cursor, Windsurf, and other non-VS Code IDEs bundle a different Electron
+    // version whose NODE_MODULE_VERSION ABI is incompatible with better-sqlite3
+    // compiled for VS Code's Electron.  The parsers for those IDEs read directly
+    // from the IDE's own SQLite databases (via sql.js WASM), so re-parsing on
+    // startup is fast enough that the cache is unnecessary.
     // Wrap in try/catch so a corrupt/unreadable DB does not block the entire
     // extension startup — the extension can still function without the cache.
     const enableCache = vscode.workspace.getConfiguration('chatwizard').get<boolean>('enablePersistentCache', true);
+    const appName = vscode.env.appName ?? '';
+    const isVSCode = /visual studio code/i.test(appName);
     let cacheIntegration: CacheIntegration | undefined;
-    if (enableCache) {
+    if (enableCache && isVSCode) {
         channel.appendLine('[Chat Wizard] Initialising SQLite persistent cache…');
         try {
             // Feature 24b (shared cache): resolve the cache directory from the
@@ -161,6 +169,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         } catch (err) {
             channel.appendLine(`[Chat Wizard] SQLite cache init failed (continuing without cache): ${err}`);
         }
+    } else if (enableCache && !isVSCode) {
+        channel.appendLine(`[Chat Wizard] Skipping SQLite cache — running in ${appName} (better-sqlite3 NODE_MODULE_VERSION mismatch).`);
     }
 
     // Branding status-bar item — created early so all listeners below can call brandingBar.notify()
@@ -1403,7 +1413,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
             provider.setGroupMode(picked.mode);
             treeView.description = provider.getDescription();
-            void context.globalState.update('sessionGroupMode', picked.mode);
+            saveUiStateNow();
             syncContext();
         })
     );
@@ -1411,7 +1421,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         vscode.commands.registerCommand('chatwizard.enableSessionGrouping', () => {
             provider.setGroupMode('date');
             treeView.description = provider.getDescription();
-            void context.globalState.update('sessionGroupMode', 'date');
+            saveUiStateNow();
             syncContext();
         })
     );
@@ -1419,7 +1429,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         vscode.commands.registerCommand('chatwizard.disableSessionGrouping', () => {
             provider.setGroupMode('none');
             treeView.description = provider.getDescription();
-            void context.globalState.update('sessionGroupMode', 'none');
+            saveUiStateNow();
             syncContext();
         })
     );
@@ -1446,7 +1456,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 // Auto-switch to folder group mode
                 if (provider.getGroupMode() !== 'folder') {
                     provider.setGroupMode('folder');
-                    void context.globalState.update('sessionGroupMode', 'folder');
+                    saveUiStateNow();
                     syncContext();
                 }
                 provider.refresh();
@@ -1567,7 +1577,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             const next: CbGroupMode = codeBlockProvider.getGroupMode() === 'language' ? 'none' : 'language';
             codeBlockProvider.setGroupMode(next);
             codeBlockTreeView.description = codeBlockProvider.getDescription();
-            void context.globalState.update('cbGroupMode', next);
+            saveUiStateNow();
             syncCbGroupContext();
         })
     );
@@ -1575,7 +1585,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         vscode.commands.registerCommand('chatwizard.enableCbGrouping', () => {
             codeBlockProvider.setGroupMode('language');
             codeBlockTreeView.description = codeBlockProvider.getDescription();
-            void context.globalState.update('cbGroupMode', 'language');
+            saveUiStateNow();
             syncCbGroupContext();
         })
     );
@@ -1583,7 +1593,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         vscode.commands.registerCommand('chatwizard.disableCbGrouping', () => {
             codeBlockProvider.setGroupMode('none');
             codeBlockTreeView.description = codeBlockProvider.getDescription();
-            void context.globalState.update('cbGroupMode', 'none');
+            saveUiStateNow();
             syncCbGroupContext();
         })
     );
@@ -2626,7 +2636,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 const bySessionId = new Map<string, ChronicleData>();
 
                 for (const dbPath of dbPaths) {
-                    for (const s of readChronicleSessions(dbPath)) {
+                    const sessions = await readChronicleSessions(dbPath);
+                    for (const s of sessions) {
                         const existing = bySessionId.get(s.sessionId);
                         bySessionId.set(s.sessionId, {
                             overview:         existing?.overview         ?? null,
@@ -2639,7 +2650,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                             repository:       s.repository ?? existing?.repository ?? null,
                         });
                     }
-                    for (const cp of readChronicleCheckpoints(dbPath)) {
+                    const checkpoints = await readChronicleCheckpoints(dbPath);
+                    for (const cp of checkpoints) {
                         const existing = bySessionId.get(cp.sessionId);
                         bySessionId.set(cp.sessionId, {
                             overview:         cp.overview         ?? existing?.overview         ?? null,

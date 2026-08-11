@@ -3,7 +3,7 @@ import * as assert from 'assert';
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
-import { parseCursorWorkspace, parseCursorGlobalDb, extractCursorCodeBlocks } from '../../src/parsers/cursor';
+import { parseCursorWorkspace, parseCursorGlobalDb, extractCursorCodeBlocks, stripCursorSystemContext } from '../../src/parsers/cursor';
 
 // ---------------------------------------------------------------------------
 // Helpers to create minimal SQLite fixtures in a temp directory
@@ -585,6 +585,26 @@ suite('parseCursorGlobalDb', () => {
         assert.strictEqual(results[0].session.messages[1].role, 'assistant');
     });
 
+    test('user bubbles with Cursor system context are stripped', async () => {
+        const composerId = 'composer-bubble-context';
+        const dbPath = path.join(tmpDir, 'bubble-context.db');
+        createGlobalDb(dbPath, [
+            { key: `composerData:${composerId}`, value: JSON.stringify({ name: 'Chat', createdAt: 1700000000000 }) },
+            {
+                key: `bubbleId:${composerId}:bubble-001`,
+                value: JSON.stringify({
+                    type: 1,
+                    text: `<user_info>OS: Windows</user_info>\n<user_query>\nFix the bug in auth\n</user_query>`,
+                    unixMs: 1700000001000,
+                }),
+            },
+            { key: `bubbleId:${composerId}:bubble-002`, value: JSON.stringify({ type: 2, text: 'Done.', unixMs: 1700000002000 }) },
+        ]);
+        const results = await parseCursorGlobalDb(dbPath);
+        assert.strictEqual(results[0].session.messages.length, 2);
+        assert.strictEqual(results[0].session.messages[0].content, 'Fix the bug in auth');
+    });
+
     test('returns multiple sessions for multiple composer rows', async () => {
         const c1 = 'composer-multi-1';
         const c2 = 'composer-multi-2';
@@ -746,6 +766,148 @@ suite('parseCursorGlobalDb', () => {
         assert.strictEqual(results.length, 1);
         assert.strictEqual(results[0].session.messages.length, 1);
         assert.strictEqual(results[0].session.messages[0].content, 'Real bubble text');
+    });
+
+    test('blob recovery strips Cursor agent-mode system context from user messages', async () => {
+        const composerId = 'composer-context-strip';
+        const dbPath = path.join(tmpDir, 'context-strip.db');
+
+        const userHash = Buffer.alloc(32, 0xaa);
+        const asstHash = Buffer.alloc(32, 0xbb);
+        const conversationState = buildConversationState([userHash, asstHash]);
+
+        const noisyUser = `<user_info>OS Version: win32 10.0.26200</user_info>
+<git_status>M src/foo.ts</git_status>
+<rules>
+<user_rule>Some rule here</user_rule>
+</rules>
+<available_skills>
+<agent_skill>skill1</agent_skill>
+</available_skills>
+<open_and_recently_viewed_files>src/foo.ts</open_and_recently_viewed_files>
+<timestamp>Monday, Aug 10, 2026</timestamp>
+<user_query>
+Please refactor the UserService class to use dependency injection
+</user_query>`;
+
+        createGlobalDb(
+            dbPath,
+            [
+                {
+                    key: `composerData:${composerId}`,
+                    value: JSON.stringify({ name: 'Refactor DI', createdAt: 1700000000000, conversationState }),
+                },
+            ],
+            true,
+            [
+                { key: `agentKv:blob:${userHash.toString('hex')}`, value: Buffer.from(JSON.stringify({ role: 'user', content: noisyUser })) },
+                { key: `agentKv:blob:${asstHash.toString('hex')}`, value: Buffer.from(JSON.stringify({ role: 'assistant', content: 'Here is the refactored code.' })) },
+            ]
+        );
+
+        const results = await parseCursorGlobalDb(dbPath);
+        assert.strictEqual(results.length, 1);
+        assert.strictEqual(results[0].session.messages.length, 2);
+        assert.strictEqual(results[0].session.messages[0].role, 'user');
+        // The system context should be stripped, leaving only the <user_query> content
+        assert.strictEqual(
+            results[0].session.messages[0].content,
+            'Please refactor the UserService class to use dependency injection'
+        );
+        // Assistant message should be preserved as-is
+        assert.strictEqual(results[0].session.messages[1].content, 'Here is the refactored code.');
+    });
+});
+
+// ---------------------------------------------------------------------------
+// stripCursorSystemContext — Cursor agent-mode noise stripping
+// ---------------------------------------------------------------------------
+
+suite('stripCursorSystemContext', () => {
+
+    test('extracts content from <user_query> tags', () => {
+        const input = `<user_info>OS: Windows</user_info>
+<user_query>
+how do I fix the JWT signing?
+</user_query>
+<git_status>modified: src/auth.ts</git_status>`;
+        assert.strictEqual(
+            stripCursorSystemContext(input),
+            'how do I fix the JWT signing?'
+        );
+    });
+
+    test('extracts content from <user_query> with surrounding system context', () => {
+        const input = `<user_info>...</user_info>
+<git_status>...</git_status>
+<agent_transcripts>...</agent_transcripts>
+<rules>
+<user_rule>rule1</user_rule>
+</rules>
+<available_skills>...</available_skills>
+<open_and_recently_viewed_files>src/foo.ts</open_and_recently_viewed_files>
+<timestamp>Monday, Aug 10, 2026</timestamp>
+<user_query>
+Please refactor the UserService class
+</user_query>`;
+        assert.strictEqual(
+            stripCursorSystemContext(input),
+            'Please refactor the UserService class'
+        );
+    });
+
+    test('returns original text unchanged when no context tags or user_query present', () => {
+        const input = 'Hello, can you help me?';
+        assert.strictEqual(stripCursorSystemContext(input), 'Hello, can you help me?');
+    });
+
+    test('strips Cursor prompt markers', () => {
+        const input = `Some context here
+Cursor
+★
+📝
+⧉
+<user_query>
+What is the actual question?
+</user_query>`;
+        assert.strictEqual(
+            stripCursorSystemContext(input),
+            'What is the actual question?'
+        );
+    });
+
+    test('strips <!-- HTML comments --> added by Cursor', () => {
+        const input = `<!-- This is a conversation summary -->
+<user_query>How do I use async/await?</user_query>`;
+        assert.strictEqual(
+            stripCursorSystemContext(input),
+            'How do I use async/await?'
+        );
+    });
+
+    test('handles empty input gracefully', () => {
+        assert.strictEqual(stripCursorSystemContext(''), '');
+    });
+
+    test('handles input with only whitespace', () => {
+        assert.strictEqual(stripCursorSystemContext('   \n  \n  '), '   \n  \n  ');
+    });
+
+    test('preserves assistant messages (non-user content) unchanged', () => {
+        // This function is only called on user messages, but test defensive handling
+        const input = 'Here is the refactored code:\n\n```typescript\nconst x = 1;\n```';
+        assert.strictEqual(stripCursorSystemContext(input), input);
+    });
+
+    test('strips git_status when present without user_query', () => {
+        const input = `<user_info>Windows</user_info>
+<git_status>M src/foo.ts</git_status>
+
+What is the actual question?`;
+        assert.strictEqual(
+            stripCursorSystemContext(input),
+            'What is the actual question?'
+        );
     });
 });
 

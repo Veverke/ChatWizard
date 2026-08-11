@@ -1126,7 +1126,7 @@ this.index.remove(taskId);
 
             const entries: Array<{ sessionId: string; data: ChronicleData }> = [];
             for (const { dbPath } of dbs) {
-                const checkpoints = readChronicleCheckpoints(dbPath);
+                const checkpoints = await readChronicleCheckpoints(dbPath);
                 for (const cp of checkpoints) {
                     entries.push({
                         sessionId: cp.sessionId,

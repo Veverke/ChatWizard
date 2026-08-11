@@ -1578,7 +1578,12 @@
           "chatwizard.logLevel": {
             "type": "string",
             "default": "INFO",
-            "enum": ["DEBUG", "INFO", "WARN", "ERROR"],
+            "enum": [
+              "DEBUG",
+              "INFO",
+              "WARN",
+              "ERROR"
+            ],
             "enumDescriptions": [
               "Verbose diagnostic logging — all steps, timings, and decisions",
               "Normal operational messages and warnings",
@@ -1851,7 +1856,11 @@
           "chatwizard.cloudSync.type": {
             "type": "string",
             "default": "gist",
-            "enum": ["gist", "s3", "azure"],
+            "enum": [
+              "gist",
+              "s3",
+              "azure"
+            ],
             "enumDescriptions": [
               "GitHub Gist (requires GitHub token)",
               "Amazon S3 (requires AWS credentials)",
@@ -1908,8 +1917,8 @@
     "pretest:integration": "npm run compile",
     "test:integration": "vscode-test --files \"out/test/e2e/integration/**/*.test.js\"",
     "rebuild:native": "node scripts/rebuild-native.js",
-    "bundle": "esbuild src/extension.ts --bundle --platform=node --external:vscode --external:better-sqlite3 --external:@xenova/transformers --outfile=dist/extension.js && esbuild src/search/embeddingWorker.ts --bundle --platform=node --external:@xenova/transformers --outfile=dist/embeddingWorker.js",
-    "bundle:watch": "esbuild src/extension.ts --bundle --platform=node --external:vscode --external:better-sqlite3 --external:@xenova/transformers --outfile=dist/extension.js --sourcemap --watch & esbuild src/search/embeddingWorker.ts --bundle --platform=node --external:@xenova/transformers --outfile=dist/embeddingWorker.js --sourcemap --watch",
+    "bundle": "esbuild src/extension.ts --bundle --platform=node --external:vscode --external:better-sqlite3 --external:sql.js --external:@xenova/transformers --outfile=dist/extension.js && esbuild src/search/embeddingWorker.ts --bundle --platform=node --external:@xenova/transformers --outfile=dist/embeddingWorker.js",
+    "bundle:watch": "esbuild src/extension.ts --bundle --platform=node --external:vscode --external:better-sqlite3 --external:sql.js --external:@xenova/transformers --outfile=dist/extension.js --sourcemap --watch & esbuild src/search/embeddingWorker.ts --bundle --platform=node --external:@xenova/transformers --outfile=dist/embeddingWorker.js --sourcemap --watch",
     "pretest:coverage": "npm run compile",
     "test:coverage": "vscode-test --coverage --coverage-reporter lcov --coverage-reporter text --coverage-reporter json-summary && node -e \"const s=require('./coverage/coverage-summary.json'),T=90,EXCL=['fileWatcher.ts','sessionWebviewPanel.ts','analyticsPanel.ts','codeBlocksPanel.ts','mcpServer.ts','chatParticipant.ts','configPaths.ts','timelineViewProvider.ts','getContextTool.ts','cursor.ts','copilot.ts','antigravity.ts','copilotWorkspace.ts','sessionTreeProvider.ts','summaryGenerator.ts','amazonQWorkspace.ts','continueWorkspace.ts','geminiCodeAssistWorkspace.ts','sourceBrandIcons.ts','fileAnchorResolver.ts','promptLibraryPanel.ts','semanticSearchPanel.ts','semanticWiring.test.ts','semanticIndexer.test.ts'];function adj(k){let tot=s.total[k].total,cov=s.total[k].covered;for(const[f,d]of Object.entries(s)){if(f==='total')continue;const n=f.split(/[/\\\\\\\\]/).pop();if(EXCL.includes(n)){tot-=d[k].total;cov-=d[k].covered;}}return tot>0?cov/tot*100:100;}const f=['branches','functions','lines','statements'].filter(k=>adj(k)<T);if(f.length){console.error('\\nCoverage below '+T+'%: '+f.map(k=>k+' '+adj(k).toFixed(2)+'%').join(', '));process.exit(1);}console.log('Coverage OK (>='+T+'%)')\"",
     "test:flaky": "node scripts/detect-flaky.mjs",
@@ -1927,7 +1936,8 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@xenova/transformers": "^2.17.2",
-    "better-sqlite3": "github:WiseLibs/better-sqlite3#v12.11.0"
+    "better-sqlite3": "github:WiseLibs/better-sqlite3#v12.11.0",
+    "sql.js": "^1.14.1"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.3",

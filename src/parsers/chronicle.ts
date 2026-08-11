@@ -1,6 +1,8 @@
 // src/parsers/chronicle.ts
 // Reads Copilot Chronicle checkpoints from a session-store.db SQLite file.
 
+import { openReadonlyDb } from '../utils/sqliteDb';
+
 /** Maximum characters retained from each Chronicle text field to prevent index bloat. */
 const MAX_FIELD_CHARS = 8 * 1024; // 8 KB
 
@@ -21,7 +23,7 @@ export interface ChronicleSessionMeta {
     repository: string | null;
 }
 
-interface RawCheckpointRow {
+interface RawCheckpointRow extends Record<string, unknown> {
     session_id: string;
     overview: string | null;
     work_done: string | null;
@@ -31,7 +33,7 @@ interface RawCheckpointRow {
     important_files: string | null;
 }
 
-interface RawSessionRow {
+interface RawSessionRow extends Record<string, unknown> {
     id: string;
     branch: string | null;
     repository: string | null;
@@ -74,47 +76,38 @@ export function parseImportantFiles(raw: string | null): string[] | undefined {
  *
  * Never throws.
  */
-export function readChronicleCheckpoints(dbPath: string): ChronicleCheckpoint[] {
+export async function readChronicleCheckpoints(dbPath: string): Promise<ChronicleCheckpoint[]> {
+    const db = await openReadonlyDb(dbPath);
+    if (!db) { return []; }
+
     try {
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const Database = require('better-sqlite3') as typeof import('better-sqlite3');
-        let db: import('better-sqlite3').Database | null = null;
-        try {
-            db = new Database(dbPath, { readonly: true, fileMustExist: true });
-            // Enable WAL mode read (reduces lock contention with the running Copilot process)
-            try { db.pragma('journal_mode = WAL'); } catch { /* ignore — already set */ }
+        // Guard: check the table exists before querying (older Chronicle versions may not have it)
+        const tableCheck = db.get<{ name: string }>(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='checkpoints'"
+        );
+        if (!tableCheck) { return []; }
 
-            // Guard: check the table exists before querying (older Chronicle versions may not have it)
-            const tableCheck = db.prepare(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='checkpoints'"
-            ).get() as { name: string } | undefined;
-            if (!tableCheck) { return []; }
+        // Check for important_files column (added in newer Chronicle versions)
+        const cpColumns = db.query<{ name: string }>('PRAGMA table_info(checkpoints)');
+        const hasImportantFiles = cpColumns.some(c => c.name === 'important_files');
 
-            // Check for important_files column (added in newer Chronicle versions)
-            const cpColumns = db.prepare('PRAGMA table_info(checkpoints)').all() as Array<{ name: string }>;
-            const hasImportantFiles = cpColumns.some(c => c.name === 'important_files');
+        const query = hasImportantFiles
+            ? 'SELECT session_id, overview, work_done, technical_details, next_steps, created_at, important_files FROM checkpoints'
+            : 'SELECT session_id, overview, work_done, technical_details, next_steps, created_at, NULL as important_files FROM checkpoints';
 
-            const query = hasImportantFiles
-                ? 'SELECT session_id, overview, work_done, technical_details, next_steps, created_at, important_files FROM checkpoints'
-                : 'SELECT session_id, overview, work_done, technical_details, next_steps, created_at, NULL as important_files FROM checkpoints';
+        const rows = db.query<RawCheckpointRow>(query);
 
-            const rows = db.prepare(query).all() as RawCheckpointRow[];
-
-            return rows.map(row => ({
-                sessionId:        row.session_id,
-                overview:         cap(row.overview),
-                workDone:         cap(row.work_done),
-                technicalDetails: cap(row.technical_details),
-                nextSteps:        cap(row.next_steps),
-                createdAt:        row.created_at,
-                importantFiles:   parseImportantFiles(row.important_files),
-            }));
-        } finally {
-            db?.close();
-        }
-    } catch {
-        // SQLITE_BUSY, missing file, native module error, etc.
-        return [];
+        return rows.map(row => ({
+            sessionId:        row.session_id,
+            overview:         cap(row.overview),
+            workDone:         cap(row.work_done),
+            technicalDetails: cap(row.technical_details),
+            nextSteps:        cap(row.next_steps),
+            createdAt:        row.created_at,
+            importantFiles:   parseImportantFiles(row.important_files),
+        }));
+    } finally {
+        db.close();
     }
 }
 
@@ -130,45 +123,38 @@ export function readChronicleCheckpoints(dbPath: string): ChronicleCheckpoint[] 
  *
  * Never throws.
  */
-export function readChronicleSessions(dbPath: string): ChronicleSessionMeta[] {
+export async function readChronicleSessions(dbPath: string): Promise<ChronicleSessionMeta[]> {
+    const db = await openReadonlyDb(dbPath);
+    if (!db) { return []; }
+
     try {
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const Database = require('better-sqlite3') as typeof import('better-sqlite3');
-        let db: import('better-sqlite3').Database | null = null;
-        try {
-            db = new Database(dbPath, { readonly: true, fileMustExist: true });
-            try { db.pragma('journal_mode = WAL'); } catch { /* ignore */ }
+        // Guard: check the sessions table exists
+        const tableCheck = db.get<{ name: string }>(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='sessions'"
+        );
+        if (!tableCheck) { return []; }
 
-            // Guard: check the sessions table exists
-            const tableCheck = db.prepare(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='sessions'"
-            ).get() as { name: string } | undefined;
-            if (!tableCheck) { return []; }
+        // Guard: check the branch column exists (schema may vary)
+        const columns = db.query<{ name: string }>('PRAGMA table_info(sessions)');
+        const hasBranch = columns.some(c => c.name === 'branch');
+        if (!hasBranch) { return []; }
 
-            // Guard: check the branch column exists (schema may vary)
-            const columns = db.prepare('PRAGMA table_info(sessions)').all() as Array<{ name: string }>;
-            const hasBranch = columns.some(c => c.name === 'branch');
-            if (!hasBranch) { return []; }
+        const hasRepository = columns.some(c => c.name === 'repository');
 
-            const hasRepository = columns.some(c => c.name === 'repository');
+        const query = hasRepository
+            ? 'SELECT id, branch, repository FROM sessions'
+            : 'SELECT id, branch, NULL as repository FROM sessions';
 
-            const query = hasRepository
-                ? 'SELECT id, branch, repository FROM sessions'
-                : 'SELECT id, branch, NULL as repository FROM sessions';
+        const rows = db.query<RawSessionRow>(query);
 
-            const rows = db.prepare(query).all() as RawSessionRow[];
-
-            return rows
-                .filter(row => row.id)
-                .map(row => ({
-                    sessionId:  row.id,
-                    branch:     row.branch || null,
-                    repository: row.repository || null,
-                }));
-        } finally {
-            db?.close();
-        }
-    } catch {
-        return [];
+        return rows
+            .filter(row => row.id)
+            .map(row => ({
+                sessionId:  row.id,
+                branch:     row.branch || null,
+                repository: row.repository || null,
+            }));
+    } finally {
+        db.close();
     }
 }

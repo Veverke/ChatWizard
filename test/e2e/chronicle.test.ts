@@ -65,31 +65,31 @@ suite('readChronicleCheckpoints', () => {
         fs.rmSync(tmpDir, { recursive: true, force: true });
     });
 
-    test('non-existent file returns empty array', () => {
-        const result = readChronicleCheckpoints(path.join(tmpDir, 'missing.db'));
+    test('non-existent file returns empty array', async () => {
+        const result = await readChronicleCheckpoints(path.join(tmpDir, 'missing.db'));
         assert.deepStrictEqual(result, []);
     });
 
-    test('non-SQLite file returns empty array', () => {
+    test('non-SQLite file returns empty array', async () => {
         const badPath = path.join(tmpDir, 'bad.db');
         fs.writeFileSync(badPath, 'this is not sqlite');
-        const result = readChronicleCheckpoints(badPath);
+        const result = await readChronicleCheckpoints(badPath);
         assert.deepStrictEqual(result, []);
     });
 
-    test('valid SQLite file with no checkpoints table returns empty array', () => {
+    test('valid SQLite file with no checkpoints table returns empty array', async () => {
         const dbPath = createTestDb(tmpDir, 'notble.db', false);
-        const result = readChronicleCheckpoints(dbPath);
+        const result = await readChronicleCheckpoints(dbPath);
         assert.deepStrictEqual(result, []);
     });
 
-    test('valid SQLite with empty checkpoints table returns empty array', () => {
+    test('valid SQLite with empty checkpoints table returns empty array', async () => {
         const dbPath = createTestDb(tmpDir, 'empty.db', true);
-        const result = readChronicleCheckpoints(dbPath);
+        const result = await readChronicleCheckpoints(dbPath);
         assert.deepStrictEqual(result, []);
     });
 
-    test('valid SQLite with one row maps fields correctly', () => {
+    test('valid SQLite with one row maps fields correctly', async () => {
         const dbPath = createTestDb(tmpDir, 'one.db', true, [{
             session_id: 'sess-1',
             overview: 'overview text',
@@ -98,7 +98,7 @@ suite('readChronicleCheckpoints', () => {
             next_steps: 'next steps',
             created_at: '2024-01-01T00:00:00Z',
         }]);
-        const result = readChronicleCheckpoints(dbPath);
+        const result = await readChronicleCheckpoints(dbPath);
         assert.strictEqual(result.length, 1);
         assert.strictEqual(result[0].sessionId, 'sess-1');
         assert.strictEqual(result[0].overview, 'overview text');
@@ -108,17 +108,17 @@ suite('readChronicleCheckpoints', () => {
         assert.strictEqual(result[0].createdAt, '2024-01-01T00:00:00Z');
     });
 
-    test('valid SQLite with multiple rows returns all', () => {
+    test('valid SQLite with multiple rows returns all', async () => {
         const dbPath = createTestDb(tmpDir, 'multi.db', true, [
             { session_id: 's1', overview: 'a', work_done: null, technical_details: null, next_steps: null, created_at: null },
             { session_id: 's2', overview: 'b', work_done: null, technical_details: null, next_steps: null, created_at: null },
             { session_id: 's3', overview: 'c', work_done: null, technical_details: null, next_steps: null, created_at: null },
         ]);
-        const result = readChronicleCheckpoints(dbPath);
+        const result = await readChronicleCheckpoints(dbPath);
         assert.strictEqual(result.length, 3);
     });
 
-    test('null field values are preserved as null', () => {
+    test('null field values are preserved as null', async () => {
         const dbPath = createTestDb(tmpDir, 'nulls.db', true, [{
             session_id: 'sess-null',
             overview: null,
@@ -127,14 +127,14 @@ suite('readChronicleCheckpoints', () => {
             next_steps: null,
             created_at: null,
         }]);
-        const result = readChronicleCheckpoints(dbPath);
+        const result = await readChronicleCheckpoints(dbPath);
         assert.strictEqual(result.length, 1);
         assert.strictEqual(result[0].overview, null);
         assert.strictEqual(result[0].workDone, null);
         assert.strictEqual(result[0].createdAt, null);
     });
 
-    test('text field exceeding 8 KB is truncated to 8192 chars', () => {
+    test('text field exceeding 8 KB is truncated to 8192 chars', async () => {
         const longText = 'x'.repeat(10000);
         const dbPath = createTestDb(tmpDir, 'long.db', true, [{
             session_id: 'sess-long',
@@ -144,12 +144,12 @@ suite('readChronicleCheckpoints', () => {
             next_steps: null,
             created_at: null,
         }]);
-        const result = readChronicleCheckpoints(dbPath);
+        const result = await readChronicleCheckpoints(dbPath);
         assert.strictEqual(result.length, 1);
         assert.strictEqual(result[0].overview!.length, 8192);
     });
 
-    test('text field at exactly 8 KB is not truncated', () => {
+    test('text field at exactly 8 KB is not truncated', async () => {
         const exactText = 'y'.repeat(8192);
         const dbPath = createTestDb(tmpDir, 'exact.db', true, [{
             session_id: 'sess-exact',
@@ -159,7 +159,7 @@ suite('readChronicleCheckpoints', () => {
             next_steps: null,
             created_at: null,
         }]);
-        const result = readChronicleCheckpoints(dbPath);
+        const result = await readChronicleCheckpoints(dbPath);
         assert.strictEqual(result[0].overview!.length, 8192);
     });
 });
