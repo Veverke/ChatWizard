@@ -32,7 +32,6 @@ ChatWizard indexes every AI chat session from all your tools (Copilot, Claude, C
    - [Generating the Knowledge Base](#generating-the-knowledge-base)
    - [Custom Categories](#custom-categories)
    - [Exporting](#exporting)
-   - [Regeneration](#regeneration)
 8. [Analytics & Monitoring](#8-analytics--monitoring)
    - [Analytics Dashboard](#analytics-dashboard)
    - [Model Usage](#model-usage)
@@ -463,10 +462,6 @@ When generating, you can configure custom fallback categories for the heuristic 
 ### Exporting
 
 Click **Export** in the KB dashboard to write an Obsidian-compatible Markdown knowledge base to a folder of your choice, with clustered entries and cross-links.
-
-### Regeneration
-
-Click **Regenerate** to re-run classification on all sessions. The result updates both the sidebar view and any open dashboard panel.
 
 ---
 

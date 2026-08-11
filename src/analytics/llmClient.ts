@@ -6,8 +6,10 @@
 
 import * as vscode from 'vscode';
 import * as fs from 'fs';
-import { execSync, execFile } from 'child_process';
+import * as path from 'path';
+import { execSync, spawn } from 'child_process';
 import { createLogger } from '../utils/logger';
+import { openReadonlyDb } from '../utils/sqliteDb';
 
 const log = createLogger().withContext('LLM');
 
@@ -148,6 +150,48 @@ async function doSendRequest(
     }
 }
 
+// ── Cursor API key reader ──────────────────────────────────────────────────
+
+/**
+ * Read the Cursor access token from Cursor's global state.vscdb.
+ * Returns the JWT token string, or null if it cannot be read.
+ */
+async function readCursorApiKey(): Promise<string | null> {
+    try {
+        const dbPath = path.join(
+            process.env.USERPROFILE || '',
+            'AppData',
+            'Roaming',
+            'Cursor',
+            'User',
+            'globalStorage',
+            'state.vscdb',
+        );
+        if (!fs.existsSync(dbPath)) {
+            log.debug('Cursor API key: state.vscdb not found');
+            return null;
+        }
+        const db = await openReadonlyDb(dbPath);
+        if (!db) {
+            log.debug('Cursor API key: could not open state.vscdb');
+            return null;
+        }
+        const row = db.get<{ value: string }>(
+            "SELECT value FROM ItemTable WHERE key = 'cursorAuth/accessToken'",
+        );
+        db.close();
+        if (row && typeof row.value === 'string' && row.value.trim()) {
+            log.info('Cursor API key: read access token from state.vscdb');
+            return row.value.trim();
+        }
+        log.debug('Cursor API key: accessToken not found in state.vscdb');
+        return null;
+    } catch (err) {
+        log.warn(`Cursor API key: error reading state.vscdb: ${err}`);
+        return null;
+    }
+}
+
 // ── Cursor CLI provider ────────────────────────────────────────────────────
 
 /**
@@ -189,36 +233,63 @@ async function tryCursorCli(
 
     log.info(`Cursor CLI: running agent with workspace=${workspacePath}`);
 
+    // Read the Cursor API key from state.vscdb
+    const apiKey = await readCursorApiKey();
+    if (!apiKey) {
+        log.warn('Cursor CLI: no API key available — agent will fail with "Authentication required"');
+    }
+
     try {
         const result = await new Promise<string | null>((resolve, reject) => {
             const isWinCmd = process.platform === 'win32' && agentPath.endsWith('.cmd');
-            const child = execFile(
-                isWinCmd ? process.env.COMSPEC || 'cmd.exe' : agentPath,
-                isWinCmd
-                    ? ['/c', agentPath, '-p', '--trust', '--workspace', workspacePath, '--model', 'auto', finalContent]
-                    : [
-                        '-p',
-                        '--trust',
-                        '--workspace', workspacePath,
-                        '--model', 'auto',
-                        finalContent,
-                    ],
-                {
-                    timeout: timeoutMs,
-                    maxBuffer: 1_000_000,
-                    windowsHide: true,
-                    env: { ...process.env },
+
+            // Build args: pass everything EXCEPT the prompt as CLI args.
+            // The prompt is sent via stdin to avoid Windows command-line length limits.
+            const args = isWinCmd
+                ? ['/c', agentPath, '-p', '--trust', '--workspace', workspacePath, '--model', 'auto']
+                : ['-p', '--trust', '--workspace', workspacePath, '--model', 'auto'];
+
+            const command = isWinCmd ? process.env.COMSPEC || 'cmd.exe' : agentPath;
+
+            const child = spawn(command, args, {
+                timeout: timeoutMs,
+                windowsHide: true,
+                stdio: ['pipe', 'pipe', 'pipe'],
+                env: {
+                    ...process.env,
+                    ...(apiKey ? { CURSOR_API_KEY: apiKey } : {}),
                 },
-                (err, stdout, stderr) => {
-                    if (err) {
-                        // Attach stderr to the error for better diagnostics
-                        (err as NodeJS.ErrnoException & { stderr?: string }).stderr = stderr;
-                        reject(err);
-                        return;
-                    }
-                    resolve(stdout || null);
-                },
-            );
+            });
+
+            let stdout = '';
+            let stderr = '';
+
+            child.stdout?.on('data', (data: Buffer) => {
+                stdout += data.toString();
+            });
+
+            child.stderr?.on('data', (data: Buffer) => {
+                stderr += data.toString();
+            });
+
+            // Write the prompt to stdin, then close it
+            child.stdin?.write(finalContent);
+            child.stdin?.end();
+
+            child.on('error', (err) => {
+                (err as NodeJS.ErrnoException & { stderr?: string }).stderr = stderr;
+                reject(err);
+            });
+
+            child.on('close', (code) => {
+                if (code !== 0) {
+                    const err = new Error(`Cursor CLI exited with code ${code}`);
+                    (err as NodeJS.ErrnoException & { stderr?: string }).stderr = stderr;
+                    reject(err);
+                    return;
+                }
+                resolve(stdout || null);
+            });
         });
 
         if (result !== null) {
