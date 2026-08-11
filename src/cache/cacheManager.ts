@@ -340,12 +340,19 @@ export class CacheManager implements ICacheManager {
 
         let sessionRows: DbSessionRow[];
         if (workspaceIds && workspaceIds.length > 0) {
-            // Filter by workspace IDs using dynamic placeholders
-            const placeholders = workspaceIds.map(() => '?').join(',');
+            // Always include global workspace IDs (cursor-global, windsurf-global)
+            // so that sessions from AI-tool global storage DBs are loaded from cache
+            // even when the workspace scope filter excludes them. Without this, those
+            // sessions would be silently dropped on startup, and because the index is
+            // already populated, buildInitialIndex() would be skipped — meaning they'd
+            // never be re-parsed.
+            const allIds = [...workspaceIds];
+            if (!allIds.includes('cursor-global')) { allIds.push('cursor-global'); }
+            const placeholders = allIds.map(() => '?').join(',');
             const stmt = this.db.prepare(
                 `SELECT * FROM sessions WHERE workspace_id IN (${placeholders}) ORDER BY updated_at DESC`
             );
-            sessionRows = stmt.all(...workspaceIds) as DbSessionRow[];
+            sessionRows = stmt.all(...allIds) as DbSessionRow[];
         } else {
             // No filter — load all sessions (backward compat)
             sessionRows = this.stmt.getAllSessions.all() as DbSessionRow[];
