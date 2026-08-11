@@ -61,8 +61,9 @@ export function parseActionItems(raw: string): string[] | null {
 
 /**
  * Generate a stable, deterministic ID for an action item.
+ * @internal exported for unit testing
  */
-function makeActionItemId(sessionId: string, text: string, index: number): string {
+export function makeActionItemId(sessionId: string, text: string, index: number): string {
     const prefix = sessionId.slice(0, 8);
     const slug = text.toLowerCase().replace(/\W+/g, '-').slice(0, 20);
     return `${prefix}-${index}-${slug}`;

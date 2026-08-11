@@ -474,7 +474,8 @@ const MAX_RATE_LIMIT_RETRIES = 3;
  */
 const RATE_LIMIT_BASE_DELAY_MS = 2_000;
 
-function isRateLimitedError(err: unknown): boolean {
+/** @internal exported for unit testing */
+export function isRateLimitedError(err: unknown): boolean {
     const msg = String(err);
     return msg.includes('ChatRateLimited') || msg.includes('rate limit') || msg.includes('RateLimited');
 }

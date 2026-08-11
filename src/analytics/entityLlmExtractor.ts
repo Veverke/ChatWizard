@@ -58,7 +58,8 @@ interface LlmEntityResult {
     languages?: string[];
 }
 
-function parseEntityResponse(raw: string): LlmEntityResult | null {
+/** @internal exported for unit testing */
+export function parseEntityResponse(raw: string): LlmEntityResult | null {
     const trimmed = raw.trim();
     // Strip markdown code fences if present
     const jsonStr = trimmed.replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '');

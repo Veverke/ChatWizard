@@ -9,6 +9,7 @@ import {
     buildActionItemPrompt,
     buildActionItemSystemPrompt,
     parseActionItems,
+    makeActionItemId,
 } from '../../src/analytics/actionItemLlmExtractor';
 import type { Session, Message } from '../../src/types/index';
 
@@ -129,6 +130,25 @@ suite('actionItemLlmExtractor', () => {
         test('returns null when only non-dash lines present', () => {
             const result = parseActionItems('Just some text without dashes');
             assert.strictEqual(result, null);
+        });
+    });
+
+    suite('makeActionItemId', () => {
+        test('generates stable deterministic ID from session id, text and index', () => {
+            const id = makeActionItemId('abc12345-session', 'Add error handling', 0);
+            assert.ok(id.startsWith('abc12345-0-'));
+            assert.ok(id.includes('add-error-handling'));
+        });
+
+        test('generates different IDs for different indices', () => {
+            const id1 = makeActionItemId('s1', 'Fix bug', 0);
+            const id2 = makeActionItemId('s1', 'Fix bug', 1);
+            assert.notStrictEqual(id1, id2);
+        });
+
+        test('handles special characters in text', () => {
+            const id = makeActionItemId('s1', 'Fix #@$ bug!', 0);
+            assert.ok(id.includes('-fix-bug'));
         });
     });
 });

@@ -9,6 +9,7 @@ import {
     buildClassificationPrompt,
     buildSystemPrompt,
     parseClassification,
+    isRateLimitedError,
 } from '../../src/analytics/kbLlmClassifier';
 import type { Session, Message } from '../../src/types/index';
 
@@ -185,6 +186,28 @@ suite('kbLlmClassifier', () => {
             const r = parseClassification('  Bug Fixes  ');
             assert.ok(r !== null);
             assert.strictEqual(r!.folder, 'Bug Fixes');
+        });
+    });
+
+    suite('isRateLimitedError', () => {
+        test('returns true for ChatRateLimited error', () => {
+            assert.ok(isRateLimitedError(new Error('ChatRateLimited: too many requests')));
+        });
+
+        test('returns true for rate limit message', () => {
+            assert.ok(isRateLimitedError('rate limit exceeded'));
+        });
+
+        test('returns true for RateLimited string', () => {
+            assert.ok(isRateLimitedError('RateLimited'));
+        });
+
+        test('returns false for unrelated errors', () => {
+            assert.ok(!isRateLimitedError(new Error('Network timeout')));
+        });
+
+        test('returns false for empty string', () => {
+            assert.ok(!isRateLimitedError(''));
         });
     });
 });

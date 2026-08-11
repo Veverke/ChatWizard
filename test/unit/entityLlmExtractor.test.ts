@@ -9,6 +9,7 @@ import * as assert from 'assert';
 import {
     buildEntitySystemPrompt,
     buildEntityUserPrompt,
+    parseEntityResponse,
 } from '../../src/analytics/entityLlmExtractor';
 import type { Session, Message } from '../../src/types/index';
 
@@ -87,6 +88,67 @@ suite('entityLlmExtractor', () => {
             const session = makeSession({ id: 's1', messages: [] });
             const prompt = buildEntityUserPrompt(session);
             assert.ok(prompt.includes('Session title:'));
+        });
+    });
+
+    suite('parseEntityResponse', () => {
+        test('parses valid JSON with all entity types', () => {
+            const raw = JSON.stringify({
+                frameworks: ['React', 'Express'],
+                apis: ['REST /api/users'],
+                concepts: ['dependency injection'],
+                tools: ['Docker'],
+                languages: ['TypeScript'],
+            });
+            const result = parseEntityResponse(raw);
+            assert.ok(result !== null);
+            assert.strictEqual(result!.frameworks?.length, 2);
+            assert.strictEqual(result!.apis?.length, 1);
+            assert.strictEqual(result!.concepts?.length, 1);
+            assert.strictEqual(result!.tools?.length, 1);
+            assert.strictEqual(result!.languages?.length, 1);
+        });
+
+        test('returns null for invalid JSON', () => {
+            const result = parseEntityResponse('not json');
+            assert.strictEqual(result, null);
+        });
+
+        test('returns null when parsed value is not an object', () => {
+            const result = parseEntityResponse('"string"');
+            assert.strictEqual(result, null);
+        });
+
+        test('strips markdown code fences from response', () => {
+            const raw = '```json\n{"frameworks":["Jest"]}\n```';
+            const result = parseEntityResponse(raw);
+            assert.ok(result !== null);
+            assert.strictEqual(result!.frameworks?.[0], 'Jest');
+        });
+
+        test('strips code fences without language tag', () => {
+            const raw = '```\n{"frameworks":["Mocha"]}\n```';
+            const result = parseEntityResponse(raw);
+            assert.ok(result !== null);
+            assert.strictEqual(result!.frameworks?.[0], 'Mocha');
+        });
+
+        test('filters out empty strings and limits to 15 items', () => {
+            const raw = JSON.stringify({
+                frameworks: ['A', '', 'B', '', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P'],
+            });
+            const result = parseEntityResponse(raw);
+            assert.ok(result !== null);
+            assert.strictEqual(result!.frameworks?.length, 15);
+            assert.ok(result!.frameworks!.every(f => f.length > 0));
+        });
+
+        test('returns empty arrays when key is missing', () => {
+            const raw = JSON.stringify({ frameworks: ['React'] });
+            const result = parseEntityResponse(raw);
+            assert.ok(result !== null);
+            assert.strictEqual(result!.frameworks?.length, 1);
+            assert.strictEqual(result!.apis, undefined);
         });
     });
 });
