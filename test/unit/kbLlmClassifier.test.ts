@@ -9,8 +9,7 @@ import {
     buildClassificationPrompt,
     buildSystemPrompt,
     parseClassification,
-    buildTopLevelGroupingPrompt,
-    parseTopLevelGrouping,
+    isRateLimitedError,
 } from '../../src/analytics/kbLlmClassifier';
 import type { Session, Message } from '../../src/types/index';
 
@@ -72,27 +71,41 @@ suite('kbLlmClassifier', () => {
         test('returns expected system prompt content', () => {
             const prompt = buildSystemPrompt();
             assert.ok(prompt.includes('session categorizer'));
-            assert.ok(prompt.includes('Examples:'));
             assert.ok(prompt.includes('Other'));
             assert.ok(prompt.includes('Title Case'));
+            assert.ok(prompt.includes('Bugs'));
+            assert.ok(prompt.includes('Testing'));
+            assert.ok(prompt.includes('Architecture'));
+            assert.ok(prompt.includes('Refactoring'));
+            assert.ok(prompt.includes('Features'));
+            assert.ok(prompt.includes('Best Practices'));
         });
     });
 
     suite('parseClassification', () => {
-        test('returns clean label as-is', () => {
-            assert.strictEqual(parseClassification('Bug Fixes'), 'Bug Fixes');
+        test('returns clean folder label as-is', () => {
+            const r = parseClassification('Bug Fixes');
+            assert.ok(r !== null);
+            assert.strictEqual(r!.folder, 'Bug Fixes');
+            assert.strictEqual(r!.subtype, null);
         });
 
         test('strips markdown code fences', () => {
-            assert.strictEqual(parseClassification('```\nBug Fixes\n```'), 'Bug Fixes');
+            const r = parseClassification('```\nBug Fixes\n```');
+            assert.ok(r !== null);
+            assert.strictEqual(r!.folder, 'Bug Fixes');
         });
 
         test('strips language-tagged code fences', () => {
-            assert.strictEqual(parseClassification('```markdown\nBug Fixes\n```'), 'Bug Fixes');
+            const r = parseClassification('```markdown\nBug Fixes\n```');
+            assert.ok(r !== null);
+            assert.strictEqual(r!.folder, 'Bug Fixes');
         });
 
         test('handles unclosed fences', () => {
-            assert.strictEqual(parseClassification('```\nBug Fixes'), 'Bug Fixes');
+            const r = parseClassification('```\nBug Fixes');
+            assert.ok(r !== null);
+            assert.strictEqual(r!.folder, 'Bug Fixes');
         });
 
         test('returns null for (none)', () => {
@@ -112,10 +125,44 @@ suite('kbLlmClassifier', () => {
         });
 
         test('takes first line only', () => {
-            assert.strictEqual(parseClassification('Bug Fixes\nSome extra text'), 'Bug Fixes');
+            const r = parseClassification('Bug Fixes\nSome extra text');
+            assert.ok(r !== null);
+            assert.strictEqual(r!.folder, 'Bug Fixes');
         });
 
-        test('returns null for >5 word labels', () => {
+        test('extracts 2-level pipe format', () => {
+            const r = parseClassification('Git|Branch Management');
+            assert.ok(r !== null);
+            assert.strictEqual(r!.folder, 'Git');
+            assert.strictEqual(r!.subtype, 'Branch Management');
+        });
+
+        test('extracts 2-level pipe format with second level', () => {
+            const r = parseClassification('Bugs|UI Crash');
+            assert.ok(r !== null);
+            assert.strictEqual(r!.folder, 'Bugs');
+            assert.strictEqual(r!.subtype, 'UI Crash');
+        });
+
+        test('ignores second level when it equals General', () => {
+            const r = parseClassification('Bugs|General');
+            assert.ok(r !== null);
+            assert.strictEqual(r!.folder, 'Bugs');
+            assert.strictEqual(r!.subtype, null);
+        });
+
+        test('returns null for Other|Something', () => {
+            assert.strictEqual(parseClassification('Other|Specific'), null);
+        });
+
+        test('handles 2-level from code fences', () => {
+            const r = parseClassification('```\nPython|Debugging\n```');
+            assert.ok(r !== null);
+            assert.strictEqual(r!.folder, 'Python');
+            assert.strictEqual(r!.subtype, 'Debugging');
+        });
+
+        test('returns null for >2 word labels (pipe-less)', () => {
             assert.strictEqual(parseClassification('This is a very long category label'), null);
         });
 
@@ -136,57 +183,31 @@ suite('kbLlmClassifier', () => {
         });
 
         test('handles whitespace wrapping', () => {
-            assert.strictEqual(parseClassification('  Bug Fixes  '), 'Bug Fixes');
+            const r = parseClassification('  Bug Fixes  ');
+            assert.ok(r !== null);
+            assert.strictEqual(r!.folder, 'Bug Fixes');
         });
     });
 
-    suite('buildTopLevelGroupingPrompt', () => {
-        test('includes input categories', () => {
-            const prompt = buildTopLevelGroupingPrompt(['Git Pull', 'Docker Compose']);
-            assert.ok(prompt.includes('Git Pull'));
-            assert.ok(prompt.includes('Docker Compose'));
+    suite('isRateLimitedError', () => {
+        test('returns true for ChatRateLimited error', () => {
+            assert.ok(isRateLimitedError(new Error('ChatRateLimited: too many requests')));
         });
 
-        test('includes example output format', () => {
-            const prompt = buildTopLevelGroupingPrompt([]);
-            assert.ok(prompt.includes('JSON'));
-            assert.ok(prompt.includes('Title Case'));
-        });
-    });
-
-    suite('parseTopLevelGrouping', () => {
-        test('parses valid JSON grouping', () => {
-            const raw = '{"Git":["Git Pull","Git Push"],"Docker":["Docker Compose"]}';
-            const result = parseTopLevelGrouping(raw);
-            assert.ok(result !== null);
-            assert.strictEqual(result!.size, 2);
-            assert.deepStrictEqual(result!.get('Git'), ['Git Pull', 'Git Push']);
+        test('returns true for rate limit message', () => {
+            assert.ok(isRateLimitedError('rate limit exceeded'));
         });
 
-        test('strips code fences', () => {
-            const raw = '```json\n{"Git":["Git Pull"]}\n```';
-            const result = parseTopLevelGrouping(raw);
-            assert.ok(result !== null);
-            assert.strictEqual(result!.size, 1);
+        test('returns true for RateLimited string', () => {
+            assert.ok(isRateLimitedError('RateLimited'));
         });
 
-        test('returns null for empty object', () => {
-            assert.strictEqual(parseTopLevelGrouping('{}'), null);
+        test('returns false for unrelated errors', () => {
+            assert.ok(!isRateLimitedError(new Error('Network timeout')));
         });
 
-        test('returns null for invalid JSON', () => {
-            assert.strictEqual(parseTopLevelGrouping('not json'), null);
-        });
-
-        test('filters out non-string children', () => {
-            const raw = '{"Git":["Git Pull", 42, null]}';
-            const result = parseTopLevelGrouping(raw);
-            assert.ok(result !== null);
-            assert.deepStrictEqual(result!.get('Git'), ['Git Pull']);
-        });
-
-        test('returns null for non-object JSON', () => {
-            assert.strictEqual(parseTopLevelGrouping('"string"'), null);
+        test('returns false for empty string', () => {
+            assert.ok(!isRateLimitedError(''));
         });
     });
 });

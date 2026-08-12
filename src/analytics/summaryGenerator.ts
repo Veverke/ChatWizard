@@ -27,8 +27,9 @@ const STOP_WORDS = new Set([
 /**
  * Extracts top-N keywords from `text` using simple TF-IDF-like scoring.
  * Returns keywords sorted by frequency descending.
+ * @internal exported for unit testing
  */
-function extractKeywords(text: string, topN = 3): string[] {
+export function extractKeywords(text: string, topN = 3): string[] {
     const words = text
         .toLowerCase()
         .replace(/[^a-z0-9\s_]/g, ' ')
@@ -71,8 +72,9 @@ export function generateTfidfSummary(session: Session): string {
 
 // ─── Rate limiter ─────────────────────────────────────────────────────────────
 
-/** Limits concurrent LM API calls to avoid throttling. */
-class RateLimiter {
+/** Limits concurrent LM API calls to avoid throttling.
+ * @internal exported for unit testing */
+export class RateLimiter {
     private readonly maxConcurrent: number;
     private active = 0;
     private queue: Array<() => void> = [];

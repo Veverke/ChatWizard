@@ -1,29 +1,10 @@
 // src/analytics/actionItemVerifier.ts
 // Feature 34 — LLM-based verification pass for extracted action items.
-// Uses the VS Code Copilot LM API to assess whether each extracted action item
-// is genuinely actionable, and marks it with verified=true/false.
+// Uses the central llmClient (VS Code LM API → Cursor CLI) to assess whether
+// each extracted action item is genuinely actionable.
 
-import * as vscode from 'vscode';
 import type { ActionItem } from '../types/index';
-
-// ── Model selection ──────────────────────────────────────────────────────────
-
-const FREE_MODEL_CHAIN = [
-    { family: 'o4-mini' },
-    { family: 'gpt-4o-mini' },
-];
-
-async function selectCopilotModel(): Promise<vscode.LanguageModelChat | undefined> {
-    for (const filter of FREE_MODEL_CHAIN) {
-        try {
-            const [model] = await vscode.lm.selectChatModels({ vendor: 'copilot', ...filter });
-            if (model) { return model; }
-        } catch {
-            // try next
-        }
-    }
-    return undefined;
-}
+import { promptLlm } from './llmClient';
 
 // ── Prompt building ─────────────────────────────────────────────────────────
 
@@ -72,25 +53,6 @@ function parseVerificationResponse(raw: string, itemCount: number): Verification
     const validIndices = new Set<number>();
     const lines = raw.trim().split('\n');
 
-    for (const line of lines) {
-        const trimmed = line.trim();
-        // Match "[VALID] ..." or "[INVALID] ..."
-        const match = trimmed.match(/^\[(VALID|INVALID)\]\s*(.*)/i);
-        if (!match) { continue; }
-        if (match[1].toUpperCase() !== 'VALID') { continue; }
-
-        // Find the item index by matching the description text
-        const desc = match[2].trim().toLowerCase();
-        // Walk through items in order to find the closest match
-        for (let i = 0; i < itemCount; i++) {
-            // Accept if the description is a substring of the original item text (or vice versa)
-            // or if this line corresponds to the nth VALID in sequence
-            if (validIndices.has(i)) { continue; }
-            break;
-        }
-        // Simple positional approach: nth VALID line corresponds to nth item
-    }
-
     // Fallback: use positional matching — the LLM returns [VALID] or [INVALID]
     // for each item in order, one per line.
     let validIdx = 0;
@@ -112,39 +74,25 @@ function parseVerificationResponse(raw: string, itemCount: number): Verification
 // ── Public API ──────────────────────────────────────────────────────────────
 
 /**
- * Verifies a batch of action items using the Copilot LM API.
+ * Verifies a batch of action items using the central llmClient.
  * Marks each item as `verified: true` if the LLM confirms it is genuinely
  * actionable, or `verified: false` if it's vague/generic.
  *
- * Returns the updated items array. If the LM API is unavailable, returns
+ * Returns the updated items array. If no LLM provider is available, returns
  * items unchanged (no verification).
- *
- * @param sessionTitle  Session title for context
- * @param items         Action items to verify
- * @param token         Optional cancellation token
  */
 export async function verifyActionItemsWithLlm(
     sessionTitle: string,
     items: ActionItem[],
-    token?: vscode.CancellationToken,
 ): Promise<ActionItem[]> {
     if (items.length === 0) { return items; }
 
     try {
-        const model = await selectCopilotModel();
-        if (!model) { return items; }
-
+        const systemPrompt = buildVerifySystemPrompt();
         const userContent = buildVerifyUserPrompt(sessionTitle, items);
-        const messages = [vscode.LanguageModelChatMessage.User(userContent)];
-        const response = await model.sendRequest(messages, {
-            systemPrompt: buildVerifySystemPrompt(),
-        } as any);
 
-        let raw = '';
-        for await (const chunk of response.text) {
-            raw += chunk;
-            if (token?.isCancellationRequested) { return items; }
-        }
+        const raw = await promptLlm(systemPrompt, userContent, { timeoutMs: 30_000 });
+        if (raw === null) { return items; }
 
         const { validIndices } = parseVerificationResponse(raw, items.length);
         return items.map((item, i) => ({
@@ -152,7 +100,7 @@ export async function verifyActionItemsWithLlm(
             verified: validIndices.has(i),
         }));
     } catch {
-        // LM API unavailable or error — return items unchanged
+        // LLM provider unavailable or error — return items unchanged
         return items;
     }
 }

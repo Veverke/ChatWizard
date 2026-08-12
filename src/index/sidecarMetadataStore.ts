@@ -149,6 +149,14 @@ export class SidecarMetadataStore {
         }
     }
 
+    /** Removes all tags from a session.  No-op if the session has no tags. */
+    async clearTags(sessionId: string): Promise<void> {
+        const map = this.cache ?? await this.load();
+        const existing = map.get(sessionId);
+        if (!existing?.tags || existing.tags.length === 0) { return; }
+        await this.patch(sessionId, { tags: [] });
+    }
+
     /**
      * Returns all tags across all sessions with their usage counts,
      * sorted by count descending.

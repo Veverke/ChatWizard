@@ -1,33 +1,14 @@
 // src/analytics/entityLlmExtractor.ts
 // Feature 19 — LLM-based entity extraction.
-// Uses the VS Code Copilot LM API to extract richer semantic entities
-// (frameworks, libraries, API endpoints, protocols, architectural concepts)
-// that regex cannot capture.
+// Uses the central llmClient (VS Code LM API → Cursor CLI) to extract richer
+// semantic entities (frameworks, libraries, API endpoints, protocols, architectural
+// concepts) that regex cannot capture.
 //
-// Falls back gracefully when the LM API is unavailable — the caller
+// Falls back gracefully when no LLM provider is available — the caller
 // (entityExtractor.ts) then uses the original regex-only extractor.
 
-import * as vscode from 'vscode';
 import type { Session, ExtractedEntities } from '../types/index';
-
-// ── Model selection ──────────────────────────────────────────────────────────
-
-const FREE_MODEL_CHAIN = [
-    { family: 'o4-mini' },
-    { family: 'gpt-4o-mini' },
-];
-
-async function selectCopilotModel(): Promise<vscode.LanguageModelChat | undefined> {
-    for (const filter of FREE_MODEL_CHAIN) {
-        try {
-            const [model] = await vscode.lm.selectChatModels({ vendor: 'copilot', ...filter });
-            if (model) { return model; }
-        } catch {
-            // try next
-        }
-    }
-    return undefined;
-}
+import { promptLlm } from './llmClient';
 
 // ── Prompt building ─────────────────────────────────────────────────────────
 
@@ -77,7 +58,8 @@ interface LlmEntityResult {
     languages?: string[];
 }
 
-function parseEntityResponse(raw: string): LlmEntityResult | null {
+/** @internal exported for unit testing */
+export function parseEntityResponse(raw: string): LlmEntityResult | null {
     const trimmed = raw.trim();
     // Strip markdown code fences if present
     const jsonStr = trimmed.replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '');
@@ -101,29 +83,21 @@ function parseEntityResponse(raw: string): LlmEntityResult | null {
 // ── Public API ──────────────────────────────────────────────────────────────
 
 /**
- * Extracts semantic entities using the free Copilot LM API.
+ * Extracts semantic entities using the central llmClient.
  *
  * Returns an `ExtractedEntities` object with the LLM's output merged into the
- * `semantic` field, or `null` if the LM API is unavailable or the response
+ * `semantic` field, or `null` if no LLM provider is available or the response
  * could not be parsed.
  */
 export async function extractEntitiesWithLlm(
     session: Session,
 ): Promise<Partial<ExtractedEntities> | null> {
     try {
-        const model = await selectCopilotModel();
-        if (!model) { return null; }
+        const systemPrompt = buildEntitySystemPrompt();
+        const userContent = buildEntityUserPrompt(session);
 
-        const content = buildEntityUserPrompt(session);
-        const messages = [vscode.LanguageModelChatMessage.User(content)];
-        const response = await model.sendRequest(messages, {
-            systemPrompt: buildEntitySystemPrompt(),
-        } as any);
-
-        let raw = '';
-        for await (const chunk of response.text) {
-            raw += chunk;
-        }
+        const raw = await promptLlm(systemPrompt, userContent, { timeoutMs: 30_000 });
+        if (raw === null) { return null; }
 
         const parsed = parseEntityResponse(raw);
         if (!parsed) { return null; }

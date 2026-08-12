@@ -3,6 +3,7 @@
 import * as path from 'path';
 import { Session, Message, CodeBlock, ParseResult } from '../types/index';
 import { extractCodeBlocks } from './claude';
+import { openReadonlyDb } from '../utils/sqliteDb';
 
 /** Maximum number of ComposerEntry records processed per database. */
 const MAX_COMPOSERS = 5_000;
@@ -75,6 +76,72 @@ function extractItemText(item: ConversationItem): string {
 const AISERVICE_SOURCE_NOTE =
     'This session was rebuilt from Cursor\'s aiService.prompts data. Cursor does not store full assistant ' +
     'replies in workspace state.vscdb for this build — only your prompts are available here. This is not a parse failure.';
+
+// ─── Cursor system context stripping ──────────────────────────────────────────
+// Cursor agent mode prepends extensive system context (OS info, git status,
+// rules, skills, file lists) before every user message. The actual user prompt
+// is the text inside <user_query>...</user_query>.
+
+/** Known Cursor system-context XML tags to strip from user messages. */
+const CURSOR_CONTEXT_TAGS = [
+    'user_info',
+    'git_status',
+    'agent_transcripts',
+    'rules',
+    'available_skills',
+    'agent_skills',
+    'mcp_meta_tool_servers',
+    'mcp_meta_tools',
+    'open_and_recently_viewed_files',
+    'timestamp',
+] as const;
+
+const CURSOR_CONTEXT_PATTERN = new RegExp(
+    `<(${CURSOR_CONTEXT_TAGS.join('|')})>[\\s\\S]*?<\\/\\1>\\s*`,
+    'g'
+);
+
+/** Tag used by Cursor to mark the conversational part of the user prompt. */
+const USER_QUERY_PATTERN = /<user_query>([\s\S]*?)<\/user_query>/;
+
+/**
+ * Strip Cursor's agent-mode system context from a user message.
+ *
+ * Strategy:
+ * 1. If `<user_query>...</user_query>` is present, extract just that content.
+ * 2. Otherwise, strip known XML context tags and leading whitespace-only lines.
+ * 3. If neither pattern matches, return the text unchanged (pre-context Cursor builds).
+ */
+export function stripCursorSystemContext(text: string): string {
+    if (!text) { return text; }
+
+    // Step 1: Extract <user_query> content if present
+    const queryMatch = text.match(USER_QUERY_PATTERN);
+    if (queryMatch) {
+        return queryMatch[1].trim();
+    }
+
+    // Step 2: Strip known context tags
+    let cleaned = text.replace(CURSOR_CONTEXT_PATTERN, '');
+
+    // Also strip the leading <!-- conversation summary / instructions --> block Cursor adds
+    cleaned = cleaned.replace(/<!--[\s\S]*?-->\s*/g, '');
+
+    // Strip Cursor's rollback/pending markers
+    cleaned = cleaned.replace(/^\s*(?:Cursor|You)\s*(?:⚠|\★|📝|⧉).*$/gm, '');
+
+    // Strip "Response not available — cancelled or incomplete" etc.
+    cleaned = cleaned.replace(/^⚠\s*Response not available.*$/gm, '');
+
+    // Strip leading lines that are just whitespace or consist entirely of === separators
+    cleaned = cleaned.replace(/^[=\s]{3,}$/gm, '');
+
+    // If stripping removed everything, return original (safer than losing data)
+    const stripped = cleaned.trim();
+    if (!stripped) { return text; }
+
+    return stripped;
+}
 
 /** Try to read a composer/chat id Cursor may attach to each prompt entry. */
 function extractPromptComposerId(p: unknown): string | undefined {
@@ -187,7 +254,7 @@ function buildAiServiceFallbackSessions(
             messages.push({
                 id: `${sid}-${messageIndex}`,
                 role: 'user',
-                content: fp.text,
+                content: stripCursorSystemContext(fp.text),
                 codeBlocks: extractCursorCodeBlocks(fp.text, sid, messageIndex),
                 timestamp: fp.unixMs !== undefined ? new Date(fp.unixMs).toISOString() : undefined,
             });
@@ -354,7 +421,7 @@ function buildAiServiceFallbackSessions(
             messages.push({
                 id: `${cid}-${messageIndex}`,
                 role: 'user',
-                content: fp.text,
+                content: stripCursorSystemContext(fp.text),
                 codeBlocks: extractCursorCodeBlocks(fp.text, cid, messageIndex),
                 timestamp: fp.unixMs !== undefined ? new Date(fp.unixMs).toISOString() : undefined,
             });
@@ -400,7 +467,130 @@ interface BubbleRow {
     bubbleId: string;
     type: number;      // 1 = user, 2 = assistant
     text: string;
+    richText?: string; // Lexical editor state JSON (newer Cursor builds)
     unixMs?: number;
+}
+
+/**
+ * Extract plain text from a Lexical rich-text editor state JSON string.
+ * Cursor 0.48+ stores user bubble content as Lexical JSON in the `richText`
+ * field instead of plain text in the `text` field.
+ */
+function extractLexicalText(richTextJson: string): string {
+    try {
+        const state = JSON.parse(richTextJson);
+        const root = state.root ?? state;
+        const parts: string[] = [];
+        walkLexicalNode(root, parts);
+        return parts.join('');
+    } catch {
+        return '';
+    }
+}
+
+function walkLexicalNode(node: Record<string, unknown>, out: string[]): void {
+    if (typeof node.text === 'string') {
+        out.push(node.text);
+    }
+    if (node.type === 'linebreak') {
+        out.push('\n');
+    }
+    const children = node.children;
+    if (Array.isArray(children)) {
+        for (const child of children) {
+            if (typeof child === 'object' && child !== null) {
+                walkLexicalNode(child as Record<string, unknown>, out);
+            }
+        }
+    }
+}
+
+/**
+ * Parse a protobuf `conversationState` string (base64-encoded repeated field 1,
+ * wire type 2, each value 32 bytes = SHA-256 hash) into an array of hex hashes.
+ */
+function parseConversationStateBlobHashes(conversationState: string): string[] {
+    const decoded = Buffer.from(conversationState, 'base64');
+    const hashes: string[] = [];
+    let offset = 0;
+    while (offset < decoded.length) {
+        const tag = decoded[offset];
+        if ((tag & 7) !== 2) { break; } // wire type 2 (length-delimited)
+        offset++;
+        let length = 0;
+        let shift = 0;
+        while (offset < decoded.length) {
+            const byte = decoded[offset];
+            length |= (byte & 0x7f) << shift;
+            shift += 7;
+            offset++;
+            if (!(byte & 0x80)) { break; }
+        }
+        if (length === 32) {
+            hashes.push(decoded.slice(offset, offset + 32).toString('hex'));
+        }
+        offset += length;
+    }
+    return hashes;
+}
+
+/**
+ * Try to recover messages from `conversationState` → `agentKv:blob:<hash>` entries.
+ * Returns messages for user/assistant blobs (skipping system/tool roles).
+ * Returns undefined when no blobs can be recovered.
+ */
+function recoverMessagesFromBlobs(
+    composerId: string,
+    conversationState: string,
+    blobContentByHash: Map<string, string>
+): Message[] | undefined {
+    const blobHashes = parseConversationStateBlobHashes(conversationState);
+    if (blobHashes.length === 0) { return undefined; }
+
+    const messages: Message[] = [];
+    for (const hash of blobHashes) {
+        const raw = blobContentByHash.get(hash);
+        if (!raw) { continue; }
+
+        let parsed: { role?: string; content?: unknown };
+        try { parsed = JSON.parse(raw); } catch { continue; }
+
+        const role = parsed.role;
+        if (role !== 'user' && role !== 'assistant') { continue; }
+
+        let text = '';
+        if (typeof parsed.content === 'string') {
+            text = parsed.content;
+        } else if (Array.isArray(parsed.content)) {
+            text = parsed.content
+                .map((c: unknown) => {
+                    if (typeof c === 'object' && c !== null) {
+                        const obj = c as Record<string, unknown>;
+                        return typeof obj.text === 'string' ? obj.text : '';
+                    }
+                    return '';
+                })
+                .filter(Boolean)
+                .join('\n');
+        }
+        if (!text.trim()) { continue; }
+
+        // Strip Cursor agent-mode system context from user messages
+        if (role === 'user') {
+            text = stripCursorSystemContext(text);
+            if (!text.trim()) { continue; }
+        }
+
+        const messageIndex = messages.length;
+        messages.push({
+            id: `${composerId}-blob-${messageIndex}`,
+            role: role as 'user' | 'assistant',
+            content: text,
+            codeBlocks: extractCursorCodeBlocks(text, composerId, messageIndex),
+        });
+    }
+
+    return messages.length > 0 ? messages : undefined;
 }
 
 /**
@@ -419,36 +609,44 @@ interface BubbleRow {
 export async function parseCursorGlobalDb(
     globalDbPath: string
 ): Promise<ParseResult[]> {
-    let composerRows: Array<{ key: string; value: string }> = [];
-    let bubbleRows:   Array<{ key: string; value: string }> = [];
+    const db = await openReadonlyDb(globalDbPath);
+    if (!db) { return []; }
 
-    try {
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const Database = require('better-sqlite3') as typeof import('better-sqlite3');
-        const db = new Database(globalDbPath, { readonly: true, fileMustExist: true });
-        try {
-            // Check if cursorDiskKV table exists (Cursor 0.43+).
-            const tableCheck = db.prepare(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='cursorDiskKV'"
-            ).get() as { name: string } | undefined;
-            if (!tableCheck) { return []; }
+    // Check if cursorDiskKV table exists (Cursor 0.43+).
+    const tableCheck = db.get<{ name: string }>(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='cursorDiskKV'"
+    );
+    if (!tableCheck) { db.close(); return []; }
 
-            composerRows = db.prepare(
-                "SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%'"
-            ).all() as Array<{ key: string; value: string }>;
+    const composerRows = db.query<{ key: string; value: string }>(
+        "SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%'"
+    );
 
-            bubbleRows = db.prepare(
-                "SELECT key, value FROM cursorDiskKV WHERE key LIKE 'bubbleId:%'"
-            ).all() as Array<{ key: string; value: string }>;
-        } finally {
-            db.close();
-        }
-    } catch {
-        // File does not exist, is locked, or is not a valid SQLite database.
-        return [];
-    }
+    const bubbleRows = db.query<{ key: string; value: string }>(
+        "SELECT key, value FROM cursorDiskKV WHERE key LIKE 'bubbleId:%'"
+    );
+
+    const blobRows = db.query<{ key: string; value: string }>(
+        "SELECT key, value FROM cursorDiskKV WHERE key LIKE 'agentKv:blob:%'"
+    );
+
+    db.close();
 
     if (composerRows.length === 0) { return []; }
+
+    // ── Build blob hash → content map (for conversationState recovery) ──────
+    const blobContentByHash = new Map<string, string>();
+    for (const row of blobRows) {
+        const hash = row.key.slice('agentKv:blob:'.length);
+        if (hash) {
+            // sql.js returns Uint8Array for BLOB columns; better-sqlite3 returns Buffer.
+            // Both have .toString('utf-8') or we can use Buffer.from().
+            const content = typeof row.value === 'string'
+                ? row.value
+                : Buffer.from(row.value as unknown as Uint8Array).toString('utf-8');
+            blobContentByHash.set(hash, content);
+        }
+    }
 
     // ── Build composerId → bubble list map ───────────────────────────────────
     // Key format: bubbleId:<composerId>:<bubbleId>
@@ -469,8 +667,17 @@ export async function parseCursorGlobalDb(
         try { parsed = JSON.parse(row.value); } catch { continue; }
 
         const type  = typeof parsed.type   === 'number' ? parsed.type   : 0;
-        const text  = typeof parsed.text   === 'string' ? parsed.text.trim() : '';
         const unixMs = (typeof parsed.unixMs === 'number' && parsed.unixMs > 0) ? parsed.unixMs : undefined;
+
+        // Extract text: prefer `text` field, fall back to `richText` (Lexical JSON).
+        // Cursor 0.48+ stores user bubble content as Lexical rich-text state.
+        let text = typeof parsed.text === 'string' ? parsed.text.trim() : '';
+        if (!text) {
+            const rawRich = typeof parsed.richText === 'string' ? parsed.richText.trim() : '';
+            if (rawRich) {
+                text = extractLexicalText(rawRich).trim();
+            }
+        }
 
         if (!text || (type !== 1 && type !== 2)) { continue; }
 
@@ -491,7 +698,21 @@ export async function parseCursorGlobalDb(
         try { composerMeta = JSON.parse(row.value); } catch { continue; }
 
         const rawBubbles = bubblesByComposer.get(composerId) ?? [];
-        if (rawBubbles.length === 0) { continue; }
+
+        // ── Try to recover messages from conversationState blobs ──────────────
+        // Cursor 0.46+ stores real content in agentKv:blob entries referenced by
+        // the protobuf-encoded conversationState field. BubbleId rows become stubs
+        // with empty text. When most bubbles have no text, attempt blob recovery.
+        const conversationState = typeof composerMeta.conversationState === 'string'
+            ? composerMeta.conversationState
+            : undefined;
+        const blobMessages = conversationState
+            ? recoverMessagesFromBlobs(composerId, conversationState, blobContentByHash)
+            : undefined;
+        const useBlobMessages = blobMessages !== undefined;
+
+        // Skip if we have no bubbles AND no blob messages to recover
+        if (rawBubbles.length === 0 && !useBlobMessages) { continue; }
 
         // Order bubbles using `fullConversationHeadersOnly` when available,
         // falling back to timestamp sort.
@@ -517,17 +738,28 @@ export async function parseCursorGlobalDb(
         }
 
         // ── Build Message list ────────────────────────────────────────────────
-        const messages: Message[] = [];
-        for (const bubble of orderedBubbles) {
-            const role: 'user' | 'assistant' = bubble.type === 1 ? 'user' : 'assistant';
-            const messageIndex = messages.length;
-            messages.push({
-                id: `${composerId}-${messageIndex}`,
-                role,
-                content: bubble.text,
-                codeBlocks: extractCursorCodeBlocks(bubble.text, composerId, messageIndex),
-                timestamp: bubble.unixMs !== undefined ? new Date(bubble.unixMs).toISOString() : undefined,
-            });
+        let messages: Message[];
+        if (useBlobMessages && blobMessages) {
+            messages = blobMessages;
+        } else {
+            messages = [];
+            for (const bubble of orderedBubbles) {
+                const role: 'user' | 'assistant' = bubble.type === 1 ? 'user' : 'assistant';
+                let content = bubble.text;
+                // Strip Cursor agent-mode system context from user bubbles
+                if (role === 'user') {
+                    content = stripCursorSystemContext(content);
+                    if (!content.trim()) { continue; }
+                }
+                const messageIndex = messages.length;
+                messages.push({
+                    id: `${composerId}-${messageIndex}`,
+                    role,
+                    content,
+                    codeBlocks: extractCursorCodeBlocks(bubble.text, composerId, messageIndex),
+                    timestamp: bubble.unixMs !== undefined ? new Date(bubble.unixMs).toISOString() : undefined,
+                });
+            }
         }
 
         // ── Derive title ──────────────────────────────────────────────────────
@@ -633,47 +865,42 @@ export async function parseCursorWorkspace(
     let usedKey = 'composer.composerData';
     let rawPrompts: string | null = null;
     let rawGenerations: string | null = null;
+    const db = await openReadonlyDb(vscdbPath);
+    if (!db) {
+        return fatalResult(`Failed to open state.vscdb: ${vscdbPath}`);
+    }
     try {
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const Database = require('better-sqlite3') as typeof import('better-sqlite3');
-        const db = new Database(vscdbPath, { readonly: true, fileMustExist: true });
-        try {
-            const row = db.prepare(
-                "SELECT value FROM ItemTable WHERE key = 'composer.composerData'"
-            ).get() as { value: string } | undefined;
-            rawValue = row?.value ?? null;
-            if (rawValue === null || rawValue === undefined) {
-                const probeRows = db.prepare(
-                    "SELECT key, value FROM ItemTable WHERE key LIKE '%composer%' ORDER BY key LIMIT 100"
-                ).all() as Array<{ key: string; value: string }>;
-                for (const pr of probeRows) {
-                    try {
-                        const parsed = JSON.parse(pr.value) as { allComposers?: unknown; composers?: unknown };
-                        if (Array.isArray(parsed?.allComposers) || Array.isArray(parsed?.composers)) {
-                            rawValue = pr.value;
-                            usedKey = pr.key;
-                            break;
-                        }
-                    } catch {
-                        // non-JSON value or unexpected shape
+        const row = db.get<{ value: string }>(
+            "SELECT value FROM ItemTable WHERE key = 'composer.composerData'"
+        );
+        rawValue = row?.value ?? null;
+        if (rawValue === null || rawValue === undefined) {
+            const probeRows = db.query<{ key: string; value: string }>(
+                "SELECT key, value FROM ItemTable WHERE key LIKE '%composer%' ORDER BY key LIMIT 100"
+            );
+            for (const pr of probeRows) {
+                try {
+                    const parsed = JSON.parse(pr.value) as { allComposers?: unknown; composers?: unknown };
+                    if (Array.isArray(parsed?.allComposers) || Array.isArray(parsed?.composers)) {
+                        rawValue = pr.value;
+                        usedKey = pr.key;
+                        break;
                     }
+                } catch {
+                    // non-JSON value or unexpected shape
                 }
             }
-            const prRow = db.prepare(
-                "SELECT value FROM ItemTable WHERE key = 'aiService.prompts'"
-            ).get() as { value: string } | undefined;
-            rawPrompts = prRow?.value ?? null;
-            const genRow = db.prepare(
-                "SELECT value FROM ItemTable WHERE key = 'aiService.generations'"
-            ).get() as { value: string } | undefined;
-            rawGenerations = genRow?.value ?? null;
-        } finally {
-            db.close();
         }
-    } catch (err) {
-        return fatalResult(
-            `Failed to open/query state.vscdb: ${err instanceof Error ? err.message : String(err)}`
+        const prRow = db.get<{ value: string }>(
+            "SELECT value FROM ItemTable WHERE key = 'aiService.prompts'"
         );
+        rawPrompts = prRow?.value ?? null;
+        const genRow = db.get<{ value: string }>(
+            "SELECT value FROM ItemTable WHERE key = 'aiService.generations'"
+        );
+        rawGenerations = genRow?.value ?? null;
+    } finally {
+        db.close();
     }
 
     if (rawValue === null || rawValue === undefined) {
@@ -728,9 +955,15 @@ export async function parseCursorWorkspace(
         for (const item of conversation) {
             const role = extractItemRole(item);
             if (!role) { continue; }
-            const content = extractItemText(item);
+            let content = extractItemText(item);
 
             if (!content.trim()) { continue; }
+
+            // Strip Cursor agent-mode system context from user messages
+            if (role === 'user') {
+                content = stripCursorSystemContext(content);
+                if (!content.trim()) { continue; }
+            }
 
             const messageIndex = messages.length;
             messages.push({

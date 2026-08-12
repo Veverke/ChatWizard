@@ -2,30 +2,61 @@
 // Feature 23 — KB Entry Classification + KB Generation
 
 /**
- * A knowledge-base entry type — one of the five default types, or a user-defined
- * custom category.
+ * A knowledge-base entry type — a free-form category label.
+ * Categories emerge from LLM analysis (or embedding fallback).
  */
 export type KbEntryType = string;
 
 /**
- * The five built-in KB entry types.
+ * The five legacy built-in KB entry types, kept for backwards compatibility
+ * with the embedding fallback classifier.
  */
 export const DEFAULT_KB_TYPES: KbEntryType[] = ['decision', 'learning', 'pattern', 'gotcha', 'architecture'];
 
 /**
- * Set of the five built-in KB entry types for fast lookup.
+ * Broad topic categories used by the embedding fallback classifier.
+ *
+ * The LLM prompt suggests these same topics (Git, Docker, React, …). When the
+ * LLM is unavailable (e.g. Cursor without the agent CLI), the embedding
+ * classifier needs the same broad vocabulary — the legacy five types
+ * ("decision", "learning", …) are too abstract to match real sessions, which
+ * is why nearly everything collapsed into "Other".
+ */
+export const EMBEDDING_FALLBACK_CATEGORIES: string[] = [
+    'Git',
+    'Docker',
+    'React',
+    'Python',
+    'Vs Code',
+    'CSS',
+    'API',
+    'Database',
+    'Deployment',
+    'Bugs',
+    'Testing',
+    'Architecture',
+    'Refactoring',
+    'Features',
+    'Best Practices',
+    'Other',
+];
+
+/**
+ * Set of the five legacy KB entry types for fast lookup.
  */
 export const DEFAULT_KB_TYPE_SET = new Set<KbEntryType>(DEFAULT_KB_TYPES);
 
 /**
  * A single entry in the ChatWizard knowledge base.
- * Each entry corresponds to one session, classified into one of the five types.
+ * Each entry corresponds to one session, classified by LLM or embedding model.
  */
 export interface KbEntry {
     /** ID of the source session */
     sessionId: string;
-    /** Entry type, classified by heuristic rules */
+    /** Top-level folder — classified by LLM (pass 1) */
     type: KbEntryType;
+    /** Second-level subject within the top-level folder — classified by LLM (pass 1) */
+    subtype?: string;
     /** Human-readable title — derived from session title or first user message */
     title: string;
     /** 1–3 sentence summary of the knowledge */
@@ -38,4 +69,6 @@ export interface KbEntry {
     locked?: boolean;
     /** ISO-8601 creation timestamp */
     createdAt: string;
+    /** Whether this entry was classified using the LLM (vs embedding fallback) */
+    usedLlm?: boolean;
 }

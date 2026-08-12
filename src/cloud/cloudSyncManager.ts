@@ -31,6 +31,7 @@ import * as os from 'os';
 import * as zlib from 'zlib';
 import { SessionIndex } from '../index/sessionIndex';
 import type { SessionSummary } from '../types/index';
+import BetterSqlite3 from 'better-sqlite3';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -42,6 +43,11 @@ const KEY_FILENAME = 'cloud-sync-key.bin';
 const SYNC_STATE_FILENAME = 'cloud-sync-state.json';
 const SESSION_SUMMARIES_FILENAME = 'chatwizard-sessions.json';
 const DB_BACKUP_FILENAME = 'chatwizard-cache.db.backup.enc';
+const README_FILENAME = 'README.md';
+
+// GitHub Gist max file size is 50 MB (52,428,800 bytes) for free accounts.
+// The API may reject earlier due to total gist size limits.
+const GIST_MAX_FILE_SIZE = 50 * 1024 * 1024;
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -92,8 +98,8 @@ export interface ICloudBackend {
     readonly name: string;
     /** Read the current stored data for the default (summaries) entry. Returns null if none exists. */
     read(): Promise<Buffer | null>;
-    /** Write (overwrite) entries. Each key is a filename, value is the content. */
-    writeFiles(files: Record<string, Buffer>): Promise<void>;
+    /** Write (overwrite) entries. Each key is a filename, value is the content (string for plain text, Buffer for binary). */
+    writeFiles(files: Record<string, string | Buffer>): Promise<void>;
     /** Test connectivity and credentials. */
     test(): Promise<boolean>;
 }
@@ -133,10 +139,12 @@ class GitHubGistBackend implements ICloudBackend {
         }
     }
 
-    async writeFiles(files: Record<string, Buffer>): Promise<void> {
+    async writeFiles(files: Record<string, string | Buffer>): Promise<void> {
         const filesPayload: Record<string, { content: string }> = {};
         for (const [name, data] of Object.entries(files)) {
-            filesPayload[name] = { content: data.toString('base64') };
+            filesPayload[name] = typeof data === 'string'
+                ? { content: data }
+                : { content: data.toString('base64') };
         }
 
         const body = {
@@ -145,33 +153,50 @@ class GitHubGistBackend implements ICloudBackend {
             files: filesPayload,
         };
 
-        try {
-            const url = this.gistId
-                ? `https://api.github.com/gists/${this.gistId}`
-                : 'https://api.github.com/gists';
+        const url = this.gistId
+            ? `https://api.github.com/gists/${this.gistId}`
+            : 'https://api.github.com/gists';
 
-            const response = await fetch(url, {
-                method: this.gistId ? 'PATCH' : 'POST',
-                headers: { Authorization: `Bearer ${this.token}`, Accept: 'application/vnd.github.v3+json', 'Content-Type': 'application/json' },
-                body: JSON.stringify(body),
-            });
+        // Retry up to 3 times with exponential backoff for transient failures
+        const maxRetries = 3;
+        let lastError: Error | undefined;
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), 120_000); // 2 min timeout
 
-            if (!response.ok) {
-                throw new Error(`GitHub API returned ${response.status}: ${await response.text()}`);
+                const response = await fetch(url, {
+                    method: this.gistId ? 'PATCH' : 'POST',
+                    headers: { Authorization: `Bearer ${this.token}`, Accept: 'application/vnd.github.v3+json', 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                    signal: controller.signal,
+                });
+                clearTimeout(timeout);
+
+                if (!response.ok) {
+                    throw new Error(`GitHub API returned ${response.status}: ${await response.text()}`);
+                }
+
+                const gist = await response.json() as { id?: string };
+                if (gist.id) {
+                    this.gistId = gist.id;
+                    // Persist gist ID
+                    const statePath = path.join(this.stateDir, 'gist-state.json');
+                    const dir = path.dirname(statePath);
+                    if (!fs.existsSync(dir)) { fs.mkdirSync(dir, { recursive: true }); }
+                    fs.writeFileSync(statePath, JSON.stringify({ gistId: this.gistId }, null, 2));
+                }
+                return; // Success
+            } catch (err) {
+                lastError = err instanceof Error ? err : new Error(String(err));
+                if (attempt < maxRetries) {
+                    // Exponential backoff: 2s, 4s, 8s
+                    const delay = Math.pow(2, attempt) * 1000;
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                }
             }
-
-            const gist = await response.json() as { id?: string };
-            if (gist.id) {
-                this.gistId = gist.id;
-                // Persist gist ID
-                const statePath = path.join(this.stateDir, 'gist-state.json');
-                const dir = path.dirname(statePath);
-                if (!fs.existsSync(dir)) { fs.mkdirSync(dir, { recursive: true }); }
-                fs.writeFileSync(statePath, JSON.stringify({ gistId: this.gistId }, null, 2));
-            }
-        } catch (err) {
-            throw new Error(`Failed to write to GitHub Gist: ${err}`);
         }
+        throw new Error(`Failed to write to GitHub Gist: ${lastError}`);
     }
 
     async test(): Promise<boolean> {
@@ -198,7 +223,7 @@ class S3Backend implements ICloudBackend {
         return null;
     }
 
-    async writeFiles(_files: Record<string, Buffer>): Promise<void> {
+    async writeFiles(_files: Record<string, string | Buffer>): Promise<void> {
         // Placeholder — S3 SDK is not bundled
         throw new Error('S3 backend requires the @aws-sdk/client-s3 package. Install it manually.');
     }
@@ -220,7 +245,7 @@ class AzureBlobBackend implements ICloudBackend {
         return null;
     }
 
-    async writeFiles(_files: Record<string, Buffer>): Promise<void> {
+    async writeFiles(_files: Record<string, string | Buffer>): Promise<void> {
         // Placeholder — Azure SDK is not bundled
         throw new Error('Azure Blob backend requires the @azure/storage-blob package. Install it manually.');
     }
@@ -240,6 +265,7 @@ export class CloudSyncManager {
     private syncTimer: ReturnType<typeof setInterval> | undefined;
     private readonly _onChangeListener: () => void;
     private _disposed = false;
+    private dbPath: string | null = null;
 
     constructor(
         private readonly index: SessionIndex,
@@ -255,7 +281,9 @@ export class CloudSyncManager {
         this.index.addChangeListener(this._onChangeListener);
     }
 
-    async initialize(): Promise<void> {
+    async initialize(dbPath?: string): Promise<void> {
+        this.dbPath = dbPath ?? null;
+
         // Load existing sync state
         try {
             if (fs.existsSync(this.statePath)) {
@@ -280,11 +308,14 @@ export class CloudSyncManager {
 
         this.logger(`[Chat Wizard] Cloud sync initialised (${this.backend.name})`);
 
-        // Start periodic sync (every 5 minutes)
-        this.syncTimer = setInterval(() => { void this.sync(); }, 5 * 60 * 1000);
+        // Start periodic sync (every 5 minutes) — syncs summaries + DB backup
+        this.syncTimer = setInterval(() => { void this._syncAll(); }, 5 * 60 * 1000);
 
-        // Initial sync
-        void this.sync();
+        // Initial sync — summaries first, then DB backup
+        await this.sync();
+        if (this.dbPath) {
+            await this.syncDbBackup(this.dbPath);
+        }
     }
 
     async sync(): Promise<void> {
@@ -307,6 +338,7 @@ export class CloudSyncManager {
 
             await this.backend.writeFiles({
                 [SESSION_SUMMARIES_FILENAME]: encrypted,
+                [README_FILENAME]: this._readmeContent(),
             });
 
             // Update state
@@ -363,10 +395,45 @@ export class CloudSyncManager {
                 return;
             }
 
-            const dbBuffer = fs.readFileSync(resolvedPath);
+            // Copy to a temp file and VACUUM to reclaim free pages.
+            // SQLite doesn't reclaim space on DELETE — VACUUM rebuilds the file.
+            const tmpPath = resolvedPath + '.vacuum.tmp';
+            try {
+                fs.copyFileSync(resolvedPath, tmpPath);
+                const db = new BetterSqlite3(tmpPath);
+                db.pragma('journal_mode = OFF');
+                db.exec('VACUUM;');
+                db.close();
+            } catch (vacuumErr) {
+                this.logger(`[Chat Wizard] DB backup: VACUUM failed (${String(vacuumErr)}), proceeding with original file.`);
+                // If temp copy exists, clean it up
+                try { if (fs.existsSync(tmpPath)) { fs.unlinkSync(tmpPath); } } catch { /* ignore */ }
+            }
 
-            // Encrypt the raw .db file (no compression — already binary)
-            const encrypted = this._encrypt(dbBuffer);
+            let dbBuffer: Buffer;
+            const vacuumedPath = fs.existsSync(tmpPath) ? tmpPath : resolvedPath;
+            try {
+                dbBuffer = fs.readFileSync(vacuumedPath);
+            } finally {
+                // Clean up temp file if it exists and differs from original
+                if (vacuumedPath !== resolvedPath) {
+                    try { fs.unlinkSync(vacuumedPath); } catch { /* ignore */ }
+                }
+            }
+
+            // Compress before encrypting — SQLite DBs are highly compressible.
+            // AES output is random (incompressible), so compression must come first.
+            const compressed = zlib.gzipSync(dbBuffer);
+            const compressedSizeMb = compressed.length / 1024 / 1024;
+
+            // Check size — GitHub Gist has a 50 MB per-file limit
+            if (compressed.length > GIST_MAX_FILE_SIZE) {
+                this.logger(`[Chat Wizard] DB backup: compressed .db is ${compressedSizeMb.toFixed(1)} MB — still exceeds Gist 50 MB limit. Skipping DB backup.`);
+                return;
+            }
+
+            // Encrypt the compressed data
+            const encrypted = this._encrypt(compressed);
 
             // Write as a separate named blob via the backend.
             // Since our ICloudBackend interface only supports a single named file,
@@ -377,16 +444,18 @@ export class CloudSyncManager {
 
             // Write the DB backup file to the Gist.
             // Summaries are uploaded separately by sync() — do not overwrite them.
+            // Magic header: DB02 = gzip-compressed + AES-256-GCM encrypted
             const backupPayload = Buffer.concat([
-                Buffer.from('DB01'),  // magic header + version
+                Buffer.from('DB02'),
                 encrypted,
             ]);
 
             await this.backend.writeFiles({
                 [DB_BACKUP_FILENAME]: backupPayload,
+                [README_FILENAME]: this._readmeContent(),
             });
 
-            this.logger(`[Chat Wizard] DB backup: ${(dbBuffer.length / 1024).toFixed(0)} KB backed up to cloud alongside summaries.`);
+            this.logger(`[Chat Wizard] DB backup: ${(dbBuffer.length / 1024 / 1024).toFixed(1)} MB → ${compressedSizeMb.toFixed(1)} MB compressed, backed up to cloud.`);
         } catch (err) {
             this.logger(`[Chat Wizard] DB backup error: ${String(err)}`);
         }
@@ -578,5 +647,74 @@ export class CloudSyncManager {
     private async _onIndexChanged(): Promise<void> {
         // Debounce — only sync every 30 seconds at most
         // The 5-minute timer handles the actual sync schedule
+    }
+
+    /** Generate README content for the Gist explaining how to decode the files. */
+    private _readmeContent(): string {
+        return [
+            '# ChatWizard Cloud Sync',
+            '',
+            'This Gist contains encrypted backups from the [ChatWizard](https://github.com/veverke/chatwizard) VS Code extension.',
+            '',
+            '## Files',
+            '',
+            '### `chatwizard-sessions.json`',
+            'Session summaries (metadata only — titles, sources, token counts, timestamps).',
+            'AES-256-GCM encrypted, then gzip compressed.',
+            '',
+            '### `chatwizard-cache.db.backup.enc`',
+            'Full SQLite database backup (all sessions, messages, code blocks).',
+            'Gzip-compressed, then AES-256-GCM encrypted.',
+            '',
+            '## Decoding (requires the encryption key)',
+            '',
+            'Both files are encrypted with AES-256-GCM using a key stored locally in:',
+            '```',
+            '%APPDATA%\\Code\\User\\globalStorage\\veverke.chatwizard\\cloud-sync-key.bin',
+            '```',
+            '',
+            '### Decode `chatwizard-sessions.json`',
+            '```powershell',
+            'node -e "',
+            'const fs=require(\'fs\'),crypto=require(\'crypto\'),zlib=require(\'zlib\');',
+            'const key=fs.readFileSync(\'$env:APPDATA\\Code\\User\\globalStorage\\veverke.chatwizard\\cloud-sync-key.bin\');',
+            'const data=fs.readFileSync(\'chatwizard-sessions.json\');',
+            'const iv=data.subarray(0,16),tag=data.subarray(16,32),ct=data.subarray(32);',
+            'const d=crypto.createDecipheriv(\'aes-256-gcm\',key,iv); d.setAuthTag(tag);',
+            'const dec=Buffer.concat([d.update(ct),d.final()]);',
+            'console.log(zlib.gunzipSync(dec).toString(\'utf-8\'));',
+            '"',
+            '```',
+            '',
+            '### Decode `chatwizard-cache.db.backup.enc`',
+            'The file has a 4-byte magic header `DB02` followed by gzip-compressed + AES-256-GCM encrypted data.',
+            '```powershell',
+            'node -e "',
+            'const fs=require(\'fs\'),crypto=require(\'crypto\'),zlib=require(\'zlib\');',
+            'const key=fs.readFileSync(\'$env:APPDATA\\Code\\User\\globalStorage\\veverke.chatwizard\\cloud-sync-key.bin\');',
+            'const raw=fs.readFileSync(\'chatwizard-cache.db.backup.enc\');',
+            'const magic=raw.subarray(0,4).toString();',
+            'if(magic!==\'DB02\'){console.error(\'Bad magic (expected DB02)\');process.exit(1);}',
+            'const data=raw.subarray(4);',
+            'const iv=data.subarray(0,16),tag=data.subarray(16,32),ct=data.subarray(32);',
+            'const d=crypto.createDecipheriv(\'aes-256-gcm\',key,iv); d.setAuthTag(tag);',
+            'const dec=Buffer.concat([d.update(ct),d.final()]);',
+            'const db=zlib.gunzipSync(dec);',
+            'fs.writeFileSync(\'restored-chatwizard-cache.db\',db);',
+            'console.log(\'Written to restored-chatwizard-cache.db\');',
+            '"',
+            '```',
+            '',
+            '> **Security:** The encryption key never leaves your machine. Anyone with access to this Gist also needs the key file to decode the contents.',
+            '',
+        ].join('\n');
+    }
+
+    /** Sync summaries then DB backup — called by the periodic timer. */
+    private async _syncAll(): Promise<void> {
+        await this.sync();
+        if (this.dbPath) {
+            await this.syncDbBackup(this.dbPath);
+        }
     }
 }

@@ -1,20 +1,12 @@
 // src/analytics/copilotPromptAnalysisProvider.ts
 //
-// Implements ILlmAnalysisProvider using the VS Code Copilot Language Model API
-// (zero premium requests when using o4-mini / gpt-4o-mini via the copilot vendor).
-//
-// Ask the LLM to return a strict JSON object. If the response cannot be parsed
-// as valid JSON, return null so the caller can fall back to heuristics.
+// Implements ILlmAnalysisProvider using the central llmClient.
+// Falls back gracefully when no provider is available.
 
 import type { ILlmAnalysisProvider, LlmPromptAnalysis, VerbosityFlag } from './promptAnalyzer';
 import type { ModelId } from '../utils/modelPriceTable';
 import { resolveModelId } from '../utils/modelPriceTable';
-
-/** Shared no-op token — avoids allocating a CancellationTokenSource when no external token is provided. */
-const NONE_TOKEN = {
-    isCancellationRequested: false,
-    onCancellationRequested: () => ({ dispose: () => void 0 }),
-} as unknown as import('vscode').CancellationToken;
+import { promptLlm } from './llmClient';
 
 // ── Valid codes the LLM is allowed to emit ───────────────────────────────────
 const VALID_CODES = new Set<string>([
@@ -48,26 +40,6 @@ Rules:
 - Include rewriteSuggestion only when the prompt can be meaningfully shortened (>25% fewer tokens).
 - If no flags apply, return "verbosityFlags": [].
 - Never add extra keys outside the schema.`;
-
-// ── Model selection helpers ──────────────────────────────────────────────────
-
-const FREE_MODEL_CHAIN = [
-    { family: 'o4-mini' },
-    { family: 'gpt-4o-mini' },
-];
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function selectCopilotModel(vscode: any): Promise<any | undefined> {
-    for (const filter of FREE_MODEL_CHAIN) {
-        try {
-            const [model] = await vscode.lm.selectChatModels({ vendor: 'copilot', ...filter });
-            if (model) { return model; }
-        } catch {
-            // try next
-        }
-    }
-    return undefined;
-}
 
 // ── JSON parsing with fallback ───────────────────────────────────────────────
 
@@ -122,30 +94,14 @@ export function parseResponse(raw: string): LlmPromptAnalysis | null {
 // ── Provider implementation ──────────────────────────────────────────────────
 
 export class CopilotPromptAnalysisProvider implements ILlmAnalysisProvider {
-    async analyze(prompt: string, tokenCount: number, token?: unknown): Promise<LlmPromptAnalysis | null> {
+    async analyze(prompt: string, tokenCount: number, _token?: unknown): Promise<LlmPromptAnalysis | null> {
         try {
-            // eslint-disable-next-line @typescript-eslint/no-require-imports
-            const vscode = require('vscode') as typeof import('vscode');
-            const model = await selectCopilotModel(vscode);
-            if (!model) { return null; }
-
             const userContent =
                 `Token count: ~${tokenCount}\n\nPrompt to analyze:\n${prompt.slice(0, 6000)}`;
 
-            const messages = [
-                vscode.LanguageModelChatMessage.User(userContent),
-            ];
+            const raw = await promptLlm(SYSTEM_PROMPT, userContent, { timeoutMs: 15_000 });
+            if (raw === null) { return null; }
 
-            const ct = (token as import('vscode').CancellationToken | undefined) ?? NONE_TOKEN;
-
-            const response = await model.sendRequest(
-                messages,
-                { systemPrompt: SYSTEM_PROMPT },
-                ct,
-            );
-
-            let raw = '';
-            for await (const chunk of response.text) { raw += chunk; }
             return parseResponse(raw);
         } catch {
             return null;

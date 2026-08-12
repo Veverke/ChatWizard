@@ -29,6 +29,13 @@ node_modules/**
 !node_modules/better-sqlite3/build/Release/better_sqlite3.node
 !node_modules/better-sqlite3/package.json
 
+# sql.js: pure WASM SQLite, used as fallback when better-sqlite3 native module
+# fails due to NODE_MODULE_VERSION mismatch (e.g. running in Cursor's Electron).
+# The WASM file is loaded at runtime via locateFile.
+!node_modules/sql.js/dist/sql-wasm.js
+!node_modules/sql.js/dist/sql-wasm.wasm
+!node_modules/sql.js/package.json
+
 # @xenova/transformers: loaded externally at runtime (not bundled); include full package
 !node_modules/@xenova/transformers/**
 

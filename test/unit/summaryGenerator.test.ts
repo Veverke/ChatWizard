@@ -5,7 +5,7 @@
  */
 
 import * as assert from 'assert';
-import { generateTfidfSummary } from '../../src/analytics/summaryGenerator';
+import { generateTfidfSummary, extractKeywords, RateLimiter } from '../../src/analytics/summaryGenerator';
 import type { Session, Message } from '../../src/types/index';
 
 function msg(role: 'user' | 'assistant', content: string): Message {
@@ -105,6 +105,88 @@ suite('summaryGenerator', () => {
             // Should not throw
             const summary = generateTfidfSummary(session);
             assert.ok(typeof summary === 'string');
+        });
+    });
+
+    suite('extractKeywords', () => {
+        test('returns top N keywords sorted by frequency', () => {
+            const result = extractKeywords('react react react angular angular vue', 2);
+            assert.deepStrictEqual(result, ['react', 'angular']);
+        });
+
+        test('filters out stop words', () => {
+            const result = extractKeywords('the and of react for with', 3);
+            assert.deepStrictEqual(result, ['react']);
+        });
+
+        test('ignores words shorter than 3 characters', () => {
+            const result = extractKeywords('react js go ts vue', 3);
+            assert.deepStrictEqual(result, ['react', 'vue']);
+        });
+
+        test('handles punctuation and special characters', () => {
+            const result = extractKeywords('react! component? (testing) [api]', 3);
+            assert.deepStrictEqual(result, ['react', 'component', 'testing']);
+        });
+
+        test('returns empty array for empty text', () => {
+            assert.deepStrictEqual(extractKeywords('', 3), []);
+        });
+
+        test('returns empty array for text with only stop words', () => {
+            assert.deepStrictEqual(extractKeywords('the a an and or of', 3), []);
+        });
+
+        test('defaults to topN=3', () => {
+            const result = extractKeywords('react angular vue svelte');
+            assert.strictEqual(result.length, 3);
+        });
+    });
+
+    suite('RateLimiter', () => {
+        test('runs function when under max concurrency', async () => {
+            const limiter = new RateLimiter(5);
+            const result = await limiter.run(() => Promise.resolve(42));
+            assert.strictEqual(result, 42);
+        });
+
+        test('queues tasks when at max concurrency', async () => {
+            const limiter = new RateLimiter(1);
+            let order: string[] = [];
+            const p1 = limiter.run(async () => {
+                order.push('start1');
+                await new Promise(r => setTimeout(r, 50));
+                order.push('end1');
+                return 1;
+            });
+            const p2 = limiter.run(async () => {
+                order.push('start2');
+                return 2;
+            });
+            const results = await Promise.all([p1, p2]);
+            assert.strictEqual(results[0], 1);
+            assert.strictEqual(results[1], 2);
+            assert.strictEqual(order[0], 'start1');
+            assert.strictEqual(order[1], 'end1');
+            assert.strictEqual(order[2], 'start2');
+        });
+
+        test('handles concurrent tasks up to max', async () => {
+            const limiter = new RateLimiter(3);
+            const results = await Promise.all([
+                limiter.run(() => Promise.resolve('a')),
+                limiter.run(() => Promise.resolve('b')),
+                limiter.run(() => Promise.resolve('c')),
+            ]);
+            assert.deepStrictEqual(results, ['a', 'b', 'c']);
+        });
+
+        test('propagates errors from the wrapped function', async () => {
+            const limiter = new RateLimiter(5);
+            await assert.rejects(
+                limiter.run(() => Promise.reject(new Error('test error'))),
+                /test error/,
+            );
         });
     });
 });

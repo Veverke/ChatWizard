@@ -264,6 +264,20 @@ suite('clineParser — branch coverage edge cases', () => {
         assert.ok(session.title.includes('Refactor'), `Expected title to include 'Refactor', got: "${session.title}"`);
     });
 
+    test('<task>…</task> wrapper stripped from displayed user message content', async () => {
+        writeTask([
+            { role: 'user', content: '<task>\nRefactor the database layer\n</task>\n<context>some context</context>' },
+            { role: 'assistant', content: 'Will do.' },
+        ]);
+        const { session } = await parseClineTask(tmpDir);
+        assert.strictEqual(session.messages.length, 2, 'Expected 2 messages');
+        const userMsg = session.messages[0];
+        assert.strictEqual(userMsg.role, 'user');
+        assert.ok(!userMsg.content.includes('<task>'), 'Message content should not contain <task> wrapper');
+        assert.ok(userMsg.content.startsWith('Refactor'), `Expected content to start with actual prompt, got: "${userMsg.content.slice(0, 50)}"`);
+        assert.ok(userMsg.content.includes('<context>'), 'Other XML tags should be preserved');
+    });
+
     test('title uses first non-empty non-tag line when no <task> block', async () => {
         writeTask([
             { role: 'user', content: '<environment_details>some env</environment_details>\nActual user request here' },

@@ -7,9 +7,9 @@ import { SemanticMessageResult } from './types';
 
 /** Magic bytes "CWSE" */
 const MAGIC = Buffer.from([0x43, 0x57, 0x53, 0x45]);
-// v3: session titles are now indexed as synthetic user entries (messageIndex = -1).
-// Bumping the version discards any v2 index so all sessions are re-indexed with titles.
-const FILE_VERSION = 3;
+// v4: keys are padded to 4-byte alignment so Float32Array views work correctly.
+// Bumping the version discards any v3 index so all entries are re-written with padding.
+const FILE_VERSION = 4;
 
 /**
  * Composite key format: "sessionId::role::messageIndex::paragraphIndex"
@@ -40,14 +40,15 @@ function parseKey(key: string): { sessionId: string; role: 'user' | 'assistant';
  * paragraph position. Vectors are pre-normalized; cosine similarity is a
  * plain dot product.
  *
- * Binary format v2:
+ * Binary format v4:
  *   [4] magic "CWSE"
- *   [4] version: 2 (uint32 LE)
+ *   [4] version: 4 (uint32 LE)
  *   [4] dims: 384 (uint32 LE)
  *   [4] entry count N (uint32 LE)
  *   [N entries]
  *     [4] composite key byte length (uint32 LE)
  *     [var] composite key UTF-8 bytes
+ *     [padding] 0-3 bytes to align to 4-byte boundary
  *     [dims×4] float32 embedding (little-endian)
  */
 export class SemanticIndex implements ISemanticIndex {
@@ -125,7 +126,8 @@ export class SemanticIndex implements ISemanticIndex {
         for (const [key] of entries) {
             const keyBuf = Buffer.from(key, 'utf8');
             keyBufs.push(keyBuf);
-            totalSize += 4 + keyBuf.byteLength + SEMANTIC_DIMS * 4;
+            const padding = (4 - (keyBuf.byteLength % 4)) % 4;
+            totalSize += 4 + keyBuf.byteLength + padding + SEMANTIC_DIMS * 4;
         }
 
         const buf = Buffer.allocUnsafe(totalSize);
@@ -145,9 +147,14 @@ export class SemanticIndex implements ISemanticIndex {
             buf.writeUInt32LE(keyBuf.byteLength, offset); offset += 4;
             keyBuf.copy(buf, offset); offset += keyBuf.byteLength;
 
-            for (let d = 0; d < SEMANTIC_DIMS; d++) {
-                buf.writeFloatLE(embedding[d], offset); offset += 4;
-            }
+            // Pad to 4-byte alignment so Float32Array views work correctly
+            const padding = (4 - (keyBuf.byteLength % 4)) % 4;
+            offset += padding;
+
+            // Bulk-write the 384 float32 values via a TypedArray view into the
+            // same underlying Buffer — avoids 384 individual writeFloatLE calls.
+            new Float32Array(buf.buffer, buf.byteOffset + offset, SEMANTIC_DIMS).set(embedding);
+            offset += SEMANTIC_DIMS * 4;
         }
 
         // Atomic write: write to a temp file first, then rename.
@@ -177,7 +184,8 @@ export class SemanticIndex implements ISemanticIndex {
         for (const [key] of entries) {
             const keyBuf = Buffer.from(key, 'utf8');
             keyBufs.push(keyBuf);
-            totalSize += 4 + keyBuf.byteLength + SEMANTIC_DIMS * 4;
+            const padding = (4 - (keyBuf.byteLength % 4)) % 4;
+            totalSize += 4 + keyBuf.byteLength + padding + SEMANTIC_DIMS * 4;
         }
 
         const buf = Buffer.allocUnsafe(totalSize);
@@ -195,9 +203,14 @@ export class SemanticIndex implements ISemanticIndex {
             buf.writeUInt32LE(keyBuf.byteLength, offset); offset += 4;
             keyBuf.copy(buf, offset); offset += keyBuf.byteLength;
 
-            for (let d = 0; d < SEMANTIC_DIMS; d++) {
-                buf.writeFloatLE(embedding[d], offset); offset += 4;
-            }
+            // Pad to 4-byte alignment so Float32Array views work correctly
+            const padding = (4 - (keyBuf.byteLength % 4)) % 4;
+            offset += padding;
+
+            // Bulk-write the 384 float32 values via a TypedArray view into the
+            // same underlying Buffer — avoids 384 individual writeFloatLE calls.
+            new Float32Array(buf.buffer, buf.byteOffset + offset, SEMANTIC_DIMS).set(embedding);
+            offset += SEMANTIC_DIMS * 4;
         }
 
         // Ensure parent directory exists
@@ -266,7 +279,15 @@ export class SemanticIndex implements ISemanticIndex {
             this._store.clear();
             this._indexedSessions.clear();
 
+            const embeddingBytes = SEMANTIC_DIMS * 4;
+
             for (let i = 0; i < N; i++) {
+                // Yield every 500 entries so the event loop stays responsive
+                // and the load timeout does not fire prematurely on large indexes.
+                if (i > 0 && i % 500 === 0) {
+                    await new Promise((r) => setImmediate(r));
+                }
+
                 if (offset + 4 > raw.byteLength) {
                     throw new Error(`Unexpected end of file reading entry ${i} key length`);
                 }
@@ -278,16 +299,24 @@ export class SemanticIndex implements ISemanticIndex {
                 const key = raw.toString('utf8', offset, offset + keyLen);
                 offset += keyLen;
 
-                const embeddingBytes = SEMANTIC_DIMS * 4;
+                // Skip padding bytes to maintain 4-byte alignment for Float32Array
+                const padding = (4 - (keyLen % 4)) % 4;
+                offset += padding;
+
                 if (offset + embeddingBytes > raw.byteLength) {
                     throw new Error(`Unexpected end of file reading entry ${i} embedding`);
                 }
-                const embedding = new Float32Array(SEMANTIC_DIMS);
-                for (let d = 0; d < SEMANTIC_DIMS; d++) {
-                    embedding[d] = raw.readFloatLE(offset); offset += 4;
-                }
+                // Bulk-read the 384 float32 values via a TypedArray view into the
+                // underlying ArrayBuffer — avoids 384 individual readFloatLE calls
+                // per entry, which was causing a 10-second timeout on large indexes.
+                const embedding = new Float32Array(
+                    raw.buffer,
+                    raw.byteOffset + offset,
+                    SEMANTIC_DIMS,
+                );
+                offset += embeddingBytes;
 
-                this._store.set(key, embedding);
+                this._store.set(key, new Float32Array(embedding));
                 // Rebuild _indexedSessions from loaded keys
                 const parsed = parseKey(key);
                 if (parsed) { this._indexedSessions.add(parsed.sessionId); }

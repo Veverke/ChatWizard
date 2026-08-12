@@ -55,6 +55,15 @@ function extractContent(content: string | ContentPart[]): string {
         .join('');
 }
 
+/**
+ * Strips the Cline <task>…</task> wrapper from a user message.
+ * Cline wraps the user's real prompt in <task> tags in the API conversation,
+ * so we remove it before displaying or searching content.
+ */
+function stripTaskWrapper(text: string): string {
+    return text.replace(/<task>\s*([\s\S]*?)\s*<\/task>/g, '$1').trim();
+}
+
 // ─── Public exports ────────────────────────────────────────────────────────
 
 /**
@@ -202,10 +211,18 @@ export async function parseClineTask(
     for (const entry of apiEntries) {
         const role: 'user' | 'assistant' =
             entry.role === 'user' ? 'user' : 'assistant';
-        const content = extractContent(entry.content);
+        let content = extractContent(entry.content);
 
         // Skip turns with no visible text (tool-only, image-only, etc.)
         if (!content.trim()) { continue; }
+
+        // Cline wraps the user's real prompt in <task>…</task> in the API
+        // conversation history. Strip it so the displayed/searchable content
+        // is just the actual user request without XML noise.
+        if (role === 'user') {
+            content = stripTaskWrapper(content);
+            if (!content.trim()) { continue; }
+        }
 
         const messageIndex = messages.length;
         messages.push({
@@ -218,8 +235,7 @@ export async function parseClineTask(
 
     // ── Derive title ─────────────────────────────────────────────────────────
     // Priority 1: ui_messages.json task entry — cleanest, no XML wrapper noise.
-    // Priority 2: Parse <task>…</task> block from first API user message.
-    // Priority 3: First non-empty line of first API user message (fallback).
+    // Priority 2: First line of the first user message (already stripped of <task> wrapper).
     let title = 'Untitled Task';
 
     const taskUiMsg = uiMessages.find(m => m.say === 'task' && typeof m.text === 'string' && m.text?.trim());
@@ -230,12 +246,12 @@ export async function parseClineTask(
     } else {
         const firstUserMsg = messages.find(m => m.role === 'user');
         if (firstUserMsg) {
-            // Cline wraps the user request in <task>…</task> in the API message.
-            const taskMatch = firstUserMsg.content.match(/<task>\s*([\s\S]*?)\s*<\/task>/);
-            const base = taskMatch
-                ? taskMatch[1].split('\n')[0] || taskMatch[1]
-                : (firstUserMsg.content.split('\n').find(l => l.trim() && !l.startsWith('<')) ?? firstUserMsg.content);
-            title = base.length > MAX_TITLE_CHARS ? base.slice(0, MAX_TITLE_CHARS) + '…' : base;
+            // Find first non-empty line that doesn't start with < (XML metadata).
+            // The <task> wrapper is already stripped from message content so
+            // remaining <tag> lines (e.g. <environment_details>) are skipped.
+            const firstLine = firstUserMsg.content.split('\n').find(l => l.trim() && !l.startsWith('<'))
+                ?? firstUserMsg.content;
+            title = firstLine.length > MAX_TITLE_CHARS ? firstLine.slice(0, MAX_TITLE_CHARS) + '…' : firstLine;
         }
     }
 

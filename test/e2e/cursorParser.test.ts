@@ -3,7 +3,7 @@ import * as assert from 'assert';
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
-import { parseCursorWorkspace, parseCursorGlobalDb, extractCursorCodeBlocks } from '../../src/parsers/cursor';
+import { parseCursorWorkspace, parseCursorGlobalDb, extractCursorCodeBlocks, stripCursorSystemContext } from '../../src/parsers/cursor';
 
 // ---------------------------------------------------------------------------
 // Helpers to create minimal SQLite fixtures in a temp directory
@@ -414,7 +414,8 @@ suite('Cursor Parser', () => {
 function createGlobalDb(
     dbPath: string,
     rows: Array<{ key: string; value: string }>,
-    createTable = true
+    createTable = true,
+    blobRows: Array<{ key: string; value: Buffer }> = []
 ): void {
     const db = new Database(dbPath);
     if (createTable) {
@@ -422,6 +423,11 @@ function createGlobalDb(
         const stmt = db.prepare('INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)');
         for (const row of rows) {
             stmt.run(row.key, row.value);
+        }
+        // BLOB values need a separate insert since the type matters
+        const blobStmt = db.prepare('INSERT OR REPLACE INTO cursorDiskKV (key, value) VALUES (?, ?)');
+        for (const brow of blobRows) {
+            blobStmt.run(brow.key, brow.value);
         }
     } else {
         // Create a different table so cursorDiskKV is missing
@@ -543,6 +549,50 @@ suite('parseCursorGlobalDb', () => {
         assert.strictEqual(results[0].session.messages[0].content, 'Real message');
     });
 
+    test('richText Lexical JSON used as fallback when text is empty', async () => {
+        const composerId = 'composer-richtext-global';
+        const dbPath = path.join(tmpDir, 'richtext-global.db');
+
+        // Lexical JSON structure: nested children with text and linebreak nodes
+        const lexicalJson = JSON.stringify({
+            root: {
+                children: [{
+                    children: [
+                        { text: 'Hello from ' },
+                        { text: 'Lexical', bold: true },
+                        { type: 'linebreak' },
+                        { text: 'rich text editor' },
+                    ],
+                }],
+            },
+        });
+
+        createGlobalDb(dbPath, [
+            { key: `composerData:${composerId}`, value: JSON.stringify({ name: 'RichText Chat', createdAt: 1700000000000 }) },
+            { key: `bubbleId:${composerId}:bubble-001`, value: JSON.stringify({ type: 1, text: '', richText: lexicalJson, unixMs: 1700000001000 }) },
+            { key: `bubbleId:${composerId}:bubble-002`, value: JSON.stringify({ type: 2, text: 'Assistant reply', unixMs: 1700000002000 }) },
+        ]);
+        const results = await parseCursorGlobalDb(dbPath);
+        assert.strictEqual(results.length, 1);
+        assert.strictEqual(results[0].session.messages.length, 2);
+        assert.strictEqual(results[0].session.messages[0].role, 'user');
+        assert.strictEqual(results[0].session.messages[0].content, 'Hello from Lexical\nrich text editor');
+        assert.strictEqual(results[0].session.messages[1].content, 'Assistant reply');
+    });
+
+    test('richText fallback handles empty richText gracefully', async () => {
+        const composerId = 'composer-empty-rt';
+        const dbPath = path.join(tmpDir, 'empty-rt.db');
+        createGlobalDb(dbPath, [
+            { key: `composerData:${composerId}`, value: JSON.stringify({ name: 'Empty RT', createdAt: 1700000000000 }) },
+            { key: `bubbleId:${composerId}:bubble-001`, value: JSON.stringify({ type: 1, text: '', richText: '', unixMs: 1700000001000 }) },
+            { key: `bubbleId:${composerId}:bubble-002`, value: JSON.stringify({ type: 1, text: 'Fallback message', unixMs: 1700000002000 }) },
+        ]);
+        const results = await parseCursorGlobalDb(dbPath);
+        assert.strictEqual(results[0].session.messages.length, 1);
+        assert.strictEqual(results[0].session.messages[0].content, 'Fallback message');
+    });
+
     test('bubbles with unsupported type (not 1 or 2) are skipped', async () => {
         const composerId = 'composer-bad-type';
         const dbPath = path.join(tmpDir, 'bad-type.db');
@@ -577,6 +627,26 @@ suite('parseCursorGlobalDb', () => {
         const results = await parseCursorGlobalDb(dbPath);
         assert.strictEqual(results[0].session.messages[0].role, 'user');
         assert.strictEqual(results[0].session.messages[1].role, 'assistant');
+    });
+
+    test('user bubbles with Cursor system context are stripped', async () => {
+        const composerId = 'composer-bubble-context';
+        const dbPath = path.join(tmpDir, 'bubble-context.db');
+        createGlobalDb(dbPath, [
+            { key: `composerData:${composerId}`, value: JSON.stringify({ name: 'Chat', createdAt: 1700000000000 }) },
+            {
+                key: `bubbleId:${composerId}:bubble-001`,
+                value: JSON.stringify({
+                    type: 1,
+                    text: `<user_info>OS: Windows</user_info>\n<user_query>\nFix the bug in auth\n</user_query>`,
+                    unixMs: 1700000001000,
+                }),
+            },
+            { key: `bubbleId:${composerId}:bubble-002`, value: JSON.stringify({ type: 2, text: 'Done.', unixMs: 1700000002000 }) },
+        ]);
+        const results = await parseCursorGlobalDb(dbPath);
+        assert.strictEqual(results[0].session.messages.length, 2);
+        assert.strictEqual(results[0].session.messages[0].content, 'Fix the bug in auth');
     });
 
     test('returns multiple sessions for multiple composer rows', async () => {
@@ -626,6 +696,262 @@ suite('parseCursorGlobalDb', () => {
         ]);
         const results = await parseCursorGlobalDb(dbPath);
         assert.ok(results[0].session.title.length <= 130, 'title should be truncated');
+    });
+
+    // ── conversationState / agentKv blob recovery ────────────────────────────
+
+    /** Build a protobuf conversationState from a list of 32-byte hash buffers. */
+    function buildConversationState(hashes: Buffer[]): string {
+        const parts: Buffer[] = [];
+        for (const h of hashes) {
+            parts.push(Buffer.from([0x0a, h.length])); // field 1, wire type 2, len
+            parts.push(h);
+        }
+        return Buffer.concat(parts).toString('base64');
+    }
+
+    test('recovers messages from agentKv blobs when bubbles have empty text', async () => {
+        const composerId = 'composer-blobs';
+        const dbPath = path.join(tmpDir, 'blobs.db');
+
+        // Two blobs: user + assistant
+        const userHash = Buffer.alloc(32, 0x01);
+        const asstHash = Buffer.alloc(32, 0x02);
+        const hoverHash = Buffer.alloc(32, 0x03); // not referenced
+
+        const conversationState = buildConversationState([userHash, asstHash]);
+
+        createGlobalDb(
+            dbPath,
+            [
+                {
+                    key: `composerData:${composerId}`,
+                    // bubbles are stubs (empty text) like Cursor 0.46+
+                    value: JSON.stringify({
+                        name: 'Knowledge Base issue',
+                        createdAt: 1700000000000,
+                        conversationState,
+                    }),
+                },
+                { key: `bubbleId:${composerId}:b1`, value: JSON.stringify({ type: 1, text: '', unixMs: 1700000001000 }) },
+                { key: `bubbleId:${composerId}:b2`, value: JSON.stringify({ type: 2, text: '', unixMs: 1700000002000 }) },
+            ],
+            true,
+            [
+                { key: `agentKv:blob:${userHash.toString('hex')}`, value: Buffer.from(JSON.stringify({ role: 'user', content: 'What is the Knowledge Base feature?' })) },
+                { key: `agentKv:blob:${asstHash.toString('hex')}`, value: Buffer.from(JSON.stringify({ role: 'assistant', content: 'It handles free model triggering.' })) },
+                { key: `agentKv:blob:${hoverHash.toString('hex')}`, value: Buffer.from(JSON.stringify({ role: 'tool', content: 'ignored' })) },
+            ]
+        );
+
+        const results = await parseCursorGlobalDb(dbPath);
+        assert.strictEqual(results.length, 1);
+        assert.strictEqual(results[0].session.title, 'Knowledge Base issue');
+        assert.strictEqual(results[0].session.messages.length, 2);
+        assert.strictEqual(results[0].session.messages[0].role, 'user');
+        assert.strictEqual(results[0].session.messages[0].content, 'What is the Knowledge Base feature?');
+        assert.strictEqual(results[0].session.messages[1].role, 'assistant');
+        assert.strictEqual(results[0].session.messages[1].content, 'It handles free model triggering.');
+    });
+
+    test('recovers multi-part content and skips system/tool blobs', async () => {
+        const composerId = 'composer-multipart';
+        const dbPath = path.join(tmpDir, 'multipart.db');
+
+        const sysHash = Buffer.alloc(32, 0x11);
+        const userHash = Buffer.alloc(32, 0x12);
+        const conversationState = buildConversationState([sysHash, userHash]);
+
+        createGlobalDb(
+            dbPath,
+            [
+                {
+                    key: `composerData:${composerId}`,
+                    value: JSON.stringify({ name: 'Multi', createdAt: 1700000000000, conversationState }),
+                },
+            ],
+            true,
+            [
+                { key: `agentKv:blob:${sysHash.toString('hex')}`, value: Buffer.from(JSON.stringify({ role: 'system', content: 'You are an AI.' })) },
+                { key: `agentKv:blob:${userHash.toString('hex')}`, value: Buffer.from(JSON.stringify({ role: 'user', content: [{ type: 'text', text: 'Part one' }, { type: 'text', text: 'Part two' }] })) },
+            ]
+        );
+
+        const results = await parseCursorGlobalDb(dbPath);
+        assert.strictEqual(results.length, 1);
+        assert.strictEqual(results[0].session.messages.length, 1);
+        assert.strictEqual(results[0].session.messages[0].role, 'user');
+        assert.strictEqual(results[0].session.messages[0].content, 'Part one\nPart two');
+    });
+
+    test('falls back to bubble text when blob recovery yields no user/assistant messages', async () => {
+        const composerId = 'composer-blob-fallback';
+        const dbPath = path.join(tmpDir, 'blob-fallback.db');
+
+        const toolHash = Buffer.alloc(32, 0x21);
+        const conversationState = buildConversationState([toolHash]);
+
+        createGlobalDb(
+            dbPath,
+            [
+                {
+                    key: `composerData:${composerId}`,
+                    value: JSON.stringify({ name: 'Fallback', createdAt: 1700000000000, conversationState }),
+                },
+                { key: `bubbleId:${composerId}:b-001`, value: JSON.stringify({ type: 1, text: 'Real bubble text', unixMs: 1700000001000 }) },
+            ],
+            true,
+            [
+                { key: `agentKv:blob:${toolHash.toString('hex')}`, value: Buffer.from(JSON.stringify({ role: 'tool', content: 'tool result' })) },
+            ]
+        );
+
+        const results = await parseCursorGlobalDb(dbPath);
+        assert.strictEqual(results.length, 1);
+        assert.strictEqual(results[0].session.messages.length, 1);
+        assert.strictEqual(results[0].session.messages[0].content, 'Real bubble text');
+    });
+
+    test('blob recovery strips Cursor agent-mode system context from user messages', async () => {
+        const composerId = 'composer-context-strip';
+        const dbPath = path.join(tmpDir, 'context-strip.db');
+
+        const userHash = Buffer.alloc(32, 0xaa);
+        const asstHash = Buffer.alloc(32, 0xbb);
+        const conversationState = buildConversationState([userHash, asstHash]);
+
+        const noisyUser = `<user_info>OS Version: win32 10.0.26200</user_info>
+<git_status>M src/foo.ts</git_status>
+<rules>
+<user_rule>Some rule here</user_rule>
+</rules>
+<available_skills>
+<agent_skill>skill1</agent_skill>
+</available_skills>
+<open_and_recently_viewed_files>src/foo.ts</open_and_recently_viewed_files>
+<timestamp>Monday, Aug 10, 2026</timestamp>
+<user_query>
+Please refactor the UserService class to use dependency injection
+</user_query>`;
+
+        createGlobalDb(
+            dbPath,
+            [
+                {
+                    key: `composerData:${composerId}`,
+                    value: JSON.stringify({ name: 'Refactor DI', createdAt: 1700000000000, conversationState }),
+                },
+            ],
+            true,
+            [
+                { key: `agentKv:blob:${userHash.toString('hex')}`, value: Buffer.from(JSON.stringify({ role: 'user', content: noisyUser })) },
+                { key: `agentKv:blob:${asstHash.toString('hex')}`, value: Buffer.from(JSON.stringify({ role: 'assistant', content: 'Here is the refactored code.' })) },
+            ]
+        );
+
+        const results = await parseCursorGlobalDb(dbPath);
+        assert.strictEqual(results.length, 1);
+        assert.strictEqual(results[0].session.messages.length, 2);
+        assert.strictEqual(results[0].session.messages[0].role, 'user');
+        // The system context should be stripped, leaving only the <user_query> content
+        assert.strictEqual(
+            results[0].session.messages[0].content,
+            'Please refactor the UserService class to use dependency injection'
+        );
+        // Assistant message should be preserved as-is
+        assert.strictEqual(results[0].session.messages[1].content, 'Here is the refactored code.');
+    });
+});
+
+// ---------------------------------------------------------------------------
+// stripCursorSystemContext — Cursor agent-mode noise stripping
+// ---------------------------------------------------------------------------
+
+suite('stripCursorSystemContext', () => {
+
+    test('extracts content from <user_query> tags', () => {
+        const input = `<user_info>OS: Windows</user_info>
+<user_query>
+how do I fix the JWT signing?
+</user_query>
+<git_status>modified: src/auth.ts</git_status>`;
+        assert.strictEqual(
+            stripCursorSystemContext(input),
+            'how do I fix the JWT signing?'
+        );
+    });
+
+    test('extracts content from <user_query> with surrounding system context', () => {
+        const input = `<user_info>...</user_info>
+<git_status>...</git_status>
+<agent_transcripts>...</agent_transcripts>
+<rules>
+<user_rule>rule1</user_rule>
+</rules>
+<available_skills>...</available_skills>
+<open_and_recently_viewed_files>src/foo.ts</open_and_recently_viewed_files>
+<timestamp>Monday, Aug 10, 2026</timestamp>
+<user_query>
+Please refactor the UserService class
+</user_query>`;
+        assert.strictEqual(
+            stripCursorSystemContext(input),
+            'Please refactor the UserService class'
+        );
+    });
+
+    test('returns original text unchanged when no context tags or user_query present', () => {
+        const input = 'Hello, can you help me?';
+        assert.strictEqual(stripCursorSystemContext(input), 'Hello, can you help me?');
+    });
+
+    test('strips Cursor prompt markers', () => {
+        const input = `Some context here
+Cursor
+★
+📝
+⧉
+<user_query>
+What is the actual question?
+</user_query>`;
+        assert.strictEqual(
+            stripCursorSystemContext(input),
+            'What is the actual question?'
+        );
+    });
+
+    test('strips <!-- HTML comments --> added by Cursor', () => {
+        const input = `<!-- This is a conversation summary -->
+<user_query>How do I use async/await?</user_query>`;
+        assert.strictEqual(
+            stripCursorSystemContext(input),
+            'How do I use async/await?'
+        );
+    });
+
+    test('handles empty input gracefully', () => {
+        assert.strictEqual(stripCursorSystemContext(''), '');
+    });
+
+    test('handles input with only whitespace', () => {
+        assert.strictEqual(stripCursorSystemContext('   \n  \n  '), '   \n  \n  ');
+    });
+
+    test('preserves assistant messages (non-user content) unchanged', () => {
+        // This function is only called on user messages, but test defensive handling
+        const input = 'Here is the refactored code:\n\n```typescript\nconst x = 1;\n```';
+        assert.strictEqual(stripCursorSystemContext(input), input);
+    });
+
+    test('strips git_status when present without user_query', () => {
+        const input = `<user_info>Windows</user_info>
+<git_status>M src/foo.ts</git_status>
+
+What is the actual question?`;
+        assert.strictEqual(
+            stripCursorSystemContext(input),
+            'What is the actual question?'
+        );
     });
 });
 

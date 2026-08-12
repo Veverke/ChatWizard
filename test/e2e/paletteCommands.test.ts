@@ -38,6 +38,7 @@ const EXPECTED_LEAF_COMMANDS: ReadonlySet<string> = new Set([
     'chatwizard.removeBookmark',
     'chatwizard.addTag',
     'chatwizard.removeTag',
+    'chatwizard.clearTags',
     'chatwizard.tagActiveSession',
     'chatwizard.regenerateTitle',
     'chatwizard.regenerateAllTitles',

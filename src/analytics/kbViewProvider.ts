@@ -4,30 +4,59 @@
 import * as vscode from 'vscode';
 import { SessionIndex } from '../index/sessionIndex';
 import { SidecarMetadataStore } from '../index/sidecarMetadataStore';
-import { buildKbEntries } from './kbEngine';
+import { buildKbEntries, mergeIntoResult, removeFromResult, cleanSummary } from './kbEngine';
+import type { KbEntry, KbEntryType } from '../types/kb';
+import { classifySessionWithCategories } from './kbClassifier';
 import { clusterEntries } from './kbClusterer';
 import { exportKbAsync } from '../export/kbExporter';
 import { KbDashboardPanel } from './kbDashboardPanel';
-import { configureFallbackCategories } from './kbCategoryConfigurator';
 import { DEFAULT_KB_TYPES } from '../types/kb';
+import { KbStore } from './kbStore';
 
 export class KbViewProvider implements vscode.WebviewViewProvider {
     static readonly viewType = 'chatwizardKnowledgeBase';
 
     private _view?: vscode.WebviewView;
-    private _refreshTimer: ReturnType<typeof setTimeout> | null = null;
     private _lastResult: import('./kbEngine').KbEngineResult | null = null;
     private _categories: string[] | undefined;
     private _classifiedSessionIds: string[] | undefined;
+    /** ISO-8601 timestamp of the last KB update (generation or incremental refresh). */
+    private _lastUpdated = '';
+    /** Debounce map: sessionId → timer for refreshForSession */
+    private _refreshDebounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+    /** Guards against re-entrant KB generation (double-click on Generate). */
+    private _generating = false;
 
     constructor(
         private readonly _index: SessionIndex,
         private readonly _sidecarStore: SidecarMetadataStore,
         private readonly _globalState: vscode.Memento,
+        private readonly _kbStore: KbStore,
     ) {
         // Restore persisted categories from previous session
         this._categories = _globalState.get<string[]>('chatwizard.kbCategories', undefined as unknown as string[]);
         this._classifiedSessionIds = _globalState.get<string[]>('chatwizard.kbClassifiedSessionIds', undefined as unknown as string[]);
+
+        // Attempt to load persisted KB from disk (best-effort, non-blocking)
+        void this._loadPersistedKb();
+    }
+
+    /**
+     * Try to load a previously persisted KB result from disk.
+     * If found, it becomes _lastResult and the view is updated.
+     */
+    private async _loadPersistedKb(): Promise<void> {
+        try {
+            const persisted = await this._kbStore.load();
+            if (persisted && persisted.entries.length > 0) {
+                this._lastResult = persisted;
+                this._lastUpdated = persisted.lastUpdated ?? new Date().toISOString();
+                this._sendToView();
+                this._notifyDashboardPanel();
+            }
+        } catch {
+            // Ignore — no persisted data is fine
+        }
     }
 
     resolveWebviewView(
@@ -48,7 +77,7 @@ export class KbViewProvider implements vscode.WebviewViewProvider {
                 this._sendToView();
             } else if (msg.command === 'openSession' && msg.sessionId) {
                 void vscode.commands.executeCommand('chatwizard.openSession', { id: msg.sessionId });
-            } else if (msg.command === 'generateKb' || msg.command === 'regenerateKb') {
+            } else if (msg.command === 'generateKb') {
                 void this._handleGenerate();
             } else if (msg.command === 'export') {
                 void this._handleExport();
@@ -60,25 +89,84 @@ export class KbViewProvider implements vscode.WebviewViewProvider {
         });
     }
 
-    /** Re-render the view when the session index changes. Debounced 5 s. No-op if not visible. */
-    refresh(): void {
-        if (this._refreshTimer) { clearTimeout(this._refreshTimer); }
-        this._refreshTimer = setTimeout(() => {
-            this._refreshTimer = null;
-            void this._computeResult().then(() => {
-                this._sendToView();
-                this._notifyDashboardPanel();
-            });
-        }, 5000);
+    // ── Public API ──────────────────────────────────────────────────────────
+
+    /**
+     * Full KB generation for all sessions. Called when the user clicks
+     * "Generate Knowledge Base" or via the command palette.
+     */
+    async generateForAllChats(): Promise<void> {
+        await this._computeResult();
+        if (this._lastResult) {
+            this._lastUpdated = new Date().toISOString();
+            void this._kbStore.save(this._lastResult, this._lastUpdated);
+        }
+        this._sendToView();
+        this._notifyDashboardPanel();
     }
 
     /**
-     * Run KB classification in the background (no view needed).
-     * Called on extension startup to auto-classify new sessions.
-     * After completion, pushes the result to any open view/dashboard.
+     * Incremental KB update for a single session. Called when a session is
+     * upserted. Debounced per-sessionId: if multiple upserts fire for the same
+     * session within 5 minutes, only the last one triggers a refresh.
      */
-    async preload(): Promise<void> {
-        await this._computeResult();
+    async refreshForSession(sessionId: string): Promise<void> {
+        // Cancel any pending debounce for this sessionId
+        const existing = this._refreshDebounceTimers.get(sessionId);
+        if (existing) { clearTimeout(existing); }
+
+        // Schedule the actual work
+        return new Promise<void>((resolve) => {
+            const timer = setTimeout(async () => {
+                this._refreshDebounceTimers.delete(sessionId);
+                await this._doRefreshForSession(sessionId);
+                resolve();
+            }, 300000); // 5 minutes
+            this._refreshDebounceTimers.set(sessionId, timer);
+        });
+    }
+
+    private async _doRefreshForSession(sessionId: string): Promise<void> {
+        const session = this._index.get(sessionId);
+        if (!session) { return; }
+
+        const cache = await this._sidecarStore.load();
+        const useCategories = this._categories ?? DEFAULT_KB_TYPES;
+        const { type: entryType, subtype, usedLlm } = await classifySessionWithCategories(session, useCategories);
+        const meta = cache?.get(session.id);
+        const tags = meta?.tags ?? [];
+        const rawSummary = meta?.summary ?? session.title;
+        const summary = cleanSummary(rawSummary);
+
+        const newEntry: KbEntry = {
+            sessionId: session.id,
+            type: entryType,
+            subtype: subtype ?? undefined,
+            title: session.title,
+            summary,
+            tags,
+            createdAt: session.createdAt,
+            usedLlm,
+        };
+
+        if (this._lastResult) {
+            this._lastResult = await mergeIntoResult(this._lastResult, [newEntry]);
+            if (usedLlm) { this._lastResult.usedLlm = true; }
+            this._lastUpdated = new Date().toISOString();
+            void this._kbStore.save(this._lastResult, this._lastUpdated);
+        }
+        // No _lastResult yet = user hasn't generated KB; don't auto-create one.
+
+        this._sendToView();
+        this._notifyDashboardPanel();
+    }
+
+    /**
+     * Remove a session from the KB result. Called when a session is deleted.
+     */
+    removeSession(sessionId: string): void {
+        if (!this._lastResult) { return; }
+        this._lastResult = removeFromResult(this._lastResult, new Set([sessionId]));
         this._sendToView();
         this._notifyDashboardPanel();
     }
@@ -91,39 +179,57 @@ export class KbViewProvider implements vscode.WebviewViewProvider {
         this._categories = categories;
     }
 
-    private async _handleGenerate(): Promise<void> {
-        const fallbackCategories = await configureFallbackCategories();
-        // `undefined` = auto-detect (LLM generates freely; heuristic fallback uses built-in types)
-        // `string[]` = custom fallback categories for when LLM is unavailable
+    /**
+     * Refresh the webview with the current state (loading, empty, or data).
+     * Called when the index finishes building so the view transitions from
+     * "Waiting for sessions to be indexed…" to the appropriate state.
+     */
+    refreshView(): void {
+        this._sendToView();
+    }
 
-        this._categories = fallbackCategories;
+    private async _handleGenerate(): Promise<void> {
+        if (this._generating) { return; }
+        this._generating = true;
         this._lastResult = null; // Force fresh computation
 
-        await vscode.window.withProgress(
-            {
-                location: vscode.ProgressLocation.Notification,
-                title: 'Chat Wizard: Regenerating knowledge base…',
-                cancellable: false,
-            },
-            async (progress) => {
-                await this._computeResult((done, total) => {
-                    progress.report({
-                        message: `${done} / ${total} sessions classified`,
-                        increment: 100 / total,
-                    });
-                });
-            },
-        );
+        // Show the in-webview generating overlay (spinner + "Generating…")
+        this._view?.webview.postMessage({ type: 'generating' });
+        KbDashboardPanel.showGenerating();
 
-        this._saveState();
-        this._sendToView();
-        this._notifyDashboardPanel();
+        try {
+            await vscode.window.withProgress(
+                {
+                    location: vscode.ProgressLocation.Notification,
+                    title: 'Chat Wizard: Generating knowledge base…',
+                    cancellable: false,
+                },
+                async (progress) => {
+                    await this._computeResult((done, total) => {
+                        progress.report({
+                            message: `${done} / ${total} sessions classified`,
+                            increment: 100 / total,
+                        });
+                    });
+                },
+            );
+
+            this._saveState();
+            if (this._lastResult) {
+                this._lastUpdated = new Date().toISOString();
+                void this._kbStore.save(this._lastResult, this._lastUpdated);
+            }
+            this._sendToView();
+            this._notifyDashboardPanel();
+        } finally {
+            this._generating = false;
+        }
     }
 
     /** Forward the latest result to the standalone dashboard panel if open. */
     private _notifyDashboardPanel(): void {
         if (this._lastResult) {
-            KbDashboardPanel.refresh(this._lastResult, () => this._handleExport());
+            KbDashboardPanel.refresh(this._lastResult, () => this._handleExport(), this._lastUpdated);
         }
     }
 
@@ -145,37 +251,26 @@ export class KbViewProvider implements vscode.WebviewViewProvider {
 
         const cache = await this._sidecarStore.load();
         const useCategories = this._categories ?? DEFAULT_KB_TYPES;
-        const result = await buildKbEntries(sessions, cache, useCategories, onProgress);
+        const refineLabels = vscode.workspace.getConfiguration('chatwizard').get<boolean>('kbRefineLabels', true);
+        const result = await buildKbEntries(sessions, cache, useCategories, onProgress, refineLabels);
         this._lastResult = result;
 
         // ── Auto-tag sessions with KB categories ─────────────────────────
         const autoTagEnabled = vscode.workspace.getConfiguration('chatwizard').get<boolean>('kbAutoTagSessions', true);
         if (autoTagEnabled && result.entries.length > 0) {
-            // Build a reverse map: child category → parent group
-            const childToParent = new Map<string, string>();
-            if (result.topLevelGrouping) {
-                for (const [parent, children] of result.topLevelGrouping.entries()) {
-                    for (const child of children) {
-                        // Keep the more general parent if a child appears in multiple groups
-                        if (!childToParent.has(child)) {
-                            childToParent.set(child, parent);
-                        }
-                    }
-                }
-            }
-
             // Tag each entry concurrently
             await Promise.all(result.entries.map(async (entry) => {
-                // Tag: kb-category:<fine-grained-category>
-                const fineTag = `kb-category:${entry.type.toLowerCase().replace(/\s+/g, '-')}`;
-                await this._sidecarStore.addTag(entry.sessionId, fineTag);
-
-                // Tag: kb-group:<top-level-group> (if applicable)
-                const parentGroup = childToParent.get(entry.type);
-                if (parentGroup) {
-                    const groupTag = `kb-group:${parentGroup.toLowerCase().replace(/\s+/g, '-')}`;
-                    await this._sidecarStore.addTag(entry.sessionId, groupTag);
+                // Remove prior KB tags first to avoid accumulation across generations
+                const meta = cache?.get(entry.sessionId);
+                const existingTags = meta?.tags ?? [];
+                const nonKbTags = existingTags.filter(t => !t.startsWith('kb-category:') && !t.startsWith('kb-group:'));
+                if (nonKbTags.length !== existingTags.length) {
+                    await this._sidecarStore.patch(entry.sessionId, { tags: nonKbTags });
                 }
+
+                // Tag: kb-category:<top-level-folder>
+                const folderTag = `kb-category:${entry.type.toLowerCase().replace(/\s+/g, '-')}`;
+                await this._sidecarStore.addTag(entry.sessionId, folderTag);
             }));
         }
     }
@@ -191,7 +286,7 @@ export class KbViewProvider implements vscode.WebviewViewProvider {
             const sessionsReady = summaries.length > 0;
             void this._view.webview.postMessage({
                 type: 'update',
-                payload: { slices: [], total: 0, sessionsReady },
+                payload: { slices: [], total: 0, sessionsReady, lastUpdated: this._lastUpdated },
             });
             return;
         }
@@ -200,7 +295,7 @@ export class KbViewProvider implements vscode.WebviewViewProvider {
         void this._view.webview.postMessage({
             type: 'update',
             payload: {
-                ...KbDashboardPanel.buildPayload(result),
+                ...KbDashboardPanel.buildPayload(result, this._lastUpdated),
                 sessionsReady: true,
             },
         });

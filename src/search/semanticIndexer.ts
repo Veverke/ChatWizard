@@ -283,6 +283,11 @@ export class SemanticIndexer implements ISemanticIndexer {
         return this._queueRunning;
     }
 
+    /** Expose the embedding engine for downstream consumers (e.g. KB classification fallback). */
+    get embeddingEngine(): IEmbeddingEngine {
+        return this.engine;
+    }
+
     // ── initialize() ────────────────────────────────────────────────────────
 
     /**
@@ -323,10 +328,12 @@ export class SemanticIndexer implements ISemanticIndexer {
             this.vsCodeApi.showModelReady();
         }
 
-        // Restore persisted index with a 10-second timeout
+        // Restore persisted index with a 60-second timeout.
+        // 11 MB with ~7200 entries takes ~15-30s to decode on first load;
+        // subsequent loads are faster due to OS page cache.
         this.log.debug('Loading persisted index from %s', this.embeddingsPath);
         try {
-            await withTimeout(this.index.load(this.embeddingsPath), 10_000, 'index.load');
+            await withTimeout(this.index.load(this.embeddingsPath), 60_000, 'index.load');
             this.log.debug('Persisted index loaded — %d vectors restored', this.index.size);
         } catch (err) {
             this.log.warn('Could not load persisted index (will start fresh): %s', String(err));
@@ -501,14 +508,18 @@ export class SemanticIndexer implements ISemanticIndexer {
         // Release the global bulk lock if we hold it — lets another instance start building.
         this._releaseBulkLock();
 
-        // Synchronous final save — must complete before the process exits
-        if (this._isReady) {
-            try {
-                this.index.saveSync(this.embeddingsPath);
-                this.log.debug('Final save complete');
-            } catch (err) {
-                this.log.warn('Final save failed: %s', String(err));
-            }
+        // Synchronous final save — must complete before the process exits.
+        // Only write if the index has entries, so we never replace a valid
+        // on-disk file with an empty one (which would trigger a full re-embed
+        // on the next startup).
+        if (this._isReady && this.index.size > 0) {
+            this._saveNowSync();
+        } else {
+            // If the index is empty (no chunks completed yet), explicitly save
+            // the previous on-disk file's content by re-loading it, ensuring
+            // we don't lose data from a previous complete run.  If the file
+            // doesn't exist or is corrupt, this is a no-op.
+            this.log.debug('dispose: index empty, preserving on-disk file at %s', this.embeddingsPath);
         }
     }
 
@@ -717,10 +728,12 @@ export class SemanticIndexer implements ISemanticIndexer {
                     }
                 }
 
-                // Schedule save periodically
-                if (chunkCount % 10 === 0) {
-                    this._scheduleSave();
-                }
+                // Save after EVERY chunk — synchronous so partial progress
+                // survives a reload at any point. The file grows to ~16MB max,
+                // so a sync write every ~30 entries is cheap enough and guarantees
+                // that even a reload a few seconds into the run keeps the progress
+                // already made (no more "start from scratch" on every reload).
+                this._saveNowSync();
 
                 chunkCount++;
 
@@ -739,8 +752,15 @@ export class SemanticIndexer implements ISemanticIndexer {
             }
         });
 
-        // Final save after queue is drained
-        this._scheduleSave();
+        // Final save after queue is drained — use synchronous save so that
+        // data reaches disk immediately. Only write if there's actual data,
+        // so we never replace a valid on-disk file with an empty one (which
+        // would trigger a full re-embed on the next startup). This guard is
+        // critical when dispose() fires mid-batch: the while loop exits, but
+        // no chunks may have completed yet, so the index is still empty.
+        if (this.index.size > 0) {
+            this._saveNowSync();
+        }
 
         this._clearStallWatchdog();
         this._queueRunning = false;
@@ -786,5 +806,22 @@ export class SemanticIndexer implements ISemanticIndexer {
                 .save(this.embeddingsPath)
                 .catch(() => { /* ignore */ });
         }, SAVE_DEBOUNCE_MS);
+    }
+
+    /** Synchronous save — used at the end of _runQueue() so the index is
+     *  guaranteed on disk before the user can reload VS Code.  Also used in
+     *  dispose() as the final synchronous save. */
+    private _saveNowSync(): void {
+        if (this._saveTimer !== undefined) {
+            clearTimeout(this._saveTimer);
+            this._saveTimer = undefined;
+        }
+        try {
+            const size = this.index.size;
+            this.index.saveSync(this.embeddingsPath);
+            this.log.debug('saveNowSync: %d entries saved to %s', size, this.embeddingsPath);
+        } catch (err) {
+            this.log.warn('saveNowSync: failed to save %d entries: %s', this.index.size, String(err));
+        }
     }
 }

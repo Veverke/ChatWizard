@@ -11,27 +11,28 @@ const DEFAULT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
 interface SectionHeading {
     text: string;
-    /** GitHub-style anchor fragment (lowercased, spaces → hyphens, stripped special chars). */
+    /** 0-based line number in the source markdown file. */
+    lineNumber: number;
+    /** Anchor fragment for navigating in markdown preview, e.g. "19-did-you-know-tips". */
     anchor: string;
 }
 
-/**
- * Convert heading text to a GitHub-style anchor fragment.
- * Matches what GitHub's markdown renderer and VS Code's markdown preview produce.
- */
-function headingToAnchor(text: string): string {
-    return text
+function toAnchor(heading: string): string {
+    // GitHub-style anchor: lowercase, remove non-alnum/non-space/non-hyphen,
+    // replace spaces with hyphens, collapse consecutive hyphens.
+    return heading
         .toLowerCase()
-        .replace(/[`~!@#$%^&*()=+[\]{}|;:'",.<>/?\\]/g, '')  // strip special chars
-        .replace(/\s+/g, '-')                                    // spaces → hyphens
-        .replace(/-+/g, '-')                                     // collapse multiple hyphens
-        .replace(/^-+|-+$/g, '');                                // trim leading/trailing hyphens
+        .replace(/[^a-z0-9\s-]/g, '')
+        .replace(/\s+/g, '-')
+        .replace(/-+/g, '-');
 }
 
 /**
  * Parse section headings ("## ..." and "### ...") from the user-guide markdown
- * file. Returns a deduplicated list of {text, anchor} pairs,
+ * file. Returns a deduplicated list of {text, lineNumber} pairs,
  * excluding the top-level H1 and any empty or TOC-only headings.
+ * For H3 headings, the parent H2 section name is prepended so the
+ * nudge message includes context (e.g. "MCP Server & AI Integrations Quick Start").
  */
 function parseUserGuideSections(filePath: string): SectionHeading[] {
     try {
@@ -39,16 +40,28 @@ function parseUserGuideSections(filePath: string): SectionHeading[] {
         const lines = content.split('\n');
         const seen = new Set<string>();
         const headings: SectionHeading[] = [];
+        let currentH2 = '';
 
-        for (const line of lines) {
-            const trimmed = line.trim();
-            // Match "## Section Title" or "### Sub-section" but NOT "# H1"
-            if (/^#{2,3}\s+(?!\n)(.+)/.test(trimmed)) {
-                const text = trimmed.replace(/^#{2,3}\s+/, '').trim();
-                // Skip table of contents entries and empty headings
-                if (text && !text.startsWith('Table of Contents') && text.length > 2 && !seen.has(text)) {
+        for (let i = 0; i < lines.length; i++) {
+            const trimmed = lines[i].trim();
+            if (/^##\s+(?!\n)(.+)/.test(trimmed)) {
+                const text = trimmed.replace(/^##\s+/, '').trim();
+                if (text && !text.startsWith('Table of Contents') && text.length > 2) {
+                    currentH2 = text;
+                    const displayText = text.replace(/^\d+\.\s+/, '');
+                    if (!seen.has(displayText)) {
+                        seen.add(displayText);
+                        headings.push({ text: displayText, lineNumber: i, anchor: toAnchor(text) });
+                    }
+                }
+            } else if (/^###\s+(?!\n)(.+)/.test(trimmed)) {
+                const text = trimmed.replace(/^###\s+/, '').trim();
+                if (text && text.length > 2 && !seen.has(text)) {
                     seen.add(text);
-                    headings.push({ text, anchor: headingToAnchor(text) });
+                    // Prepend parent H2 for context — strip numbering prefix from both
+                    const parentLabel = currentH2.replace(/^\d+\.\s+/, '');
+                    const displayText = parentLabel ? `${parentLabel} ${text}` : text;
+                    headings.push({ text: displayText, lineNumber: i, anchor: toAnchor(text) });
                 }
             }
         }
@@ -88,14 +101,14 @@ export class DidYouKnowNudge implements vscode.Disposable {
         if (this._items.length === 0) {
             // Fallback: a few built-in items if parsing fails
             this._items = [
-                { text: 'Search past sessions by keyword', anchor: 'search-past-sessions-by-keyword' },
-                { text: 'Tag sessions for quick filtering', anchor: 'tag-sessions-for-quick-filtering' },
-                { text: 'Export sessions to Markdown or Obsidian', anchor: 'export-sessions-to-markdown-or-obsidian' },
-                { text: 'Use @chatwizard in Copilot Chat', anchor: 'use-chatwizard-in-copilot-chat' },
-                { text: 'Connect Claude Desktop via MCP server', anchor: 'connect-claude-desktop-via-mcp-server' },
-                { text: 'View per-model usage stats', anchor: 'view-per-model-usage-stats' },
-                { text: 'Browse AI-generated code blocks', anchor: 'browse-ai-generated-code-blocks' },
-                { text: 'See which files a session touched', anchor: 'see-which-files-a-session-touched' },
+                { text: 'Search past sessions by keyword', lineNumber: 0, anchor: 'search' },
+                { text: 'Tag sessions for quick filtering', lineNumber: 0, anchor: 'tag' },
+                { text: 'Export sessions to Markdown or Obsidian', lineNumber: 0, anchor: 'export' },
+                { text: 'Use @chatwizard in Copilot Chat', lineNumber: 0, anchor: 'chatwizard' },
+                { text: 'Connect Claude Desktop via MCP server', lineNumber: 0, anchor: 'mcp' },
+                { text: 'View per-model usage stats', lineNumber: 0, anchor: 'usage' },
+                { text: 'Browse AI-generated code blocks', lineNumber: 0, anchor: 'codeblocks' },
+                { text: 'See which files a session touched', lineNumber: 0, anchor: 'files' },
             ];
         }
         this._queue = shuffle(this._items);
@@ -104,7 +117,7 @@ export class DidYouKnowNudge implements vscode.Disposable {
 
     private _start(): void {
         const cfg = vscode.workspace.getConfiguration('chatwizard');
-        const intervalSec = cfg.get<number>('didYouKnowInterval', 300);
+        const intervalSec = cfg.get<number>('didYouKnowInterval', 600);
         if (intervalSec <= 0) {
             return; // disabled via setting
         }
@@ -119,7 +132,7 @@ export class DidYouKnowNudge implements vscode.Disposable {
         }
 
         const item = this._queue.pop()!;
-        const msg = `🐿️ Are you familiar with ${item.text} functionality? Open user guide and learn more.`;
+        const msg = `🐿️ Want to learn about ${item.text}?`;
         this._brandingBar.notify(msg, 'workbench.view.extension.chatwizard');
 
         // Show notification with "Open User Guide" button (opens user-guide.md)
@@ -128,8 +141,17 @@ export class DidYouKnowNudge implements vscode.Disposable {
         void vscode.window.showInformationMessage(msg, 'Open User Guide', "Don't show again").then(selection => {
             if (selection === 'Open User Guide') {
                 const userGuidePath = path.join(this._extensionPath, 'docs', 'user-guide.md');
-                const uri = vscode.Uri.file(userGuidePath).with({ fragment: item.anchor });
-                void vscode.commands.executeCommand('markdown.showPreview', uri);
+                const uri = vscode.Uri.file(userGuidePath);
+                // Open source file, reveal the heading line, then open preview —
+                // VS Code syncs the preview to the cursor position in the source.
+                void vscode.workspace.openTextDocument(uri).then(doc => {
+                    void vscode.window.showTextDocument(doc).then(editor => {
+                        const pos = new vscode.Position(item.lineNumber, 0);
+                        editor.selection = new vscode.Selection(pos, pos);
+                        editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.AtTop);
+                        void vscode.commands.executeCommand('markdown.showPreview', uri);
+                    });
+                });
             } else if (selection === "Don't show again") {
                 this.dispose();
             }

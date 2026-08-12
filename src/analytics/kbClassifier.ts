@@ -1,78 +1,35 @@
 // src/analytics/kbClassifier.ts
 // Feature 23 — KB Entry Classification
-// Supports both heuristic (default types) and LLM-based (custom categories) classification.
+// Supports embedding-based (local ONNX model) and LLM-based classification.
+//
+// Priority: LLM → embedding → default category.
+// Heuristic phrase-matching has been removed — the local ONNX embedding model
+// (all-MiniLM-L6-v2) provides far better semantic understanding.
 
 import type { Session } from '../types/index';
 import type { KbEntryType } from '../types/kb';
+import { EMBEDDING_FALLBACK_CATEGORIES } from '../types/kb';
+import type { IEmbeddingEngine } from '../search/semanticContracts';
 import { classifySessionWithLlm } from './kbLlmClassifier';
+import { classifySessionWithEmbedding } from './kbEmbeddingClassifier';
 import { createLogger } from '../utils/logger';
 
 const log = createLogger().withContext('KB');
 
-/**
- * Heuristic signal phrases for each KB entry type.
- * Rules are evaluated in order; first match wins.
- * Fallthrough: any session not matching the above rules is classified as 'learning'.
- */
-const CLASSIFICATION_RULES: Array<{ type: KbEntryType; phrases: string[] }> = [
-    {
-        type: 'decision',
-        phrases: [
-            'i decided', 'we chose', 'we went with', 'the reason we',
-            'trade-off', 'tradeoff', 'alternative', 'chose to', 'we decided',
-        ],
-    },
-    {
-        type: 'gotcha',
-        phrases: [
-            'gotcha', 'footgun', 'be careful', 'watch out',
-            "don't forget", 'turns out', 'fixed by', 'tricky',
-            'common mistake', 'easy to miss',
-        ],
-    },
-    {
-        type: 'architecture',
-        phrases: [
-            'architecture', 'component', 'service', 'layer', 'schema',
-            'system design', 'dependency graph', 'microservice', 'monolith',
-            'api design', 'data model',
-        ],
-    },
-    {
-        type: 'pattern',
-        phrases: [
-            'pattern', 'template', 'reusable', 'abstraction', 'convention',
-            'strategy', 'best practice', 'idiom', 'recipe',
-        ],
-    },
-    // 'learning' is the fallthrough — no explicit phrases needed
-];
+// ── Module-level embedding engine (set during extension activation) ─────────
+let _globalEmbeddingEngine: IEmbeddingEngine | null | undefined;
 
 /**
- * Classify a session into one of five KB entry types using heuristic phrase matching.
- *
- * Applies rules in order against the concatenated text of the first 10 messages
- * (lowercased). Returns the type of the first matching rule, or 'learning' if no
- * rule matches.
+ * Register the embedding engine for use as a classification fallback.
+ * Call once during extension activation from extension.ts.
  */
-export function classifySession(session: Session): KbEntryType {
-    // Take only the first 10 messages for classification
-    const firstTenMessages = session.messages.slice(0, 10);
-    const combinedText = firstTenMessages
-        .map(m => m.content)
-        .join(' ')
-        .toLowerCase();
+export function setKbEmbeddingEngine(engine: IEmbeddingEngine | null | undefined): void {
+    _globalEmbeddingEngine = engine;
+}
 
-    for (const rule of CLASSIFICATION_RULES) {
-        for (const phrase of rule.phrases) {
-            if (combinedText.includes(phrase)) {
-                return rule.type;
-            }
-        }
-    }
-
-    // Fallthrough: any session not matching the above is a 'learning'
-    return 'learning';
+/** Resolve the effective embedding engine: explicit param wins over global. */
+function resolveEngine(explicit?: IEmbeddingEngine | null): IEmbeddingEngine | null | undefined {
+    return explicit !== undefined ? explicit : _globalEmbeddingEngine;
 }
 
 /**
@@ -80,33 +37,47 @@ export function classifySession(session: Session): KbEntryType {
  *
  * Tries the free AI model (Copilot LM API) first — the LLM generates a
  * free-form category label from the conversation content with no predefined
- * buckets. Falls back to heuristic phrase-matching (hardcoded types) only
- * when the model is unavailable.
+ * buckets. Falls back to embedding-based classification (local ONNX model)
+ * when the model is unavailable. If neither is available, returns "Other"
+ * as a safe default.
  *
- * @returns The best-matching category name — either an LLM-invented label
- *          or a hardcoded type from the heuristic fallback.
+ * @param session    The session to classify.
+ * @param categories  The list of valid category names used for the embedding fallback
+ *                     (defaults to EMBEDDING_FALLBACK_CATEGORIES, which is broader
+ *                     than the legacy five built-in types).
+ * @param embeddingEngine Optional. If provided and ready, used as fallback
+ *                        when LLM is unavailable.
+ * @returns An object with the best-matching category, optional subtype, and whether the LLM was used.
  */
 export async function classifySessionWithCategories(
     session: Session,
     categories: string[],
-): Promise<KbEntryType> {
+    embeddingEngine?: IEmbeddingEngine | null,
+): Promise<{ type: KbEntryType; subtype: string | null; usedLlm: boolean }> {
+    // Resolve which embedding engine to use
+    const engine = resolveEngine(embeddingEngine);
+
     // Try LLM first — no predefined categories, it invents a label freely
     const llmResult = await classifySessionWithLlm(session);
     if (llmResult) {
-        // Normalise: if the LLM label looks like one of the known heuristic
-        // types, map it for consistency (e.g. "debugging" stays as is,
-        // but "architecture" maps to itself).
-        return llmResult;
+        return { type: llmResult.folder, subtype: llmResult.subtype, usedLlm: true };
     }
 
-    // LLM unavailable — fall back to heuristic
-    log.debug(`LLM returned null for session ${session.id} — using heuristic fallback`);
-    const heuristic = classifySession(session);
-    if (categories.includes(heuristic)) {
-        return heuristic;
+    log.debug(`LLM returned null for session ${session.id} — trying embedding fallback`);
+
+    // Embedding fallback — uses local ONNX model when available.
+    // Uses the broad EMBEDDING_FALLBACK_CATEGORIES (Git, Docker, React, Bugs, …)
+    // rather than the caller-provided `categories` (legacy 5 types like
+    // "decision", "learning", …) because those are too abstract for embedding
+    // similarity to match real session content.
+    const embeddingResult = await classifySessionWithEmbedding(engine, session, EMBEDDING_FALLBACK_CATEGORIES);
+    if (embeddingResult) {
+        log.info(`KB: embedding fallback classified ${session.id} as "${embeddingResult}"`);
+        return { type: embeddingResult, subtype: null, usedLlm: false };
     }
 
-    // If even the heuristic result isn't in the requested categories,
-    // return the first category as a safe default
-    return categories[0] ?? 'learning';
+    log.warn(`LLM and embedding both unavailable for session ${session.id} — using "Other"`);
+
+    // No LLM, no embedding — label as Other instead of leaking a heuristic type name
+    return { type: 'Other', subtype: null, usedLlm: false };
 }

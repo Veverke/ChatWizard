@@ -77,6 +77,7 @@ export const PALETTE_CATEGORIES: readonly PaletteCategory[] = [
             { commandId: 'chatwizard.removeBookmark',    label: 'Remove Bookmark…',     icon: '$(bookmark)'          },
             { commandId: 'chatwizard.addTag',            label: 'Add Tag…',             icon: '$(tag)'               },
             { commandId: 'chatwizard.removeTag',         label: 'Remove Tag…',          icon: '$(tag)'               },
+            { commandId: 'chatwizard.clearTags',       label: 'Clear All Tags…',      icon: '$(tag)'               },
             { commandId: 'chatwizard.tagActiveSession',  label: 'Tag Active Session',   icon: '$(tag)'               },
             { commandId: 'chatwizard.regenerateTitle',   label: 'Regenerate Title',     icon: '$(edit)'              },
             { commandId: 'chatwizard.regenerateAllTitles', label: 'Regenerate All Titles', icon: '$(refresh)'        },

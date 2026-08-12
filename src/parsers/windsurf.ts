@@ -2,6 +2,7 @@
 
 import { Session, Message, CodeBlock, ParseResult } from '../types/index';
 import { extractCodeBlocks } from './claude';
+import { openReadonlyDb } from '../utils/sqliteDb';
 
 /** Maximum number of CascadeSession records processed per database. */
 const MAX_SESSIONS = 5_000;
@@ -73,22 +74,17 @@ export async function parseWindsurfWorkspace(
 
     // ── Open SQLite and fetch cascade session data ───────────────────────────
     let rawValue: string | null = null;
+    const db = await openReadonlyDb(vscdbPath);
+    if (!db) {
+        return fatalResult(`Failed to open state.vscdb: ${vscdbPath}`);
+    }
     try {
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const Database = require('better-sqlite3') as typeof import('better-sqlite3');
-        const db = new Database(vscdbPath, { readonly: true, fileMustExist: true });
-        try {
-            const row = db.prepare(
-                "SELECT value FROM ItemTable WHERE key = 'cascade.sessionData'"
-            ).get() as { value: string } | undefined;
-            rawValue = row?.value ?? null;
-        } finally {
-            db.close();
-        }
-    } catch (err) {
-        return fatalResult(
-            `Failed to open/query state.vscdb: ${err instanceof Error ? err.message : String(err)}`
+        const row = db.get<{ value: string }>(
+            "SELECT value FROM ItemTable WHERE key = 'cascade.sessionData'"
         );
+        rawValue = row?.value ?? null;
+    } finally {
+        db.close();
     }
 
     if (rawValue === null || rawValue === undefined) {

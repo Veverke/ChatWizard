@@ -1,29 +1,10 @@
 // src/analytics/actionItemLlmExtractor.ts
 // Feature 34 — LLM-based action item extraction.
-// Uses the VS Code Copilot Language Model API to extract actionable follow-ups
-// from sessions. Falls back gracefully when the LM API is unavailable.
+// Uses the central llmClient (VS Code LM API → Cursor CLI) to extract
+// actionable follow-ups from sessions.
 
-import * as vscode from 'vscode';
 import type { Session, ActionItem } from '../types/index';
-
-// ── Model selection ──────────────────────────────────────────────────────────
-
-const FREE_MODEL_CHAIN = [
-    { family: 'o4-mini' },
-    { family: 'gpt-4o-mini' },
-];
-
-async function selectCopilotModel(): Promise<vscode.LanguageModelChat | undefined> {
-    for (const filter of FREE_MODEL_CHAIN) {
-        try {
-            const [model] = await vscode.lm.selectChatModels({ vendor: 'copilot', ...filter });
-            if (model) { return model; }
-        } catch {
-            // try next
-        }
-    }
-    return undefined;
-}
+import { promptLlm } from './llmClient';
 
 // ── Prompt building ─────────────────────────────────────────────────────────
 
@@ -80,37 +61,29 @@ export function parseActionItems(raw: string): string[] | null {
 
 /**
  * Generate a stable, deterministic ID for an action item.
+ * @internal exported for unit testing
  */
-function makeActionItemId(sessionId: string, text: string, index: number): string {
+export function makeActionItemId(sessionId: string, text: string, index: number): string {
     const prefix = sessionId.slice(0, 8);
     const slug = text.toLowerCase().replace(/\W+/g, '-').slice(0, 20);
     return `${prefix}-${index}-${slug}`;
 }
 
 /**
- * Extract action items using the free Copilot LM API.
+ * Extract action items using the central llmClient.
  *
- * Returns an array of ActionItem objects on success, or `null` if the LM API
- * is unavailable or the response could not be parsed.
+ * Returns an array of ActionItem objects on success, or `null` if no LLM
+ * provider is available or the response could not be parsed.
  */
 export async function extractActionItemsWithLlm(
     session: Session,
 ): Promise<ActionItem[] | null> {
     try {
-        const model = await selectCopilotModel();
-        if (!model) { return null; }
+        const systemPrompt = buildActionItemSystemPrompt();
+        const userContent = buildActionItemPrompt(session);
 
-        const content = buildActionItemPrompt(session);
-        const messages = [vscode.LanguageModelChatMessage.User(content)];
-        const response = await model.sendRequest(messages, {
-            systemPrompt: buildActionItemSystemPrompt(),
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        } as any);
-
-        let raw = '';
-        for await (const chunk of response.text) {
-            raw += chunk;
-        }
+        const raw = await promptLlm(systemPrompt, userContent, { timeoutMs: 30_000 });
+        if (raw === null) { return null; }
 
         const items = parseActionItems(raw);
         if (!items) { return null; }

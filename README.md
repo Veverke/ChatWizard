@@ -1,5 +1,6 @@
 ﻿# Chat Wizard
 
+[![Chat Wizard User Survey](https://img.shields.io/badge/📋User%20Survey-Help%20Improve%20ChatWizard-blue)](https://forms.gle/Mj4JtMsYLdxQds1R6)
 [![VS Code Marketplace](https://vsmarketplacebadges.dev/version/Veverke.chatwizard.svg)](https://marketplace.visualstudio.com/items?itemName=Veverke.chatwizard)
 [![Installs](https://vsmarketplacebadges.dev/installs/Veverke.chatwizard.svg)](https://marketplace.visualstudio.com/items?itemName=Veverke.chatwizard)
 [![Rating](https://vsmarketplacebadges.dev/rating/Veverke.chatwizard.svg)](https://marketplace.visualstudio.com/items?itemName=Veverke.chatwizard)
@@ -356,3 +357,8 @@ In plain terms:
 - You may **not** sell the software or offer it as a paid product or service (including hosting or consulting services whose value derives substantially from this software).
 
 This is **source-available** software. It is not OSI-certified open source.
+
+## Feedback & User Survey
+Help improve ChatWizard by sharing your experience:
+
+👉 [Take the User Survey](https://forms.gle/Mj4JtMsYLdxQds1R6)
