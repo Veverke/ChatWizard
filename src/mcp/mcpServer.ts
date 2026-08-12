@@ -183,14 +183,14 @@ export class McpServer implements IMcpServer {
                         return;
                     }
 
-                    // ── Authenticated endpoints ────────────────────────────────
-                    if (!checkAuth(req, res)) { return; }
-
                     if (req.method === 'GET' && urlPath === '/mcp-config') {
                         res.writeHead(200, { 'Content-Type': 'application/json' })
                             .end(this._buildConfigSnippet(port, token));
                         return;
                     }
+
+                    // ── Authenticated endpoints ────────────────────────────────
+                    if (!checkAuth(req, res)) { return; }
 
                     if (req.method === 'GET' && urlPath === '/sse') {
                         const transport = new SSEServerTransport('/messages', res);
