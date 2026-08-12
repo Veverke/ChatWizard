@@ -120,7 +120,7 @@ def main():
             f.write('')
         sys.exit(0)
 
-    # VS Code 1.133+ renamed the macOS binary from Electron → Code.
+    # VS Code 1.133+ renamed the macOS binary from Electron → Code (or Code - Insiders).
     # If the Code binary exists but Electron doesn't, create a symlink
     # so that @vscode/test-electron and our tooling can find it.
     code_binary = os.path.join(install_dir, "Visual Studio Code.app", "Contents", "MacOS", "Code")
@@ -133,12 +133,12 @@ def main():
                 f.write('')
             sys.exit(0)
 
-    code_insiders_binary = os.path.join(install_dir, "Visual Studio Code - Insiders.app", "Contents", "MacOS", "Code")
+    code_insiders_binary = os.path.join(install_dir, "Visual Studio Code - Insiders.app", "Contents", "MacOS", "Code - Insiders")
     if not os.path.exists(expected_insiders) and os.path.exists(code_insiders_binary):
-        print(f"[repair] Electron binary missing, but Code binary found — creating symlink")
-        os.symlink("Code", expected_insiders)
+        print(f"[repair] Electron binary missing, but Code - Insiders binary found — creating symlink")
+        os.symlink("Code - Insiders", expected_insiders)
         if os.path.exists(expected_insiders):
-            print(f"[repair] OK — symlink {expected_insiders} → Code created")
+            print(f"[repair] OK — symlink {expected_insiders} → Code - Insiders created")
             with open(os.path.join(install_dir, 'is-complete'), 'w') as f:
                 f.write('')
             sys.exit(0)

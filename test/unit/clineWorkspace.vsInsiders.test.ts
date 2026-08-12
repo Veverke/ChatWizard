@@ -6,6 +6,7 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import * as sinon from 'sinon';
 
 suite('getClineCompatStorageRoot — VS Code Insiders preference', () => {
     let tmpDir: string;
@@ -20,17 +21,27 @@ suite('getClineCompatStorageRoot — VS Code Insiders preference', () => {
 
     test('returns Insiders path when Insiders tasks dir exists', () => {
         // Arrange: create Insiders tasks dir structure
-        const insidersTasksDir = path.join(tmpDir, 'Code - Insiders', 'User', 'globalStorage', 'saoudrizwan.claude-dev', 'tasks');
+        const isMac = process.platform === 'darwin';
+        let insidersTasksDir: string;
+
+        if (isMac) {
+            insidersTasksDir = path.join(tmpDir, 'Library', 'Application Support', 'Code - Insiders', 'User', 'globalStorage', 'saoudrizwan.claude-dev', 'tasks');
+        } else {
+            insidersTasksDir = path.join(tmpDir, 'Code - Insiders', 'User', 'globalStorage', 'saoudrizwan.claude-dev', 'tasks');
+        }
         fs.mkdirSync(insidersTasksDir, { recursive: true });
 
-        // Patch platform-appropriate env vars so getClineCompatStorageRoot looks in tmpDir
         const originalAppData = process.env['APPDATA'];
         const originalXdgConfig = process.env['XDG_CONFIG_HOME'];
+        let homedirStub: sinon.SinonStub | undefined;
         process.env['APPDATA'] = tmpDir;
         process.env['XDG_CONFIG_HOME'] = tmpDir;
 
+        if (isMac) {
+            homedirStub = sinon.stub(os, 'homedir').returns(tmpDir);
+        }
+
         try {
-            // Re-require to pick up patched env
             delete require.cache[require.resolve('../../src/readers/clineWorkspace')];
             // eslint-disable-next-line @typescript-eslint/no-require-imports
             const { getClineStorageRoot } = require('../../src/readers/clineWorkspace') as typeof import('../../src/readers/clineWorkspace');
@@ -40,19 +51,34 @@ suite('getClineCompatStorageRoot — VS Code Insiders preference', () => {
         } finally {
             process.env['APPDATA'] = originalAppData;
             process.env['XDG_CONFIG_HOME'] = originalXdgConfig;
+            if (homedirStub) {
+                homedirStub.restore();
+            }
             delete require.cache[require.resolve('../../src/readers/clineWorkspace')];
         }
     });
 
     test('falls back to stable Code path when Insiders tasks dir does NOT exist', () => {
         // Arrange: only create stable Code tasks dir
-        const stableTasksDir = path.join(tmpDir, 'Code', 'User', 'globalStorage', 'saoudrizwan.claude-dev', 'tasks');
+        const isMac = process.platform === 'darwin';
+        let stableTasksDir: string;
+
+        if (isMac) {
+            stableTasksDir = path.join(tmpDir, 'Library', 'Application Support', 'Code', 'User', 'globalStorage', 'saoudrizwan.claude-dev', 'tasks');
+        } else {
+            stableTasksDir = path.join(tmpDir, 'Code', 'User', 'globalStorage', 'saoudrizwan.claude-dev', 'tasks');
+        }
         fs.mkdirSync(stableTasksDir, { recursive: true });
 
         const originalAppData = process.env['APPDATA'];
         const originalXdgConfig = process.env['XDG_CONFIG_HOME'];
+        let homedirStub: sinon.SinonStub | undefined;
         process.env['APPDATA'] = tmpDir;
         process.env['XDG_CONFIG_HOME'] = tmpDir;
+
+        if (isMac) {
+            homedirStub = sinon.stub(os, 'homedir').returns(tmpDir);
+        }
 
         try {
             delete require.cache[require.resolve('../../src/readers/clineWorkspace')];
@@ -64,6 +90,9 @@ suite('getClineCompatStorageRoot — VS Code Insiders preference', () => {
         } finally {
             process.env['APPDATA'] = originalAppData;
             process.env['XDG_CONFIG_HOME'] = originalXdgConfig;
+            if (homedirStub) {
+                homedirStub.restore();
+            }
             delete require.cache[require.resolve('../../src/readers/clineWorkspace')];
         }
     });
