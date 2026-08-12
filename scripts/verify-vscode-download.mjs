@@ -105,6 +105,22 @@ function main() {
     process.exit(0);
   }
 
+  // VS Code 1.133+ renamed the macOS binary from Electron → Code.
+  // If the Code binary exists, create a symlink Electron → Code.
+  const codeExe = exe.replace(/\/Electron$/, '/Code');
+  if (existsSync(codeExe)) {
+    console.log(`[verify] Electron binary missing, but Code binary found — creating symlink`);
+    try {
+      execFileSync('ln', ['-s', 'Code', exe], { stdio: 'inherit' });
+      if (existsSync(exe)) {
+        console.log(`[verify] OK - symlink ${exe} → Code created`);
+        process.exit(0);
+      }
+    } catch {
+      console.error(`[verify] Failed to create symlink`);
+    }
+  }
+
   console.error(`[verify] MISSING - ${exe} not found`);
   console.error(`[verify] Delegating to repair-macos-vscode.py ...`);
 

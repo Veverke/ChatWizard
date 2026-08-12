@@ -68,7 +68,8 @@ jobs:
           fi
 
       - name: Upload coverage to Codecov
-        if: matrix.os == 'ubuntu-latest' && matrix.vscode-version == 'stable'
+        if: false
+        #if: matrix.os == 'ubuntu-latest' && matrix.vscode-version == 'stable'
         uses: codecov/codecov-action@v5.5.4
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
