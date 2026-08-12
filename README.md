@@ -1,6 +1,6 @@
 ﻿# Chat Wizard
 
-[![Chat Wizard User Survey](https://img.shields.io/badge/📋User %20Survey-Help%20Improve%20ChatWizard-blue)](https://forms.gle/Mj4JtMsYLdxQds1R6)
+[![Chat Wizard User Survey](https://img.shields.io/badge/📋User%20Survey-Help%20Improve%20ChatWizard-blue)](https://forms.gle/Mj4JtMsYLdxQds1R6)
 [![VS Code Marketplace](https://vsmarketplacebadges.dev/version/Veverke.chatwizard.svg)](https://marketplace.visualstudio.com/items?itemName=Veverke.chatwizard)
 [![Installs](https://vsmarketplacebadges.dev/installs/Veverke.chatwizard.svg)](https://marketplace.visualstudio.com/items?itemName=Veverke.chatwizard)
 [![Rating](https://vsmarketplacebadges.dev/rating/Veverke.chatwizard.svg)](https://marketplace.visualstudio.com/items?itemName=Veverke.chatwizard)
