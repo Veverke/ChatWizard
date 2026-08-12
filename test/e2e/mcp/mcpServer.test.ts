@@ -263,17 +263,19 @@ suite('McpServer — /mcp-config endpoint', () => {
         assert.ok(json.endpoints?.messages, 'should include messages endpoint');
     });
 
-    // Feature 39: /mcp-config now requires authentication
-    test('GET /mcp-config without Authorization header returns 401', async () => {
+    // /mcp-config is a discovery endpoint — it is intentionally public
+    // so that IDEs can fetch the URL, endpoints, and bearer token without
+    // pre-existing credentials.
+    test('GET /mcp-config without Authorization header returns 200 (public discovery)', async () => {
         const { status } = await httpGet(`http://localhost:${port}/mcp-config`);
-        assert.strictEqual(status, 401);
+        assert.strictEqual(status, 200);
     });
 
-    test('GET /mcp-config with wrong token returns 401', async () => {
+    test('GET /mcp-config with wrong token returns 200 (public discovery)', async () => {
         const { status } = await httpGet(`http://localhost:${port}/mcp-config`, {
             Authorization: 'Bearer wrong-token',
         });
-        assert.strictEqual(status, 401);
+        assert.strictEqual(status, 200);
     });
 
     test('GET /mcp-config with valid token returns 200', async () => {
