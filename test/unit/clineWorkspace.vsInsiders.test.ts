@@ -6,7 +6,6 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import * as sinon from 'sinon';
 
 suite('getClineCompatStorageRoot — VS Code Insiders preference', () => {
     let tmpDir: string;
@@ -31,14 +30,14 @@ suite('getClineCompatStorageRoot — VS Code Insiders preference', () => {
         }
         fs.mkdirSync(insidersTasksDir, { recursive: true });
 
+        // Patch platform-appropriate env vars so getClineCompatStorageRoot looks in tmpDir
         const originalAppData = process.env['APPDATA'];
         const originalXdgConfig = process.env['XDG_CONFIG_HOME'];
-        let homedirStub: sinon.SinonStub | undefined;
+        const originalHome = process.env['HOME'];
         process.env['APPDATA'] = tmpDir;
         process.env['XDG_CONFIG_HOME'] = tmpDir;
-
         if (isMac) {
-            homedirStub = sinon.stub(os, 'homedir').returns(tmpDir);
+            process.env['HOME'] = tmpDir;
         }
 
         try {
@@ -51,9 +50,7 @@ suite('getClineCompatStorageRoot — VS Code Insiders preference', () => {
         } finally {
             process.env['APPDATA'] = originalAppData;
             process.env['XDG_CONFIG_HOME'] = originalXdgConfig;
-            if (homedirStub) {
-                homedirStub.restore();
-            }
+            process.env['HOME'] = originalHome;
             delete require.cache[require.resolve('../../src/readers/clineWorkspace')];
         }
     });
@@ -72,12 +69,11 @@ suite('getClineCompatStorageRoot — VS Code Insiders preference', () => {
 
         const originalAppData = process.env['APPDATA'];
         const originalXdgConfig = process.env['XDG_CONFIG_HOME'];
-        let homedirStub: sinon.SinonStub | undefined;
+        const originalHome = process.env['HOME'];
         process.env['APPDATA'] = tmpDir;
         process.env['XDG_CONFIG_HOME'] = tmpDir;
-
         if (isMac) {
-            homedirStub = sinon.stub(os, 'homedir').returns(tmpDir);
+            process.env['HOME'] = tmpDir;
         }
 
         try {
@@ -90,9 +86,7 @@ suite('getClineCompatStorageRoot — VS Code Insiders preference', () => {
         } finally {
             process.env['APPDATA'] = originalAppData;
             process.env['XDG_CONFIG_HOME'] = originalXdgConfig;
-            if (homedirStub) {
-                homedirStub.restore();
-            }
+            process.env['HOME'] = originalHome;
             delete require.cache[require.resolve('../../src/readers/clineWorkspace')];
         }
     });
