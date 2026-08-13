@@ -1134,10 +1134,6 @@
           "when": "false"
         },
         {
-          "command": "chatwizard.generateDigest",
-          "when": "false"
-        },
-        {
           "command": "chatwizard.filterSessions",
           "when": "false"
         },
