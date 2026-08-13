@@ -99,6 +99,16 @@ jobs:
       - name: Set up git hooks (husky)
         run: npx husky
 
+      # Download VS Code first so rebuild-native.js can read the exact Electron
+      # version from .vscode-test/ before recompiling better-sqlite3.
+      - name: Download VS Code
+        run: node -e "require('@vscode/test-electron').downloadAndUnzipVSCode('stable')"
+
+      - name: Verify VS Code executable exists (macOS workaround)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: node scripts/verify-vscode-download.mjs
+
       - name: Set up MSVC dev command prompt (Windows)
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
