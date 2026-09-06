@@ -93,6 +93,7 @@ import { PromptAnalyzer } from './analytics/promptAnalyzer';
 import { readChronicleCheckpoints, readChronicleSessions } from './parsers/chronicle';
 import { CacheIntegration } from './cache/cacheIntegration';
 import { resolveSharedCacheDir } from './utils/sharedCachePath';
+import { LogService, createDefaultLogSourceRegistry } from './logs';
 import * as path from 'path';
 import { RestApiServer } from './api/restApiServer';
 import { CloudSyncManager } from './cloud/cloudSyncManager';
@@ -177,6 +178,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         }
     } else if (enableCache && !isVSCode) {
         channel.appendLine(`[Chat Wizard] Skipping SQLite cache — running in ${appName} (better-sqlite3 NODE_MODULE_VERSION mismatch).`);
+    }
+
+    // ── Watch-logs Phase 1: normalized agent-execution log event store ──────
+    // Uses the same shared directory as the session cache so the log event DB
+    // (chatwizard-log-events.db) is readable across IDEs. Better-sqlite3 is a
+    // native dependency, so this follows the same enable/isVSCode gating as the
+    // session cache — in non-VS Code IDEs the events simply aren't persisted.
+    let logService: LogService | undefined;
+    if (enableCache && isVSCode) {
+        try {
+            const sharedDir = vscode.workspace.getConfiguration('chatwizard').get<string>('sharedCacheDir', '');
+            const cacheDir = resolveSharedCacheDir(sharedDir);
+            logService = new LogService(cacheDir, createDefaultLogSourceRegistry());
+            channel.appendLine(`[Chat Wizard] Watch-logs event store initialised (${logService.store.dbPath}).`);
+        } catch (err) {
+            channel.appendLine(`[Chat Wizard] Watch-logs store init failed (continuing without it): ${err}`);
+        }
     }
 
     // Branding status-bar item — created early so all listeners below can call brandingBar.notify()
@@ -634,6 +652,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
         // Register dispose for cache on deactivation
         context.subscriptions.push({ dispose: () => cacheIntegration.dispose() });
+    }
+
+    // ── Watch-logs Phase 1: dispose the log event store on deactivation ─────
+    if (logService) {
+        context.subscriptions.push({ dispose: () => logService.dispose() });
     }
 
     const provider = new SessionTreeProvider(index, context.extensionUri);
