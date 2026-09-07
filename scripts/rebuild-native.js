@@ -18,7 +18,7 @@
 
 'use strict';
 
-const { execSync } = require('child_process');
+const { execFileSync, execSync } = require('child_process');
 const fs   = require('fs');
 const path = require('path');
 const os   = require('os');
@@ -83,20 +83,66 @@ function queryElectronVersionFromVSCode() {
         return wantInsiders ? (aI === bI ? 0 : aI ? -1 : 1) : (aI === bI ? 0 : aI ? 1 : -1);
     });
     for (const dir of dirs) {
-        for (const child of safeReaddir(path.join(vscodeTestDir, dir))) {
-            const p = path.join(vscodeTestDir, dir, child, 'resources', 'app', 'package.json');
+        const installDir = path.join(vscodeTestDir, dir);
+        const candidates = [installDir];
+
+        // Windows archive builds may put the actual installation below a
+        // commit-hash directory.  Probe those direct children as well.
+        for (const child of safeReaddir(installDir)) {
+            const childPath = path.join(installDir, child);
             try {
-                if (!fs.existsSync(p)) { continue; }
-                const pkg = JSON.parse(fs.readFileSync(p, 'utf8'));
-                const ver = pkg?.devDependencies?.electron;
-                if (ver && /^\d+\.\d+\.\d+$/.test(ver)) {
-                    console.log(`[rebuild-native] Detected Electron ${ver}`);
+                if (fs.statSync(childPath).isDirectory()) {
+                    candidates.push(childPath);
+                }
+            } catch { /* ignore inaccessible entries */ }
+        }
+
+        for (const candidate of candidates) {
+            const bin = findVSCodeBinary(candidate);
+            if (!bin) { continue; }
+
+            try {
+                // Query the binary itself instead of deriving Electron's
+                // version from the VS Code release number.  The mapping is
+                // not stable, and stale mappings produce ABI mismatches.
+                const ver = execFileSync(
+                    bin,
+                    ['-e', 'process.stdout.write(process.versions.electron)'],
+                    {
+                        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+                        timeout: 15_000,
+                        windowsHide: true,
+                        stdio: ['pipe', 'pipe', 'pipe'],
+                    }
+                ).toString().trim();
+
+                if (/^\d+\.\d+\.\d+$/.test(ver)) {
+                    console.log(`[rebuild-native] Detected Electron ${ver} from ${bin}`);
                     return ver;
                 }
-            } catch { /* ignore */ }
+            } catch {
+                // A downloaded binary may not start in a headless environment;
+                // try the next cached installation before using the fallback.
+            }
         }
     }
     return null;
+}
+
+function findVSCodeBinary(installDir) {
+    let names;
+    if (process.platform === 'win32') {
+        names = ['Code.exe', 'Code - Insiders.exe'];
+    } else if (process.platform === 'darwin') {
+        return safeReaddir(installDir)
+            .filter(entry => entry.endsWith('.app'))
+            .map(app => path.join(installDir, app, 'Contents', 'MacOS', 'Electron'))
+            .find(fs.existsSync) ?? null;
+    } else {
+        names = ['code', 'code-insiders', 'code-exploration'];
+    }
+
+    return names.map(name => path.join(installDir, name)).find(fs.existsSync) ?? null;
 }
 
 function safeReaddir(d) { try { return fs.readdirSync(d); } catch { return []; } }

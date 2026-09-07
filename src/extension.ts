@@ -343,19 +343,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             channel.appendLine('[Chat Wizard] KB embedding engine registered via SemanticIndexer.');
             void indexer.initialize().then(() => {
                 const cachedCount = indexer.indexedCount;
+                const summaries = index.getAllSummaries();
                 if (cachedCount > 0) {
-                    // Index was loaded from disk — all sessions are already embedded.
-                    // No need to schedule anything; the live listener handles new sessions.
-                    channel.appendLine(`[Chat Wizard] Semantic indexer ready — ${cachedCount} session(s) restored from cache for this workspace.`);
+                    // Reconcile source fingerprints without re-embedding unchanged sessions.
+                    // Changed sessions are replaced incrementally by scheduleSession().
+                    channel.appendLine(`[Chat Wizard] Semantic indexer ready — ${cachedCount} session(s) restored; checking ${summaries.length} session(s) for changes.`);
                 } else {
-                    // First run or index was empty — schedule all existing sessions.
-                    const summaries = index.getAllSummaries();
                     channel.appendLine(`[Chat Wizard] Semantic indexer ready — scheduling ${summaries.length} existing session(s).`);
-                    for (const summary of summaries) {
-                        const session = index.get(summary.id);
-                        if (session) {
-                            indexer.scheduleSession(session);
-                        }
+                }
+                for (const summary of summaries) {
+                    const session = index.get(summary.id);
+                    if (session) {
+                        indexer.scheduleSession(session);
                     }
                 }
             }).catch((err: unknown) => {
@@ -392,6 +391,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             semanticIndexer.dispose();
             semanticIndexer = null;
             void vscode.workspace.fs.delete(semanticEmbeddingsUri).then(undefined, () => { /* ignore missing file */ });
+            void vscode.workspace.fs.delete(vscode.Uri.file(`${semanticEmbeddingsUri.fsPath}.meta.json`)).then(undefined, () => { /* ignore missing file */ });
             if (vscode.workspace.getConfiguration('chatwizard').get<boolean>('enableSemanticSearch') ?? true) {
                 createAndInitSemanticIndexer();
             }

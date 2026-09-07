@@ -5,6 +5,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { SemanticIndexer, SemanticIndexerVsCodeApi } from '../../src/search/semanticIndexer';
+import { SemanticIndex } from '../../src/search/semanticIndex';
 import { IEmbeddingEngine, ISemanticIndex, SEMANTIC_DIMS, SemanticScope } from '../../src/search/semanticContracts';
 import { SemanticSearchResult, SemanticMessageResult } from '../../src/search/types';
 import { Session, Message } from '../../src/types/index';
@@ -328,6 +329,107 @@ suite('SemanticIndexer.scheduleSession', () => {
         indexer.scheduleSession(makeSession('s1', 'hello world'));
         await new Promise(r => setTimeout(r, 20));
         assert.strictEqual(engine.embedCallCount, 0, 'already-indexed session must be skipped');
+        indexer.dispose();
+    });
+
+    test('re-embeds changed sessions but skips unchanged updates', async () => {
+        const { indexer, engine } = await makeReadyIndexer();
+        const original = makeSession('s1', 'hello world');
+        indexer.scheduleSession(original);
+        await new Promise(r => setTimeout(r, 30));
+        assert.strictEqual(engine.embedCallCount, 2);
+
+        indexer.scheduleSession(original);
+        await new Promise(r => setTimeout(r, 20));
+        assert.strictEqual(engine.embedCallCount, 2, 'unchanged session must be skipped');
+
+        indexer.scheduleSession(makeSession('s1', 'updated world'));
+        await new Promise(r => setTimeout(r, 30));
+        assert.strictEqual(engine.embedCallCount, 4, 'changed session must be re-embedded');
+        indexer.dispose();
+    });
+
+    test('restores fingerprints and embeds only changed sessions after reload', async () => {
+        const storageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'semantic-fingerprint-test-'));
+        const api = makeVsCodeApiStub({ isFirstUse: false });
+        const firstEngine = makeEngineStub();
+        const firstIndexer = new SemanticIndexer(
+            storageDir,
+            () => firstEngine,
+            () => new SemanticIndex(),
+            api,
+            0,
+        );
+        await firstIndexer.initialize();
+        firstIndexer.scheduleSession(makeSession('s1', 'original world'));
+        await new Promise(r => setTimeout(r, 30));
+        firstIndexer.dispose();
+
+        const secondEngine = makeEngineStub();
+        const secondIndexer = new SemanticIndexer(
+            storageDir,
+            () => secondEngine,
+            () => new SemanticIndex(),
+            api,
+            0,
+        );
+        await secondIndexer.initialize();
+        secondIndexer.scheduleSession(makeSession('s1', 'original world'));
+        await new Promise(r => setTimeout(r, 20));
+        assert.strictEqual(secondEngine.embedCallCount, 0, 'unchanged cached session must not re-embed');
+
+        secondIndexer.scheduleSession(makeSession('s1', 'changed world'));
+        await new Promise(r => setTimeout(r, 30));
+        assert.strictEqual(secondEngine.embedCallCount, 2, 'changed cached session must re-embed');
+        secondIndexer.dispose();
+    });
+
+    test('drops partial embeddings when a session changes during an in-flight batch', async () => {
+        const engine = makeEngineStub();
+        const batches: string[][] = [];
+        let releaseSecondBatch!: () => void;
+        let secondBatchStarted!: () => void;
+        const secondBatchReady = new Promise<void>(resolve => { secondBatchStarted = resolve; });
+        const realEmbedBatch = engine.embedBatch.bind(engine);
+        let batchNumber = 0;
+        engine.embedBatch = async (texts: string[]) => {
+            batchNumber++;
+            batches.push([...texts]);
+            if (batchNumber === 2) {
+                secondBatchStarted();
+                await new Promise<void>(resolve => { releaseSecondBatch = resolve; });
+            }
+            return realEmbedBatch(texts);
+        };
+
+        const storageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'semantic-inflight-test-'));
+        const index = makeIndexStub();
+        const api = makeVsCodeApiStub({ isFirstUse: false });
+        const indexer = new SemanticIndexer(storageDir, () => engine, () => index, api, 0);
+        await indexer.initialize();
+
+        const makeLargeSession = (content: string): Session => ({
+            ...makeSession('s1', content),
+            messages: Array.from({ length: 31 }, (_, i) => ({
+                id: `msg-${i}`,
+                role: 'user' as const,
+                content: `${content} ${i}`,
+                codeBlocks: [],
+            })),
+        });
+
+        indexer.scheduleSession(makeLargeSession('original'));
+        await secondBatchReady;
+        indexer.scheduleSession(makeLargeSession('updated'));
+        releaseSecondBatch();
+
+        for (let i = 0; i < 50 && indexer.isIndexing; i++) {
+            await new Promise(resolve => setTimeout(resolve, 10));
+        }
+        assert.strictEqual(batches.length, 4, 'updated session should be embedded after stale work is discarded');
+        assert.ok(batches[2].every(text => text.startsWith('updated') || text === 's1'));
+        assert.ok(batches[3].every(text => text.startsWith('updated')));
+        assert.strictEqual(index.size, 32, 'index should contain only the updated session entries');
         indexer.dispose();
     });
 

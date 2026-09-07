@@ -1,6 +1,7 @@
 // src/search/semanticIndexer.ts
 
 import * as vscode from 'vscode';
+import { createHash } from 'crypto';
 import * as path from 'path';
 import * as fs from 'fs';
 import { ISemanticIndexer, IEmbeddingEngine, ISemanticIndex, SemanticScope, SEMANTIC_MIN_SCORE } from './semanticContracts';
@@ -9,6 +10,8 @@ import { Session } from '../types/index';
 import { createLogger, type BoundLogger, withTimeout } from '../utils/logger';
 
 const EMBEDDINGS_FILENAME = 'semantic-embeddings.bin';
+const FINGERPRINTS_FILENAME_SUFFIX = '.meta.json';
+const FINGERPRINTS_FILE_VERSION = 1;
 const SAVE_DEBOUNCE_MS = 5_000;
 const MODEL_CACHE_SUBDIR = 'models';
 /**
@@ -173,10 +176,24 @@ export function defaultVsCodeApi(globalState?: SemanticGlobalState): SemanticInd
 
 interface QueueEntry {
     sessionId: string;
+    fingerprint: string;
     role: 'user' | 'assistant';
     messageIndex: number;
     paragraphIndex: number;
     text: string;
+}
+
+/** Hash only the content that contributes entries to the semantic index. */
+function sessionFingerprint(session: Session): string {
+    const hash = createHash('sha256');
+    hash.update(session.title ?? '');
+    for (const message of session.messages) {
+        hash.update('\0');
+        hash.update(message.role);
+        hash.update('\0');
+        hash.update(message.content ?? '');
+    }
+    return hash.digest('hex');
 }
 
 /**
@@ -206,6 +223,10 @@ export class SemanticIndexer implements ISemanticIndexer {
     private _totalSessionsCompleted = 0;
     /** Remaining queue entries per session; deleted when the session reaches 0. */
     private _pendingBySession = new Map<string, number>();
+    /** Fingerprint for each session currently queued, used to replace stale queued work. */
+    private _pendingFingerprints = new Map<string, string>();
+    /** Fingerprints for sessions whose embeddings have been persisted successfully. */
+    private _sessionFingerprints = new Map<string, string>();
 
     /** Feature 43: Max age in days for sessions to be included in the semantic index. 0 = no limit. */
     private _maxAgeDays: number = 0;
@@ -236,6 +257,8 @@ export class SemanticIndexer implements ISemanticIndexer {
 
     private readonly _queueStartDebounceMs: number;
     private readonly embeddingsPath: string;
+    /** Sidecar containing content fingerprints for persisted session embeddings. */
+    private readonly fingerprintsPath: string;
     /** Path to the global bulk-embedding lock directory. */
     private readonly _bulkLockPath: string;
     /** Whether this instance currently holds the bulk lock. */
@@ -258,6 +281,7 @@ export class SemanticIndexer implements ISemanticIndexer {
         this.vsCodeApi = vsCodeApi ?? defaultVsCodeApi();
         this._queueStartDebounceMs = queueStartDebounceMs ?? QUEUE_START_DEBOUNCE_MS;
         this.log = parentLog?.withContext('SemanticIndexer') ?? createLogger().withContext('SemanticIndexer');
+        this.fingerprintsPath = `${this.embeddingsPath}${FINGERPRINTS_FILENAME_SUFFIX}`;
     }
 
     /**
@@ -338,6 +362,7 @@ export class SemanticIndexer implements ISemanticIndexer {
         } catch (err) {
             this.log.warn('Could not load persisted index (will start fresh): %s', String(err));
         }
+        await this._loadSessionFingerprints();
 
         this._isReady = true;
     }
@@ -348,22 +373,57 @@ export class SemanticIndexer implements ISemanticIndexer {
      * Queues all messages of a session for embedding.
      * - Each user message → one queue entry.
      * - Each assistant response → one entry per non-empty paragraph (split on `\n\n`).
-     * Skips silently if the session is already in the index or the indexer is not ready.
+     * Skips unchanged sessions while replacing entries whose content fingerprint changed.
      */
     scheduleSession(session: Session): void {
         if (!this._isReady || this._disposed) {
             return;
         }
+        const fingerprint = sessionFingerprint(session);
+        let removedStaleIndex = false;
         if (this.index.has(session.id)) {
-            this.log.debug('scheduleSession: session %s already indexed — skipping', session.id);
-            return;
+            const knownFingerprint = this._sessionFingerprints.get(session.id);
+            if (knownFingerprint === undefined) {
+                const pendingFingerprint = this._pendingFingerprints.get(session.id);
+                if (pendingFingerprint === undefined) {
+                    // Index files from before fingerprints were introduced have no way to
+                    // reconstruct their source text. Treat those entries as current and
+                    // seed the sidecar; future edits will then be detected incrementally.
+                    this._sessionFingerprints.set(session.id, fingerprint);
+                    this._scheduleSave();
+                    this.log.debug('scheduleSession: seeded fingerprint for cached session %s', session.id);
+                    return;
+                }
+                if (pendingFingerprint !== fingerprint) {
+                    // A partial in-flight embedding may already have written old entries.
+                    // Remove them before the queued replacement is built below.
+                    this.index.remove(session.id);
+                    removedStaleIndex = true;
+                    this.log.debug('scheduleSession: session %s changed while embedding — replacing partial entries', session.id);
+                }
+            }
+            if (knownFingerprint !== undefined && knownFingerprint === fingerprint) {
+                this.log.debug('scheduleSession: session %s unchanged — skipping', session.id);
+                return;
+            }
+            if (knownFingerprint !== undefined && knownFingerprint !== fingerprint) {
+                this.index.remove(session.id);
+                this._sessionFingerprints.delete(session.id);
+                removedStaleIndex = true;
+                this.log.debug('scheduleSession: session %s changed — replacing embeddings', session.id);
+            }
         }
-        // Skip if this session is already queued but not yet processed — avoids
-        // enqueuing duplicate work and inflating _totalSessionsQueued when repeated
-        // upsert events fire for the same session.
-        if (this._pendingBySession.has(session.id)) {
-            this.log.debug('scheduleSession: session %s already queued — skipping', session.id);
-            return;
+
+        const queuedFingerprint = this._pendingFingerprints.get(session.id);
+        if (queuedFingerprint !== undefined) {
+            if (queuedFingerprint === fingerprint) {
+                this.log.debug('scheduleSession: session %s already queued — skipping', session.id);
+                return;
+            }
+            this._queue = this._queue.filter(entry => entry.sessionId !== session.id);
+            this._pendingBySession.delete(session.id);
+            this._pendingFingerprints.delete(session.id);
+            this.log.debug('scheduleSession: replaced stale queued work for session %s', session.id);
         }
 
         // Feature 43: Skip sessions older than the configured max age.
@@ -386,7 +446,7 @@ export class SemanticIndexer implements ISemanticIndexer {
         // displacing content-based matches.
         const titleText = session.title?.trim();
         if (titleText) {
-            this._queue.push({ sessionId: session.id, role: 'user', messageIndex: -1, paragraphIndex: 0, text: titleText });
+            this._queue.push({ sessionId: session.id, fingerprint, role: 'user', messageIndex: -1, paragraphIndex: 0, text: titleText });
             added++;
         }
 
@@ -396,13 +456,14 @@ export class SemanticIndexer implements ISemanticIndexer {
             if (!text) { continue; }
 
             if (msg.role === 'user') {
-                this._queue.push({ sessionId: session.id, role: 'user', messageIndex: msgIdx, paragraphIndex: 0, text });
+                this._queue.push({ sessionId: session.id, fingerprint, role: 'user', messageIndex: msgIdx, paragraphIndex: 0, text });
                 added++;
             } else if (msg.role === 'assistant') {
                 const paragraphs = text.split(/\n\n+/).map(p => p.trim()).filter(Boolean);
                 for (let paraIdx = 0; paraIdx < paragraphs.length; paraIdx++) {
                     this._queue.push({
                         sessionId: session.id,
+                        fingerprint,
                         role: 'assistant',
                         messageIndex: msgIdx,
                         paragraphIndex: paraIdx,
@@ -413,10 +474,16 @@ export class SemanticIndexer implements ISemanticIndexer {
             }
         }
 
-        if (added === 0) { return; }
+        if (added === 0) {
+            if (removedStaleIndex) {
+                this._scheduleSave();
+            }
+            return;
+        }
 
         this._totalSessionsQueued++;
         this._pendingBySession.set(session.id, added);
+        this._pendingFingerprints.set(session.id, fingerprint);
 
         if (!this._queueRunning) {
             // Cancel any pending "indexing complete" notification — more sessions are
@@ -444,7 +511,11 @@ export class SemanticIndexer implements ISemanticIndexer {
     // ── removeSession() ─────────────────────────────────────────────────────
 
     removeSession(sessionId: string): void {
+        this._queue = this._queue.filter(entry => entry.sessionId !== sessionId);
+        this._pendingBySession.delete(sessionId);
+        this._pendingFingerprints.delete(sessionId);
         this.index.remove(sessionId);
+        this._sessionFingerprints.delete(sessionId);
         this._scheduleSave();
     }
 
@@ -705,13 +776,20 @@ export class SemanticIndexer implements ISemanticIndexer {
 
                 // Collect completed session IDs (deduped) for counter bookkeeping
                 const completedSessions = new Set<string>();
+                const completedFingerprints = new Map<string, string>();
                 for (let i = 0; i < chunk.length; i++) {
                     const { sessionId, entry } = { sessionId: chunk[i].sessionId, entry: chunk[i] };
+                    // A session can be updated while its previous embedding batch is
+                    // in flight. Do not let that stale batch put old entries back.
+                    if (this._pendingFingerprints.get(sessionId) !== entry.fingerprint) {
+                        continue;
+                    }
                     const embedding = embeddings[i];
                     if (embedding) {
                         this.index.add(sessionId, entry.role, entry.messageIndex, entry.paragraphIndex, embedding);
                     }
                     completedSessions.add(sessionId);
+                    completedFingerprints.set(sessionId, entry.fingerprint);
                 }
 
                 // Decrement pending counts; remove sessions that have no more pending entries
@@ -721,6 +799,11 @@ export class SemanticIndexer implements ISemanticIndexer {
                         const updated = remaining - chunk.filter(e => e.sessionId === sid).length;
                         if (updated <= 0) {
                             this._pendingBySession.delete(sid);
+                            this._pendingFingerprints.delete(sid);
+                            const fingerprint = completedFingerprints.get(sid);
+                            if (fingerprint !== undefined) {
+                                this._sessionFingerprints.set(sid, fingerprint);
+                            }
                             this._totalSessionsCompleted++;
                         } else {
                             this._pendingBySession.set(sid, updated);
@@ -758,7 +841,7 @@ export class SemanticIndexer implements ISemanticIndexer {
         // would trigger a full re-embed on the next startup). This guard is
         // critical when dispose() fires mid-batch: the while loop exits, but
         // no chunks may have completed yet, so the index is still empty.
-        if (this.index.size > 0) {
+        if (this.index.size > 0 || this._sessionFingerprints.size > 0) {
             this._saveNowSync();
         }
 
@@ -802,10 +885,60 @@ export class SemanticIndexer implements ISemanticIndexer {
         }
         this._saveTimer = setTimeout(() => {
             this._saveTimer = undefined;
-            this.index
-                .save(this.embeddingsPath)
-                .catch(() => { /* ignore */ });
+            this._saveAll().catch(() => { /* ignore */ });
         }, SAVE_DEBOUNCE_MS);
+    }
+
+    /** Load the fingerprint sidecar; it is absent for pre-fingerprint cache files. */
+    private async _loadSessionFingerprints(): Promise<void> {
+        try {
+            const raw = await fs.promises.readFile(this.fingerprintsPath, 'utf8');
+            const parsed: unknown = JSON.parse(raw);
+            if (!parsed || typeof parsed !== 'object') { return; }
+            const record = parsed as { version?: unknown; fingerprints?: unknown };
+            if (
+                record.version !== FINGERPRINTS_FILE_VERSION ||
+                !record.fingerprints ||
+                typeof record.fingerprints !== 'object'
+            ) {
+                return;
+            }
+            for (const [sessionId, fingerprint] of Object.entries(record.fingerprints as Record<string, unknown>)) {
+                if (typeof fingerprint === 'string') {
+                    this._sessionFingerprints.set(sessionId, fingerprint);
+                }
+            }
+        } catch (err) {
+            const code = (err as NodeJS.ErrnoException).code;
+            if (code !== 'ENOENT') {
+                this.log.warn('Could not load semantic session fingerprints: %s', String(err));
+            }
+        }
+    }
+
+    private _fingerprintsPayload(): string {
+        return JSON.stringify({
+            version: FINGERPRINTS_FILE_VERSION,
+            fingerprints: Object.fromEntries(this._sessionFingerprints),
+        });
+    }
+
+    private async _saveAll(): Promise<void> {
+        await this.index.save(this.embeddingsPath);
+        await fs.promises.mkdir(path.dirname(this.fingerprintsPath), { recursive: true });
+        const tmpPath = `${this.fingerprintsPath}.tmp`;
+        await fs.promises.writeFile(tmpPath, this._fingerprintsPayload(), 'utf8');
+        await fs.promises.rename(tmpPath, this.fingerprintsPath);
+    }
+
+    private _saveSessionFingerprintsSync(): void {
+        const dir = path.dirname(this.fingerprintsPath);
+        if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true });
+        }
+        const tmpPath = `${this.fingerprintsPath}.tmp.sync`;
+        fs.writeFileSync(tmpPath, this._fingerprintsPayload(), 'utf8');
+        fs.renameSync(tmpPath, this.fingerprintsPath);
     }
 
     /** Synchronous save — used at the end of _runQueue() so the index is
@@ -819,6 +952,7 @@ export class SemanticIndexer implements ISemanticIndexer {
         try {
             const size = this.index.size;
             this.index.saveSync(this.embeddingsPath);
+            this._saveSessionFingerprintsSync();
             this.log.debug('saveNowSync: %d entries saved to %s', size, this.embeddingsPath);
         } catch (err) {
             this.log.warn('saveNowSync: failed to save %d entries: %s', this.index.size, String(err));
