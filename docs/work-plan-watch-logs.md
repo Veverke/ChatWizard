@@ -1237,9 +1237,29 @@ For each tool:
 
 Deliverable: internal API like `logService.getEvents({ sessionId, type })`.
 
-### **Phase 2 – First tool integration (2–3 weeks)**
+### **Phase 2 – First tool integration (2–3 weeks)** ⏳ IN PROGRESS
 
-- Pick **one tool** (Antigravity or Cursor).
+> **Implementation note (2026-09)** — started with **VS Code + GitHub Copilot** at the
+> user's request (the plan text below suggested Antigravity or Cursor; Copilot was
+> chosen because the phase-1 watcher already parses its `chatSessions/*.jsonl`, and
+> that same file embeds the agent-execution trail — tool invocations, inline file
+> edits, and terminal notifications with exit codes).
+>
+> **Status so far:**
+> - ✅ **Adapter + normalization** — `src/logs/adapters/copilotLogAdapter.ts` replays
+>   the session JSONL into `CommandEvent` / `ToolCallEvent` / `FileOperationEvent` /
+>   `ErrorEvent` (incl. exit-code correlation via `[Terminal <uuid> …]` notifications).
+> - ✅ **Log discovery** — `copilot` registered in `createDefaultLogSourceRegistry()`
+>   with roots from `getWorkspaceStorageRoots()` (honours `chatwizard.copilotStoragePath`).
+> - ✅ **Basic correlation** — the harvester (`src/logs/copilotLogHarvester.ts`) hooks
+>   the session index's typed change events, so events stay in sync with live file
+>   rewrites/removals; commands carry `sessionId`, `messageIndex`, `workspaceId/path`.
+> - ✅ **Executed Commands panel** — `chatwizardExecutedCommands` tree view
+>   (`src/logs/executedCommandsProvider.ts`) groups commands per session, newest
+>   first, with copy / open-session / refresh actions.
+> - ⬜ Remaining: `chatwizard.*` settings docs in README/user-guide, full manual QA.
+
+- Pick **one tool** (Antigravity or Cursor — implemented first: **Copilot**).
 - Implement:
 
 - log discovery

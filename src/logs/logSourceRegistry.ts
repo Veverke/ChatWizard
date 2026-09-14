@@ -19,6 +19,7 @@ import { getAntigravityBrainRoot } from '../readers/antigravityWorkspace';
 import { getCursorStorageRoot } from '../readers/cursorWorkspace';
 import { getWindsurfStorageRoot } from '../readers/windsurfWorkspace';
 import { getClineStorageRoot, getRooCodeStorageRoot } from '../readers/clineWorkspace';
+import { getWorkspaceStorageRoots } from '../readers/copilotWorkspace';
 import { LogSourceTool } from './types';
 
 /** On-disk shape of a source's agent-execution logs. */
@@ -136,6 +137,21 @@ export class LogSourceRegistry {
  */
 export function createDefaultLogSourceRegistry(): LogSourceRegistry {
     const registry = new LogSourceRegistry();
+
+    registry.register({
+        tool: 'copilot',
+        displayName: 'GitHub Copilot',
+        format: 'jsonl',
+        // VS Code persists every Copilot conversation as a snapshot+patch JSONL
+        // under workspaceStorage/<hash>/chatSessions/. Response items embed the
+        // agent-execution trail (toolInvocationSerialized, textEditGroup) and
+        // terminal-notification turns carry command exit codes.
+        filePatterns: ['**/chatSessions/*.jsonl'],
+        logRoots: getWorkspaceStorageRoots(),
+        enabledSettingKey: 'chatwizard.indexCopilot',
+        pathOverrideSettingKey: 'chatwizard.copilotStoragePath',
+        notes: 'Session JSONL includes tool invocations, inline edits and terminal notifications — the Phase 2 adapter.',
+    });
 
     registry.register({
         tool: 'cursor',

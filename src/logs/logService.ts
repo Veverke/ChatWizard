@@ -16,6 +16,7 @@
 import { LogEvent, LogEventFilter } from './types';
 import { LogEventStore, LogStoreStats } from './logEventStore';
 import { LogSourceRegistry, LogSourceConfig } from './logSourceRegistry';
+import { parseCopilotLogEvents } from './adapters/copilotLogAdapter';
 
 export interface ILogService {
     /** Query normalized agent log events (the Phase 1 deliverable). */
@@ -28,6 +29,18 @@ export interface ILogService {
     removeEventsForSession(sessionId: string): number;
     /** Remove events parsed from a given source log file. */
     removeBySourcePath(sourcePath: string): number;
+    /** Number of stored events that were parsed from a given source file. */
+    getEventCountForSource(sourcePath: string): number;
+    /**
+     * Phase 2 — Parse a Copilot session JSONL and (re)index its normalized
+     * agent-execution events. Events previously parsed from the same file are
+     * removed first, so live rewrites never leave stale rows.
+     */
+    ingestCopilotSessionFile(
+        filePath: string,
+        workspaceId: string,
+        workspacePath?: string
+    ): { ingested: number; errors: string[] };
     /** Drop every stored event. */
     clear(): void;
     /** Registered log source configs (optionally only enabled ones). */
@@ -76,6 +89,25 @@ export class LogService implements ILogService {
 
     removeBySourcePath(sourcePath: string): number {
         return this.store.removeBySourcePath(sourcePath);
+    }
+
+    getEventCountForSource(sourcePath: string): number {
+        return this.store.countBySourcePath(sourcePath);
+    }
+
+    ingestCopilotSessionFile(
+        filePath: string,
+        workspaceId: string,
+        workspacePath?: string
+    ): { ingested: number; errors: string[] } {
+        const result = parseCopilotLogEvents(filePath, workspaceId, workspacePath);
+        if (result.events.length > 0 || this.store.countBySourcePath(filePath) > 0) {
+            this.store.removeBySourcePath(filePath);
+        }
+        if (result.events.length > 0) {
+            this.store.upsertEvents(result.events);
+        }
+        return { ingested: result.events.length, errors: result.errors };
     }
 
     clear(): void {

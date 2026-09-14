@@ -1,16 +1,17 @@
 /**
  * src/logs/index.ts
  *
- * Phase 1 — Watch logs foundations.
- *
- * Public surface of the logs subsystem:
- *   - unified event schema   (./types)
- *   - log source registry    (./logSourceRegistry)
- *   - storage/indexing       (./logEventStore)
- *   - facade with getEvents  (./logService)
+ * Watch-logs subsystem public surface:
+ * Phase 1 — foundations (schema, registry, storage, facade).
+ * Phase 2 — first tool adapter (GitHub Copilot), harvester and the
+ *           "Executed Commands" panel.
  */
 
 export * from './types';
 export * from './logSourceRegistry';
 export * from './logEventStore';
 export * from './logService';
+export * from './adapters/copilotLogAdapter';
+export * from './copilotLogHarvester';
+export * from './executedCommandsProvider';
+export * from './logsCommands';

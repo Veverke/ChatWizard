@@ -81,6 +81,7 @@ export class LogEventStore {
         deleteBySourcePath: BetterSqlite3.Statement;
         deleteAll: BetterSqlite3.Statement;
         getEventCount: BetterSqlite3.Statement;
+        countBySourcePath: BetterSqlite3.Statement;
         countByType: BetterSqlite3.Statement;
         getDistinctTools: BetterSqlite3.Statement;
     } | null = null;
@@ -178,6 +179,7 @@ private _prepareStatements(): void {
             deleteAll: this.db.prepare('DELETE FROM agent_events'),
 
             getEventCount: this.db.prepare('SELECT COUNT(*) AS cnt FROM agent_events'),
+            countBySourcePath: this.db.prepare('SELECT COUNT(*) AS cnt FROM agent_events WHERE source_path = ?'),
             countByType: this.db.prepare(
                 'SELECT event_type AS eventType, COUNT(*) AS cnt FROM agent_events GROUP BY event_type'
             ),
@@ -308,6 +310,14 @@ private _prepareStatements(): void {
         if (!this.db || !this.stmt) { this.open(); }
         if (!this.db || !this.stmt) { return 0; }
         const row = this.stmt.getEventCount.get() as { cnt: number };
+        return row?.cnt ?? 0;
+    }
+
+    /** Number of stored events parsed from a given source log file. */
+    countBySourcePath(sourcePath: string): number {
+        if (!this.db || !this.stmt) { this.open(); }
+        if (!this.db || !this.stmt) { return 0; }
+        const row = this.stmt.countBySourcePath.get(sourcePath) as { cnt: number };
         return row?.cnt ?? 0;
     }
 

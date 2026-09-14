@@ -93,7 +93,13 @@ import { PromptAnalyzer } from './analytics/promptAnalyzer';
 import { readChronicleCheckpoints, readChronicleSessions } from './parsers/chronicle';
 import { CacheIntegration } from './cache/cacheIntegration';
 import { resolveSharedCacheDir } from './utils/sharedCachePath';
-import { LogService, createDefaultLogSourceRegistry } from './logs';
+import {
+    LogService,
+    createDefaultLogSourceRegistry,
+    ExecutedCommandsProvider,
+    registerLogCommands,
+    CopilotLogHarvester,
+} from './logs';
 import * as path from 'path';
 import { RestApiServer } from './api/restApiServer';
 import { CloudSyncManager } from './cloud/cloudSyncManager';
@@ -194,6 +200,34 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             channel.appendLine(`[Chat Wizard] Watch-logs event store initialised (${logService.store.dbPath}).`);
         } catch (err) {
             channel.appendLine(`[Chat Wizard] Watch-logs store init failed (continuing without it): ${err}`);
+        }
+    }
+
+    // ── Watch-logs Phase 2: GitHub Copilot adapter + Executed Commands panel ─
+    // The Copilot adapter replays each session's JSONL (the file the watcher
+    // already parses for chat) into normalized CommandEvent/ToolCallEvent/… rows.
+    // We hook the session index's typed events so initial indexing *and* live
+    // rewrites/removals keep the event store in sync with zero extra watching.
+    if (logService) {
+        try {
+            const executedCommandsProvider = new ExecutedCommandsProvider(logService, (sessionId) => index.get(sessionId)?.title);
+            const logHarvester = new CopilotLogHarvester(logService);
+            logHarvester.onEventsChanged = () => executedCommandsProvider.refresh();
+            const sessionEventListener = index.addTypedChangeListener((event) => {
+                try {
+                    logHarvester.handleIndexEvent(event);
+                } catch {
+                    // Log harvesting must never break session indexing.
+                }
+            });
+            const executedCommandsTreeView = vscode.window.createTreeView('chatwizardExecutedCommands', {
+                treeDataProvider: executedCommandsProvider,
+            });
+            context.subscriptions.push(sessionEventListener);
+            context.subscriptions.push(executedCommandsTreeView);
+            registerLogCommands(context, executedCommandsProvider);
+        } catch (err) {
+            channel.appendLine(`[Chat Wizard] Watch-logs Phase 2 UI init failed (continuing without it): ${err}`);
         }
     }
 

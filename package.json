@@ -82,6 +82,7 @@
     "onView:chatwizardSessions",
     "onView:chatwizardPromptLibrary",
     "onView:chatwizardCodeBlocks",
+    "onView:chatwizardExecutedCommands",
     "onView:chatwizardAnalytics",
     "onView:chatwizardModelUsage",
     "onView:chatwizardTimeline",
@@ -113,6 +114,10 @@
         {
           "id": "chatwizardCodeBlocks",
           "name": "Code Blocks"
+        },
+        {
+          "id": "chatwizardExecutedCommands",
+          "name": "Executed Commands"
         },
         {
           "id": "chatwizardAnalytics",
@@ -754,6 +759,28 @@
         "command": "chatwizard.shareSession",
         "title": "Chat Wizard: Share Session",
         "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.showExecutedCommands",
+        "title": "Chat Wizard: Show Executed Commands",
+        "category": "Chat Wizard",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "chatwizard.execCommands.copy",
+        "title": "Chat Wizard: Copy Command",
+        "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.execCommands.openSession",
+        "title": "Chat Wizard: Open Session",
+        "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.execCommands.refresh",
+        "title": "Chat Wizard: Refresh Executed Commands",
+        "category": "Chat Wizard",
+        "icon": "$(refresh)"
       }
     ],
     "menus": {
@@ -772,6 +799,11 @@
         }
       ],
       "view/title": [
+        {
+          "command": "chatwizard.execCommands.refresh",
+          "when": "view == chatwizardExecutedCommands",
+          "group": "navigation@0"
+        },
         {
           "command": "chatwizard.filterSessions",
           "when": "view == chatwizardSessions",
@@ -1098,6 +1130,16 @@
           "command": "chatwizard.moveSessionToFolder",
           "when": "viewItem == session || viewItem == session.pinned",
           "group": "7_folder@1"
+        },
+        {
+          "command": "chatwizard.execCommands.copy",
+          "when": "viewItem == execCommand",
+          "group": "1_copy@1"
+        },
+        {
+          "command": "chatwizard.execCommands.openSession",
+          "when": "viewItem == execCommand",
+          "group": "2_open@1"
         }
       ],
       "commandPalette": [
@@ -1491,6 +1533,18 @@
         },
         {
           "command": "chatwizard.createFolder",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.execCommands.copy",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.execCommands.openSession",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.execCommands.refresh",
           "when": "false"
         }
       ]

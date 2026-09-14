@@ -91,12 +91,21 @@ suite('LogService – watch-logs facade', () => {
 
     test('getSources returns registered configs; enabledOnly filters', () => {
         const all = logService.getSources();
-        assert.strictEqual(all.length, 6);
+        // 6 Phase-1 tools + GitHub Copilot (Phase 2).
+        assert.strictEqual(all.length, 7);
 
         // With default settings every source is enabled.
         const enabled = logService.getSources(true);
         assert.strictEqual(enabled.length, all.length);
         assert.deepStrictEqual(enabled.map((s) => s.tool), all.map((s) => s.tool));
+
+        // The Phase 2 Copilot source is registered with the expected shape.
+        const copilot = logService.registry.get('copilot');
+        assert.ok(copilot !== undefined, 'copilot log source should be registered');
+        assert.strictEqual(copilot!.displayName, 'GitHub Copilot');
+        assert.strictEqual(copilot!.format, 'jsonl');
+        assert.strictEqual(copilot!.enabledSettingKey, 'chatwizard.indexCopilot');
+        assert.ok(copilot!.filePatterns.includes('**/chatSessions/*.jsonl'));
     });
 
     test('getStats reflects stored events', () => {
