@@ -116,7 +116,8 @@ Eight panels live under the Chat Wizard Activity Bar icon:
 The **Commands** panel is the home of the _watch-logs_ subsystem (Phase 2/3 of
 `docs/work-plan-watch-logs.md`). It contains three collapsible sections — **Executed
 Commands**, **Unified Timeline** and **Diff Explorer** — instead of three separate
-sidebar views. AI models do not run commands themselves — the *host tools* execute
+sidebar views; all three start collapsed so the panel opens compact. AI models do not
+run commands themselves — the *host tools* execute
 them, and ChatWizard replays the agent-execution trail each tool writes to disk:
 
 | Tool | Source file | What is captured |
@@ -147,6 +148,27 @@ replacement text only (additions-only patches), while Cline and Aider patches ca
   a GUI Git client. `Open Patch` renders the raw patch text in a disposable markdown editor;
   `Copy Change` copies the diff text; `Open File` reveals the affected file when it still
   exists. The change rows' hover tooltip shows only a short patch preview.
+- **One filter bar for all three sections** (Phase 4). The filter button in the view title
+  bar (or `Chat Wizard: Filter Agent Logs…`) opens a menu with the current state of every
+  facet:
+  - **Search Agent Logs…** (`chatwizard.logs.search`) — case-insensitive free text; all words
+    must match. It searches command text, working directory, shell, output summaries, file
+    paths and operation details, diff text, tool names and arguments, error messages and
+    stack traces, planner descriptions, plus the agent name and workspace path.
+  - **Filter by Agent…** (`chatwizard.logs.filterByAgent`) — restrict to one AI tool.
+  - **Show Failures Only** (`chatwizard.logs.toggleFailures`) — failed commands (non-zero exit
+    code) and non-warning `error` events.
+  - **Filter by Event Kind…** (`chatwizard.logs.timeline.filter`) — the Unified Timeline's
+    kind filter, which now composes with the facets above.
+  - **Clear All Filters** (`chatwizard.logs.clearFilters`) — reset everything.
+
+  While a filter is active the section rows say so (`12 commands · 2 failed · filtered`), and
+  the counts always describe what is actually visible.
+- **`Chat Wizard: Show Agent Log Stats`** (`chatwizard.logs.showStats`) opens a markdown report
+  with totals (events, commands, failed commands, failures, errors, diffs, +/− lines) and a
+  command **success rate** over commands that logged an exit code — plus one row per agent
+  (sessions, commands, failed, errors, diffs, files, tool calls, steps) and one row per
+  session (events, commands, failures, last activity).
 
 The underlying event store is a read-only SQLite database
 (`chatwizard-log-events.db`, colocated with the session cache); events are re-indexed
@@ -1325,6 +1347,15 @@ corresponding `chatwizard.index*` toggle.
 | `chatwizard.deleteFolder` | Chat Wizard: Delete Folder |
 | `chatwizard.setSessionStatus` | Chat Wizard: Set Session Status… |
 | `chatwizard.searchAnnotations` | Chat Wizard: Search Annotations |
+| `chatwizard.showExecutedCommands` | Chat Wizard: Show Executed Commands |
+| `chatwizard.showUnifiedTimeline` | Chat Wizard: Show Unified Timeline |
+| `chatwizard.showDiffExplorer` | Chat Wizard: Show Diff Explorer |
+| `chatwizard.logs.filterMenu` | Chat Wizard: Filter Agent Logs… |
+| `chatwizard.logs.search` | Chat Wizard: Search Agent Logs… |
+| `chatwizard.logs.filterByAgent` | Chat Wizard: Filter Agent Logs by Agent… |
+| `chatwizard.logs.toggleFailures` | Chat Wizard: Show Failures Only |
+| `chatwizard.logs.clearFilters` | Chat Wizard: Clear Agent Log Filters |
+| `chatwizard.logs.showStats` | Chat Wizard: Show Agent Log Stats |
 
 ### Session & Code Block actions (triggered from UI)
 

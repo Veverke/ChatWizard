@@ -883,6 +883,42 @@
         "title": "Chat Wizard: Show Details for Selection",
         "category": "Chat Wizard",
         "icon": "$(eye)"
+      },
+      {
+        "command": "chatwizard.logs.filterMenu",
+        "title": "Chat Wizard: Filter Agent Logs…",
+        "category": "Chat Wizard",
+        "icon": "$(filter)"
+      },
+      {
+        "command": "chatwizard.logs.search",
+        "title": "Chat Wizard: Search Agent Logs…",
+        "category": "Chat Wizard",
+        "icon": "$(search)"
+      },
+      {
+        "command": "chatwizard.logs.filterByAgent",
+        "title": "Chat Wizard: Filter Agent Logs by Agent…",
+        "category": "Chat Wizard",
+        "icon": "$(person)"
+      },
+      {
+        "command": "chatwizard.logs.toggleFailures",
+        "title": "Chat Wizard: Show Failures Only",
+        "category": "Chat Wizard",
+        "icon": "$(error)"
+      },
+      {
+        "command": "chatwizard.logs.clearFilters",
+        "title": "Chat Wizard: Clear Agent Log Filters",
+        "category": "Chat Wizard",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "chatwizard.logs.showStats",
+        "title": "Chat Wizard: Show Agent Log Stats",
+        "category": "Chat Wizard",
+        "icon": "$(graph)"
       }
     ],
     "menus": {
@@ -907,7 +943,7 @@
           "group": "navigation@0"
         },
         {
-          "command": "chatwizard.logs.timeline.filter",
+          "command": "chatwizard.logs.filterMenu",
           "when": "view == chatwizardCommands",
           "group": "navigation@1"
         },

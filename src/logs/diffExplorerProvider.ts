@@ -1,5 +1,7 @@
 import * as vscode from 'vscode';
 import { LogService } from './logService';
+import { LogViewFilters, emptyLogFilters, hasActiveFilters, matchesLogFilters } from './logFilters';
+import { createLogger } from '../utils/logger';
 import {
     DiffEvent,
     FileOperationEvent,
@@ -24,10 +26,14 @@ import {
  *   - copy the diff text to the clipboard
  *   - open the affected file (when it still exists on disk)
  *
- * Feeds today from the GitHub Copilot and Cline / Roo Code adapters; Windsurf
- * and Aider adapters (Phase 3, still open) will stream into the same normalized
- * store.
+ * Feeds today from the GitHub Copilot, Cline / Roo Code, Aider and Windsurf
+ * adapters — all of them stream into the same normalized store.
+ *
+ * Phase 4 honours the shared view filters: the free-text search and the agent
+ * filter narrow this section exactly like the other two.
  */
+
+const logWatch = createLogger().withContext('WatchLogs');
 
 /** Hard cap on rows pulled out of the store for one render. */
 export const MAX_DIFFS_PER_QUERY = 2000;
@@ -229,18 +235,41 @@ export class DiffExplorerProvider implements vscode.TreeDataProvider<DiffExplore
     readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
     private _workspaceGroups: DiffWorkspaceGroupItem[] = [];
+    private _filters: LogViewFilters = emptyLogFilters();
+    /** Phase 4: cache "filtered to nothing" so empty sections stop re-querying. */
+    private _built = false;
 
     constructor(private readonly logService: LogService) { }
+
+    /**
+     * Replace the active filters and rebuild. Only the search + agent facets
+     * apply here — the Diff Explorer never lists command/error kinds.
+     */
+    setFilters(filters: LogViewFilters): void {
+        this._filters = { search: filters.search, tool: filters.tool };
+        this.refresh();
+    }
+
+    /** Current filters (a copy — callers may mutate the result safely). */
+    getFilters(): LogViewFilters {
+        return { ...this._filters };
+    }
+
+    /** True when a search / agent filter is narrowing this section. */
+    filtersActive(): boolean {
+        return hasActiveFilters(this._filters);
+    }
 
     /** Re-query the store and rebuild the tree. */
     refresh(): void {
         this._workspaceGroups = this._buildWorkspaceGroups();
+        this._built = true;
         this._onDidChangeTreeData.fire();
     }
 
     getChildren(element?: DiffExplorerTreeNode): DiffExplorerTreeNode[] {
         if (!element) {
-            if (this._workspaceGroups.length === 0) { this.refresh(); }
+            if (!this._built) { this.refresh(); }
             return this._workspaceGroups;
         }
         if (element instanceof DiffWorkspaceGroupItem) {
@@ -273,8 +302,9 @@ export class DiffExplorerProvider implements vscode.TreeDataProvider<DiffExplore
     getWorkspaceGroups(): DiffWorkspaceGroupItem[] {
         // Lazily build on first read so callers that inspect the tree before
         // VS Code renders it still see the store contents.
-        if (this._workspaceGroups.length === 0) {
+        if (!this._built) {
             this._workspaceGroups = this._buildWorkspaceGroups();
+            this._built = true;
         }
         return this._workspaceGroups;
     }
@@ -291,11 +321,23 @@ export class DiffExplorerProvider implements vscode.TreeDataProvider<DiffExplore
     }
 
     private _buildWorkspaceGroups(): DiffWorkspaceGroupItem[] {
-        const events = this.logService.getEvents({
-            types: ['diff', 'fileOperation'],
-            order: 'desc',
-            limit: MAX_DIFFS_PER_QUERY,
-        }).filter(isDiffCandidate);
+        let events: LogEvent[];
+        try {
+            events = this.logService.getEvents({
+                types: ['diff', 'fileOperation'],
+                tool: this._filters.tool,
+                order: 'desc',
+                limit: MAX_DIFFS_PER_QUERY,
+            });
+        } catch (err) {
+            // A broken/degraded store must never break tree rendering.
+            logWatch.warn('diff explorer query failed: %s', err);
+            return [];
+        }
+
+        events = events
+            .filter(isDiffCandidate)
+            .filter((event) => matchesLogFilters(event, { search: this._filters.search }));
 
         const byWorkspace = new Map<string, LogEvent[]>();
         for (const event of events) {

@@ -8,7 +8,7 @@
  * `chatwizardDiffExplorer`), which made the Chat Wizard sidebar noisy. VS Code
  * does **not** support nesting a contributed view inside another view, so the
  * three panels are exposed as three collapsible *sections* of one tree view
- * (`chatwizardCommands`) instead:
+ * (`chatwizardCommands`) instead — all of them collapsed by default:
  *
  *   Commands
  *   ├── Executed Commands   (n commands)
@@ -18,6 +18,10 @@
  * `CommandsViewProvider` is a thin composite: it owns the section rows and
  * forwards every other node to the provider that produced it, re-emitting their
  * change events so the single view stays live.
+ *
+ * Phase 4: the composite also fans one `LogViewFilters` set out to all three
+ * sections and prefixes their subtitles with `· N failed` / `· filtered`, so
+ * the section header always describes exactly the rows below it.
  */
 
 import * as vscode from 'vscode';
@@ -41,6 +45,7 @@ import {
     DiffExplorerTreeNode,
 } from './diffExplorerProvider';
 import { LogEvent } from './types';
+import { LogViewFilters, emptyLogFilters, hasActiveFilters, isFailedCommand } from './logFilters';
 
 /** Contributed id of the single watch-logs sidebar view. */
 export const COMMANDS_VIEW_ID = 'chatwizardCommands';
@@ -68,18 +73,27 @@ export interface CommandsSectionCounts {
     events: number;
     changes: number;
     files: number;
+    /** Commands that finished with a non-zero exit code (optional). */
+    failedCommands?: number;
+    /** True when a search / agent / kind / failures filter is active (optional). */
+    filtered?: boolean;
 }
 
-/** Section subtitle, e.g. "12 commands" or "8 changes · 3 files". */
+/** Section subtitle, e.g. "12 commands · 2 failed" or "8 changes · 3 files". */
 export function describeCommandsSection(subView: CommandsSubViewId, counts: CommandsSectionCounts): string {
     const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`;
+    const filterSuffix = counts.filtered ? ' · filtered' : '';
     switch (subView) {
-        case 'executedCommands':
-            return plural(counts.commands, 'command');
+        case 'executedCommands': {
+            const failed = counts.failedCommands && counts.failedCommands > 0
+                ? ` · ${counts.failedCommands} failed`
+                : '';
+            return `${plural(counts.commands, 'command')}${failed}${filterSuffix}`;
+        }
         case 'timeline':
-            return plural(counts.events, 'event');
+            return `${plural(counts.events, 'event')}${filterSuffix}`;
         case 'diffs':
-            return `${plural(counts.changes, 'change')} · ${plural(counts.files, 'file')}`;
+            return `${plural(counts.changes, 'change')} · ${plural(counts.files, 'file')}${filterSuffix}`;
     }
 }
 
@@ -87,7 +101,14 @@ export function describeCommandsSection(subView: CommandsSubViewId, counts: Comm
 // Tree items
 // ---------------------------------------------------------------------------
 
-/** A collapsible section header — one per former panel. */
+/**
+ * A collapsible section header — one per former panel.
+ *
+ * Sections are built **collapsed** so the Commands view opens compact (and
+ * stays compact after a window reload) instead of spilling three expanded
+ * event feeds into the sidebar. Expanding one is a per-session user choice, and
+ * the explicit "Show …" commands still reveal + expand their section.
+ */
 export class CommandsSectionItem extends vscode.TreeItem {
     constructor(
         readonly subView: CommandsSubViewId,
@@ -95,7 +116,7 @@ export class CommandsSectionItem extends vscode.TreeItem {
         icon: string,
         description: string
     ) {
-        super(label, vscode.TreeItemCollapsibleState.Expanded);
+        super(label, vscode.TreeItemCollapsibleState.Collapsed);
         this.description = description;
         this.contextValue = `commandsSection.${subView}`;
         this.iconPath = new vscode.ThemeIcon(icon);
@@ -203,6 +224,43 @@ export class CommandsViewProvider implements vscode.TreeDataProvider<CommandsTre
         this.diffs.refresh();
     }
 
+    /**
+     * Apply the shared view filters to every section. `types` only narrows the
+     * Unified Timeline (the other sections never list those event kinds).
+     */
+    setFilters(filters: LogViewFilters): void {
+        this.executedCommands.setFilters(filters);
+        this.timeline.setFilters(filters);
+        this.diffs.setFilters(filters);
+    }
+
+    /** Remove every filter (search, agent, failures and event kind). */
+    clearFilters(): void {
+        this.executedCommands.setFilters(emptyLogFilters());
+        this.timeline.setFilters(emptyLogFilters());
+        this.diffs.setFilters(emptyLogFilters());
+    }
+
+    /**
+     * The filters currently narrowing the view — the timeline's kinds plus the
+     * search/agent/failures facets shared by all three sections.
+     */
+    getFilters(): LogViewFilters {
+        const commands = this.executedCommands.getFilters();
+        const timeline = this.timeline.getFilters();
+        return {
+            search: timeline.search ?? commands.search,
+            tool: timeline.tool ?? commands.tool,
+            failuresOnly: timeline.failuresOnly ?? commands.failuresOnly,
+            types: timeline.types,
+        };
+    }
+
+    /** True when any filter is active (drives the "· filtered" section suffix). */
+    filtersActive(): boolean {
+        return hasActiveFilters(this.getFilters());
+    }
+
     getChildren(element?: CommandsTreeNode): CommandsTreeNode[] {
         if (!element) {
             this._syncSectionDescriptions();
@@ -260,6 +318,12 @@ export class CommandsViewProvider implements vscode.TreeDataProvider<CommandsTre
         const groups = this.executedCommands.getGroups();
         const timelineGroups = this.timeline.getGroups();
         const workspaceGroups = this.diffs.getWorkspaceGroups();
+        let failedCommands = 0;
+        for (const group of groups) {
+            for (const command of group.commands) {
+                if (isFailedCommand(command)) { failedCommands += 1; }
+            }
+        }
         return {
             commands: groups.reduce((total, g) => total + g.commands.length, 0),
             events: timelineGroups.reduce((total, g) => total + g.events.length, 0),
@@ -268,6 +332,8 @@ export class CommandsViewProvider implements vscode.TreeDataProvider<CommandsTre
                 0
             ),
             files: workspaceGroups.reduce((total, ws) => total + ws.groups.length, 0),
+            failedCommands,
+            filtered: this.filtersActive(),
         };
     }
 

@@ -193,3 +193,57 @@ suite('DiffExplorerProvider — grouping and ordering', () => {
         assert.match(diffEventTooltip(fileOp), /## File operation/);
     });
 });
+
+suite('DiffExplorerProvider — Phase 4 filters', () => {
+    let dir: string;
+    let service: LogService;
+
+    setup(() => {
+        dir = tmpDir();
+        service = new LogService(dir, createDefaultLogSourceRegistry());
+        service.ingestEvents([
+            makeDiff({ id: 'd1', timestamp: '2026-01-01T10:00:00.000Z', filePath: '/repo/src/a.ts' }),
+            makeDiff({ id: 'd2', timestamp: '2026-01-02T10:00:00.000Z', filePath: '/repo/src/app.ts', tool: 'cline' }),
+            makeFileOp({ id: 'f1', timestamp: '2026-01-03T10:00:00.000Z', filePath: '/repo/docs/readme.md' }),
+        ]);
+    });
+
+    teardown(() => {
+        try { service.dispose(); } catch { /* ignore */ }
+        try { fs.rmSync(dir, { recursive: true }); } catch { /* ignore */ }
+    });
+
+    const visibleIds = (provider: DiffExplorerProvider): string[] =>
+        provider.getWorkspaceGroups().flatMap((ws) => ws.groups.flatMap((f) => f.events.map((e) => e.id)));
+
+    test('search narrows by file path', () => {
+        const provider = new DiffExplorerProvider(service);
+        provider.setFilters({ search: 'app.ts' });
+        assert.deepStrictEqual(visibleIds(provider), ['d2']);
+        assert.strictEqual(provider.filtersActive(), true);
+    });
+
+    test('search also matches the patch text', () => {
+        service.ingestEvents([
+            makeDiff({
+                id: 'd3',
+                timestamp: '2026-01-04T10:00:00.000Z',
+                filePath: '/repo/src/config.ts',
+                diffText: '+retryLimit: 3\n',
+            }),
+        ]);
+        const provider = new DiffExplorerProvider(service);
+        provider.setFilters({ search: 'retryLimit' });
+        assert.deepStrictEqual(visibleIds(provider), ['d3']);
+    });
+
+    test('agent filter narrows by tool and clearing restores everything', () => {
+        const provider = new DiffExplorerProvider(service);
+        provider.setFilters({ tool: 'cline' });
+        assert.deepStrictEqual(visibleIds(provider), ['d2']);
+
+        provider.setFilters({});
+        assert.deepStrictEqual(visibleIds(provider).sort(), ['d1', 'd2', 'f1']);
+        assert.strictEqual(provider.filtersActive(), false);
+    });
+});

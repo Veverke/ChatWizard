@@ -93,6 +93,17 @@ suite('detail webview pipeline', () => {
         const commands = await vscode.commands.getCommands(true);
         assert.ok(commands.includes('chatwizard.logs.refreshAll'), 'shared refresh command');
         assert.ok(commands.includes('chatwizard.logs.showSelectedDetails'), 'selection-aware details command');
+        // Phase 4 — view-wide filters + per-agent stats.
+        for (const id of [
+            'chatwizard.logs.filterMenu',
+            'chatwizard.logs.search',
+            'chatwizard.logs.filterByAgent',
+            'chatwizard.logs.toggleFailures',
+            'chatwizard.logs.clearFilters',
+            'chatwizard.logs.showStats',
+        ]) {
+            assert.ok(commands.includes(id), `${id} is registered`);
+        }
         assert.ok(
             commands.includes('chatwizardCommands.focus'),
             'the contributed Commands view registers <view>.focus'

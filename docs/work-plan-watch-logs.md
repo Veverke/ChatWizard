@@ -1341,7 +1341,57 @@ Deliverable: end-to-end flow for one agent.
 
 Deliverable: cross-agent view for commands + diffs.
 
-### **Phase 4 – Polishing & analytics (ongoing)**
+### **Phase 4 – Polishing & analytics (ongoing)** ✅
+
+> **Implementation note (2026-11)** — filters, search, per-agent stats & hardening
+> (the three bullets at the end of this phase):
+> - ✅ **Filters + search** — `src/logs/logFilters.ts` adds the shared
+>   `LogViewFilters` model (`search`, `tool`, `failuresOnly`, `types`) with pure
+>   predicates (`matchesLogFilters`, `matchesSearch`, `isFailureEvent`, …).
+>   Search is case-insensitive, matches **all** words (AND) and covers the
+>   human-readable facets of every event kind — command text / cwd / shell /
+>   output, file paths + operation detail, diff text, tool name + arguments,
+>   error message + stack, planner description — plus the agent name and
+>   workspace path. `failuresOnly` keeps failed commands (`exitCode !== 0`) and
+>   non-warning `error` events.
+> - ✅ **Applied to every section** — `ExecutedCommandsProvider`,
+>   `UnifiedTimelineProvider` and `DiffExplorerProvider` expose
+>   `setFilters()/getFilters()/filtersActive()`; the composite
+>   `CommandsViewProvider` fans one filter set out to all three, so a search
+>   narrows commands, timeline and diffs together. The old
+>   `TimelineProvider.setFilter(types)` kind filter keeps working (and now
+>   composes with the other facets).
+> - ✅ **Commands** — `chatwizard.logs.search` (input box),
+>   `chatwizard.logs.filterByAgent` (quick pick of the agents that actually
+>   produced events), `chatwizard.logs.toggleFailures`,
+>   `chatwizard.logs.clearFilters`, `chatwizard.logs.showStats`, and a single
+>   `chatwizard.logs.filterMenu` that dispatches to all of them. The view title
+>   bar keeps three buttons — **Refresh Commands**, **Filter Agent Logs**
+>   (`$(filter)`) and **Show Details for Selection**.
+> - ✅ **Per-agent stats** — `src/logs/logStats.ts` (`computeLogStats`,
+>   `renderLogStatsMarkdown`) aggregates events per agent and per session:
+>   commands, failed commands, failures (failed commands + errors), errors,
+>   diffs, +/− lines, tool calls, planner steps, sessions, activity span and a
+>   command **success rate** over commands that actually logged an exit code
+>   (`null` when the tool never records one, e.g. Aider/Cline/Windsurf).
+>   `Chat Wizard: Show Agent Log Stats` opens the markdown report in an editor.
+> - ✅ **UX** — section rows now read e.g. `12 commands · 2 failed`,
+>   `31 events · filtered`, and every section row/tooltip reflects the live
+>   filtered counts; the filter menu shows the current state of each facet.
+> - ✅ **Performance** — harvester-driven refreshes are debounced (250 ms) into
+>   one rebuild per quiet window during the initial index; the agent/kind
+>   facets are pushed down into the SQLite query, and the search/failure facets
+>   reuse the existing per-section row caps (2000 commands / 2000 diffs /
+>   5000 events).
+> - ✅ **Error handling** — `LogService.getEvents()` / `getStats()` degrade to
+>   empty results (logged to the **Chat Wizard** channel) instead of throwing
+>   when the store cannot be queried, and each provider guards its query so a
+>   broken store can never break tree rendering. `Show Agent Log Stats` reports
+>   failures to the user instead of silently doing nothing.
+> - ✅ **Tests** — `test/unit/logFilters.test.ts`, `test/unit/logStats.test.ts`
+>   and new "Phase 4 filters" suites in the three provider tests + the composite
+>   view test.
+> - ⬜ Remaining: manual QA against real multi-agent histories.
 
 > **Implementation note (2026-09)** — double-click / click detail webview:
 > - ✅ **Any click** (single or double) on a row in **Executed Commands**,
@@ -1398,7 +1448,9 @@ Deliverable: cross-agent view for commands + diffs.
 >   first-class tree nodes; `CommandsViewProvider` is a thin composite that
 >   forwards children/parents to the delegate providers and re-emits their
 >   change events. Each section row carries live counts ("12 commands",
->   "8 changes · 3 files"). `Chat Wizard: Show Executed Commands / Unified
+>   "8 changes · 3 files") and **all three sections start collapsed**, so the
+>   view opens compact instead of spilling three expanded event feeds into the
+>   sidebar. `Chat Wizard: Show Executed Commands / Unified
 >   Timeline / Diff Explorer` now focus the single view and reveal the
 >   matching section, and the title bar shrank from eight per-panel buttons to
 >   **Refresh Commands**, **Filter Unified Timeline** and **Show Details for

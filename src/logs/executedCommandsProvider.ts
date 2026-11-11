@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
 import { LogService } from './logService';
-import { CommandEvent } from './types';
+import { CommandEvent, LogEvent } from './types';
+import { LogViewFilters, emptyLogFilters, hasActiveFilters, matchesLogFilters } from './logFilters';
+import { createLogger } from '../utils/logger';
 
 /**
  * src/logs/executedCommandsProvider.ts
@@ -12,11 +14,15 @@ import { CommandEvent } from './types';
  * even when the model never mentioned the command in chat text.
  *
  * The panel is intentionally tool-agnostic — it renders whatever `CommandEvent`s
- * the watch-logs store holds (today fed by the Copilot and Cline / Roo Code
- * adapters; Windsurf/Aider adapters are still outstanding in Phase 3). Commands
- * are grouped per session, newest first, and each row exposes copy +
- * open-session actions.
+ * the watch-logs store holds (fed by the Copilot, Cline / Roo Code, Aider and
+ * Windsurf adapters). Commands are grouped per session, newest first, and each
+ * row exposes copy + open-session actions.
+ *
+ * Phase 4 adds the shared view filters (`search`, agent, failures-only) so the
+ * section honours exactly the same query as the Unified Timeline.
  */
+
+const logWatch = createLogger().withContext('WatchLogs');
 
 /** Hard cap on rows pulled out of the store for one render. */
 export const MAX_COMMANDS_PER_QUERY = 2000;
@@ -102,21 +108,52 @@ export class ExecutedCommandsProvider implements vscode.TreeDataProvider<ExecCom
     readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
     private _groups: ExecCommandsGroupItem[] = [];
+    private _filters: LogViewFilters = emptyLogFilters();
+    /**
+     * Phase 4: an empty result set is a valid, cacheable state. Without this
+     * flag every `getChildren()` on a filtered-to-nothing section would re-run
+     * the store query.
+     */
+    private _built = false;
 
     constructor(
         private readonly logService: LogService,
         private readonly resolveSessionTitle?: ExecSessionTitleResolver
     ) { }
 
+    /**
+     * Replace the active filters and rebuild. `types` is ignored here — this
+     * section only ever renders `command` events.
+     */
+    setFilters(filters: LogViewFilters): void {
+        this._filters = {
+            search: filters.search,
+            tool: filters.tool,
+            failuresOnly: filters.failuresOnly,
+        };
+        this.refresh();
+    }
+
+    /** Current filters (a copy — callers may mutate the result safely). */
+    getFilters(): LogViewFilters {
+        return { ...this._filters };
+    }
+
+    /** True when a search / agent / failures filter is narrowing this section. */
+    filtersActive(): boolean {
+        return hasActiveFilters(this._filters);
+    }
+
     /** Re-query the store and rebuild the tree. */
     refresh(): void {
         this._groups = this._buildGroups();
+        this._built = true;
         this._onDidChangeTreeData.fire();
     }
 
     getChildren(element?: ExecCommandsTreeNode): ExecCommandsTreeNode[] {
         if (!element) {
-            if (this._groups.length === 0) { this.refresh(); }
+            if (!this._built) { this.refresh(); }
             return this._groups;
         }
         if (element instanceof ExecCommandsGroupItem) {
@@ -141,21 +178,38 @@ export class ExecutedCommandsProvider implements vscode.TreeDataProvider<ExecCom
         // Lazily build on first read: VS Code normally calls getChildren(),
         // but tests (and any caller inspecting the tree before it rendered)
         // must see the store contents rather than a permanently empty list.
-        if (this._groups.length === 0) {
+        if (!this._built) {
             this._groups = this._buildGroups();
+            this._built = true;
         }
         return this._groups;
     }
 
     private _buildGroups(): ExecCommandsGroupItem[] {
-        const events = this.logService.getEvents({
-            type: 'command',
-            order: 'desc',
-            limit: MAX_COMMANDS_PER_QUERY,
-        });
+        let events: LogEvent[];
+        try {
+            events = this.logService.getEvents({
+                type: 'command',
+                tool: this._filters.tool,
+                order: 'desc',
+                limit: MAX_COMMANDS_PER_QUERY,
+            });
+        } catch (err) {
+            // A broken/degraded store must never break tree rendering.
+            logWatch.warn('executed commands query failed: %s', err);
+            return [];
+        }
 
         const bySession = new Map<string, CommandEvent[]>();
         for (const event of events) {
+            // Search + failures-only are applied here (the store handles the
+            // type/tool facets); both share the predicates with the timeline.
+            if (!matchesLogFilters(event, {
+                search: this._filters.search,
+                failuresOnly: this._filters.failuresOnly,
+            })) {
+                continue;
+            }
             // The store narrows the event to its concrete type; cast defensively
             // here since the public LogEvent union keeps `commandText` optional.
             const command = event as CommandEvent;

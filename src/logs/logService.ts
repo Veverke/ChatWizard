@@ -15,7 +15,14 @@
 
 import * as path from 'path';
 import { LogEvent, LogEventFilter } from './types';
-import { ILogEventStore, LogEventStore, LogStoreStats, InMemoryLogEventStore } from './logEventStore';
+import {
+    ILogEventStore,
+    LogEventStore,
+    LogStoreStats,
+    InMemoryLogEventStore,
+    LOG_SCHEMA_VERSION,
+} from './logEventStore';
+import { createLogger } from '../utils/logger';
 import { LogSourceRegistry, LogSourceConfig } from './logSourceRegistry';
 import { parseCopilotLogEvents } from './adapters/copilotLogAdapter';
 import { parseClineLogEvents } from './adapters/clineLogAdapter';
@@ -99,6 +106,9 @@ export interface ILogService {
     dispose(): void;
 }
 
+/** Diagnostics for the logs subsystem (shared "Chat Wizard" output channel). */
+const logServiceLog = createLogger().withContext('WatchLogs');
+
 /**
  * LogService — owns storage + registry.
  *
@@ -143,8 +153,21 @@ export class LogService implements ILogService {
         return this.store.isPersistent;
     }
 
+    /**
+     * Query normalized events.
+     *
+     * Phase 4 hardening: a store that cannot be queried (native binding
+     * mismatch, corrupt DB, partially-closed handle, …) degrades to "no events"
+     * instead of throwing into a tree provider — the panels stay usable and the
+     * reason lands in the Chat Wizard output channel.
+     */
     getEvents(filter?: LogEventFilter): LogEvent[] {
-        return this.store.getEvents(filter);
+        try {
+            return this.store.getEvents(filter);
+        } catch (err) {
+            logServiceLog.warn('getEvents failed (returning no events): %s', err);
+            return [];
+        }
     }
 
     ingestEvent(event: LogEvent): void {
@@ -239,7 +262,24 @@ export class LogService implements ILogService {
     }
 
     getStats(): LogStoreStats {
-        return this.store.getStats();
+        try {
+            return this.store.getStats();
+        } catch (err) {
+            logServiceLog.warn('getStats failed (reporting empty stats): %s', err);
+            return {
+                totalEvents: 0,
+                byType: {
+                    command: 0,
+                    fileOperation: 0,
+                    diff: 0,
+                    toolCall: 0,
+                    error: 0,
+                    plannerStep: 0,
+                },
+                tools: [],
+                schemaVersion: LOG_SCHEMA_VERSION,
+            };
+        }
     }
 
     dispose(): void {

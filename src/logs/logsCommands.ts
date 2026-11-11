@@ -11,11 +11,19 @@
  *
  * The three "Show …" commands now focus that single view and reveal the
  * requested section, so they no longer need a view of their own.
+ *
+ * Phase 4 adds the view-wide filters (free-text search, agent, failures-only),
+ * the single **Filter Agent Logs** menu that fronts them, and the per-agent
+ * statistics report (`Chat Wizard: Show Agent Log Stats`).
  */
 
 import * as vscode from 'vscode';
 import { ExecutedCommandsProvider, ExecCommandsLeafItem } from './executedCommandsProvider';
-import { UnifiedTimelineProvider, TimelineEventItem } from './unifiedTimelineProvider';
+import {
+    UnifiedTimelineProvider,
+    TimelineEventItem,
+    MAX_TIMELINE_EVENTS,
+} from './unifiedTimelineProvider';
 import { DiffExplorerProvider, DiffEventLeafItem, renderPatchMarkdown } from './diffExplorerProvider';
 import { openVisualDiff } from './diffViewer';
 import { showEventWebview } from './logEventWebview';
@@ -26,7 +34,16 @@ import {
     CommandsViewProvider,
     eventOfCommandsNode,
 } from './commandsViewProvider';
-import { LogEventType, LOG_EVENT_TYPES, LogEvent, CommandEvent, logEventTypeLabel, getEventFilePath } from './types';
+import { LogEventType, LOG_EVENT_TYPES, LogEvent, CommandEvent, LogSourceTool, logEventTypeLabel, getEventFilePath } from './types';
+import {
+    LogViewFilters,
+    emptyLogFilters,
+    hasActiveFilters,
+    normalizeSearchQuery,
+} from './logFilters';
+import { computeLogStats, renderLogStatsMarkdown } from './logStats';
+import { LogService } from './logService';
+import { friendlySourceName } from '../ui/sourceUi';
 import { createLogger } from '../utils/logger';
 
 /** Shared diagnostics for the watch-logs panels (same "Chat Wizard" channel). */
@@ -57,7 +74,8 @@ export function registerLogCommands(
     timelineProvider?: UnifiedTimelineProvider,
     diffExplorerProvider?: DiffExplorerProvider,
     commandsViewProvider?: CommandsViewProvider,
-    treeViews?: LogTreeViews
+    treeViews?: LogTreeViews,
+    logService?: LogService
 ): void {
     const push = (command: string, handler: (...args: any[]) => unknown): void => {
         context.subscriptions.push(vscode.commands.registerCommand(command, handler));
@@ -65,6 +83,51 @@ export function registerLogCommands(
 
     /** The node currently selected in the Commands view, if any. */
     const selectedNode = (): unknown => (treeViews?.commands?.selection ?? [])[0];
+
+    // ── Shared view filters (Phase 4: search / agent / failures) ───────────
+    // One filter set drives the three sections, so a search in Commands also
+    // narrows the timeline and the diff explorer.
+
+    /** Read the filters currently applied to the whole view. */
+    const readFilters = (): LogViewFilters => {
+        if (commandsViewProvider) { return commandsViewProvider.getFilters(); }
+        const timeline = timelineProvider?.getFilters();
+        const commands = provider.getFilters();
+        return {
+            search: timeline?.search ?? commands.search,
+            tool: timeline?.tool ?? commands.tool,
+            failuresOnly: timeline?.failuresOnly ?? commands.failuresOnly,
+            types: timeline?.types,
+        };
+    };
+
+    /** Apply filters everywhere, keeping the description counts in sync. */
+    const writeFilters = (filters: LogViewFilters): void => {
+        if (commandsViewProvider) {
+            commandsViewProvider.setFilters(filters);
+            return;
+        }
+        provider.setFilters(filters);
+        timelineProvider?.setFilters(filters);
+        diffExplorerProvider?.setFilters(filters);
+    };
+
+    /** Short confirmation message describing the resulting filter state. */
+    const announceFilters = (filters: LogViewFilters): void => {
+        if (!hasActiveFilters(filters)) {
+            vscode.window.showInformationMessage('Agent log filters cleared — showing everything.');
+            return;
+        }
+        const parts: string[] = [];
+        const search = normalizeSearchQuery(filters.search);
+        if (search) { parts.push(`text “${search}”`); }
+        if (filters.tool) { parts.push(`agent ${friendlySourceName(filters.tool)}`); }
+        if (filters.failuresOnly) { parts.push('failures only'); }
+        if (filters.types && filters.types.length > 0) {
+            parts.push(`kind ${filters.types.map((t) => logEventTypeLabel(t)).join(', ')}`);
+        }
+        vscode.window.showInformationMessage(`Agent logs filtered by ${parts.join(' · ')}.`);
+    };
 
     /**
      * Focus the single Commands view and reveal one of its sections — this is
@@ -86,6 +149,181 @@ export function registerLogCommands(
             }
         })();
     };
+
+    // ── Phase 4: view-wide filters (search / agent / failures) + stats ─────
+    // These commands narrow all three sections at once. The title-bar filter
+    // button opens `filterMenu`, which dispatches to the individual commands so
+    // every action stays reachable from the Command Palette too.
+
+    push('chatwizard.logs.search', async () => {
+        const current = readFilters().search ?? '';
+        const query = await vscode.window.showInputBox({
+            title: 'Search Agent Logs',
+            prompt: 'Match commands, file paths, diffs, errors and planner steps. '
+                + 'Separate words to require all of them.',
+            value: current,
+            placeHolder: 'e.g. npm test',
+            ignoreFocusOut: true,
+        });
+        if (query === undefined) { return; }
+        const next: LogViewFilters = { ...readFilters(), search: normalizeSearchQuery(query) };
+        writeFilters(next);
+        announceFilters(next);
+    });
+
+    push('chatwizard.logs.filterByAgent', async () => {
+        if (!logService) {
+            vscode.window.showInformationMessage('The agent log store is not available.');
+            return;
+        }
+        let tools: LogSourceTool[] = [];
+        try {
+            tools = logService.getStats().tools;
+        } catch (err) {
+            logWatch.warn('filterByAgent could not read store stats: %s', err);
+        }
+        if (tools.length === 0) {
+            vscode.window.showInformationMessage('No agent log events indexed yet — run an agent session first.');
+            return;
+        }
+
+        const currentTool = readFilters().tool;
+        const picks: (vscode.QuickPickItem & { value?: LogSourceTool })[] = [
+            { label: 'All agents', description: 'no agent filter', value: undefined },
+            ...tools.map((tool) => ({
+                label: friendlySourceName(tool),
+                description: tool,
+                value: tool,
+            })),
+        ];
+        const picked = await vscode.window.showQuickPick(picks, {
+            title: 'Filter Agent Logs by Agent',
+            placeHolder: currentTool
+                ? `Now: ${friendlySourceName(currentTool)}`
+                : 'All agents',
+        });
+        if (!picked) { return; }
+        const next: LogViewFilters = {
+            ...readFilters(),
+            tool: picked.value,
+        };
+        writeFilters(next);
+        announceFilters(next);
+    });
+
+    push('chatwizard.logs.toggleFailures', () => {
+        const current = readFilters();
+        const next: LogViewFilters = {
+            ...current,
+            failuresOnly: current.failuresOnly ? undefined : true,
+        };
+        writeFilters(next);
+        vscode.window.showInformationMessage(
+            next.failuresOnly
+                ? 'Showing failures only: failed commands (non-zero exit) and error events.'
+                : 'Showing all agent log events.'
+        );
+    });
+
+    push('chatwizard.logs.clearFilters', () => {
+        writeFilters(emptyLogFilters());
+        vscode.window.showInformationMessage('Agent log filters cleared — showing everything.');
+    });
+
+    push('chatwizard.logs.filterMenu', async () => {
+        const filters = readFilters();
+        const search = normalizeSearchQuery(filters.search);
+        const kindCount = filters.types?.length ?? 0;
+        const kindDetail = kindCount === 0
+            ? 'all kinds'
+            : filters.types?.map((t) => logEventTypeLabel(t)).join(', ');
+
+        type FilterAction = 'search' | 'agent' | 'failures' | 'kinds' | 'clear' | 'stats';
+        const items: (vscode.QuickPickItem & { action: FilterAction })[] = [
+            {
+                label: '$(search) Search Agent Logs…',
+                description: search ? `current: “${search}”` : 'no text filter',
+                action: 'search',
+            },
+            {
+                label: '$(person) Filter by Agent…',
+                description: filters.tool ? friendlySourceName(filters.tool) : 'all agents',
+                action: 'agent',
+            },
+            {
+                label: filters.failuresOnly
+                    ? '$(pass) Show All Events'
+                    : '$(error) Show Failures Only',
+                description: filters.failuresOnly ? 'failures-only filter is ON' : 'no failure filter',
+                action: 'failures',
+            },
+            {
+                label: '$(symbol-event) Filter by Event Kind…',
+                description: kindDetail,
+                action: 'kinds',
+            },
+            {
+                label: '$(clear-all) Clear All Filters',
+                description: hasActiveFilters(filters) ? 'reset every filter' : 'nothing is filtered',
+                action: 'clear',
+            },
+            {
+                label: '$(graph) Show Agent Log Stats',
+                description: 'per-agent and per-session totals',
+                action: 'stats',
+            },
+        ];
+
+        const picked = await vscode.window.showQuickPick(items, {
+            title: 'Filter Agent Logs',
+            placeHolder: hasActiveFilters(filters)
+                ? 'Filters are active — pick what to change'
+                : 'No filters active',
+        });
+        if (!picked) { return; }
+        switch (picked.action) {
+            case 'search': return vscode.commands.executeCommand('chatwizard.logs.search');
+            case 'agent': return vscode.commands.executeCommand('chatwizard.logs.filterByAgent');
+            case 'failures': return vscode.commands.executeCommand('chatwizard.logs.toggleFailures');
+            case 'kinds': return vscode.commands.executeCommand('chatwizard.logs.timeline.filter');
+            case 'clear': return vscode.commands.executeCommand('chatwizard.logs.clearFilters');
+            case 'stats': return vscode.commands.executeCommand('chatwizard.logs.showStats');
+        }
+    });
+
+    push('chatwizard.logs.showStats', async () => {
+        if (!logService) {
+            vscode.window.showInformationMessage('The agent log store is not available.');
+            return undefined;
+        }
+        try {
+            // Same cap as the timeline: the stats describe what the panels show.
+            const events = logService.getEvents({ order: 'desc', limit: MAX_TIMELINE_EVENTS });
+            const report = computeLogStats(events);
+            if (report.totalEvents === 0) {
+                vscode.window.showInformationMessage(
+                    'No agent log events indexed yet — run an agent session first.'
+                );
+                return undefined;
+            }
+            const markdown = renderLogStatsMarkdown(report, friendlySourceName);
+            const doc = await vscode.workspace.openTextDocument({ content: markdown, language: 'markdown' });
+            await vscode.window.showTextDocument(doc, { preview: false });
+            logWatch.info(
+                'stats report: %d events across %d agents / %d sessions',
+                report.totalEvents,
+                report.toolCount,
+                report.sessionCount
+            );
+            return doc;
+        } catch (err) {
+            logWatch.error('showStats failed: %s', err);
+            vscode.window.showErrorMessage(
+                `Could not build the agent log stats report: ${err instanceof Error ? err.message : String(err)}`
+            );
+            return undefined;
+        }
+    });
 
     // ── Section 1: Executed Commands ───────────────────────────────────────
     push('chatwizard.showExecutedCommands', () => showSection('executedCommands'));

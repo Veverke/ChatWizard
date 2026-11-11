@@ -176,3 +176,79 @@ suite('UnifiedTimelineProvider — grouping, ordering and filter', () => {
         assert.strictEqual(leaves[0].command?.title, 'Show Event Details');
     });
 });
+
+suite('UnifiedTimelineProvider — Phase 4 filters', () => {
+    let dir: string;
+    let service: LogService;
+
+    setup(() => {
+        dir = tmpDir();
+        service = new LogService(dir, createDefaultLogSourceRegistry());
+        service.ingestEvents([
+            makeEvent({ id: 'c1', sessionId: 'sess-a', timestamp: '2026-01-01T10:00:00.000Z', commandText: 'npm test', exitCode: 0 }),
+            makeEvent({ id: 'c2', sessionId: 'sess-a', timestamp: '2026-01-01T10:05:00.000Z', commandText: 'npm run build', exitCode: 1 }),
+            makeEvent({
+                id: 'e1',
+                sessionId: 'sess-a',
+                timestamp: '2026-01-01T10:10:00.000Z',
+                type: 'error',
+                message: 'build failed',
+            } as LogEvent),
+            makeEvent({
+                id: 'd1',
+                sessionId: 'sess-b',
+                timestamp: '2026-01-02T10:00:00.000Z',
+                type: 'diff',
+                tool: 'cline',
+                filePath: '/repo/src/app.ts',
+                diffText: '+x',
+            } as LogEvent),
+        ]);
+    });
+
+    teardown(() => {
+        try { service.dispose(); } catch { /* ignore */ }
+        try { fs.rmSync(dir, { recursive: true }); } catch { /* ignore */ }
+    });
+
+    const visibleIds = (provider: UnifiedTimelineProvider): string[] =>
+        provider.getGroups().flatMap((g) => g.events.map((e) => e.id));
+
+    test('search matches command text, error messages and file paths', () => {
+        const provider = new UnifiedTimelineProvider(service);
+        provider.setFilters({ search: 'npm run' });
+        assert.deepStrictEqual(visibleIds(provider), ['c2']);
+
+        provider.setFilters({ search: 'failed' });
+        assert.deepStrictEqual(visibleIds(provider), ['e1']);
+
+        provider.setFilters({ search: 'app.ts' });
+        assert.deepStrictEqual(visibleIds(provider), ['d1']);
+        assert.strictEqual(provider.filtersActive(), true);
+    });
+
+    test('agent filter narrows by tool', () => {
+        const provider = new UnifiedTimelineProvider(service);
+        provider.setFilters({ tool: 'cline' });
+        assert.deepStrictEqual(visibleIds(provider), ['d1']);
+    });
+
+    test('failuresOnly keeps failed commands and errors', () => {
+        const provider = new UnifiedTimelineProvider(service);
+        provider.setFilters({ failuresOnly: true });
+        assert.deepStrictEqual(visibleIds(provider), ['e1', 'c2']);
+    });
+
+    test('kind filters combine with the new dimensions', () => {
+        const provider = new UnifiedTimelineProvider(service);
+        provider.setFilters({ types: ['command'], failuresOnly: true });
+        assert.deepStrictEqual(visibleIds(provider), ['c2']);
+        assert.deepStrictEqual(provider.getFilter(), ['command']);
+        assert.strictEqual(provider.getFilters().failuresOnly, true);
+
+        // Legacy kind-only setter keeps the other facets intact.
+        provider.setFilter(undefined);
+        assert.deepStrictEqual(visibleIds(provider), ['e1', 'c2']);
+        assert.strictEqual(provider.getFilters().failuresOnly, true);
+    });
+});

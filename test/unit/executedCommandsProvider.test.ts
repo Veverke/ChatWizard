@@ -143,3 +143,69 @@ suite('ExecutedCommandsProvider — grouping and ordering', () => {
         assert.strictEqual(leaves[0].command?.title, 'Show Full Command');
     });
 });
+
+suite('ExecutedCommandsProvider — Phase 4 filters', () => {
+    let dir: string;
+    let service: LogService;
+
+    setup(() => {
+        dir = tmpDir();
+        service = new LogService(dir, createDefaultLogSourceRegistry());
+    });
+
+    teardown(() => {
+        try { service.dispose(); } catch { /* ignore */ }
+        try { fs.rmSync(dir, { recursive: true }); } catch { /* ignore */ }
+    });
+
+    const visibleCommands = (provider: ExecutedCommandsProvider): string[] =>
+        provider.getGroups().flatMap((g) => g.commands.map((c) => c.commandText));
+
+    test('search narrows the rows and clearing restores them', () => {
+        service.ingestEvents([
+            makeCommand({ id: 'c1', sessionId: 'sess-a', timestamp: '2026-01-01T10:00:00.000Z', commandText: 'npm test' }),
+            makeCommand({ id: 'c2', sessionId: 'sess-a', timestamp: '2026-01-01T10:05:00.000Z', commandText: 'git status' }),
+        ]);
+        const provider = new ExecutedCommandsProvider(service);
+
+        provider.setFilters({ search: 'NPM' });
+        assert.deepStrictEqual(visibleCommands(provider), ['npm test']);
+        assert.strictEqual(provider.filtersActive(), true);
+
+        provider.setFilters({});
+        assert.strictEqual(visibleCommands(provider).length, 2);
+        assert.strictEqual(provider.filtersActive(), false);
+    });
+
+    test('the agent filter is delegated to the store query', () => {
+        service.ingestEvents([
+            makeCommand({ id: 'c1', sessionId: 'sess-a', timestamp: '2026-01-01T10:00:00.000Z', tool: 'copilot' }),
+            makeCommand({ id: 'c2', sessionId: 'sess-b', timestamp: '2026-01-01T10:05:00.000Z', tool: 'cline', commandText: 'git log' }),
+        ]);
+        const provider = new ExecutedCommandsProvider(service);
+
+        provider.setFilters({ tool: 'cline' });
+        assert.deepStrictEqual(visibleCommands(provider), ['git log']);
+        assert.strictEqual(provider.getGroups()[0].sessionId, 'sess-b');
+    });
+
+    test('failuresOnly keeps only non-zero exit codes', () => {
+        service.ingestEvents([
+            makeCommand({ id: 'c1', sessionId: 'sess-a', timestamp: '2026-01-01T10:00:00.000Z', commandText: 'npm test', exitCode: 0 }),
+            makeCommand({ id: 'c2', sessionId: 'sess-a', timestamp: '2026-01-01T10:05:00.000Z', commandText: 'npm run build', exitCode: 1 }),
+            makeCommand({ id: 'c3', sessionId: 'sess-a', timestamp: '2026-01-01T10:10:00.000Z', commandText: 'npm run lint' }),
+        ]);
+        const provider = new ExecutedCommandsProvider(service);
+
+        provider.setFilters({ failuresOnly: true });
+        assert.deepStrictEqual(visibleCommands(provider), ['npm run build']);
+    });
+
+    test('getFilters returns a defensive copy', () => {
+        const provider = new ExecutedCommandsProvider(service);
+        provider.setFilters({ search: 'npm' });
+        const copy = provider.getFilters();
+        copy.search = 'mutated';
+        assert.strictEqual(provider.getFilters().search, 'npm');
+    });
+});

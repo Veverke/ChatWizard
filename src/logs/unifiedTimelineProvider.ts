@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
 import { LogService } from './logService';
 import { firstLineOf } from './executedCommandsProvider';
+import { LogViewFilters, emptyLogFilters, hasActiveFilters, matchesLogFilters } from './logFilters';
+import { createLogger } from '../utils/logger';
 import {
     CommandEvent,
     DiffEvent,
@@ -30,7 +32,13 @@ import {
  *   - `logsEvent.diff`     → open the change in VS Code's native diff editor
  *     (`openVisualDiff`, falling back to the raw patch text)
  *   - `logsEvent.fileOperation` → reveal the affected file when it exists
+ *
+ * Phase 4 extends the kind filter with the shared view filters — free-text
+ * search, agent (tool) and "failures only" — so all three sections of the
+ * Commands view answer the same query.
  */
+
+const logWatch = createLogger().withContext('WatchLogs');
 
 /** Hard cap on rows pulled out of the store for one render. */
 export const MAX_TIMELINE_EVENTS = 5000;
@@ -198,7 +206,9 @@ export class UnifiedTimelineProvider implements vscode.TreeDataProvider<UnifiedT
     readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
     private _groups: TimelineGroupItem[] = [];
-    private _filter: LogEventType[] | undefined;
+    private _filters: LogViewFilters = emptyLogFilters();
+    /** Phase 4: cache "filtered to nothing" so empty sections stop re-querying. */
+    private _built = false;
 
     constructor(
         private readonly logService: LogService,
@@ -207,23 +217,39 @@ export class UnifiedTimelineProvider implements vscode.TreeDataProvider<UnifiedT
 
     /** Restrict the view to the given event kinds (undefined = all). */
     setFilter(types: LogEventType[] | undefined): void {
-        this._filter = types;
-        this.refresh();
+        this.setFilters({ ...this._filters, types });
     }
 
     getFilter(): LogEventType[] | undefined {
-        return this._filter;
+        return this._filters.types;
+    }
+
+    /** Replace all filters (search / agent / failures / kinds) and rebuild. */
+    setFilters(filters: LogViewFilters): void {
+        this._filters = { ...filters };
+        this.refresh();
+    }
+
+    /** Current filters (a copy — callers may mutate the result safely). */
+    getFilters(): LogViewFilters {
+        return { ...this._filters };
+    }
+
+    /** True when any filter dimension is narrowing this section. */
+    filtersActive(): boolean {
+        return hasActiveFilters(this._filters);
     }
 
     /** Re-query the store and rebuild the tree. */
     refresh(): void {
         this._groups = this._buildGroups();
+        this._built = true;
         this._onDidChangeTreeData.fire();
     }
 
     getChildren(element?: UnifiedTimelineTreeNode): UnifiedTimelineTreeNode[] {
         if (!element) {
-            if (this._groups.length === 0) { this.refresh(); }
+            if (!this._built) { this.refresh(); }
             return this._groups;
         }
         if (element instanceof TimelineGroupItem) {
@@ -247,21 +273,38 @@ export class UnifiedTimelineProvider implements vscode.TreeDataProvider<UnifiedT
     getGroups(): TimelineGroupItem[] {
         // Lazily build on first read so callers that inspect the tree before
         // VS Code renders it still see the store contents.
-        if (this._groups.length === 0) {
+        if (!this._built) {
             this._groups = this._buildGroups();
+            this._built = true;
         }
         return this._groups;
     }
 
     private _buildGroups(): TimelineGroupItem[] {
-        const events = this.logService.getEvents({
-            types: this._filter,
-            order: 'desc',
-            limit: MAX_TIMELINE_EVENTS,
-        });
+        let events: LogEvent[];
+        try {
+            events = this.logService.getEvents({
+                types: this._filters.types,
+                tool: this._filters.tool,
+                order: 'desc',
+                limit: MAX_TIMELINE_EVENTS,
+            });
+        } catch (err) {
+            // A broken/degraded store must never break tree rendering.
+            logWatch.warn('unified timeline query failed: %s', err);
+            return [];
+        }
 
         const bySession = new Map<string, LogEvent[]>();
         for (const event of events) {
+            // Search + failures-only share their predicates with the other
+            // sections (and with the unit tests).
+            if (!matchesLogFilters(event, {
+                search: this._filters.search,
+                failuresOnly: this._filters.failuresOnly,
+            })) {
+                continue;
+            }
             const key = groupKeyOf(event);
             const bucket = bySession.get(key);
             if (bucket) {

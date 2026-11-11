@@ -14,6 +14,7 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import * as vscode from 'vscode';
 import { LogService } from '../../src/logs/logService';
 import { createDefaultLogSourceRegistry } from '../../src/logs/logSourceRegistry';
 import { ExecutedCommandsProvider, ExecCommandsGroupItem, ExecCommandsLeafItem } from '../../src/logs/executedCommandsProvider';
@@ -116,6 +117,22 @@ suite('CommandsViewProvider — composite tree', () => {
         assert.strictEqual(roots[2].subView, 'diffs');
     });
 
+    test('all three sections start collapsed', () => {
+        const roots = provider.getChildren() as CommandsSectionItem[];
+        for (const section of roots) {
+            assert.strictEqual(
+                section.collapsibleState,
+                vscode.TreeItemCollapsibleState.Collapsed,
+                `${section.label} must start collapsed`
+            );
+        }
+        // A re-render (refresh → getTreeItem) must never auto-expand them again.
+        provider.refresh();
+        for (const section of roots) {
+            assert.strictEqual(provider.getTreeItem(section).collapsibleState, vscode.TreeItemCollapsibleState.Collapsed);
+        }
+    });
+
     test('sections delegate to their provider and count their rows', () => {
         service.ingestEvents([
             makeCommand({ id: 'c1', timestamp: '2026-01-01T10:00:00.000Z' }),
@@ -139,7 +156,14 @@ suite('CommandsViewProvider — composite tree', () => {
         const workspaceGroups = provider.getChildren(diffsSection);
         assert.strictEqual(workspaceGroups.length, 1, 'Diff Explorer section lists workspace groups');
 
-        assert.deepStrictEqual(provider.counts(), { commands: 2, events: 3, changes: 1, files: 1 });
+        assert.deepStrictEqual(provider.counts(), {
+            commands: 2,
+            events: 3,
+            changes: 1,
+            files: 1,
+            failedCommands: 0,
+            filtered: false,
+        });
         assert.strictEqual(commandsSection.description, '2 commands');
         assert.strictEqual(timelineSection.description, '3 events');
         assert.strictEqual(diffsSection.description, '1 change · 1 file');
@@ -202,3 +226,85 @@ suite('CommandsViewProvider — node helpers', () => {
         assert.strictEqual(subViewOfCommandsNode({}), undefined);
     });
 });
+
+suite('CommandsViewProvider — Phase 4 filters', () => {
+    let dir: string;
+    let service: LogService;
+    let provider: CommandsViewProvider;
+
+    setup(() => {
+        dir = tmpDir();
+        service = new LogService(dir, createDefaultLogSourceRegistry());
+        provider = new CommandsViewProvider(
+            new ExecutedCommandsProvider(service),
+            new UnifiedTimelineProvider(service),
+            new DiffExplorerProvider(service)
+        );
+        service.ingestEvents([
+            makeCommand({ id: 'c1', timestamp: '2026-01-01T10:00:00.000Z', commandText: 'npm test', exitCode: 0 }),
+            makeCommand({ id: 'c2', timestamp: '2026-01-01T10:05:00.000Z', commandText: 'npm run build', exitCode: 2 }),
+            makeDiff({ id: 'd1', timestamp: '2026-01-02T10:00:00.000Z', filePath: '/repo/src/app.ts' }),
+        ]);
+    });
+
+    teardown(() => {
+        try { provider.dispose(); } catch { /* ignore */ }
+        try { service.dispose(); } catch { /* ignore */ }
+        try { fs.rmSync(dir, { recursive: true }); } catch { /* ignore */ }
+    });
+
+    test('describeCommandsSection adds failed / filtered suffixes', () => {
+        const base = { commands: 2, events: 3, changes: 1, files: 1 };
+        assert.strictEqual(
+            describeCommandsSection('executedCommands', { ...base, failedCommands: 1 }),
+            '2 commands · 1 failed'
+        );
+        assert.strictEqual(
+            describeCommandsSection('executedCommands', { ...base, failedCommands: 0, filtered: true }),
+            '2 commands · filtered'
+        );
+        assert.strictEqual(describeCommandsSection('timeline', { ...base, filtered: true }), '3 events · filtered');
+        assert.strictEqual(describeCommandsSection('diffs', { ...base, filtered: true }), '1 change · 1 file · filtered');
+    });
+
+    test('counts report failed commands', () => {
+        assert.strictEqual(provider.counts().failedCommands, 1);
+        assert.strictEqual(provider.counts().filtered, false);
+    });
+
+    test('setFilters narrows every section and flags them as filtered', () => {
+        provider.setFilters({ search: 'npm run', failuresOnly: true });
+        const [commandsSection, timelineSection, diffsSection] = provider.getChildren() as CommandsSectionItem[];
+
+        const counts = provider.counts();
+        assert.strictEqual(counts.commands, 1, 'only the failed "npm run build" command matches');
+        assert.strictEqual(counts.filtered, true);
+        assert.strictEqual(provider.filtersActive(), true);
+        assert.strictEqual(commandsSection.description, '1 command · 1 failed · filtered');
+        assert.strictEqual(timelineSection.description, '1 event · filtered');
+        assert.strictEqual(diffsSection.description, '0 changes · 0 files · filtered');
+        // The diff file does not match the text query.
+        assert.deepStrictEqual(provider.getChildren(diffsSection), []);
+    });
+
+    test('getFilters merges the section filters; clearFilters resets everything', () => {
+        provider.setFilters({ search: 'npm', tool: 'copilot', failuresOnly: true, types: ['command'] });
+        assert.deepStrictEqual(provider.getFilters(), {
+            search: 'npm',
+            tool: 'copilot',
+            failuresOnly: true,
+            types: ['command'],
+        });
+
+        provider.clearFilters();
+        assert.deepStrictEqual(provider.getFilters(), {
+            search: undefined,
+            tool: undefined,
+            failuresOnly: undefined,
+            types: undefined,
+        });
+        assert.strictEqual(provider.filtersActive(), false);
+        assert.strictEqual(provider.counts().commands, 2);
+    });
+});
+

@@ -10,13 +10,17 @@
  *           Cline / Roo Code, Windsurf and Aider adapters + harvesters
  *           feeding the same store.
  * Phase 4 — UX pass: those three panels now live as sections of a single
- *           "Commands" sidebar view (`commandsViewProvider`).
+ *           "Commands" sidebar view (`commandsViewProvider`); shared filters
+ *           (search / agent / failures-only / event kind), per-agent statistics
+ *           and a resilient query path (`logFilters`, `logStats`).
  */
 
 export * from './types';
 export * from './logSourceRegistry';
 export * from './logEventStore';
 export * from './logService';
+export * from './logFilters';
+export * from './logStats';
 export * from './adapters/copilotLogAdapter';
 export * from './adapters/clineLogAdapter';
 export * from './adapters/aiderLogAdapter';

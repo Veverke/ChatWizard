@@ -246,7 +246,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 diffExplorerProvider
             );
             context.subscriptions.push(commandsViewProvider);
-            const refreshLogPanels = () => commandsViewProvider.refresh();
+            // Phase 4 (performance): the harvesters fire once per session file,
+            // so the initial index can request hundreds of rebuilds in a burst.
+            // Debounce them into one refresh per quiet window.
+            let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+            const refreshLogPanels = () => {
+                if (refreshTimer) { clearTimeout(refreshTimer); }
+                refreshTimer = setTimeout(() => {
+                    refreshTimer = undefined;
+                    commandsViewProvider.refresh();
+                }, 250);
+            };
+            context.subscriptions.push({
+                dispose: () => { if (refreshTimer) { clearTimeout(refreshTimer); } },
+            });
             const logHarvester = new CopilotLogHarvester(logService);
             logHarvester.onEventsChanged = refreshLogPanels;
             const clineLogHarvester = new ClineLogHarvester(logService);
@@ -358,7 +371,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 timelineProvider,
                 diffExplorerProvider,
                 commandsViewProvider,
-                logTreeViews
+                logTreeViews,
+                logService
             );
 
             // The single Commands view is created once; a failure here must not
