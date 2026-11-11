@@ -196,7 +196,8 @@ export function createDefaultLogSourceRegistry(): LogSourceRegistry {
         logRoots: [path.join(getWindsurfStorageRoot(), 'User', 'workspaceStorage')],
         enabledSettingKey: 'chatwizard.indexWindsurf',
         pathOverrideSettingKey: 'chatwizard.windsurfStoragePath',
-        notes: 'Agent steps incl. command execution and planner logic.',
+        notes: 'cascade.sessionData in state.vscdb: commands come from structured tool calls when present, '
+            + 'otherwise from fenced shell blocks in assistant messages (Cascade does not persist executions).',
     });
 
     registry.register({
@@ -204,9 +205,10 @@ export function createDefaultLogSourceRegistry(): LogSourceRegistry {
         displayName: 'Aider',
         format: 'markdown',
         filePatterns: ['.aider.chat.history.md'],
-        logRoots: [], // project-local .aider/ dirs — resolved via workspaces in Phase 2
+        logRoots: [], // repo-local history files — discovered via workspaces, not a global root
         enabledSettingKey: 'chatwizard.indexAider',
-        notes: '.aider.chat.history.md captures commands, patches and file edits per repo.',
+        notes: '.aider.chat.history.md: `> !cmd` / `/run|/test|/lint` commands, `Applied edit to …` file ops '
+            + 'and fenced diff blocks (no exit codes are recorded by Aider).',
     });
 
     registry.register({

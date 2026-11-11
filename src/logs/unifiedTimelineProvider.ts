@@ -21,13 +21,14 @@ import {
  * The cross-agent, cross-kind view of every normalized agent-execution event
  * the watch-logs store holds: executed commands, file operations, diffs, tool
  * calls, errors and planner steps — regardless of which AI coding tool produced
- * them (feeds today entirely from the GitHub Copilot adapter). Events are
- * grouped per session and sorted newest-first; an optional type filter narrows
- * the view to the kinds the user cares about.
+ * them (fed today by the GitHub Copilot and Cline / Roo Code adapters). Events
+ * are grouped per session and sorted newest-first; an optional type filter
+ * narrows the view to the kinds the user cares about.
  *
  * Rows expose useful actions via `contextValue`:
  *   - `logsEvent.command` → copy command / open session
- *   - `logsEvent.diff`     → open the patch in the Diff Explorer viewer
+ *   - `logsEvent.diff`     → open the change in VS Code's native diff editor
+ *     (`openVisualDiff`, falling back to the raw patch text)
  *   - `logsEvent.fileOperation` → reveal the affected file when it exists
  */
 

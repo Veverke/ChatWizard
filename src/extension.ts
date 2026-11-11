@@ -110,6 +110,8 @@ import {
     openVisualDiff,
     CopilotLogHarvester,
     ClineLogHarvester,
+    AiderLogHarvester,
+    WindsurfLogHarvester,
 } from './logs';
 import * as path from 'path';
 import { RestApiServer } from './api/restApiServer';
@@ -246,6 +248,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             logHarvester.onEventsChanged = refreshLogPanels;
             const clineLogHarvester = new ClineLogHarvester(logService);
             clineLogHarvester.onEventsChanged = refreshLogPanels;
+            const aiderLogHarvester = new AiderLogHarvester(logService);
+            aiderLogHarvester.onEventsChanged = refreshLogPanels;
+            const windsurfLogHarvester = new WindsurfLogHarvester(logService);
+            windsurfLogHarvester.onEventsChanged = refreshLogPanels;
             const sessionEventListener = index.addTypedChangeListener((event) => {
                 try {
                     logHarvester.handleIndexEvent(event);
@@ -254,6 +260,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 }
                 try {
                     clineLogHarvester.handleIndexEvent(event);
+                } catch {
+                    // Log harvesting must never break session indexing.
+                }
+                try {
+                    aiderLogHarvester.handleIndexEvent(event);
+                } catch {
+                    // Log harvesting must never break session indexing.
+                }
+                try {
+                    windsurfLogHarvester.handleIndexEvent(event);
                 } catch {
                     // Log harvesting must never break session indexing.
                 }

@@ -1303,8 +1303,31 @@ Deliverable: end-to-end flow for one agent.
 >   XML `commandString`/`toolParam` format; Roo Code shares the identical
 >   task layout. Wired through `src/logs/clineLogHarvester.ts` into the same
 >   session-index listener + panels.
-> - ⬜ Remaining: adapters for Windsurf/Aider feeding the same store,
->   manual QA of the new panels.
+> - ✅ **Aider adapter** — `src/logs/adapters/aiderLogAdapter.ts` replays
+>   `.aider.chat.history.md` (the only on-disk record Aider keeps):
+>   `> !cmd` shell passthroughs and `> /run|/test|/lint|/exec|/cmd|/shell …`
+>   → `CommandEvent` (the transcript lines that follow are captured as
+>   `stdoutSummary`), `Applied edit to <path>` → `FileOperationEvent`, and
+>   fenced `diff` blocks (Aider echoing a diff) → `DiffEvent` with stats and a
+>   real before/after for the visual diff editor. Meta commands (`/add`,
+>   `/model`, `/diff`) are ignored; Aider records no exit codes. Wired through
+>   `src/logs/aiderLogHarvester.ts`.
+> - ✅ **Windsurf adapter** — `src/logs/adapters/windsurfLogAdapter.ts`
+>   normalizes the `cascade.sessionData` payload inside each workspace's
+>   `state.vscdb` (read via `openReadonlyDb`: better-sqlite3, sql.js fallback).
+>   Structured tool calls, when a payload carries them
+>   (`toolCalls`/`tool_calls`/`toolInvocations`), become `ToolCallEvent` plus
+>   the matching `CommandEvent`/`FileOperationEvent`/`DiffEvent`; today's
+>   payloads only hold message text, so the adapter also derives
+>   `CommandEvent`s from fenced shell blocks in *assistant* messages (marked
+>   `raw: derived …`, no exit code) — i.e. the commands Cascade proposed for the
+>   terminal. Wired through `src/logs/windsurfLogHarvester.ts`, which parses a
+>   database **once** per change (in-flight + `<mtime>:<size>` stamp guards)
+>   because one `state.vscdb` holds every chat of a workspace.
+> - ✅ Wiring (`extension.ts` ← `src/logs/index.ts`), commands, menus,
+>   activation events in `package.json`, unit tests for the adapters, pure
+>   helpers, harvesters and the visual diff viewer.
+> - ⬜ Remaining: manual QA of the new panels.
 
 - Add adapters for:
 
@@ -1355,7 +1378,9 @@ Deliverable: cross-agent view for commands + diffs.
 >   syntax highlighting (the URI path keeps the real file name/extension).
 >   Wired through the row command (`chatwizard.logs.diff.viewDiff`), the
 >   single-click selection handler, a **⧉ Open Visual Diff** title-bar button,
->   a context-menu entry, and a **Visual Diff** button in the detail webview.
+>   a context-menu entry, the **Visual Diff** button in the detail webview, and
+>   the Unified Timeline's `Open Diff` action (which falls back to the raw
+>   patch text when a change carries no reconstructable patch).
 >   The parser is tolerant: standard unified diffs, Cline SEARCH/REPLACE
 >   patches, Copilot's summarized additions-only patches
 >   (`@@ modified by assistant @@`) and header-less patches. Because the log

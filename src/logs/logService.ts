@@ -19,6 +19,8 @@ import { ILogEventStore, LogEventStore, LogStoreStats, InMemoryLogEventStore } f
 import { LogSourceRegistry, LogSourceConfig } from './logSourceRegistry';
 import { parseCopilotLogEvents } from './adapters/copilotLogAdapter';
 import { parseClineLogEvents } from './adapters/clineLogAdapter';
+import { parseAiderLogEvents } from './adapters/aiderLogAdapter';
+import { parseWindsurfCascadeJson, parseWindsurfLogEvents } from './adapters/windsurfLogAdapter';
 
 export interface ILogService {
     /** Query normalized agent log events (the Phase 1 deliverable). */
@@ -52,6 +54,31 @@ export interface ILogService {
         taskDir: string,
         source?: 'cline' | 'roocode'
     ): { ingested: number; errors: string[] };
+    /**
+     * Phase 3 — Parse an Aider `.aider.chat.history.md` and (re)index its
+     * normalized agent-execution events. Events previously parsed from the same
+     * file are removed first, so a growing transcript never leaves stale rows.
+     */
+    ingestAiderHistoryFile(
+        historyFile: string,
+        workspacePath?: string,
+        sessionId?: string
+    ): { ingested: number; errors: string[] };
+    /**
+     * Phase 3 — Parse a Windsurf workspace `state.vscdb` (its
+     * `cascade.sessionData` payload) and (re)index the normalized events of
+     * every Cascade session it contains. Async because the database read goes
+     * through better-sqlite3 with a sql.js fallback.
+     *
+     * @param rawCascadeData Pre-read payload (lets callers/harvesters avoid a
+     *                       second SQLite read); omitted → the adapter reads it.
+     */
+    ingestWindsurfWorkspaceFile(
+        vscdbPath: string,
+        workspaceId: string,
+        workspacePath?: string,
+        rawCascadeData?: string
+    ): Promise<{ ingested: number; errors: string[] }>;
     /** Drop every stored event. */
     clear(): void;
     /** Registered log source configs (optionally only enabled ones). */
@@ -163,6 +190,39 @@ export class LogService implements ILogService {
         const sourcePath = path.join(taskDir, 'ui_messages.json');
         if (result.events.length > 0 || this.store.countBySourcePath(sourcePath) > 0) {
             this.store.removeBySourcePath(sourcePath);
+        }
+        if (result.events.length > 0) {
+            this.store.upsertEvents(result.events);
+        }
+        return { ingested: result.events.length, errors: result.errors };
+    }
+
+    ingestAiderHistoryFile(
+        historyFile: string,
+        workspacePath?: string,
+        sessionId?: string
+    ): { ingested: number; errors: string[] } {
+        const result = parseAiderLogEvents(historyFile, workspacePath, sessionId);
+        if (result.events.length > 0 || this.store.countBySourcePath(historyFile) > 0) {
+            this.store.removeBySourcePath(historyFile);
+        }
+        if (result.events.length > 0) {
+            this.store.upsertEvents(result.events);
+        }
+        return { ingested: result.events.length, errors: result.errors };
+    }
+
+    async ingestWindsurfWorkspaceFile(
+        vscdbPath: string,
+        workspaceId: string,
+        workspacePath?: string,
+        rawCascadeData?: string
+    ): Promise<{ ingested: number; errors: string[] }> {
+        const result = rawCascadeData === undefined
+            ? await parseWindsurfLogEvents(vscdbPath, workspaceId, workspacePath)
+            : parseWindsurfCascadeJson(rawCascadeData, { workspaceId, workspacePath, sourcePath: vscdbPath });
+        if (result.events.length > 0 || this.store.countBySourcePath(vscdbPath) > 0) {
+            this.store.removeBySourcePath(vscdbPath);
         }
         if (result.events.length > 0) {
             this.store.upsertEvents(result.events);

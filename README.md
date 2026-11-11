@@ -98,7 +98,7 @@ ChatWizard provides a unified interface for browsing, searching, analyzing, and 
 - **Sessions Panel** — browse, sort, filter, pin, group, and manage every AI session across all tools and workspaces
 - **Full-Text & Semantic Search** — instant keyword search (with regex) and topic-similarity search via a local AI model
 - **Code Block & Prompt Libraries** — every AI-generated snippet and every prompt, deduplicated and filterable
-- **Watch Agent Logs** — Executed Commands, Unified Timeline, and Diff Explorer panels capture what your AI agent *did* (shell commands, file edits, diffs, errors) — not just what it said in chat; captured changes open in VS Code's native side-by-side diff editor
+- **Watch Agent Logs** — Executed Commands, Unified Timeline, and Diff Explorer panels capture what your AI agent *did* (shell commands, file edits, diffs, errors) — not just what it said in chat; captured changes open in VS Code's native side-by-side diff editor. Sources: GitHub Copilot, Cline / Roo Code, Aider and Windsurf
 - **Knowledge Base** — auto-classified session categories
 - **Analytics, Model Usage & Timeline** — token charts, per-model drill-down, and activity heat maps with streaks
 - **MCP Server & @chatwizard Participant** — expose your history to any MCP-compatible tool or query it directly in Copilot Chat

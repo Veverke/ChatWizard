@@ -117,11 +117,20 @@ Eleven panels live under the Chat Wizard Activity Bar icon:
 
 The **Executed Commands**, **Unified Timeline** and **Diff Explorer** panels form the
 _watch-logs_ subsystem (Phase 2/3 of `docs/work-plan-watch-logs.md`). AI models do not run
-commands themselves — the *host tools* (today: **VS Code + GitHub Copilot Chat**) execute
-them, and ChatWizard replays the agent-execution trail Copilot embeds in its session JSONL:
-`toolInvocationSerialized` entries (`run_in_terminal`, `create_file`, `delete_file`,
-`move_file`, `apply_patch`, …), `textEditGroup` inline edits, and terminal notifications
-with exit codes.
+commands themselves — the *host tools* execute them, and ChatWizard replays the
+agent-execution trail each tool writes to disk:
+
+| Tool | Source file | What is captured |
+|------|-------------|------------------|
+| **GitHub Copilot** | `chatSessions/*.jsonl` | `toolInvocationSerialized` entries (`run_in_terminal`, `create_file`, `move_file`, `apply_patch`, …), `textEditGroup` inline edits, terminal notifications **with exit codes** |
+| **Cline / Roo Code** | `tasks/<id>/ui_messages.json` | `say:'command'` + `command_output` chunks, tool calls, `editedExistingFile` SEARCH/REPLACE diffs, `error`/`error_retry`, `task_progress` plan steps |
+| **Aider** | `.aider.chat.history.md` | `> !cmd` and the `/run`, `/test`, `/lint` commands (+ their output), `Applied edit to …` file edits, fenced `diff` blocks |
+| **Windsurf** | `state.vscdb` → `cascade.sessionData` | structured tool calls when present, otherwise the shell commands Cascade proposed (fenced `bash`/`sh`/`pwsh`/`cmd` blocks in assistant messages) |
+
+Fidelity differs per tool: **exit codes** are only logged by Copilot; Cline/Roo Code and
+Aider record output but no exit status; Windsurf does not persist tool executions at all, so
+its command rows are marked *derived* in the event details. Diffs likewise: Copilot stores the
+replacement text only (additions-only patches), while Cline and Aider patches carry both sides.
 
 - **Executed Commands** lists every command, newest first, grouped per session, with exit
   badges, copy-to-clipboard, and open-session actions.
@@ -137,7 +146,8 @@ with exit codes.
 
 The underlying event store is a read-only SQLite database
 (`chatwizard-log-events.db`, colocated with the session cache); events are re-indexed
-automatically whenever a Copilot session file is created or rewritten by VS Code.
+automatically whenever a Copilot session file, Cline/Roo Code task, Aider history file or
+Windsurf workspace database is created or rewritten by the tool.
 
 Each panel can also be opened as a standalone editor tab:
 

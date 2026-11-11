@@ -12,9 +12,10 @@ import { CommandEvent } from './types';
  * even when the model never mentioned the command in chat text.
  *
  * The panel is intentionally tool-agnostic — it renders whatever `CommandEvent`s
- * the watch-logs store holds (today fed by the Copilot adapter; Cursor/Cline/
- * Windsurf adapters land in Phase 3). Commands are grouped per session, newest
- * first, and each row exposes copy + open-session actions.
+ * the watch-logs store holds (today fed by the Copilot and Cline / Roo Code
+ * adapters; Windsurf/Aider adapters are still outstanding in Phase 3). Commands
+ * are grouped per session, newest first, and each row exposes copy +
+ * open-session actions.
  */
 
 /** Hard cap on rows pulled out of the store for one render. */

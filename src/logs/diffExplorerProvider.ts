@@ -24,8 +24,9 @@ import {
  *   - copy the diff text to the clipboard
  *   - open the affected file (when it still exists on disk)
  *
- * Feeds today entirely from the GitHub Copilot adapter; Cline/Windsurf/Aider
- * adapters (Phase 3) will stream into the same normalized store.
+ * Feeds today from the GitHub Copilot and Cline / Roo Code adapters; Windsurf
+ * and Aider adapters (Phase 3, still open) will stream into the same normalized
+ * store.
  */
 
 /** Hard cap on rows pulled out of the store for one render. */

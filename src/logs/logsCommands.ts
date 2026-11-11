@@ -115,8 +115,15 @@ export function registerLogCommands(
         openSessionById(item.event.sessionId);
     });
 
-    push('chatwizard.logs.timeline.openDiff', (item?: TimelineEventItem) => {
+    push('chatwizard.logs.timeline.openDiff', async (item?: TimelineEventItem) => {
         if (!item) { return; }
+        // Same visual diff the Diff Explorer opens; events without a
+        // reconstructable patch fall back to the raw patch / operation card.
+        const opened = await openVisualDiff(item.event);
+        if (opened) {
+            logWatch.info('timeline.openDiff → visual diff %s', item.event.id);
+            return;
+        }
         void openDiffEditor(item.event);
     });
 
