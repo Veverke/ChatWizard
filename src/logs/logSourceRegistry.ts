@@ -174,7 +174,7 @@ export function createDefaultLogSourceRegistry(): LogSourceRegistry {
         logRoots: [getClineStorageRoot()],
         enabledSettingKey: 'chatwizard.indexCline',
         pathOverrideSettingKey: 'chatwizard.clineStoragePath',
-        notes: 'Terminal commands, file operations and MCP tool invocations per task.',
+        notes: 'ui_messages.json carries terminal commands, tool calls, file ops/edits and errors per task — the Phase 3 adapter (shared with Roo Code).',
     });
 
     registry.register({

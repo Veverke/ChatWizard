@@ -19,9 +19,15 @@ import {
     extractCwd,
     extractShell,
     extractCorrelationId,
+    extractFilePath,
+    extractEditGroupAction,
+    buildEditGroupDiffText,
+    countEditGroupLines,
+    countPatchLines,
 } from '../../src/logs/adapters/copilotLogAdapter';
 import {
     CommandEvent,
+    DiffEvent,
     ErrorEvent,
     FileOperationEvent,
     ToolCallEvent,
@@ -278,5 +284,151 @@ suite('parseCopilotLogEvents — resilience', () => {
         const result = parseCopilotLogEvents(filePath, 'ws-hash');
         assert.strictEqual(result.events.length, 0);
         assert.strictEqual(result.errors.length, 0);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 3 — richer Copilot events: file-operation classification + diffs
+// ---------------------------------------------------------------------------
+
+suite('Phase 3 — file-path & file-action extraction helpers', () => {
+    test('extractFilePath resolves string and uri shapes', () => {
+        assert.strictEqual(extractFilePath({ path: '/a/b.ts' }), '/a/b.ts');
+        assert.strictEqual(extractFilePath({ filePath: 'c:/x.ts' }), 'c:/x.ts');
+        assert.strictEqual(extractFilePath({ uri: { fsPath: '/u.ts', path: '/u.ts' } }), '/u.ts');
+        assert.strictEqual(extractFilePath({ uri: { path: '/v.ts' } }), '/v.ts');
+        assert.strictEqual(extractFilePath({ file: 'plain.txt' }), 'plain.txt');
+        assert.strictEqual(extractFilePath({}), undefined);
+        assert.strictEqual(extractFilePath({ path: '   ' }), undefined);
+    });
+
+    test('extractEditGroupAction normalizes host action strings', () => {
+        assert.strictEqual(extractEditGroupAction(undefined), 'patch');
+        assert.strictEqual(extractEditGroupAction({ action: 'created' }), 'create');
+        assert.strictEqual(extractEditGroupAction({ action: 'deleted' }), 'delete');
+        assert.strictEqual(extractEditGroupAction({ action: 'renamed' }), 'rename');
+        assert.strictEqual(extractEditGroupAction({ action: 'moved' }), 'move');
+        assert.strictEqual(extractEditGroupAction({ action: 'mkdir' }), 'mkdir');
+        assert.strictEqual(extractEditGroupAction({ action: 'something-else' }), 'patch');
+        assert.strictEqual(extractEditGroupAction('plain'), 'patch');
+    });
+
+    test('countEditGroupLines sums replacement text + spanned source lines', () => {
+        const edits = [
+            [
+                { range: { startLineNumber: 1, endLineNumber: 3 }, text: 'a\nb' },
+                { range: { startLineNumber: 10, endLineNumber: 10 }, text: '' },
+            ],
+        ];
+        // removed = (3-1+1) + (10-10+1) = 3 + 1 = 4
+        // added   = 2 lines + 1 (empty string splits to ['']) = 2 + 1 = 3
+        assert.deepStrictEqual(countEditGroupLines(edits), { added: 3, removed: 4 });
+        assert.deepStrictEqual(countEditGroupLines(undefined), { added: 0, removed: 0 });
+    });
+
+    test('buildEditGroupDiffText renders a summarized unified patch', () => {
+        const text = buildEditGroupDiffText('/src/util.ts', [[
+            { range: { startLineNumber: 2, endLineNumber: 2 }, text: 'const x = 1;\nconst y = 2;' },
+        ]]);
+        assert.match(text, /^--- a\/src\/util\.ts/m);
+        assert.match(text, /^\+\+\+ b\/src\/util\.ts/m);
+        assert.match(text, /@@ -L2,L2 @@/);
+        assert.match(text, /\+const x = 1;/);
+        assert.match(text, /\+const y = 2;/);
+    });
+
+    test('countPatchLines tallies +/- content lines only', () => {
+        assert.deepStrictEqual(countPatchLines('--- a/x\n+++ b/x\n@@ -1,2 +1,2 @@\n-old\n+new\n'), { added: 1, removed: 1 });
+        assert.deepStrictEqual(countPatchLines(undefined), { added: 0, removed: 0 });
+    });
+});
+
+suite('parseCopilotLogEvents — Phase 3 diff + file-operation tool handling', () => {
+    test('textEditGroup emits FileOperationEvent + DiffEvent with line stats', () => {
+        const result = parseCopilotLogEvents(TOOL_CALLS_FIXTURE, 'ws-hash', '/repo');
+        const diffs = result.events.filter((e) => e.type === 'diff').map((e) => e as DiffEvent);
+        assert.strictEqual(diffs.length, 1, 'inline edit group must produce a DiffEvent');
+        assert.strictEqual(diffs[0].filePath, '/src/utils/formatDate.ts');
+        assert.strictEqual(diffs[0].addedLines, 4, 'replacement text has 4 lines');
+        assert.strictEqual(diffs[0].removedLines, 3, 'range spans lines 1..3');
+        assert.match(diffs[0].diffText, /export function formatDate/);
+
+        // The file operation itself remains a `patch` (no host action annotation).
+        const files = result.events.filter((e) => e.type === 'fileOperation').map((e) => e as FileOperationEvent);
+        assert.strictEqual(files.length, 1);
+        assert.strictEqual(files[0].operationType, 'patch');
+    });
+
+    test('create/delete/move tools produce typed FileOperationEvents', () => {
+        const filePath = writeJsonl('file-ops.jsonl', [
+            snapshotLine('sess-fops'),
+            turnLine('r1', 1705400005000, 'Create, delete, move', [
+                {
+                    kind: 'toolInvocationSerialized',
+                    value: JSON.stringify({ tool: 'create_file', arguments: { path: '/src/new.ts', content: 'export {}' } }),
+                },
+                {
+                    kind: 'toolInvocationSerialized',
+                    value: JSON.stringify({ tool: 'delete_file', arguments: { path: '/src/old.ts' } }),
+                },
+                {
+                    kind: 'toolInvocationSerialized',
+                    value: JSON.stringify({ tool: 'move_file', arguments: { sourcePath: '/src/a.ts', newPath: '/src/b.ts' } }),
+                },
+            ]),
+        ]);
+
+        const result = parseCopilotLogEvents(filePath, 'ws-hash');
+        const files = result.events.filter((e) => e.type === 'fileOperation').map((e) => e as FileOperationEvent);
+        assert.strictEqual(files.length, 3);
+
+        const [created, deleted, moved] = files;
+        assert.strictEqual(created.operationType, 'create');
+        assert.strictEqual(created.filePath, '/src/new.ts');
+
+        assert.strictEqual(deleted.operationType, 'delete');
+        assert.strictEqual(deleted.filePath, '/src/old.ts');
+
+        assert.strictEqual(moved.operationType, 'move');
+        assert.strictEqual(moved.filePath, '/src/b.ts', 'move points at destination');
+        assert.strictEqual(moved.oldPath, '/src/a.ts', 'move records the source as oldPath');
+    });
+
+    test('apply_patch tool with a patch payload yields a DiffEvent + stats', () => {
+        const filePath = writeJsonl('patch.jsonl', [
+            snapshotLine('sess-patch'),
+            turnLine('r1', 1705400005000, 'Apply patch', [{
+                kind: 'toolInvocationSerialized',
+                value: JSON.stringify({
+                    tool: 'apply_patch',
+                    arguments: { path: '/src/p.ts', patch: '--- a/src/p.ts\n+++ b/src/p.ts\n@@ -1 +1 @@\n-old\n+new\n' },
+                }),
+            }]),
+        ]);
+
+        const result = parseCopilotLogEvents(filePath, 'ws-hash');
+        const diffs = result.events.filter((e) => e.type === 'diff').map((e) => e as DiffEvent);
+        assert.strictEqual(diffs.length, 1);
+        assert.strictEqual(diffs[0].filePath, '/src/p.ts');
+        assert.strictEqual(diffs[0].addedLines, 1);
+        assert.strictEqual(diffs[0].removedLines, 1);
+        assert.match(diffs[0].diffText, /^--- a\/src\/p\.ts/m);
+    });
+
+    test('command tool aliases recognized across Copilot versions', () => {
+        const filePath = writeJsonl('cmd-aliases.jsonl', [
+            snapshotLine('sess-cmds2'),
+            turnLine('r1', 1705400005000, 'Run', [
+                {
+                    kind: 'toolInvocationSerialized',
+                    value: JSON.stringify({ tool: 'executeTerminalCommand', arguments: { command: 'npm install' } }),
+                },
+            ]),
+        ]);
+
+        const result = parseCopilotLogEvents(filePath, 'ws-hash');
+        const commands = result.events.filter((e) => e.type === 'command').map((e) => e as CommandEvent);
+        assert.strictEqual(commands.length, 1);
+        assert.strictEqual(commands[0].commandText, 'npm install');
     });
 });

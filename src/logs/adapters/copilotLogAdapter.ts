@@ -25,8 +25,10 @@ import * as fs from 'fs';
 import * as path from 'path';
 import {
     CommandEvent,
+    DiffEvent,
     ErrorEvent,
     FileOperationEvent,
+    FileOperationType,
     LogEvent,
     ToolCallEvent,
 } from '../types';
@@ -63,6 +65,8 @@ interface ResponseItem {
     kind?: string;
     value?: unknown;
     uri?: { fsPath?: string; path?: string };
+    /** `textEditGroup` payload: array of edit groups (line-range + replacement). */
+    edits?: unknown;
 }
 
 interface RequestTurn {
@@ -97,6 +101,42 @@ const COMMAND_TOOLS = new Set([
     'shell', 'shell_command', 'shellCommand', 'bash', 'sh', 'zsh',
     'exec', 'execCommand', 'executeCommand', 'command', 'terminal',
     'executeTerminalCommand', 'runTerminalCommand',
+]);
+
+/**
+ * Tool names whose invocation means "a file-system mutation was applied".
+ * Mapped to the unified `FileOperationType` used by `FileOperationEvent`.
+ */
+const FILE_OP_TOOLS = new Map<string, 'create' | 'delete' | 'move' | 'rename' | 'mkdir' | 'patch'>([
+    ['create_file', 'create'],
+    ['new_file', 'create'],
+    ['createFile', 'create'],
+    ['add_file', 'create'],
+    ['delete_file', 'delete'],
+    ['remove_file', 'delete'],
+    ['destroy_file', 'delete'],
+    ['move_file', 'move'],
+    ['rename_file', 'rename'],
+    ['moveFile', 'move'],
+    ['renameFile', 'rename'],
+    ['mkdir', 'mkdir'],
+    ['create_directory', 'mkdir'],
+    ['create_dir', 'mkdir'],
+    ['make_dir', 'mkdir'],
+    ['text_document_edit', 'patch'],
+    ['edit_file', 'patch'],
+    ['write_to_file', 'patch'],
+    ['apply_patch', 'patch'],
+]);
+
+/**
+ * Tool names whose invocation carries an explicit patch/diff payload (the
+ * `patch` argument string). These produce a `DiffEvent` instead of (or in
+ * addition to) the generic file-operation row.
+ */
+const DIFF_TOOLS = new Set([
+    'apply_patch', 'patch_tool', 'applyDiff', 'apply_diff', 'diff_apply',
+    'text_document_edit', 'write_to_file', 'edit_file',
 ]);
 
 /** UUID-shaped terminal/session correlation id (matches `[Terminal <uuid> …]`). */
@@ -225,6 +265,127 @@ export function extractShell(args: Record<string, unknown>): string | undefined 
     return undefined;
 }
 
+/** Extract a file path from a tool call's arguments object. */
+export function extractFilePath(args: Record<string, unknown>): string | undefined {
+    if (!args) { return undefined; }
+    const direct = args['filePath'] ?? args['path'] ?? args['uri'] ?? args['file'];
+    if (typeof direct === 'string' && direct.trim().length > 0) {
+        return direct.trim();
+    }
+    const uri = args['uri'];
+    if (typeof uri === 'object' && uri !== null) {
+        const fsPath = (uri as { fsPath?: unknown; path?: unknown }).fsPath;
+        if (typeof fsPath === 'string' && fsPath.trim().length > 0) {
+            return fsPath.trim();
+        }
+        const p = (uri as { path?: unknown }).path;
+        if (typeof p === 'string' && p.trim().length > 0) {
+            return p.trim();
+        }
+    }
+    return undefined;
+}
+
+/**
+ * Detect the `FileOperationType` carried by a Copilot `textEditGroup` response
+ * item. The VS Code Copilot response occasionally annotates the group's value
+ * with an `action` field (`created`, `deleted`, `moved`, `renamed`, `mkdir`);
+ * otherwise the default `patch` applies (an inline edit).
+ */
+export function extractEditGroupAction(value: unknown): 'create' | 'delete' | 'move' | 'rename' | 'mkdir' | 'patch' {
+    const action = typeof value === 'object' && value !== null
+        ? (value as { action?: unknown }).action
+        : undefined;
+    if (typeof action === 'string') {
+        const normalized = action.trim().toLowerCase();
+        if (normalized === 'created' || normalized === 'create' || normalized === 'new') { return 'create'; }
+        if (normalized === 'deleted' || normalized === 'delete' || normalized === 'removed') { return 'delete'; }
+        if (normalized === 'moved' || normalized === 'move') { return 'move'; }
+        if (normalized === 'renamed' || normalized === 'rename') { return 'rename'; }
+        if (normalized === 'mkdir' || normalized === 'createdirectory' || normalized === 'create_directory') { return 'mkdir'; }
+    }
+    return 'patch';
+}
+
+/**
+ * The per-edit shape VS Code Copilot embeds in a `textEditGroup` item:
+ * an array of edit groups, each carrying line ranges + replacement text.
+ */
+interface CopilotTextEdit {
+    range?: {
+        startLineNumber?: number; startColumn?: number;
+        endLineNumber?: number; endColumn?: number;
+    };
+    text?: string;
+}
+
+/**
+ * Count the approximate added/removed line counts for a `textEditGroup`
+ * item's `edits` payload. `removed` = number of source lines each edit
+ * spans; `added` = number of lines in each replacement text.
+ */
+export function countEditGroupLines(edits: unknown): { added: number; removed: number } {
+    let added = 0;
+    let removed = 0;
+    if (!Array.isArray(edits)) { return { added, removed }; }
+
+    for (const group of edits) {
+        const groupEdits = Array.isArray(group) ? group : [group];
+        for (const edit of groupEdits) {
+            const e = edit as CopilotTextEdit;
+            if (!e || typeof e !== 'object') { continue; }
+            const startLine = e.range?.startLineNumber ?? 0;
+            const endLine = e.range?.endLineNumber ?? startLine;
+            removed += Math.max(0, endLine - startLine + 1);
+            if (typeof e.text === 'string') {
+                added += e.text.split('\n').length;
+            }
+        }
+    }
+    return { added, removed };
+}
+
+/**
+ * Build a lightweight uniform diff text from a `textEditGroup` edit payload.
+ *
+ * VS Code Copilot only stores the replacement text (the pre-image is not
+ * captured), so this is intentionally a *summarized* patch: one `@@` hunk per
+ * edit with the replacement lines rendered as `+`. The Diff Explorer renders
+ * this in a markdown viewer rather than handing it to a strict `git apply`.
+ */
+export function buildEditGroupDiffText(filePath: string, edits: unknown): string {
+    // Strip any leading slashes so absolute paths render `--- a/src/a.ts`
+    // instead of the awkward `--- a//src/a.ts`.
+    const rel = filePath.replace(/^[/\\]+/, '');
+    const lines: string[] = [];
+    lines.push('--- a/' + rel);
+    lines.push('+++ b/' + rel);
+    lines.push('@@ modified by assistant @@');
+
+    if (!Array.isArray(edits)) {
+        lines.push('+<no inline edit payload captured>');
+        return lines.join('\n');
+    }
+    for (const group of edits) {
+        const groupEdits = Array.isArray(group) ? group : [group];
+        for (const edit of groupEdits) {
+            const e = edit as CopilotTextEdit;
+            if (!e || typeof e !== 'object') { continue; }
+            const startLine = e.range?.startLineNumber ?? 1;
+            const endLine = e.range?.endLineNumber ?? startLine;
+            lines.push(`@@ -L${startLine},L${endLine} @@`);
+            if (typeof e.text === 'string') {
+                for (const l of e.text.split('\n')) {
+                    lines.push('+' + l);
+                }
+            } else {
+                lines.push('+<empty replacement>');
+            }
+        }
+    }
+    return lines.join('\n');
+}
+
 /**
  * Extract a correlation key that links a tool call to its later terminal
  * notification. VS Code Copilot uses a UUID as the terminal id and references
@@ -242,6 +403,21 @@ export function extractCorrelationId(args: Record<string, unknown>): string | un
     }
     return undefined;
 }
+/**
+ * Count `+`/`-` lines in a free-form patch text — for any tool that hands us a
+ * literal patch/diff argument. A best-effort approximation of change size.
+ */
+export function countPatchLines(patchText: string | undefined): { added: number; removed: number } {
+    if (!patchText) { return { added: 0, removed: 0 }; }
+    let added = 0;
+    let removed = 0;
+    for (const line of patchText.split('\n')) {
+        if (line.startsWith('+') && !line.startsWith('+++')) { added++; }
+        else if (line.startsWith('-') && !line.startsWith('---')) { removed++; }
+    }
+    return { added, removed };
+}
+
 // ---------------------------------------------------------------------------
 // Event builders
 // ---------------------------------------------------------------------------
@@ -294,7 +470,20 @@ function newCommandEvent(ctx: TurnContext, itemIndex: number, toolName: string, 
     };
 }
 
-function newFileOperationEvent(ctx: TurnContext, itemIndex: number, fileIndex: number, filePath: string, raw: string): FileOperationEvent {
+interface FileOpOptions {
+    operationType?: FileOperationType;
+    detail?: string;
+    oldPath?: string;
+}
+
+function newFileOperationEvent(
+    ctx: TurnContext,
+    itemIndex: number,
+    fileIndex: number,
+    filePath: string,
+    raw: string,
+    options?: FileOpOptions
+): FileOperationEvent {
     return {
         id: `${ctx.sessionId}:t${ctx.requestIndex}:i${itemIndex}:file${fileIndex}`,
         type: 'fileOperation',
@@ -306,9 +495,37 @@ function newFileOperationEvent(ctx: TurnContext, itemIndex: number, fileIndex: n
         sourcePath: ctx.sourcePath,
         messageIndex: ctx.messageIndex,
         raw,
-        operationType: 'patch',
+        operationType: options?.operationType ?? 'patch',
         filePath,
-        detail: 'inline text edit group',
+        oldPath: options?.oldPath,
+        detail: options?.detail ?? 'inline text edit group',
+    };
+}
+
+function newDiffEvent(
+    ctx: TurnContext,
+    itemIndex: number,
+    fileIndex: number,
+    filePath: string,
+    diffText: string,
+    raw: string,
+    lineStats?: { added: number; removed: number }
+): DiffEvent {
+    return {
+        id: `${ctx.sessionId}:t${ctx.requestIndex}:i${itemIndex}:diff${fileIndex}`,
+        type: 'diff',
+        timestamp: ctx.timestamp,
+        tool: 'copilot',
+        sessionId: ctx.sessionId,
+        workspaceId: ctx.workspaceId,
+        workspacePath: ctx.workspacePath,
+        sourcePath: ctx.sourcePath,
+        messageIndex: ctx.messageIndex,
+        raw,
+        filePath,
+        diffText,
+        addedLines: lineStats?.added,
+        removedLines: lineStats?.removed,
     };
 }
 
@@ -536,6 +753,48 @@ export function parseCopilotLogEvents(
                                 pendingByTerminal.set(corrId, command);
                             }
                         }
+
+                        // File-system mutations invoked as tools (create/delete/
+                        // move/rename/mkdir/patch) become FileOperationEvents; the
+                        // patch-carrying tools also yield a DiffEvent.
+                        const fileOpType = FILE_OP_TOOLS.get(toolName);
+                        if (fileOpType) {
+                            const rawPath = extractFilePath(args);
+                            const oldPath = typeof args['oldPath'] === 'string' && args['oldPath'].length > 0
+                                ? args['oldPath']
+                                : typeof args['sourcePath'] === 'string' && args['sourcePath'].length > 0
+                                ? args['sourcePath']
+                                : undefined;
+                            const newPath = typeof args['newPath'] === 'string' && args['newPath'].length > 0
+                                ? args['newPath']
+                                : typeof args['destinationPath'] === 'string' && args['destinationPath'].length > 0
+                                ? args['destinationPath']
+                                : undefined;
+                            const isRenameOrMove = fileOpType === 'move' || fileOpType === 'rename';
+                            // For move/rename: `filePath` = destination when known,
+                            // `oldPath` = the previous path the event describes.
+                            const targetPath = isRenameOrMove ? (newPath ?? rawPath) : (rawPath ?? newPath);
+                            if (targetPath && targetPath.length > 0) {
+                                events.push(newFileOperationEvent(
+                                    ctx, itemIndex, fileOperationCounter++, targetPath, rawShort,
+                                    {
+                                        operationType: fileOpType,
+                                        detail: `tool: ${toolName}`,
+                                        oldPath: isRenameOrMove ? (oldPath ?? rawPath ?? newPath) : undefined,
+                                    }
+                                ));
+
+                                const patchText = typeof args['patch'] === 'string' ? args['patch']
+                                    : typeof args['diff'] === 'string' ? args['diff']
+                                    : undefined;
+                                if (DIFF_TOOLS.has(toolName) && patchText && patchText.trim().length > 0) {
+                                    events.push(newDiffEvent(
+                                        ctx, itemIndex, fileOperationCounter++, targetPath, patchText, rawShort,
+                                        countPatchLines(patchText)
+                                    ));
+                                }
+                            }
+                        }
                     } catch {
                         errors.push(`Turn ${requestIndex + 1} item ${itemIndex + 1}: invalid toolInvocationSerialized JSON`);
                     }
@@ -546,9 +805,34 @@ export function parseCopilotLogEvents(
                     : typeof uri?.path === 'string' ? uri.path
                     : undefined;
                 if (fsPath && fsPath.length > 0) {
+                    const groupValue = item.value;
+                    const action = extractEditGroupAction(groupValue);
+                    const edits = item['edits'];
+                    const valueObj = typeof groupValue === 'object' && groupValue !== null
+                        ? groupValue as Record<string, unknown>
+                        : undefined;
+                    const opDetail = action === 'patch'
+                        ? 'inline text edit group'
+                        : `inline text edit group (${action})`;
                     events.push(newFileOperationEvent(
-                        ctx, itemIndex, fileOperationCounter++, fsPath, rawShort
+                        ctx, itemIndex, fileOperationCounter++, fsPath, rawShort,
+                        {
+                            operationType: action,
+                            detail: opDetail,
+                            oldPath: action === 'move' || action === 'rename'
+                                ? (typeof valueObj?.['oldPath'] === 'string' ? valueObj['oldPath']
+                                    : typeof valueObj?.['previousPath'] === 'string' ? valueObj['previousPath']
+                                    : undefined)
+                                : undefined,
+                        }
                     ));
+                    if (Array.isArray(edits)) {
+                        events.push(newDiffEvent(
+                            ctx, itemIndex, fileOperationCounter++, fsPath,
+                            buildEditGroupDiffText(fsPath, edits), rawShort,
+                            countEditGroupLines(edits)
+                        ));
+                    }
                 }
             }
             // All other kinds (thinking, undoStop, inlineReference, …) carry no

@@ -43,6 +43,40 @@ export const MAX_EVENTS_PER_QUERY = 5000;
 /** Default number of rows returned when the caller omits `limit`. */
 export const DEFAULT_EVENTS_PER_QUERY = 200;
 
+// ── Common store contract ────────────────────────────────────────────────────
+
+/**
+ * Storage contract implemented by both the SQLite-backed store and the
+ * in-memory fallback. `LogService` picks the SQLite store when it can be
+ * opened and silently degrades to the in-memory one when the native
+ * `better-sqlite3` binding is unavailable (dev host without
+ * `npm run rebuild:native`, non-VS Code IDE, read-only cache dir, …).
+ *
+ * The fallback keeps every panel functional for the current session; it just
+ * does not survive a restart.
+ */
+export interface ILogEventStore {
+    /** True once `open()` succeeded (for either backend). */
+    readonly isOpen: boolean;
+    /** Path the SQLite database would live at. */
+    readonly dbPath: string;
+    /** True when events survive a restart (SQLite), false for the memory store. */
+    readonly isPersistent: boolean;
+    /** Why the SQLite backend was not used, when it fell back to memory. */
+    readonly degradedReason?: string;
+    open(): void;
+    close(): void;
+    upsertEvent(event: LogEvent): void;
+    upsertEvents(events: LogEvent[]): void;
+    removeEventsForSession(sessionId: string): number;
+    removeBySourcePath(sourcePath: string): number;
+    clear(): void;
+    getEvents(filter?: LogEventFilter): LogEvent[];
+    getEventCount(): number;
+    countBySourcePath(sourcePath: string): number;
+    getStats(): LogStoreStats;
+}
+
 // ── Row type ─────────────────────────────────────────────────────────────────
 
 interface DbLogEventRow {
@@ -69,7 +103,7 @@ export interface LogStoreStats {
 }
 // ── Store implementation ─────────────────────────────────────────────────────
 
-export class LogEventStore {
+export class LogEventStore implements ILogEventStore {
     private db: BetterSqlite3.Database | null = null;
     private readonly _dbPath: string;
     private _isOpen = false;
@@ -97,6 +131,14 @@ export class LogEventStore {
     get dbPath(): string {
         return this._dbPath;
     }
+
+    /** SQLite is the durable backend — always persistent when it is used. */
+    get isPersistent(): boolean {
+        return true;
+    }
+
+    /** The SQLite store never degrades, so there is no reason to report. */
+    readonly degradedReason?: string = undefined;
 
     /**
      * Open (or create) the SQLite database, ensure the schema is at the
@@ -356,6 +398,161 @@ private _prepareStatements(): void {
             this._isOpen = false;
         }
     }
+}
+
+// ── In-memory fallback ───────────────────────────────────────────────────────
+
+/**
+ * Non-persistent `ILogEventStore` fallback.
+ *
+ * Used when the SQLite backend cannot be opened (missing/incompatible native
+ * `better-sqlite3` binding, unwritable cache directory, newer shared schema…).
+ * Keeping the panels wired to this store means the watch-logs UI still shows
+ * everything harvested during the current session instead of failing to
+ * activate — the root cause of the "empty left side panels + command not
+ * found" regression when the native binding was absent.
+ */
+export class InMemoryLogEventStore implements ILogEventStore {
+    private readonly _dbPath: string;
+    private readonly _events = new Map<string, LogEvent>();
+    private _isOpen = false;
+
+    /** Human-readable reason the SQLite backend was skipped. */
+    readonly degradedReason?: string;
+
+    constructor(storageDir: string, degradedReason?: string) {
+        // Keep the same path shape so diagnostics point at the intended DB.
+        this._dbPath = path.join(storageDir, LOG_EVENTS_DB_FILENAME);
+        this.degradedReason = degradedReason;
+    }
+
+    get isOpen(): boolean {
+        return this._isOpen;
+    }
+
+    get dbPath(): string {
+        return this._dbPath;
+    }
+
+    get isPersistent(): boolean {
+        return false;
+    }
+
+    open(): void {
+        this._isOpen = true;
+    }
+
+    close(): void {
+        this._events.clear();
+        this._isOpen = false;
+    }
+
+    // ── Writes ───────────────────────────────────────────────────────────────
+
+    upsertEvent(event: LogEvent): void {
+        this._events.set(event.id, event);
+    }
+
+    upsertEvents(events: LogEvent[]): void {
+        for (const event of events) {
+            this._events.set(event.id, event);
+        }
+    }
+
+    removeEventsForSession(sessionId: string): number {
+        let removed = 0;
+        for (const [id, event] of this._events) {
+            if (event.sessionId === sessionId) {
+                this._events.delete(id);
+                removed++;
+            }
+        }
+        return removed;
+    }
+
+    removeBySourcePath(sourcePath: string): number {
+        let removed = 0;
+        for (const [id, event] of this._events) {
+            if (event.sourcePath === sourcePath) {
+                this._events.delete(id);
+                removed++;
+            }
+        }
+        return removed;
+    }
+
+    clear(): void {
+        this._events.clear();
+    }
+
+    // ── Reads / queries (mirror the SQL store's filter semantics) ────────────
+
+    getEvents(filter: LogEventFilter = {}): LogEvent[] {
+        const limit = Math.min(
+            Math.max(1, filter.limit ?? DEFAULT_EVENTS_PER_QUERY),
+            MAX_EVENTS_PER_QUERY
+        );
+        const offset = Math.max(0, filter.offset ?? 0);
+        const direction = filter.order === 'asc' ? 1 : -1;
+
+        return Array.from(this._events.values())
+            .filter((event) => matchesFilter(event, filter))
+            .sort((a, b) => {
+                const cmp = a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0;
+                return cmp * direction;
+            })
+            .slice(offset, offset + limit);
+    }
+
+    getEventCount(): number {
+        return this._events.size;
+    }
+
+    countBySourcePath(sourcePath: string): number {
+        let count = 0;
+        for (const event of this._events.values()) {
+            if (event.sourcePath === sourcePath) { count++; }
+        }
+        return count;
+    }
+
+    getStats(): LogStoreStats {
+        const byType = {} as Record<LogEventType, number>;
+        for (const t of LOG_EVENT_TYPES) { byType[t] = 0; }
+
+        const tools = new Set<LogSourceTool>();
+        for (const event of this._events.values()) {
+            byType[event.type] = (byType[event.type] ?? 0) + 1;
+            tools.add(event.tool);
+        }
+
+        return {
+            totalEvents: this._events.size,
+            byType,
+            tools: Array.from(tools).sort(),
+            schemaVersion: LOG_SCHEMA_VERSION,
+        };
+    }
+}
+
+/** Shared predicate used by the in-memory store (AND-combines all filters). */
+function matchesFilter(event: LogEvent, filter: LogEventFilter): boolean {
+    if (filter.sessionId && event.sessionId !== filter.sessionId) { return false; }
+
+    const types = filter.type ? [filter.type] : filter.types;
+    if (types && types.length > 0 && !types.includes(event.type)) { return false; }
+
+    if (filter.tool) {
+        const tools = Array.isArray(filter.tool) ? filter.tool : [filter.tool];
+        if (!tools.includes(event.tool)) { return false; }
+    }
+
+    if (filter.filePath && getEventFilePath(event) !== filter.filePath) { return false; }
+    if (filter.workspaceId && event.workspaceId !== filter.workspaceId) { return false; }
+    if (filter.from && event.timestamp < filter.from) { return false; }
+    if (filter.to && event.timestamp > filter.to) { return false; }
+
+    return true;
 }
 
 // ── Row mapping helpers ──────────────────────────────────────────────────────

@@ -134,4 +134,12 @@ suite('ExecutedCommandsProvider — grouping and ordering', () => {
         const leaves = provider.getChildren(provider.getGroups()[0]) as ExecCommandsLeafItem[];
         assert.strictEqual(leaves[0].tooltip, longCommand);
     });
+
+    test('leaf item sets a double-click command to show full contents', () => {
+        service.ingestEvents([makeCommand({ id: 'c1', sessionId: 'sess-a', timestamp: '2026-01-01T10:00:00.000Z' })]);
+        const provider = new ExecutedCommandsProvider(service);
+        const leaves = provider.getChildren(provider.getGroups()[0]) as ExecCommandsLeafItem[];
+        assert.strictEqual(leaves[0].command?.command, 'chatwizard.execCommands.showDetails');
+        assert.strictEqual(leaves[0].command?.title, 'Show Full Command');
+    });
 });

@@ -1257,7 +1257,8 @@ Deliverable: internal API like `logService.getEvents({ sessionId, type })`.
 > - ✅ **Executed Commands panel** — `chatwizardExecutedCommands` tree view
 >   (`src/logs/executedCommandsProvider.ts`) groups commands per session, newest
 >   first, with copy / open-session / refresh actions.
-> - ⬜ Remaining: `chatwizard.*` settings docs in README/user-guide, full manual QA.
+> - ✅ `chatwizard.*` settings + watch-logs panels documented in README / user-guide.
+> - ⬜ Remaining: full manual QA.
 
 - Pick **one tool** (Antigravity or Cursor — implemented first: **Copilot**).
 - Implement:
@@ -1274,6 +1275,37 @@ Deliverable: end-to-end flow for one agent.
 
 ### **Phase 3 – Multi-tool expansion (3–4 weeks)**
 
+> **Implementation note (2026-09)** — Phase 3 kicked off by deepening the Copilot
+> integration first (at the user's request):
+> - ✅ **Enriched Copilot adapter** — `src/logs/adapters/copilotLogAdapter.ts`
+>   now emits typed `FileOperationEvent`s (create/delete/move/rename/mkdir from
+>   `create_file`/`delete_file`/`move_file`/… tool calls **and** `textEditGroup`
+>   `action` annotations) plus `DiffEvent`s built from inline edit groups
+>   (with `addedLines`/`removedLines` stats) and explicit `apply_patch`-style
+>   payloads; more `run*` command aliases recognised.
+> - ✅ **Unified Timeline panel** — `chatwizardUnifiedTimeline` tree
+>   (`src/logs/unifiedTimelineProvider.ts`) renders every event kind per
+>   session, newest first, with a kind filter.
+> - ✅ **Diff Explorer panel** — `chatwizardDiffExplorer` tree
+>   (`src/logs/diffExplorerProvider.ts`) groups changes per workspace → file,
+>   with open-patch / copy / open-file actions.
+> - ✅ Wiring (`extension.ts` ← `src/logs/index.ts`), commands, menus,
+>   activation events in `package.json`, unit tests for the new adapters/pure
+>   helpers.
+> - ✅ **Cline / Roo Code adapter** — `src/logs/adapters/clineLogAdapter.ts`
+>   replays each task's `ui_messages.json` into the same normalized store:
+>   `say:'command'` → `CommandEvent` (with `command_output` chunks correlated
+>   as `stdoutSummary`), `say:'tool'`/legacy `tool_use` → `ToolCallEvent` +
+>   `FileOperationEvent` (+ `DiffEvent` for `editedExistingFile`
+>   SEARCH/REPLACE blocks and `applyPatch` payloads), `say:'error'`,
+>   `error_retry` and `api_req_failed` → `ErrorEvent`, and `task_progress` →
+>   `PlannerStepEvent`. Works for the modern JSON-tool format and the legacy
+>   XML `commandString`/`toolParam` format; Roo Code shares the identical
+>   task layout. Wired through `src/logs/clineLogHarvester.ts` into the same
+>   session-index listener + panels.
+> - ⬜ Remaining: adapters for Windsurf/Aider feeding the same store,
+>   manual QA of the new panels.
+
 - Add adapters for:
 
 - Cline
@@ -1287,6 +1319,51 @@ Deliverable: end-to-end flow for one agent.
 Deliverable: cross-agent view for commands + diffs.
 
 ### **Phase 4 – Polishing & analytics (ongoing)**
+
+> **Implementation note (2026-09)** — double-click / click detail webview:
+> - ✅ **Any click** (single or double) on a row in **Executed Commands**,
+>   **Unified Timeline** or **Diff Explorer** opens a webview showing the *full*
+>   item contents (`src/logs/logEventWebview.ts`): per-kind detail blocks (full
+>   command text + cwd/shell/exit + stdout/stderr for commands; diff/patch text
+>   with line stats; pretty-printed tool arguments; error stack traces; …), a
+>   metadata grid, plus **Copy** and **Open Session** actions. Activation is
+>   handled three ways — `TreeItem.command` (double-click / Enter), a debounced
+>   `TreeView.onDidChangeSelection` listener (guarantees single-click works
+>   regardless of host click semantics), and **👁 Show Details** title-bar
+>   buttons + context-menu entries on each view. New commands
+>   `chatwizard.execCommands.showDetails` / `chatwizard.logs.timeline.showDetails`
+>   / `chatwizard.logs.diff.showDetails` fall back to the view's current
+>   selection when invoked without an item, and every open is logged to the
+>   **Chat Wizard** output channel.
+>
+> **Note on "write commands"** — Cline/Copilot *never* execute file writes as
+> shell commands: writes happen as tool calls (`write_to_file`,
+> `editedExistingFile`, `apply_patch`, …). They are normalized as
+> `FileOperationEvent` + `DiffEvent` and appear in the **Unified Timeline**
+> (File Operation / Diff rows) and **Diff Explorer** (grouped per file) — the
+> **Executed Commands** panel intentionally lists only `command`-type events
+> (shell / git / build / test invocations).
+
+> **Implementation note (2026-11)** — visual (side-by-side) diffs:
+> - ✅ **`Open Visual Diff`** — the Diff Explorer no longer shows a captured
+>   change as patch text with `+`/`-` characters. `src/logs/diffViewer.ts`
+>   reconstructs the two sides of the patch (context + removed lines →
+>   *before*, context + added lines → *after*), serves them from a read-only
+>   virtual document provider (`chatwizard-diff:` scheme) and opens them with
+>   `vscode.diff`, i.e. VS Code's **native diff editor**: side-by-side or
+>   inline, coloured rows, word-level highlighting, collapse-unchanged,
+>   syntax highlighting (the URI path keeps the real file name/extension).
+>   Wired through the row command (`chatwizard.logs.diff.viewDiff`), the
+>   single-click selection handler, a **⧉ Open Visual Diff** title-bar button,
+>   a context-menu entry, and a **Visual Diff** button in the detail webview.
+>   The parser is tolerant: standard unified diffs, Cline SEARCH/REPLACE
+>   patches, Copilot's summarized additions-only patches
+>   (`@@ modified by assistant @@`) and header-less patches. Because the log
+>   only stores hunks — never whole files — the panes show the changed regions
+>   (additions-only patches therefore render with an empty left pane). Row
+>   tooltips now show a short patch *preview* instead of the whole patch;
+>   `Open Patch` still opens the full raw patch text.
+>
 
 - Add:
 

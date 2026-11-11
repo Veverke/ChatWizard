@@ -98,17 +98,46 @@ ChatWizard indexes every AI chat session from all your tools (Copilot, Claude, C
 
 ## 2. Sidebar Overview
 
-Eight panels live under the Chat Wizard Activity Bar icon:
+Eleven panels live under the Chat Wizard Activity Bar icon:
 
 | Panel | Purpose |
 |-------|---------|
 | **Sessions** | Browse every AI session across all tools and workspaces |
 | **Prompt Library** | Your full history of prompts, deduplicated and searchable |
 | **Code Blocks** | Every AI-generated code snippet, filterable by language |
+| **Executed Commands** | Every shell / git / build / test command agents ran — even when the model never mentioned it in chat |
+| **Unified Timeline** | Chronological feed of agent *actions*: commands, file operations, diffs, tool calls, errors |
+| **Diff Explorer** | Every code change the agent made, grouped per workspace → file, with visual-diff / patch / copy actions |
 | **Knowledge Base** | Categorized learnings, decisions, patterns, gotchas, and architecture |
 | **Analytics** | Token usage charts and stats |
 | **Model Usage** | Per-model request counts with date range filtering |
 | **Timeline** | Chronological feed with heat map, streaks, and topic drift |
+
+### Watch Agent Logs Panels
+
+The **Executed Commands**, **Unified Timeline** and **Diff Explorer** panels form the
+_watch-logs_ subsystem (Phase 2/3 of `docs/work-plan-watch-logs.md`). AI models do not run
+commands themselves — the *host tools* (today: **VS Code + GitHub Copilot Chat**) execute
+them, and ChatWizard replays the agent-execution trail Copilot embeds in its session JSONL:
+`toolInvocationSerialized` entries (`run_in_terminal`, `create_file`, `delete_file`,
+`move_file`, `apply_patch`, …), `textEditGroup` inline edits, and terminal notifications
+with exit codes.
+
+- **Executed Commands** lists every command, newest first, grouped per session, with exit
+  badges, copy-to-clipboard, and open-session actions.
+- **Unified Timeline** mixes all six event kinds (commands, file operations, diffs, tool
+  calls, errors, planner steps). Use the filter icon (or
+  `Chat Wizard: Filter Unified Timeline…`) to focus on failures, diffs, or commands only.
+- **Diff Explorer** groups changes by workspace → file. Double-click a change (or use
+  `Open Visual Diff`) to see it in VS Code's native diff editor — side-by-side or inline,
+  with coloured rows, word-level highlighting and "collapse unchanged regions", exactly like
+  a GUI Git client. `Open Patch` renders the raw patch text in a disposable markdown editor;
+  `Copy Change` copies the diff text; `Open File` reveals the affected file when it still
+  exists. The change rows' hover tooltip shows only a short patch preview.
+
+The underlying event store is a read-only SQLite database
+(`chatwizard-log-events.db`, colocated with the session cache); events are re-indexed
+automatically whenever a Copilot session file is created or rewritten by VS Code.
 
 Each panel can also be opened as a standalone editor tab:
 
@@ -1131,6 +1160,14 @@ Each source has an index toggle and an optional custom path override:
 | `chatwizard.indexTabnine` | `true` | `chatwizard.tabnineStoragePath` |
 
 Leave a path override empty to use the platform default location.
+
+### Watch Logs
+
+The Executed Commands / Unified Timeline / Diff Explorer panels re-use the same source
+toggles and path overrides as the session index (`chatwizard.indexCopilot` +
+`chatwizard.copilotStoragePath` gate the Copilot agent-execution log stream). Events are
+stored in `chatwizard-log-events.db` next to the session cache; there is no separate
+enable flag — disable the panels' source with the corresponding `chatwizard.index*` toggle.
 
 ### Semantic Search
 

@@ -99,6 +99,10 @@ export interface DiffEvent extends LogEventBase {
     afterHash?: string;
     /** Unified diff / patch text. */
     diffText: string;
+    /** Approximate number of added (+) lines in the diff/patch, when derivable. */
+    addedLines?: number;
+    /** Approximate number of removed (−) lines in the diff/patch, when derivable. */
+    removedLines?: number;
     /** Id of the CommandEvent (if any) that triggered this diff. */
     commandId?: string;
 }

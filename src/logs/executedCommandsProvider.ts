@@ -77,6 +77,11 @@ export class ExecCommandsLeafItem extends vscode.TreeItem {
         this.description = formatExitBadge(event.exitCode);
         this.tooltip = event.commandText;
         this.contextValue = 'execCommand';
+        // Double-click / Enter opens a webview with the full command contents.
+        this.command = {
+            command: 'chatwizard.execCommands.showDetails',
+            title: 'Show Full Command',
+        };
         const exit = event.exitCode;
         this.iconPath = new vscode.ThemeIcon(
             exit === undefined ? 'run'
@@ -132,6 +137,12 @@ export class ExecutedCommandsProvider implements vscode.TreeDataProvider<ExecCom
 
     /** All groups currently rendered (useful for tests + stats). */
     getGroups(): ExecCommandsGroupItem[] {
+        // Lazily build on first read: VS Code normally calls getChildren(),
+        // but tests (and any caller inspecting the tree before it rendered)
+        // must see the store contents rather than a permanently empty list.
+        if (this._groups.length === 0) {
+            this._groups = this._buildGroups();
+        }
         return this._groups;
     }
 

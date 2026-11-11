@@ -35,11 +35,11 @@ suite('LogSourceRegistry – watch-logs source registry', () => {
         assert.strictEqual(registry.get('cursor')?.displayName, 'Cursor B');
     });
 
-    test('createDefaultLogSourceRegistry registers all six plan targets', () => {
+    test('createDefaultLogSourceRegistry registers the plan targets + GitHub Copilot (Phase 2)', () => {
         const registry = createDefaultLogSourceRegistry();
         const tools = registry.tools().sort();
 
-        assert.deepStrictEqual(tools, ['aider', 'antigravity', 'cline', 'cursor', 'roocode', 'windsurf']);
+        assert.deepStrictEqual(tools, ['aider', 'antigravity', 'cline', 'copilot', 'cursor', 'roocode', 'windsurf']);
         for (const cfg of registry.all()) {
             assert.ok(cfg.tool, 'tool id present');
             assert.ok(cfg.displayName.length > 0, 'displayName present');

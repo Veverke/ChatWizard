@@ -83,6 +83,8 @@
     "onView:chatwizardPromptLibrary",
     "onView:chatwizardCodeBlocks",
     "onView:chatwizardExecutedCommands",
+    "onView:chatwizardUnifiedTimeline",
+    "onView:chatwizardDiffExplorer",
     "onView:chatwizardAnalytics",
     "onView:chatwizardModelUsage",
     "onView:chatwizardTimeline",
@@ -118,6 +120,14 @@
         {
           "id": "chatwizardExecutedCommands",
           "name": "Executed Commands"
+        },
+        {
+          "id": "chatwizardUnifiedTimeline",
+          "name": "Unified Timeline"
+        },
+        {
+          "id": "chatwizardDiffExplorer",
+          "name": "Diff Explorer"
         },
         {
           "id": "chatwizardAnalytics",
@@ -781,6 +791,90 @@
         "title": "Chat Wizard: Refresh Executed Commands",
         "category": "Chat Wizard",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "chatwizard.showUnifiedTimeline",
+        "title": "Chat Wizard: Show Unified Timeline",
+        "category": "Chat Wizard",
+        "icon": "$(list-unordered)"
+      },
+      {
+        "command": "chatwizard.logs.timeline.refresh",
+        "title": "Chat Wizard: Refresh Unified Timeline",
+        "category": "Chat Wizard",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "chatwizard.logs.timeline.filter",
+        "title": "Chat Wizard: Filter Unified Timeline…",
+        "category": "Chat Wizard",
+        "icon": "$(filter)"
+      },
+      {
+        "command": "chatwizard.logs.timeline.copyCommand",
+        "title": "Chat Wizard: Copy Command",
+        "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.logs.timeline.openSession",
+        "title": "Chat Wizard: Open Session",
+        "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.logs.timeline.openDiff",
+        "title": "Chat Wizard: Open Diff",
+        "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.showDiffExplorer",
+        "title": "Chat Wizard: Show Diff Explorer",
+        "category": "Chat Wizard",
+        "icon": "$(diff)"
+      },
+      {
+        "command": "chatwizard.logs.diffs.refresh",
+        "title": "Chat Wizard: Refresh Diff Explorer",
+        "category": "Chat Wizard",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "chatwizard.logs.diff.viewDiff",
+        "title": "Chat Wizard: Open Visual Diff",
+        "category": "Chat Wizard",
+        "icon": "$(diff-multiple)"
+      },
+      {
+        "command": "chatwizard.logs.diff.openPatch",
+        "title": "Chat Wizard: Open Patch",
+        "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.logs.diff.copy",
+        "title": "Chat Wizard: Copy Change",
+        "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.logs.diff.openFile",
+        "title": "Chat Wizard: Open File",
+        "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.execCommands.showDetails",
+        "title": "Chat Wizard: Show Full Command",
+        "category": "Chat Wizard",
+        "icon": "$(eye)"
+      },
+      {
+        "command": "chatwizard.logs.timeline.showDetails",
+        "title": "Chat Wizard: Show Event Details",
+        "category": "Chat Wizard",
+        "icon": "$(eye)"
+      },
+      {
+        "command": "chatwizard.logs.diff.showDetails",
+        "title": "Chat Wizard: Show Change Details",
+        "category": "Chat Wizard",
+        "icon": "$(eye)"
       }
     ],
     "menus": {
@@ -803,6 +897,41 @@
           "command": "chatwizard.execCommands.refresh",
           "when": "view == chatwizardExecutedCommands",
           "group": "navigation@0"
+        },
+        {
+          "command": "chatwizard.logs.timeline.refresh",
+          "when": "view == chatwizardUnifiedTimeline",
+          "group": "navigation@0"
+        },
+        {
+          "command": "chatwizard.logs.timeline.filter",
+          "when": "view == chatwizardUnifiedTimeline",
+          "group": "navigation@1"
+        },
+        {
+          "command": "chatwizard.logs.diffs.refresh",
+          "when": "view == chatwizardDiffExplorer",
+          "group": "navigation@0"
+        },
+        {
+          "command": "chatwizard.execCommands.showDetails",
+          "when": "view == chatwizardExecutedCommands",
+          "group": "navigation@1"
+        },
+        {
+          "command": "chatwizard.logs.timeline.showDetails",
+          "when": "view == chatwizardUnifiedTimeline",
+          "group": "navigation@2"
+        },
+        {
+          "command": "chatwizard.logs.diff.showDetails",
+          "when": "view == chatwizardDiffExplorer",
+          "group": "navigation@1"
+        },
+        {
+          "command": "chatwizard.logs.diff.viewDiff",
+          "when": "view == chatwizardDiffExplorer",
+          "group": "navigation@2"
         },
         {
           "command": "chatwizard.filterSessions",
@@ -997,6 +1126,41 @@
       ],
       "view/item/context": [
         {
+          "command": "chatwizard.logs.timeline.copyCommand",
+          "when": "viewItem == logsEvent.command",
+          "group": "1_logs@1"
+        },
+        {
+          "command": "chatwizard.logs.timeline.openSession",
+          "when": "viewItem == logsEvent.command || viewItem == logsEvent.fileOperation || viewItem == logsEvent.diff || viewItem == logsEvent.error || viewItem == logsEvent.toolCall || viewItem == logsEvent.plannerStep",
+          "group": "1_logs@2"
+        },
+        {
+          "command": "chatwizard.logs.timeline.openDiff",
+          "when": "viewItem == logsEvent.diff",
+          "group": "1_logs@3"
+        },
+        {
+          "command": "chatwizard.logs.diff.viewDiff",
+          "when": "viewItem == logsDiffEvent",
+          "group": "1_logs@0"
+        },
+        {
+          "command": "chatwizard.logs.diff.openPatch",
+          "when": "viewItem == logsDiffEvent || viewItem == logsDiffFileOp",
+          "group": "1_logs@1"
+        },
+        {
+          "command": "chatwizard.logs.diff.copy",
+          "when": "viewItem == logsDiffEvent || viewItem == logsDiffFileOp",
+          "group": "1_logs@2"
+        },
+        {
+          "command": "chatwizard.logs.diff.openFile",
+          "when": "viewItem == logsDiffEvent || viewItem == logsDiffFileOp",
+          "group": "1_logs@3"
+        },
+        {
           "command": "chatwizard.pinSession",
           "when": "viewItem == session",
           "group": "1_pin@1"
@@ -1140,6 +1304,21 @@
           "command": "chatwizard.execCommands.openSession",
           "when": "viewItem == execCommand",
           "group": "2_open@1"
+        },
+        {
+          "command": "chatwizard.execCommands.showDetails",
+          "when": "viewItem == execCommand",
+          "group": "1_details@1"
+        },
+        {
+          "command": "chatwizard.logs.timeline.showDetails",
+          "when": "viewItem == logsEvent.command || viewItem == logsEvent.fileOperation || viewItem == logsEvent.diff || viewItem == logsEvent.error || viewItem == logsEvent.toolCall || viewItem == logsEvent.plannerStep",
+          "group": "1_details@1"
+        },
+        {
+          "command": "chatwizard.logs.diff.showDetails",
+          "when": "viewItem == logsDiffEvent || viewItem == logsDiffFileOp",
+          "group": "1_details@1"
         }
       ],
       "commandPalette": [
@@ -1545,6 +1724,54 @@
         },
         {
           "command": "chatwizard.execCommands.refresh",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.logs.timeline.refresh",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.logs.timeline.copyCommand",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.logs.timeline.openSession",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.logs.timeline.openDiff",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.logs.diffs.refresh",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.logs.diff.openPatch",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.logs.diff.viewDiff",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.logs.diff.copy",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.logs.diff.openFile",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.execCommands.showDetails",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.logs.timeline.showDetails",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.logs.diff.showDetails",
           "when": "false"
         }
       ]
