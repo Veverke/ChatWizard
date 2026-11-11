@@ -16,6 +16,7 @@ import {
     eventDetailText,
     eventMetaRows,
     renderEventHtml,
+    renderCodeBlockAction,
     renderSections,
     shortEventLabel,
 } from '../../src/logs/logEventWebview';
@@ -153,5 +154,43 @@ suite('logEventWebview — HTML rendering', () => {
         assert.ok(html.includes('<span class="cw-kind">Executed Command</span>'));
         assert.ok(html.includes('Open Session'));
         assert.ok(html.includes("raw.split('\\n')"), 'embedded JS keeps its newline escape');
+    });
+});
+
+suite('logEventWebview — run command in terminal', () => {
+    test('the command code block carries the run action', () => {
+        const sections = buildEventDetailSections(makeEvent({ id: 'c1', timestamp: '2026-01-01T10:00:00.000Z' }));
+        assert.strictEqual(sections[0].code[0].action, 'runInTerminal');
+        // Only the command itself gets the button — not its stdout/stderr.
+        assert.strictEqual(sections[0].code.length, 1);
+    });
+
+    test('renderSections places the button directly below the command text', () => {
+        const html = renderSections(makeEvent({ id: 'c1', timestamp: '2026-01-01T10:00:00.000Z' }));
+        const commandEnd = html.indexOf('</pre>');
+        const buttonAt = html.indexOf('id="runCommandBtn"');
+        assert.ok(commandEnd > 0, 'expected the command code block');
+        assert.ok(buttonAt > commandEnd, 'run button must come after the command text');
+        assert.ok(html.includes('Run in Terminal'));
+        assert.ok(html.includes('cw-btn'));
+    });
+
+    test('non-command events render no run button', () => {
+        const diffHtml = renderSections(makeEvent({
+            id: 'd1',
+            timestamp: '2026-01-01T10:00:00.000Z',
+            type: 'diff',
+            filePath: '/repo/src/a.ts',
+            diffText: '--- a\n+++ b\n@@ -1 +1 @@\n-old\n+new\n',
+        }));
+        assert.ok(!diffHtml.includes('runCommandBtn'));
+    });
+
+    test('renderCodeBlockAction and the page script are wired up', () => {
+        assert.ok(renderCodeBlockAction('runInTerminal').includes('id="runCommandBtn"'));
+
+        const html = renderEventHtml(makeEvent({ id: 'c1', timestamp: '2026-01-01T10:00:00.000Z' }), 'n1');
+        assert.ok(html.includes("command: 'runInTerminal'"), 'webview posts the run message to the host');
+        assert.ok(html.includes("getElementById('runCommandBtn')"));
     });
 });

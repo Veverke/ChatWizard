@@ -1,18 +1,31 @@
 /**
  * src/logs/logsCommands.ts
  *
- * Phase 2/3 — Commands for the watch-logs panels ("Executed Commands",
- * "Unified Timeline", "Diff Explorer"). All commands are registered through the
- * extension `context` so they follow the same disposal pattern as every other
- * ChatWizard command.
+ * Phase 2/3 — Commands for the watch-logs **Commands** view.
+ *
+ * The three former panels ("Executed Commands", "Unified Timeline", "Diff
+ * Explorer") are sections of one contributed tree view
+ * (`chatwizardCommands`, see `commandsViewProvider.ts`). All commands are
+ * registered through the extension `context` so they follow the same disposal
+ * pattern as every other ChatWizard command.
+ *
+ * The three "Show …" commands now focus that single view and reveal the
+ * requested section, so they no longer need a view of their own.
  */
 
 import * as vscode from 'vscode';
-import { ExecutedCommandsProvider, ExecCommandsLeafItem, ExecCommandsTreeNode } from './executedCommandsProvider';
-import { UnifiedTimelineProvider, TimelineEventItem, UnifiedTimelineTreeNode } from './unifiedTimelineProvider';
-import { DiffExplorerProvider, DiffEventLeafItem, renderPatchMarkdown, DiffExplorerTreeNode } from './diffExplorerProvider';
+import { ExecutedCommandsProvider, ExecCommandsLeafItem } from './executedCommandsProvider';
+import { UnifiedTimelineProvider, TimelineEventItem } from './unifiedTimelineProvider';
+import { DiffExplorerProvider, DiffEventLeafItem, renderPatchMarkdown } from './diffExplorerProvider';
 import { openVisualDiff } from './diffViewer';
 import { showEventWebview } from './logEventWebview';
+import { runCommandInTerminal } from './runInTerminal';
+import {
+    CommandsSubViewId,
+    CommandsTreeNode,
+    CommandsViewProvider,
+    eventOfCommandsNode,
+} from './commandsViewProvider';
 import { LogEventType, LOG_EVENT_TYPES, LogEvent, CommandEvent, logEventTypeLabel, getEventFilePath } from './types';
 import { createLogger } from '../utils/logger';
 
@@ -23,11 +36,9 @@ export interface LogCommandsContext {
     subscriptions: { push(item: { dispose(): void }): void };
 }
 
-/** The three watch-logs tree views (used to resolve "Show Details" from buttons). */
+/** The single watch-logs tree view (used to resolve "Show Details" from buttons). */
 export interface LogTreeViews {
-    executedCommands?: vscode.TreeView<ExecCommandsTreeNode>;
-    timeline?: vscode.TreeView<UnifiedTimelineTreeNode>;
-    diffs?: vscode.TreeView<DiffExplorerTreeNode>;
+    commands?: vscode.TreeView<CommandsTreeNode>;
 }
 
 /** Quick-pick rows for the timeline kind filter. */
@@ -45,15 +56,39 @@ export function registerLogCommands(
     provider: ExecutedCommandsProvider,
     timelineProvider?: UnifiedTimelineProvider,
     diffExplorerProvider?: DiffExplorerProvider,
+    commandsViewProvider?: CommandsViewProvider,
     treeViews?: LogTreeViews
 ): void {
     const push = (command: string, handler: (...args: any[]) => unknown): void => {
         context.subscriptions.push(vscode.commands.registerCommand(command, handler));
     };
 
-    push('chatwizard.showExecutedCommands', () => {
-        void vscode.commands.executeCommand('chatwizardExecutedCommands.focus');
-    });
+    /** The node currently selected in the Commands view, if any. */
+    const selectedNode = (): unknown => (treeViews?.commands?.selection ?? [])[0];
+
+    /**
+     * Focus the single Commands view and reveal one of its sections — this is
+     * what the three "Show …" commands (and their palette entries) do now.
+     */
+    const showSection = (subView: CommandsSubViewId): void => {
+        void (async () => {
+            try {
+                await vscode.commands.executeCommand(`${CommandsViewProvider.viewType}.focus`);
+                const view = treeViews?.commands;
+                const section = commandsViewProvider?.section(subView);
+                if (view && section) {
+                    await view.reveal(section, { select: false, focus: false, expand: true });
+                }
+            } catch (err) {
+                // The view is contributed but may be hidden by the user; the
+                // command itself must never fail because of that.
+                logWatch.info('could not reveal Commands section %s: %s', subView, err);
+            }
+        })();
+    };
+
+    // ── Section 1: Executed Commands ───────────────────────────────────────
+    push('chatwizard.showExecutedCommands', () => showSection('executedCommands'));
 
     push('chatwizard.execCommands.copy', (item?: ExecCommandsLeafItem) => {
         if (!item) { return; }
@@ -70,19 +105,36 @@ export function registerLogCommands(
         provider.refresh();
     });
 
-    push('chatwizard.execCommands.showDetails', (item?: ExecCommandsLeafItem) => {
-        const target = item ?? (treeViews?.executedCommands?.selection ?? []).find((s) => s instanceof ExecCommandsLeafItem);
-        if (!target) {
+    // Re-run what the agent ran: opens a VS Code terminal and sends the command
+    // text to it. Wired to the "▶ Run in Terminal" button rendered under the
+    // command text in the detail webview, and to the row context menu.
+    push('chatwizard.execCommands.runInTerminal', async (item?: unknown) => {
+        const target = item ?? selectedNode();
+        // Tree items, raw CommandEvents and items created by another bundle
+        // copy are all accepted (see `eventOfCommandsNode`).
+        const event = eventOfCommandsNode(target) ?? (target as CommandEvent | undefined);
+        if (!event || event.type !== 'command') {
+            vscode.window.showInformationMessage('Select an executed command first, then run "Run in Terminal".');
+            return undefined;
+        }
+        const commandEvent = event as CommandEvent;
+        logWatch.info('execCommands.runInTerminal → %s', commandEvent.id);
+        return runCommandInTerminal(commandEvent.commandText, commandEvent.cwd);
+    });
+
+    push('chatwizard.execCommands.showDetails', (item?: unknown) => {
+        const target = item ?? selectedNode();
+        const event = eventOfCommandsNode(target);
+        if (!event || event.type !== 'command') {
             vscode.window.showInformationMessage('Select a command first, then run "Show Full Command".');
             return undefined;
         }
-        logWatch.info('execCommands.showDetails → %s (%s)', target.event.type, target.event.id);
-        return showEventWebview(target.event, context.subscriptions);
+        logWatch.info('execCommands.showDetails → %s (%s)', event.type, event.id);
+        return showEventWebview(event, context.subscriptions);
     });
-// ── Phase 3: Unified Timeline ──────────────────────────────────────────
-    push('chatwizard.showUnifiedTimeline', () => {
-        void vscode.commands.executeCommand('chatwizardUnifiedTimeline.focus');
-    });
+
+    // ── Section 2: Unified Timeline ────────────────────────────────────────
+    push('chatwizard.showUnifiedTimeline', () => showSection('timeline'));
 
     push('chatwizard.logs.timeline.refresh', () => {
         timelineProvider?.refresh();
@@ -90,7 +142,6 @@ export function registerLogCommands(
 
     push('chatwizard.logs.timeline.filter', async () => {
         if (!timelineProvider) { return; }
-        const current = timelineProvider.getFilter();
         const pick = await vscode.window.showQuickPick(TIMELINE_FILTER_PICKS, {
             placeHolder: 'Filter the Unified Timeline by event kind',
         });
@@ -127,20 +178,19 @@ export function registerLogCommands(
         void openDiffEditor(item.event);
     });
 
-    push('chatwizard.logs.timeline.showDetails', (item?: TimelineEventItem) => {
-        const target = item ?? (treeViews?.timeline?.selection ?? []).find((s) => s instanceof TimelineEventItem);
-        if (!target) {
+    push('chatwizard.logs.timeline.showDetails', (item?: unknown) => {
+        const target = item ?? selectedNode();
+        const event = eventOfCommandsNode(target);
+        if (!event) {
             vscode.window.showInformationMessage('Select an event first, then run "Show Event Details".');
             return undefined;
         }
-        logWatch.info('timeline.showDetails → %s (%s)', target.event.type, target.event.id);
-        return showEventWebview(target.event, context.subscriptions);
+        logWatch.info('timeline.showDetails → %s (%s)', event.type, event.id);
+        return showEventWebview(event, context.subscriptions);
     });
 
-    // ── Phase 3: Diff Explorer ─────────────────────────────────────────────
-    push('chatwizard.showDiffExplorer', () => {
-        void vscode.commands.executeCommand('chatwizardDiffExplorer.focus');
-    });
+    // ── Section 3: Diff Explorer ───────────────────────────────────────────
+    push('chatwizard.showDiffExplorer', () => showSection('diffs'));
 
     push('chatwizard.logs.diffs.refresh', () => {
         diffExplorerProvider?.refresh();
@@ -148,19 +198,20 @@ export function registerLogCommands(
 
     // Visual diff: hand the reconstructed before/after sides to VS Code's native
     // diff editor (side-by-side / inline) instead of showing patch text.
-    push('chatwizard.logs.diff.viewDiff', async (item?: DiffEventLeafItem) => {
-        const target = item ?? (treeViews?.diffs?.selection ?? []).find((s) => s instanceof DiffEventLeafItem);
-        if (!target) {
+    push('chatwizard.logs.diff.viewDiff', async (item?: unknown) => {
+        const target = item ?? selectedNode();
+        const event = eventOfCommandsNode(target);
+        if (!event || (event.type !== 'diff' && event.type !== 'fileOperation')) {
             vscode.window.showInformationMessage('Select a change first, then run "Open Visual Diff".');
             return false;
         }
-        const opened = await openVisualDiff(target.event);
+        const opened = await openVisualDiff(event);
         if (!opened) {
-            logWatch.info('diff.viewDiff → no renderable patch for %s; falling back to details', target.event.id);
+            logWatch.info('diff.viewDiff → no renderable patch for %s; falling back to details', event.id);
             vscode.window.showInformationMessage('This change captured no diff text — showing its details instead.');
-            return showEventWebview(target.event, context.subscriptions);
+            return showEventWebview(event, context.subscriptions);
         }
-        logWatch.info('diff.viewDiff → %s (%s)', target.event.type, target.event.id);
+        logWatch.info('diff.viewDiff → %s (%s)', event.type, event.id);
         return true;
     });
 
@@ -183,14 +234,42 @@ export function registerLogCommands(
         void openFileAt(getEventFilePath(item.event));
     });
 
-    push('chatwizard.logs.diff.showDetails', (item?: DiffEventLeafItem) => {
-        const target = item ?? (treeViews?.diffs?.selection ?? []).find((s) => s instanceof DiffEventLeafItem);
-        if (!target) {
+    push('chatwizard.logs.diff.showDetails', (item?: unknown) => {
+        const target = item ?? selectedNode();
+        const event = eventOfCommandsNode(target);
+        if (!event || (event.type !== 'diff' && event.type !== 'fileOperation')) {
             vscode.window.showInformationMessage('Select a change first, then run "Show Change Details".');
             return undefined;
         }
-        logWatch.info('diff.showDetails → %s (%s)', target.event.type, target.event.id);
-        return showEventWebview(target.event, context.subscriptions);
+        logWatch.info('diff.showDetails → %s (%s)', event.type, event.id);
+        return showEventWebview(event, context.subscriptions);
+    });
+
+    // ── Commands view: shared title-bar actions ────────────────────────────
+    // One refresh button for the whole view (it used to be three, one per
+    // panel) and one selection-aware "Show Details" button.
+    push('chatwizard.logs.refreshAll', () => {
+        if (commandsViewProvider) {
+            commandsViewProvider.refresh();
+            return;
+        }
+        provider.refresh();
+        timelineProvider?.refresh();
+        diffExplorerProvider?.refresh();
+    });
+
+    push('chatwizard.logs.showSelectedDetails', async (node?: unknown) => {
+        const target = node ?? selectedNode();
+        const event = eventOfCommandsNode(target);
+        if (!event) {
+            vscode.window.showInformationMessage('Select a row in the Commands view first.');
+            return undefined;
+        }
+        logWatch.info('showSelectedDetails → %s (%s)', event.type, event.id);
+        if (event.type === 'diff' && await openVisualDiff(event)) {
+            return true;
+        }
+        return showEventWebview(event, context.subscriptions);
     });
 }
 
@@ -226,3 +305,4 @@ async function openFileAt(filePath: string | undefined): Promise<void> {
         vscode.window.showErrorMessage(`File no longer exists: ${filePath}`);
     }
 }
+

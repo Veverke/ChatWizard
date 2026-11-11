@@ -1389,6 +1389,30 @@ Deliverable: cross-agent view for commands + diffs.
 >   tooltips now show a short patch *preview* instead of the whole patch;
 >   `Open Patch` still opens the full raw patch text.
 >
+> **Implementation note (2026-11)** — UX pass (sidebar noise / window pile-up):
+> - ✅ **One sidebar view — `Commands`** (`chatwizardCommands`,
+>   `src/logs/commandsViewProvider.ts`). The three contributed views were
+>   collapsed into a single tree whose roots are the three former panels:
+>   `Executed Commands`, `Unified Timeline`, `Diff Explorer`. VS Code cannot
+>   nest a contributed view inside another view, so the sections are
+>   first-class tree nodes; `CommandsViewProvider` is a thin composite that
+>   forwards children/parents to the delegate providers and re-emits their
+>   change events. Each section row carries live counts ("12 commands",
+>   "8 changes · 3 files"). `Chat Wizard: Show Executed Commands / Unified
+>   Timeline / Diff Explorer` now focus the single view and reveal the
+>   matching section, and the title bar shrank from eight per-panel buttons to
+>   **Refresh Commands**, **Filter Unified Timeline** and **Show Details for
+>   Selection**.
+> - ✅ **One details window** — `showEventWebview()` keeps a single panel and
+>   retargets it on every click (title + contents), instead of opening a new
+>   webview per event id. Closing the window resets the state, so the next
+>   click opens a fresh one.
+> - ✅ **Run in Terminal** — command events render a **▶ Run in Terminal**
+>   button directly below the command text (plus a row context-menu entry and
+>   the `chatwizard.execCommands.runInTerminal` command). It opens a VS Code
+>   terminal (`src/logs/runInTerminal.ts`) and sends the command to it, reusing
+>   the captured working directory when it still exists.
+>
 
 - Add:
 

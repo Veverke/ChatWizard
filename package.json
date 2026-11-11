@@ -82,9 +82,7 @@
     "onView:chatwizardSessions",
     "onView:chatwizardPromptLibrary",
     "onView:chatwizardCodeBlocks",
-    "onView:chatwizardExecutedCommands",
-    "onView:chatwizardUnifiedTimeline",
-    "onView:chatwizardDiffExplorer",
+    "onView:chatwizardCommands",
     "onView:chatwizardAnalytics",
     "onView:chatwizardModelUsage",
     "onView:chatwizardTimeline",
@@ -118,16 +116,8 @@
           "name": "Code Blocks"
         },
         {
-          "id": "chatwizardExecutedCommands",
-          "name": "Executed Commands"
-        },
-        {
-          "id": "chatwizardUnifiedTimeline",
-          "name": "Unified Timeline"
-        },
-        {
-          "id": "chatwizardDiffExplorer",
-          "name": "Diff Explorer"
+          "id": "chatwizardCommands",
+          "name": "Commands"
         },
         {
           "id": "chatwizardAnalytics",
@@ -875,6 +865,24 @@
         "title": "Chat Wizard: Show Change Details",
         "category": "Chat Wizard",
         "icon": "$(eye)"
+      },
+      {
+        "command": "chatwizard.execCommands.runInTerminal",
+        "title": "Chat Wizard: Run in Terminal",
+        "category": "Chat Wizard",
+        "icon": "$(play)"
+      },
+      {
+        "command": "chatwizard.logs.refreshAll",
+        "title": "Chat Wizard: Refresh Commands",
+        "category": "Chat Wizard",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "chatwizard.logs.showSelectedDetails",
+        "title": "Chat Wizard: Show Details for Selection",
+        "category": "Chat Wizard",
+        "icon": "$(eye)"
       }
     ],
     "menus": {
@@ -894,43 +902,18 @@
       ],
       "view/title": [
         {
-          "command": "chatwizard.execCommands.refresh",
-          "when": "view == chatwizardExecutedCommands",
-          "group": "navigation@0"
-        },
-        {
-          "command": "chatwizard.logs.timeline.refresh",
-          "when": "view == chatwizardUnifiedTimeline",
+          "command": "chatwizard.logs.refreshAll",
+          "when": "view == chatwizardCommands",
           "group": "navigation@0"
         },
         {
           "command": "chatwizard.logs.timeline.filter",
-          "when": "view == chatwizardUnifiedTimeline",
+          "when": "view == chatwizardCommands",
           "group": "navigation@1"
         },
         {
-          "command": "chatwizard.logs.diffs.refresh",
-          "when": "view == chatwizardDiffExplorer",
-          "group": "navigation@0"
-        },
-        {
-          "command": "chatwizard.execCommands.showDetails",
-          "when": "view == chatwizardExecutedCommands",
-          "group": "navigation@1"
-        },
-        {
-          "command": "chatwizard.logs.timeline.showDetails",
-          "when": "view == chatwizardUnifiedTimeline",
-          "group": "navigation@2"
-        },
-        {
-          "command": "chatwizard.logs.diff.showDetails",
-          "when": "view == chatwizardDiffExplorer",
-          "group": "navigation@1"
-        },
-        {
-          "command": "chatwizard.logs.diff.viewDiff",
-          "when": "view == chatwizardDiffExplorer",
+          "command": "chatwizard.logs.showSelectedDetails",
+          "when": "view == chatwizardCommands",
           "group": "navigation@2"
         },
         {
@@ -1311,9 +1294,19 @@
           "group": "1_details@1"
         },
         {
+          "command": "chatwizard.execCommands.runInTerminal",
+          "when": "viewItem == execCommand",
+          "group": "3_run@1"
+        },
+        {
           "command": "chatwizard.logs.timeline.showDetails",
           "when": "viewItem == logsEvent.command || viewItem == logsEvent.fileOperation || viewItem == logsEvent.diff || viewItem == logsEvent.error || viewItem == logsEvent.toolCall || viewItem == logsEvent.plannerStep",
           "group": "1_details@1"
+        },
+        {
+          "command": "chatwizard.execCommands.runInTerminal",
+          "when": "viewItem == logsEvent.command",
+          "group": "3_run@1"
         },
         {
           "command": "chatwizard.logs.diff.showDetails",

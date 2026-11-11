@@ -98,16 +98,14 @@ ChatWizard indexes every AI chat session from all your tools (Copilot, Claude, C
 
 ## 2. Sidebar Overview
 
-Eleven panels live under the Chat Wizard Activity Bar icon:
+Eight panels live under the Chat Wizard Activity Bar icon:
 
 | Panel | Purpose |
 |-------|---------|
 | **Sessions** | Browse every AI session across all tools and workspaces |
 | **Prompt Library** | Your full history of prompts, deduplicated and searchable |
 | **Code Blocks** | Every AI-generated code snippet, filterable by language |
-| **Executed Commands** | Every shell / git / build / test command agents ran — even when the model never mentioned it in chat |
-| **Unified Timeline** | Chronological feed of agent *actions*: commands, file operations, diffs, tool calls, errors |
-| **Diff Explorer** | Every code change the agent made, grouped per workspace → file, with visual-diff / patch / copy actions |
+| **Commands** | What your agent *did*: executed shell commands (with **Run in Terminal**), a unified action timeline, and a diff explorer — grouped per session / workspace |
 | **Knowledge Base** | Categorized learnings, decisions, patterns, gotchas, and architecture |
 | **Analytics** | Token usage charts and stats |
 | **Model Usage** | Per-model request counts with date range filtering |
@@ -115,10 +113,11 @@ Eleven panels live under the Chat Wizard Activity Bar icon:
 
 ### Watch Agent Logs Panels
 
-The **Executed Commands**, **Unified Timeline** and **Diff Explorer** panels form the
-_watch-logs_ subsystem (Phase 2/3 of `docs/work-plan-watch-logs.md`). AI models do not run
-commands themselves — the *host tools* execute them, and ChatWizard replays the
-agent-execution trail each tool writes to disk:
+The **Commands** panel is the home of the _watch-logs_ subsystem (Phase 2/3 of
+`docs/work-plan-watch-logs.md`). It contains three collapsible sections — **Executed
+Commands**, **Unified Timeline** and **Diff Explorer** — instead of three separate
+sidebar views. AI models do not run commands themselves — the *host tools* execute
+them, and ChatWizard replays the agent-execution trail each tool writes to disk:
 
 | Tool | Source file | What is captured |
 |------|-------------|------------------|
@@ -133,7 +132,12 @@ its command rows are marked *derived* in the event details. Diffs likewise: Copi
 replacement text only (additions-only patches), while Cline and Aider patches carry both sides.
 
 - **Executed Commands** lists every command, newest first, grouped per session, with exit
-  badges, copy-to-clipboard, and open-session actions.
+  badges, copy-to-clipboard, open-session and **Run in Terminal** actions.
+- Clicking any row opens **one shared details window** — subsequent clicks replace its
+  contents instead of opening another tab, so browsing a long log never leaves you lost
+  among a dozen webviews. Command rows show a **▶ Run in Terminal** button directly under
+  the command text (it re-runs the command in a fresh VS Code terminal, using the captured
+  working directory when it still exists).
 - **Unified Timeline** mixes all six event kinds (commands, file operations, diffs, tool
   calls, errors, planner steps). Use the filter icon (or
   `Chat Wizard: Filter Unified Timeline…`) to focus on failures, diffs, or commands only.
@@ -1173,11 +1177,12 @@ Leave a path override empty to use the platform default location.
 
 ### Watch Logs
 
-The Executed Commands / Unified Timeline / Diff Explorer panels re-use the same source
-toggles and path overrides as the session index (`chatwizard.indexCopilot` +
-`chatwizard.copilotStoragePath` gate the Copilot agent-execution log stream). Events are
-stored in `chatwizard-log-events.db` next to the session cache; there is no separate
-enable flag — disable the panels' source with the corresponding `chatwizard.index*` toggle.
+The Executed Commands / Unified Timeline / Diff Explorer sections of the **Commands** panel
+re-use the same source toggles and path overrides as the session index
+(`chatwizard.indexCopilot` + `chatwizard.copilotStoragePath` gate the Copilot
+agent-execution log stream). Events are stored in `chatwizard-log-events.db` next to the
+session cache; there is no separate enable flag — disable the panels' source with the
+corresponding `chatwizard.index*` toggle.
 
 ### Semantic Search
 

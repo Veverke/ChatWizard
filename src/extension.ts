@@ -97,11 +97,10 @@ import {
     LogService,
     createDefaultLogSourceRegistry,
     ExecutedCommandsProvider,
-    ExecCommandsLeafItem,
     UnifiedTimelineProvider,
-    TimelineEventItem,
     DiffExplorerProvider,
-    DiffEventLeafItem,
+    CommandsViewProvider,
+    eventOfCommandsNode,
     registerLogCommands,
     LogTreeViews,
     LogEvent,
@@ -239,11 +238,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             const executedCommandsProvider = new ExecutedCommandsProvider(logService, (sessionId) => index.get(sessionId)?.title);
             const timelineProvider = new UnifiedTimelineProvider(logService, (sessionId) => index.get(sessionId)?.title);
             const diffExplorerProvider = new DiffExplorerProvider(logService);
-            const refreshLogPanels = () => {
-                executedCommandsProvider.refresh();
-                timelineProvider.refresh();
-                diffExplorerProvider.refresh();
-            };
+            // One sidebar view ("Commands") whose three sections are the former
+            // Executed Commands / Unified Timeline / Diff Explorer panels.
+            const commandsViewProvider = new CommandsViewProvider(
+                executedCommandsProvider,
+                timelineProvider,
+                diffExplorerProvider
+            );
+            context.subscriptions.push(commandsViewProvider);
+            const refreshLogPanels = () => commandsViewProvider.refresh();
             const logHarvester = new CopilotLogHarvester(logService);
             logHarvester.onEventsChanged = refreshLogPanels;
             const clineLogHarvester = new ClineLogHarvester(logService);
@@ -341,50 +344,39 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             };
 
             // Register every contributed watch-logs command *before* creating the
-            // tree views. The view/title refresh + "Show Details" buttons and the
+            // tree view. The view/title refresh + "Show Details" buttons and the
             // row context menus are contributed in package.json, so VS Code can
-            // invoke them as soon as a view is visible — if registration were
-            // skipped (or a view creation threw first) the user would see
-            // "command 'chatwizard.execCommands.refresh' not found".
+            // invoke them as soon as the view is visible — if registration were
+            // skipped (or the view creation threw first) the user would see
+            // "command 'chatwizard.logs.refreshAll' not found".
             // `logTreeViews` is populated below and read lazily by the
             // "Show Details" handlers.
             const logTreeViews: LogTreeViews = {};
-            registerLogCommands(context, executedCommandsProvider, timelineProvider, diffExplorerProvider, logTreeViews);
+            registerLogCommands(
+                context,
+                executedCommandsProvider,
+                timelineProvider,
+                diffExplorerProvider,
+                commandsViewProvider,
+                logTreeViews
+            );
 
-            // A failure to create one view must not prevent the other two (or the
-            // commands registered above) from working.
-            const createLogTreeView = <T>(
-                id: string,
-                treeDataProvider: vscode.TreeDataProvider<T>
-            ): vscode.TreeView<T> | undefined => {
-                try {
-                    const view = vscode.window.createTreeView(id, {
-                        treeDataProvider,
-                        showCollapseAll: true,
-                    });
-                    context.subscriptions.push(view);
-                    return view;
-                } catch (err) {
-                    channel.appendLine(`[Chat Wizard] Could not create watch-logs view '${id}': ${err}`);
-                    return undefined;
-                }
-            };
-
-            logTreeViews.executedCommands = createLogTreeView('chatwizardExecutedCommands', executedCommandsProvider);
-            logTreeViews.timeline = createLogTreeView('chatwizardUnifiedTimeline', timelineProvider);
-            logTreeViews.diffs = createLogTreeView('chatwizardDiffExplorer', diffExplorerProvider);
-
-            if (logTreeViews.executedCommands) {
-                wireClickToDetails(logTreeViews.executedCommands, (item) =>
-                    item instanceof ExecCommandsLeafItem ? item.event : undefined);
+            // The single Commands view is created once; a failure here must not
+            // prevent the commands registered above from working.
+            try {
+                logTreeViews.commands = vscode.window.createTreeView(CommandsViewProvider.viewType, {
+                    treeDataProvider: commandsViewProvider,
+                    showCollapseAll: true,
+                });
+                context.subscriptions.push(logTreeViews.commands);
+            } catch (err) {
+                channel.appendLine(
+                    `[Chat Wizard] Could not create watch-logs view '${CommandsViewProvider.viewType}': ${err}`
+                );
             }
-            if (logTreeViews.timeline) {
-                wireClickToDetails(logTreeViews.timeline, (item) =>
-                    item instanceof TimelineEventItem ? item.event : undefined);
-            }
-            if (logTreeViews.diffs) {
-                wireClickToDetails(logTreeViews.diffs, (item) =>
-                    item instanceof DiffEventLeafItem ? item.event : undefined, openLogEvent);
+
+            if (logTreeViews.commands) {
+                wireClickToDetails(logTreeViews.commands, eventOfCommandsNode, openLogEvent);
             }
         } catch (err) {
             channel.appendLine(`[Chat Wizard] Watch-logs Phase 2/3 UI init failed (continuing without it): ${err}`);

@@ -3,12 +3,13 @@
  *
  * Phase 4 — "Show full contents" webview for watch-logs panels.
  *
- * Double-clicking a row in the Executed Commands / Unified Timeline / Diff
- * Explorer trees opens a disposable webview panel showing the *full* contents
+ * Clicking a row in the Executed Commands / Unified Timeline / Diff Explorer
+ * sections of the **Commands** view opens a webview showing the *full* contents
  * of that normalized `LogEvent` — everything the tree row's tooltip carries,
  * plus structured metadata and per-kind code blocks:
  *
- *   - command      → full command text, cwd/shell/exit code, stdout/stderr
+ *   - command      → full command text (+ **▶ Run in Terminal** directly under
+ *                    it), cwd/shell/exit code, stdout/stderr
  *   - fileOperation→ operation type, file path, from-path, raw payload
  *   - diff         → file path, +/- stats and the full diff/patch text
  *                    (+ a **Visual Diff** button that opens the change in
@@ -21,6 +22,9 @@
  * `syntaxHighlighterCss` + `cwInteractiveJs`) so the panel looks identical to
  * every other ChatWizard surface. The pure helpers (`buildEventDetailSections`,
  * `eventDetailText`, `renderEventHtml`) are unit-tested without a VS Code host.
+ *
+ * Only **one** detail window exists at a time: `showEventWebview()` retargets
+ * the live panel (title + contents) instead of creating a tab per event.
  */
 
 import * as vscode from 'vscode';
@@ -37,17 +41,24 @@ import {
 import { cwThemeCss, syntaxHighlighterCss, cwInteractiveJs, syntaxHighlighterJs } from '../webview/cwTheme';
 import { generateNonce } from '../views/webviewUtils';
 import { openVisualDiff } from './diffViewer';
+import { runCommandInTerminal } from './runInTerminal';
 
 /** Minimal subscription bag (matches the shape used by `logsCommands.ts`). */
 export interface LogEventWebviewSubscriptions {
     push(item: { dispose(): void }): void;
 }
 
+/** Inline action rendered right below a code block. */
+export type EventCodeBlockAction = 'runInTerminal';
+
 /** A code block rendered inside a detail section. `language` drives tinting. */
 export interface EventCodeBlock {
     language: 'bash' | 'diff' | 'json' | 'text';
     text: string;
+    /** Optional button rendered directly under this block. */
+    action?: EventCodeBlockAction;
 }
+
 
 /** One rendered detail section: key/value rows plus optional code blocks. */
 export interface EventDetailSection {
@@ -121,7 +132,7 @@ export function buildEventDetailSections(event: LogEvent): EventDetailSection[] 
             if (c.cwd) { rows.push(['Working directory', c.cwd]); }
             if (c.shell) { rows.push(['Shell', c.shell]); }
             rows.push(['Exit code', c.exitCode === undefined ? 'unknown' : String(c.exitCode)]);
-            const code: EventCodeBlock[] = [{ language: 'bash', text: c.commandText }];
+            const code: EventCodeBlock[] = [{ language: 'bash', text: c.commandText, action: 'runInTerminal' }];
             if (c.stdoutSummary && c.stdoutSummary.trim().length > 0) {
                 code.push({ language: 'text', text: c.stdoutSummary });
             }
@@ -231,6 +242,19 @@ function renderCode(block: EventCodeBlock): string {
     return `<pre><code class="${cls}">${escapeHtml(block.text)}</code></pre>`;
 }
 
+/**
+ * Render the inline button that belongs to a code block. Commands get
+ * "▶ Run in Terminal" *below the command text*, so re-running what the agent
+ * ran is one click away.
+ */
+export function renderCodeBlockAction(action: EventCodeBlockAction): string {
+    switch (action) {
+        case 'runInTerminal':
+            return `<div class="cw-block-action"><button class="cw-btn cw-run-btn" id="runCommandBtn"`
+                + ` title="Open a terminal and run this command">▶ Run in Terminal</button></div>`;
+    }
+}
+
 /** Render every detail section described by the event. */
 export function renderSections(event: LogEvent): string {
     const parts: string[] = [];
@@ -238,7 +262,10 @@ export function renderSections(event: LogEvent): string {
         parts.push(`<section class="cw-section">`);
         parts.push(`<h3>${escapeHtml(section.heading)}</h3>`);
         parts.push(renderRows(section.rows));
-        for (const block of section.code) { parts.push(renderCode(block)); }
+        for (const block of section.code) {
+            parts.push(renderCode(block));
+            if (block.action) { parts.push(renderCodeBlockAction(block.action)); }
+        }
         parts.push('</section>');
     }
     // Metadata block always last so the primary content reads first.
@@ -289,6 +316,9 @@ body { padding: 14px 18px; font-size: 13px; }
 .cw-meta { opacity: 0.92; }
 pre { max-width: 100%; overflow-x: auto; }
 code.language-text { white-space: pre-wrap; }
+/* inline action(s) rendered under a code block */
+.cw-block-action { display: flex; align-items: center; gap: 6px; margin: 6px 0 2px; }
+.cw-block-action .cw-run-btn { font-weight: 600; }
 /* diff tinting (custom tokens) */
 .diff-add  { color: #3fb950; }
 .diff-del  { color: #f85149; }
@@ -343,6 +373,13 @@ code.language-text { white-space: pre-wrap; }
     if (visualDiffBtn) {
       visualDiffBtn.addEventListener('click', function() { vscode.postMessage({ command: 'openVisualDiff' }); });
     }
+    var runBtn = document.getElementById('runCommandBtn');
+    if (runBtn) {
+      runBtn.addEventListener('click', function() {
+        vscode.postMessage({ command: 'runInTerminal' });
+        if (window.cwShowToast) { window.cwShowToast('Running in terminal'); }
+      });
+    }
   })();
   </script>
 </body>
@@ -353,21 +390,38 @@ code.language-text { white-space: pre-wrap; }
 // Panel management
 // ---------------------------------------------------------------------------
 
-/** Open panels keyed by event id so double-clicking twice reveals, not duplicates. */
-const _panels = new Map<string, vscode.WebviewPanel>();
+/**
+ * The single detail window. Every log row (Executed Commands, Unified Timeline,
+ * Diff Explorer) reuses this panel — clicking row after row updates the same
+ * window instead of piling up one webview per event, which used to lose the
+ * user among a dozen tabs.
+ */
+interface EventDetailPanelState {
+    panel: vscode.WebviewPanel;
+    /** The event currently rendered in the panel (updated on every open). */
+    current: LogEvent;
+    disposables: vscode.Disposable[];
+}
+
+let _detail: EventDetailPanelState | undefined;
 
 /**
- * Open a disposable webview panel showing the full contents of `event`.
- * Reuses the existing panel for the same event id when still alive; otherwise
- * creates a new one in a side column. `subscriptions` is optional and matches
- * the bag used by `registerLogCommands` (its `push` registers a dispose that
- * lives for the extension's lifetime).
+ * Open — or retarget — the shared detail panel for `event`.
+ *
+ * The panel is created once and then re-used: its title and HTML are replaced
+ * with the new event's contents, so there is exactly one "log event" window.
+ * Closing the window disposes the state, and the next click creates a fresh
+ * panel. `subscriptions` is optional and matches the bag used by
+ * `registerLogCommands` (its `push` registers a dispose that lives for the
+ * extension's lifetime).
  */
 export function showEventWebview(event: LogEvent, subscriptions?: LogEventWebviewSubscriptions): vscode.WebviewPanel | undefined {
-    const existing = _panels.get(event.id);
-    if (existing) {
-        existing.reveal(vscode.ViewColumn.Two);
-        return existing;
+    if (_detail) {
+        _detail.current = event;
+        _detail.panel.title = shortEventLabel(event);
+        _detail.panel.webview.html = renderEventHtml(event, generateNonce());
+        _detail.panel.reveal(vscode.ViewColumn.Two);
+        return _detail.panel;
     }
 
     const panel = vscode.window.createWebviewPanel(
@@ -376,36 +430,43 @@ export function showEventWebview(event: LogEvent, subscriptions?: LogEventWebvie
         vscode.ViewColumn.Two,
         { enableScripts: true, retainContextWhenHidden: true }
     );
-    _panels.set(event.id, panel);
+    const state: EventDetailPanelState = { panel, current: event, disposables: [] };
+    _detail = state;
+    panel.webview.html = renderEventHtml(event, generateNonce());
 
-    const nonce = generateNonce();
-    const detailText = eventDetailText(event);
-    const sessionId = event.sessionId;
-    panel.webview.html = renderEventHtml(event, nonce);
-
-    const disposables: vscode.Disposable[] = [];
     panel.onDidDispose(() => {
-        _panels.delete(event.id);
-        for (const d of disposables) { d.dispose(); }
+        if (_detail === state) { _detail = undefined; }
+        for (const d of state.disposables) { d.dispose(); }
     });
 
+    // Handlers read `state.current` — the panel outlives any single event.
     const msgListener = panel.webview.onDidReceiveMessage((message: { command?: string }) => {
+        const current = state.current;
         if (message.command === 'copy') {
-            void vscode.env.clipboard.writeText(detailText);
-        } else if (message.command === 'openSession' && sessionId) {
-            void vscode.commands.executeCommand('chatwizard.openSession', { id: sessionId });
+            void vscode.env.clipboard.writeText(eventDetailText(current));
+        } else if (message.command === 'openSession' && current.sessionId) {
+            void vscode.commands.executeCommand('chatwizard.openSession', { id: current.sessionId });
         } else if (message.command === 'openVisualDiff') {
-            void openVisualDiff(event);
+            void openVisualDiff(current);
+        } else if (message.command === 'runInTerminal' && current.type === 'command') {
+            const commandEvent = current as CommandEvent;
+            void runCommandInTerminal(commandEvent.commandText, commandEvent.cwd);
         }
     });
-    disposables.push(msgListener);
+    state.disposables.push(msgListener);
 
     if (subscriptions) {
         // Tie the panel's listeners to the caller's extension-lifetime bag.
         subscriptions.push({
-            dispose: () => { for (const d of disposables) { d.dispose(); } },
+            dispose: () => { for (const d of state.disposables) { d.dispose(); } },
         });
     }
 
     return panel;
+}
+
+/** Close the shared detail panel (used by tests and panel re-use checks). */
+export function closeEventWebview(): void {
+    _detail?.panel.dispose();
+    _detail = undefined;
 }

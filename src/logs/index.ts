@@ -9,6 +9,8 @@
  *           Timeline" panel, the "Diff Explorer" panel, and the
  *           Cline / Roo Code, Windsurf and Aider adapters + harvesters
  *           feeding the same store.
+ * Phase 4 — UX pass: those three panels now live as sections of a single
+ *           "Commands" sidebar view (`commandsViewProvider`).
  */
 
 export * from './types';
@@ -26,6 +28,8 @@ export * from './windsurfLogHarvester';
 export * from './executedCommandsProvider';
 export * from './unifiedTimelineProvider';
 export * from './diffExplorerProvider';
+export * from './commandsViewProvider';
 export * from './diffViewer';
 export * from './logEventWebview';
+export * from './runInTerminal';
 export * from './logsCommands';
