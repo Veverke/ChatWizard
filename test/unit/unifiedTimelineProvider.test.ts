@@ -16,10 +16,12 @@ import { createDefaultLogSourceRegistry } from '../../src/logs/logSourceRegistry
 import {
     UnifiedTimelineProvider,
     TimelineEventItem,
+    TimelineGroupItem,
     formatEventTime,
     eventPrimaryLabel,
     eventDescription,
     eventIconId,
+    eventTooltip,
 } from '../../src/logs/unifiedTimelineProvider';
 import { LogEvent } from '../../src/logs/types';
 
@@ -252,3 +254,259 @@ suite('UnifiedTimelineProvider — Phase 4 filters', () => {
         assert.strictEqual(provider.getFilters().failuresOnly, true);
     });
 });
+
+suite('UnifiedTimelineProvider — tooltips, tree plumbing and title fallbacks', () => {
+    let dir: string;
+    let service: LogService;
+
+    setup(() => {
+        dir = tmpDir();
+        service = new LogService(dir, createDefaultLogSourceRegistry());
+    });
+
+    teardown(() => {
+        try { service.dispose(); } catch { /* ignore */ }
+        try { fs.rmSync(dir, { recursive: true }); } catch { /* ignore */ }
+    });
+
+    test('eventTooltip surfaces everything known per event kind', () => {
+        assert.strictEqual(
+            eventTooltip(makeEvent({ id: 'c1', timestamp: '2026-01-01T10:00:00.000Z', cwd: '/repo', raw: 'raw-line' })),
+            'npm test\ncwd: /repo\nraw-line'
+        );
+        assert.strictEqual(
+            eventTooltip(makeEvent({ id: 'c2', timestamp: '2026-01-01T10:00:00.000Z' })),
+            'npm test'
+        );
+        assert.strictEqual(
+            eventTooltip(makeEvent({
+                id: 'f1', timestamp: '2026-01-01T10:00:00.000Z', type: 'fileOperation',
+                operationType: 'move', filePath: '/b.ts', oldPath: '/a.ts', detail: 'tool: move_file',
+            })),
+            '/b.ts\nfrom: /a.ts\ntool: move_file'
+        );
+        assert.strictEqual(
+            eventTooltip(makeEvent({
+                id: 't1', timestamp: '2026-01-01T10:00:00.000Z', type: 'toolCall',
+                toolName: 'read_file', arguments: { path: '/a.ts' },
+            })),
+            'read_file\n{\n  "path": "/a.ts"\n}'
+        );
+        assert.strictEqual(
+            eventTooltip(makeEvent({
+                id: 'd1', timestamp: '2026-01-01T10:00:00.000Z', type: 'diff', filePath: '/a.ts', diffText: '--- a\n+++ b',
+            })),
+            '--- a\n+++ b'
+        );
+        assert.strictEqual(
+            eventTooltip(makeEvent({
+                id: 'e1', timestamp: '2026-01-01T10:00:00.000Z', type: 'error',
+                message: 'boom', stackTrace: 'at x', raw: 'raw-err',
+            })),
+            'boom\nat x\nraw-err'
+        );
+        assert.strictEqual(
+            eventTooltip(makeEvent({
+                id: 'p1', timestamp: '2026-01-01T10:00:00.000Z', type: 'plannerStep',
+                description: 'Plan the work', status: 'done',
+            })),
+            'Plan the work\ndone'
+        );
+    });
+
+    test('eventDescription covers every kind and exit-code shape', () => {
+        const desc = (o: Partial<LogEvent>) =>
+            eventDescription(makeEvent({ id: 'x', timestamp: '2026-01-01T10:00:00.000Z', ...o }));
+
+        assert.match(desc({}), /exit \?/);
+        assert.match(desc({ exitCode: 0 }), /exit 0/);
+        assert.match(desc({ exitCode: 2 }), /exit 2/);
+        assert.match(desc({ type: 'fileOperation', operationType: 'create', filePath: '/a.ts', detail: 'via tool' }), /via tool/);
+        const noDetail = desc({ type: 'fileOperation', operationType: 'create', filePath: '/a.ts' });
+        assert.match(noDetail, /create/);
+        assert.ok(!noDetail.includes('via tool'), `unexpected detail: ${noDetail}`);
+        assert.match(desc({ type: 'diff', filePath: '/a.ts', diffText: '', addedLines: 3, removedLines: 1 }), /\+3 −1/);
+        assert.match(desc({ type: 'diff', filePath: '/a.ts', diffText: '' }), /^Diff \/ Patch/);
+        assert.match(desc({ type: 'toolCall', toolName: 'x' }), /^Tool Call/);
+        assert.match(desc({ type: 'error', message: 'x', severity: 'warning' }), /warning/);
+        assert.match(desc({ type: 'error', message: 'x' }), /^Error \/ Failure/);
+        assert.match(desc({ type: 'plannerStep', description: 'x' }), /^Planner Step/);
+    });
+
+    test('eventIconId maps exit codes and severities to codicons', () => {
+        assert.strictEqual(eventIconId(makeEvent({ id: 'a', timestamp: '2026-01-01T10:00:00.000Z' })), 'run');
+        assert.strictEqual(eventIconId(makeEvent({ id: 'b', timestamp: '2026-01-01T10:00:00.000Z', exitCode: 0 })), 'terminal');
+        assert.strictEqual(eventIconId(makeEvent({ id: 'c', timestamp: '2026-01-01T10:00:00.000Z', exitCode: 1 })), 'error');
+        assert.strictEqual(
+            eventIconId(makeEvent({ id: 'd', timestamp: '2026-01-01T10:00:00.000Z', type: 'error', message: 'x', severity: 'warning' })),
+            'warning'
+        );
+        assert.strictEqual(
+            eventIconId(makeEvent({ id: 'e', timestamp: '2026-01-01T10:00:00.000Z', type: 'error', message: 'x' })),
+            'error'
+        );
+        assert.strictEqual(
+            eventIconId(makeEvent({ id: 'f', timestamp: '2026-01-01T10:00:00.000Z', type: 'fileOperation', operationType: 'create', filePath: '/a' })),
+            'file'
+        );
+        assert.strictEqual(
+            eventIconId(makeEvent({ id: 'g', timestamp: '2026-01-01T10:00:00.000Z', type: 'diff', filePath: '/a', diffText: '' })),
+            'diff'
+        );
+        assert.strictEqual(
+            eventIconId(makeEvent({ id: 'h', timestamp: '2026-01-01T10:00:00.000Z', type: 'toolCall', toolName: 't' })),
+            'tools'
+        );
+        assert.strictEqual(
+            eventIconId(makeEvent({ id: 'i', timestamp: '2026-01-01T10:00:00.000Z', type: 'plannerStep', description: 'd' })),
+            'list-unordered'
+        );
+    });
+});
+
+
+suite('UnifiedTimelineProvider — tree plumbing and title fallbacks', () => {
+    let dir: string;
+    let service: LogService;
+
+    setup(() => {
+        dir = tmpDir();
+        service = new LogService(dir, createDefaultLogSourceRegistry());
+    });
+
+    teardown(() => {
+        try { service.dispose(); } catch { /* ignore */ }
+        try { fs.rmSync(dir, { recursive: true }); } catch { /* ignore */ }
+    });
+
+    test('getChildren lazily builds the tree without an explicit refresh', () => {
+        service.ingestEvents([
+            makeEvent({ id: 'c1', sessionId: 'sess-a', timestamp: '2026-01-01T10:00:00.000Z' }),
+        ]);
+
+        const provider = new UnifiedTimelineProvider(service);
+        const roots = provider.getChildren() as TimelineGroupItem[];
+        assert.strictEqual(roots.length, 1);
+        assert.strictEqual(roots[0].sessionKey, 'sess-a');
+
+        const leaves = provider.getChildren(roots[0]) as TimelineEventItem[];
+        assert.deepStrictEqual(leaves.map((l) => l.event.id), ['c1']);
+
+        // Leaves have no children of their own.
+        assert.deepStrictEqual(provider.getChildren(leaves[0]), []);
+    });
+
+    test('getTreeItem returns the same node and getParent links leaves to their group', () => {
+        service.ingestEvents([
+            makeEvent({ id: 'c1', sessionId: 'sess-a', timestamp: '2026-01-01T10:00:00.000Z' }),
+            makeEvent({ id: 'c2', sessionId: 'sess-b', timestamp: '2026-01-02T10:00:00.000Z' }),
+        ]);
+
+        const provider = new UnifiedTimelineProvider(service);
+        const groups = provider.getGroups();
+        assert.strictEqual(provider.getTreeItem(groups[0]), groups[0]);
+
+        const [leaf] = provider.getChildren(groups[0]) as TimelineEventItem[];
+        assert.strictEqual(provider.getParent(leaf)?.sessionKey, 'sess-b');
+        assert.strictEqual(provider.getParent(groups[0]), undefined, 'groups are roots');
+    });
+
+    test('group titles fall back for unsessioned events and long ids', () => {
+        service.ingestEvents([
+            makeEvent({ id: 'unsessioned', sessionId: undefined, tool: 'cursor', timestamp: '2026-01-01T10:00:00.000Z' }),
+            makeEvent({ id: 'long', sessionId: 'abcdefghijklmnopqrstuvwxyz', timestamp: '2026-01-02T10:00:00.000Z' }),
+        ]);
+
+        // A resolver returning a blank title must not override the fallback.
+        const provider = new UnifiedTimelineProvider(service, () => '   ');
+        const labels = provider.getGroups().map((g) => g.label);
+
+        assert.ok(labels.includes('cursor (unsessioned)'), `labels: ${labels.join(', ')}`);
+        assert.ok(labels.includes('Session abcdefghijkl'), `labels: ${labels.join(', ')}`);
+    });
+
+    test('a failing store degrades to an empty tree instead of throwing', () => {
+        const broken = { getEvents: () => { throw new Error('store down'); } } as unknown as LogService;
+        const provider = new UnifiedTimelineProvider(broken);
+        assert.deepStrictEqual(provider.getGroups(), []);
+        assert.deepStrictEqual(provider.getChildren(), []);
+    });
+
+    test('tooltips omit optional sections that are missing', () => {
+        assert.strictEqual(
+            eventTooltip(makeEvent({ id: 'c1', timestamp: '2026-01-01T10:00:00.000Z' })),
+            'npm test',
+            'no cwd / no raw → command text only'
+        );
+        assert.strictEqual(
+            eventTooltip(makeEvent({
+                id: 'f1', timestamp: '2026-01-01T10:00:00.000Z', type: 'fileOperation',
+                operationType: 'create', filePath: '/a.ts',
+            })),
+            '/a.ts'
+        );
+        assert.strictEqual(
+            eventTooltip(makeEvent({
+                id: 't1', timestamp: '2026-01-01T10:00:00.000Z', type: 'toolCall', toolName: 'read_file',
+            })),
+            'read_file'
+        );
+        assert.strictEqual(
+            eventTooltip(makeEvent({
+                id: 'e1', timestamp: '2026-01-01T10:00:00.000Z', type: 'error', message: 'boom',
+            })),
+            'boom'
+        );
+        assert.strictEqual(
+            eventTooltip(makeEvent({
+                id: 'p1', timestamp: '2026-01-01T10:00:00.000Z', type: 'plannerStep', description: 'Plan',
+            })),
+            'Plan'
+        );
+    });
+
+    test('group and leaf items expose their tree metadata', () => {
+        service.ingestEvents([
+            makeEvent({ id: 'c1', sessionId: 'sess-a', timestamp: '2026-01-01T10:00:00.000Z', workspacePath: '/repo' }),
+        ]);
+
+        const provider = new UnifiedTimelineProvider(service);
+        const [group] = provider.getGroups();
+        assert.strictEqual(group.sessionKey, 'sess-a');
+        assert.strictEqual(group.events.length, 1);
+
+        const [leaf] = provider.getChildren(group) as TimelineEventItem[];
+        assert.strictEqual(leaf.contextValue, 'logsEvent.command');
+        assert.ok(leaf.command, 'leaves open the detail webview on activation');
+    });
+
+    test('group descriptions pluralize counts and tolerate a missing workspace path', () => {
+        const two = new TimelineGroupItem('k', 'Title', [
+            makeEvent({ id: 'a', timestamp: '2026-01-01T10:00:00.000Z' }),
+            makeEvent({ id: 'b', timestamp: '2026-01-01T11:00:00.000Z' }),
+        ], '/repo');
+        assert.strictEqual(two.description, '2 events · /repo');
+
+        const single = new TimelineGroupItem('k', 'Title', [
+            makeEvent({ id: 'a', timestamp: '2026-01-01T10:00:00.000Z' }),
+        ]);
+        assert.strictEqual(single.description, '1 event');
+
+        const empty = new TimelineGroupItem('k2', 'Title', []);
+        assert.strictEqual(empty.description, '0 events');
+    });
+
+    test('leaves mark failing commands with an error-coloured icon', () => {
+        const failing = new TimelineEventItem(makeEvent({ id: 'f', timestamp: '2026-01-01T10:00:00.000Z', exitCode: 1 }));
+        assert.ok(failing.iconPath, 'nonzero exit gets a themed colour');
+
+        const passing = new TimelineEventItem(makeEvent({ id: 'p', timestamp: '2026-01-01T10:00:00.000Z', exitCode: 0 }));
+        assert.ok(passing.iconPath);
+
+        const notACommand = new TimelineEventItem(makeEvent({
+            id: 'n', timestamp: '2026-01-01T10:00:00.000Z', type: 'toolCall', toolName: 'read_file',
+        }));
+        assert.ok(notACommand.iconPath);
+    });
+});
+

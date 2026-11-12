@@ -9,6 +9,7 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import BetterSqlite3 from 'better-sqlite3';
 import { CacheManager } from '../../src/cache/cacheManager';
 import { SessionIndex } from '../../src/index/sessionIndex';
 import { Session, SessionSource } from '../../src/types/index';
@@ -358,3 +359,268 @@ suite('CacheManager – SQLite persistent cache', () => {
         assert.strictEqual(index.size, 2, 'no workspaceIds should load all');
     });
 });
+
+suite('CacheManager – lifecycle and lazy reopen', () => {
+    let cache: CacheManager;
+    let dir: string;
+
+    setup(() => {
+        dir = tmpDir();
+        cache = new CacheManager(dir);
+        cache.open();
+    });
+
+    teardown(() => {
+        try { cache.close(); } catch { /* ignore */ }
+        try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
+    });
+
+    test('dbPath exposes the database location', () => {
+        assert.strictEqual(cache.dbPath, path.join(dir, 'chatwizard-cache.db'));
+    });
+
+    test('open() is idempotent', () => {
+        cache.upsertSession(makeSession({ id: 's1' }));
+        cache.open();
+        cache.open();
+        assert.strictEqual(cache.isOpen, true);
+        assert.strictEqual(cache.getSessionCount(), 1);
+    });
+
+    test('open() creates a missing storage directory', () => {
+        const nested = path.join(dir, 'deep', 'nested');
+        const fresh = new CacheManager(nested);
+        fresh.open();
+        try {
+            assert.ok(fs.existsSync(path.join(nested, 'chatwizard-cache.db')));
+            assert.strictEqual(fresh.getSessionCount(), 0, 'a fresh DB reports zero sessions');
+        } finally {
+            fresh.close();
+        }
+    });
+
+    test('close() is safe to call twice', () => {
+        cache.close();
+        cache.close();
+        assert.strictEqual(cache.isOpen, false);
+    });
+
+    test('every public API lazily reopens the database after close()', async () => {
+        cache.upsertSession(makeSession({ id: 'lazy' }));
+        cache.setParseState('/x.jsonl', {
+            filePath: '/x.jsonl', source: 'copilot', lastMtime: 1, lastSize: 2, lastOffset: 3,
+        });
+        cache.addTag('lazy', 'Keep');
+        cache.addNote('lazy', 'note');
+
+        cache.close();
+        assert.strictEqual(cache.isOpen, false);
+
+        // Each call below must transparently re-open the DB.
+        assert.strictEqual(cache.getSessionCount(), 1);
+        assert.strictEqual(cache.searchFts('hello').length, 1);
+        assert.deepStrictEqual(cache.getTagsForSession('lazy'), ['keep']);
+        assert.strictEqual(cache.getNotes('lazy').length, 1);
+        assert.strictEqual(cache.getParseState('/x.jsonl')?.lastOffset, 3);
+
+        cache.setParseState('/y.jsonl', {
+            filePath: '/y.jsonl', source: 'claude', lastMtime: 9, lastSize: 9, lastOffset: 9,
+        });
+        cache.addTag('lazy', 'extra');
+        cache.removeTag('lazy', 'EXtra');
+        cache.clearTags('lazy');
+        assert.deepStrictEqual(cache.getTagsForSession('lazy'), []);
+
+        cache.upsertSessions([makeSession({ id: 'lazy2' })]);
+        cache.removeSession('lazy2');
+        assert.strictEqual(cache.getSessionCount(), 1);
+
+        const index = new SessionIndex();
+        await cache.loadAll(index);
+        assert.strictEqual(index.size, 1);
+    });
+});
+
+suite('CacheManager – loadAll scoping and write-path variants', () => {
+    let cache: CacheManager;
+    let dir: string;
+
+    setup(() => {
+        dir = tmpDir();
+        cache = new CacheManager(dir);
+        cache.open();
+    });
+
+    teardown(() => {
+        try { cache.close(); } catch { /* ignore */ }
+        try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
+    });
+
+    test('loadAll keeps global workspace sessions when "cursor-global" is already listed', async () => {
+        cache.upsertSessions([
+            makeSession({ id: 'global', workspaceId: 'cursor-global' }),
+            makeSession({ id: 'other', workspaceId: 'ws-other' }),
+        ]);
+
+        const index = new SessionIndex();
+        await cache.loadAll(index, ['cursor-global']);
+
+        assert.strictEqual(index.size, 1);
+        assert.ok(index.get('global'));
+    });
+
+    test('loadAll restores a session that has no messages', async () => {
+        cache.upsertSession(makeSession({ id: 'no-messages', messages: [] }));
+
+        const index = new SessionIndex();
+        await cache.loadAll(index);
+
+        const loaded = index.get('no-messages');
+        assert.ok(loaded);
+        assert.deepStrictEqual(loaded.messages, []);
+    });
+
+    test('upsertSessions persists code blocks through the raw write path', async () => {
+        cache.upsertSessions([makeSession({
+            id: 'bulk',
+            messages: [{
+                id: 'bulk-m1', role: 'assistant', content: 'here you go',
+                timestamp: '2024-01-01T00:00:00Z',
+                codeBlocks: [{
+                    language: 'python', content: 'print(1)',
+                    sessionId: 'bulk', messageIndex: 0, blockIndexInMessage: 0,
+                }],
+            }],
+        })]);
+
+        const index = new SessionIndex();
+        await cache.loadAll(index);
+
+        const loaded = index.get('bulk');
+        assert.ok(loaded);
+        assert.strictEqual(loaded.messages[0].codeBlocks.length, 1);
+        assert.strictEqual(loaded.messages[0].codeBlocks[0].language, 'python');
+    });
+
+    test('messages without a timestamp and with flags round-trip', async () => {
+        cache.upsertSession(makeSession({
+            id: 'flags',
+            messages: [{
+                id: 'flags-m1', role: 'user', content: "it's quoted",
+                codeBlocks: [], skipped: true, interrupted: true,
+            }],
+        }));
+
+        const index = new SessionIndex();
+        await cache.loadAll(index);
+
+        const msg = index.get('flags')?.messages[0];
+        assert.ok(msg);
+        assert.strictEqual(msg.content, "it's quoted");
+        assert.strictEqual(msg.timestamp, undefined);
+        assert.strictEqual(msg.skipped, true);
+        assert.strictEqual(msg.interrupted, true);
+    });
+
+    test('searchFts returns nothing for a query with no searchable characters', () => {
+        cache.upsertSession(makeSession({ id: 's1' }));
+        assert.deepStrictEqual(cache.searchFts('***'), []);
+        assert.deepStrictEqual(cache.searchFts('   '), []);
+    });
+
+    test('searchFts strips quotes before querying', () => {
+        cache.upsertSession(makeSession({ id: 's1' }));
+        assert.strictEqual(cache.searchFts('"hello"').length, 1);
+        assert.strictEqual(cache.searchFts("hel'lo").length, 1);
+    });
+
+    test('clearTags removes every tag for a session', () => {
+        cache.upsertSession(makeSession({ id: 's1' }));
+        cache.addTag('s1', 'One');
+        cache.addTag('s1', 'Two');
+        assert.deepStrictEqual(cache.getTagsForSession('s1').sort(), ['one', 'two']);
+
+        cache.clearTags('s1');
+        assert.deepStrictEqual(cache.getTagsForSession('s1'), []);
+    });
+
+    test('tags are normalized to lower case on add and remove', () => {
+        cache.upsertSession(makeSession({ id: 's1' }));
+        cache.addTag('s1', '  Important  ');
+        assert.deepStrictEqual(cache.getTagsForSession('s1'), ['important']);
+
+        cache.removeTag('s1', 'IMPORTANT');
+        assert.deepStrictEqual(cache.getTagsForSession('s1'), []);
+    });
+
+    test('searchFts falls back to LIKE when the FTS index is unavailable', () => {
+        cache.upsertSession(makeSession({ id: 's1', messages: [{
+            id: 's1-m1', role: 'user', content: 'needle in a haystack',
+            timestamp: '2024-01-01T00:00:00Z', codeBlocks: [],
+        }] }));
+
+        // Simulate a broken/missing FTS index: the prepared FTS statement then
+        // throws, which must degrade to the LIKE query instead of failing.
+        const raw = new BetterSqlite3(cache.dbPath);
+        try {
+            raw.exec('DROP TABLE messages_fts');
+        } finally {
+            raw.close();
+        }
+
+        const rows = cache.searchFts('needle');
+        assert.strictEqual(rows.length, 1);
+        assert.strictEqual(rows[0].sessionId, 's1');
+    });
+
+    test('bulk upsert persists flag and timestamp variants', async () => {
+        cache.upsertSessions([makeSession({
+            id: 'bulk-flags',
+            messages: [
+                { id: 'bulk-m1', role: 'user', content: 'no timestamp', codeBlocks: [], skipped: true },
+                { id: 'bulk-m2', role: 'assistant', content: 'interrupted', timestamp: '2024-02-02T00:00:00Z', codeBlocks: [], interrupted: true },
+            ],
+        })]);
+
+        const index = new SessionIndex();
+        await cache.loadAll(index);
+
+        const loaded = index.get('bulk-flags');
+        assert.ok(loaded);
+        assert.strictEqual(loaded.messages[0].timestamp, undefined);
+        assert.strictEqual(loaded.messages[0].skipped, true);
+        assert.strictEqual(loaded.messages[1].interrupted, true);
+    });
+
+    test('a minimal session round-trips with undefined optional fields', async () => {
+        cache.upsertSession({
+            id: 'minimal',
+            source: 'claude' as SessionSource,
+            title: 'Minimal',
+            messages: [],
+            workspaceId: 'ws-min',
+            filePath: '/minimal.jsonl',
+            createdAt: '2024-01-01T00:00:00Z',
+            updatedAt: '2024-01-02T00:00:00Z',
+        } as Session);
+
+        const index = new SessionIndex();
+        await cache.loadAll(index);
+
+        const loaded = index.get('minimal');
+        assert.ok(loaded);
+        assert.strictEqual(loaded.workspacePath, undefined);
+        assert.strictEqual(loaded.model, undefined);
+        assert.strictEqual(loaded.fileSizeBytes, undefined);
+        assert.strictEqual(loaded.parseErrors, undefined);
+        assert.strictEqual(loaded.sourceNotes, undefined);
+        assert.strictEqual(loaded.subSource, undefined);
+        assert.strictEqual(loaded.compactionSummary, undefined);
+    });
+
+    test('notes and tags for an unknown session stay empty', () => {
+        assert.deepStrictEqual(cache.getNotes('missing-session'), []);
+        assert.deepStrictEqual(cache.getTagsForSession('missing-session'), []);
+    });
+});
+

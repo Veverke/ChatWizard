@@ -841,9 +841,12 @@ export function parseCopilotLogEvents(
 
         // Mirror the parser: an assistant message is appended when the turn's
         // rendered AI text is non-empty. Approximate: any plain text value item.
-        const hasAssistantText = responseItems.some((it) =>
-            it.kind === undefined && typeof it.value === 'string' && (it.value as string).trim().length > 0
-        );
+        // Response arrays can contain nulls/partial entries (same tolerance as the
+        // item loop above) — guard before touching `kind`.
+        const hasAssistantText = responseItems.some((it) => {
+            if (!it || typeof it !== 'object') { return false; }
+            return it.kind === undefined && typeof it.value === 'string' && (it.value as string).trim().length > 0;
+        });
         if (hasAssistantText) {
             nextMessageIndex++;
         }
