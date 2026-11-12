@@ -623,3 +623,26 @@ suite('SemanticIndexer.dispose', () => {
 });
 
 
+
+// ── embedBatch sanity guard ───────────────────────────────────────────────────
+
+suite('SemanticIndexer — embedBatch sanity guard', () => {
+    test('tolerates short and all-zero vectors returned by the engine', async () => {
+        const { indexer, engine, index } = await makeReadyIndexer();
+
+        // Exercise the fast zero-vector probe: undersized vector, all-zero
+        // vector, then a healthy one.
+        engine.embedBatch = async (texts: string[]) => texts.map((_text, i) => {
+            if (i === 0) { return new Float32Array([0, 0]); }
+            if (i === 1) { return new Float32Array(SEMANTIC_DIMS); }
+            return new Float32Array(SEMANTIC_DIMS).fill(0.25);
+        });
+
+        indexer.scheduleSession(makeSession('s1', 'first paragraph. second paragraph. third paragraph.'));
+        await new Promise(r => setTimeout(r, 60));
+
+        assert.ok(index.size > 0, 'indexing must continue even when the engine returns junk vectors');
+        indexer.dispose();
+    });
+});
+

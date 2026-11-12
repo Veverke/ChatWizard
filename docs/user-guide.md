@@ -105,10 +105,75 @@ Eight panels live under the Chat Wizard Activity Bar icon:
 | **Sessions** | Browse every AI session across all tools and workspaces |
 | **Prompt Library** | Your full history of prompts, deduplicated and searchable |
 | **Code Blocks** | Every AI-generated code snippet, filterable by language |
+| **Commands** | What your agent *did*: executed shell commands (with **Run in Terminal**), a unified action timeline, and a diff explorer — grouped per session / workspace |
 | **Knowledge Base** | Categorized learnings, decisions, patterns, gotchas, and architecture |
 | **Analytics** | Token usage charts and stats |
 | **Model Usage** | Per-model request counts with date range filtering |
 | **Timeline** | Chronological feed with heat map, streaks, and topic drift |
+
+### Watch Agent Logs Panels
+
+The **Commands** panel is the home of the _watch-logs_ subsystem (Phase 2/3 of
+`docs/work-plan-watch-logs.md`). It contains three collapsible sections — **Executed
+Commands**, **Unified Timeline** and **Diff Explorer** — instead of three separate
+sidebar views; all three start collapsed so the panel opens compact. AI models do not
+run commands themselves — the *host tools* execute
+them, and ChatWizard replays the agent-execution trail each tool writes to disk:
+
+| Tool | Source file | What is captured |
+|------|-------------|------------------|
+| **GitHub Copilot** | `chatSessions/*.jsonl` | `toolInvocationSerialized` entries (`run_in_terminal`, `create_file`, `move_file`, `apply_patch`, …), `textEditGroup` inline edits, terminal notifications **with exit codes** |
+| **Cline / Roo Code** | `tasks/<id>/ui_messages.json` | `say:'command'` + `command_output` chunks, tool calls, `editedExistingFile` SEARCH/REPLACE diffs, `error`/`error_retry`, `task_progress` plan steps |
+| **Aider** | `.aider.chat.history.md` | `> !cmd` and the `/run`, `/test`, `/lint` commands (+ their output), `Applied edit to …` file edits, fenced `diff` blocks |
+| **Windsurf** | `state.vscdb` → `cascade.sessionData` | structured tool calls when present, otherwise the shell commands Cascade proposed (fenced `bash`/`sh`/`pwsh`/`cmd` blocks in assistant messages) |
+
+Fidelity differs per tool: **exit codes** are only logged by Copilot; Cline/Roo Code and
+Aider record output but no exit status; Windsurf does not persist tool executions at all, so
+its command rows are marked *derived* in the event details. Diffs likewise: Copilot stores the
+replacement text only (additions-only patches), while Cline and Aider patches carry both sides.
+
+- **Executed Commands** lists every command, newest first, grouped per session, with exit
+  badges, copy-to-clipboard, open-session and **Run in Terminal** actions.
+- Clicking any row opens **one shared details window** — subsequent clicks replace its
+  contents instead of opening another tab, so browsing a long log never leaves you lost
+  among a dozen webviews. Command rows show a **▶ Run in Terminal** button directly under
+  the command text (it re-runs the command in a fresh VS Code terminal, using the captured
+  working directory when it still exists).
+- **Unified Timeline** mixes all six event kinds (commands, file operations, diffs, tool
+  calls, errors, planner steps). Use the filter icon (or
+  `Chat Wizard: Filter Unified Timeline…`) to focus on failures, diffs, or commands only.
+- **Diff Explorer** groups changes by workspace → file. Double-click a change (or use
+  `Open Visual Diff`) to see it in VS Code's native diff editor — side-by-side or inline,
+  with coloured rows, word-level highlighting and "collapse unchanged regions", exactly like
+  a GUI Git client. `Open Patch` renders the raw patch text in a disposable markdown editor;
+  `Copy Change` copies the diff text; `Open File` reveals the affected file when it still
+  exists. The change rows' hover tooltip shows only a short patch preview.
+- **One filter bar for all three sections** (Phase 4). The filter button in the view title
+  bar (or `Chat Wizard: Filter Agent Logs…`) opens a menu with the current state of every
+  facet:
+  - **Search Agent Logs…** (`chatwizard.logs.search`) — case-insensitive free text; all words
+    must match. It searches command text, working directory, shell, output summaries, file
+    paths and operation details, diff text, tool names and arguments, error messages and
+    stack traces, planner descriptions, plus the agent name and workspace path.
+  - **Filter by Agent…** (`chatwizard.logs.filterByAgent`) — restrict to one AI tool.
+  - **Show Failures Only** (`chatwizard.logs.toggleFailures`) — failed commands (non-zero exit
+    code) and non-warning `error` events.
+  - **Filter by Event Kind…** (`chatwizard.logs.timeline.filter`) — the Unified Timeline's
+    kind filter, which now composes with the facets above.
+  - **Clear All Filters** (`chatwizard.logs.clearFilters`) — reset everything.
+
+  While a filter is active the section rows say so (`12 commands · 2 failed · filtered`), and
+  the counts always describe what is actually visible.
+- **`Chat Wizard: Show Agent Log Stats`** (`chatwizard.logs.showStats`) opens a markdown report
+  with totals (events, commands, failed commands, failures, errors, diffs, +/− lines) and a
+  command **success rate** over commands that logged an exit code — plus one row per agent
+  (sessions, commands, failed, errors, diffs, files, tool calls, steps) and one row per
+  session (events, commands, failures, last activity).
+
+The underlying event store is a read-only SQLite database
+(`chatwizard-log-events.db`, colocated with the session cache); events are re-indexed
+automatically whenever a Copilot session file, Cline/Roo Code task, Aider history file or
+Windsurf workspace database is created or rewritten by the tool.
 
 Each panel can also be opened as a standalone editor tab:
 
@@ -1132,6 +1197,15 @@ Each source has an index toggle and an optional custom path override:
 
 Leave a path override empty to use the platform default location.
 
+### Watch Logs
+
+The Executed Commands / Unified Timeline / Diff Explorer sections of the **Commands** panel
+re-use the same source toggles and path overrides as the session index
+(`chatwizard.indexCopilot` + `chatwizard.copilotStoragePath` gate the Copilot
+agent-execution log stream). Events are stored in `chatwizard-log-events.db` next to the
+session cache; there is no separate enable flag — disable the panels' source with the
+corresponding `chatwizard.index*` toggle.
+
 ### Semantic Search
 
 | Setting | Default | Description |
@@ -1273,6 +1347,15 @@ Leave a path override empty to use the platform default location.
 | `chatwizard.deleteFolder` | Chat Wizard: Delete Folder |
 | `chatwizard.setSessionStatus` | Chat Wizard: Set Session Status… |
 | `chatwizard.searchAnnotations` | Chat Wizard: Search Annotations |
+| `chatwizard.showExecutedCommands` | Chat Wizard: Show Executed Commands |
+| `chatwizard.showUnifiedTimeline` | Chat Wizard: Show Unified Timeline |
+| `chatwizard.showDiffExplorer` | Chat Wizard: Show Diff Explorer |
+| `chatwizard.logs.filterMenu` | Chat Wizard: Filter Agent Logs… |
+| `chatwizard.logs.search` | Chat Wizard: Search Agent Logs… |
+| `chatwizard.logs.filterByAgent` | Chat Wizard: Filter Agent Logs by Agent… |
+| `chatwizard.logs.toggleFailures` | Chat Wizard: Show Failures Only |
+| `chatwizard.logs.clearFilters` | Chat Wizard: Clear Agent Log Filters |
+| `chatwizard.logs.showStats` | Chat Wizard: Show Agent Log Stats |
 
 ### Session & Code Block actions (triggered from UI)
 

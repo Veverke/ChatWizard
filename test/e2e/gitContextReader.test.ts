@@ -9,29 +9,29 @@ import * as childProcess from 'child_process';
 import { execFileSync } from 'child_process';
 import { readGitContextAsync, GitContextCache } from '../../src/utils/gitContextReader';
 
-/** Retry fs.rmSync up to 10 times on Windows (EPERM workaround) */
-
-function rmRetry(dir: string): void {
-    for (let i = 0; i < 10; i++) {
-        try {
-            fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
-            return;
-        } catch (err: any) {
-            if (i === 9) {
-                // Last resort: use cmd.exe to force delete
-                try {
-                    execFileSync('cmd.exe', ['/c', 'rmdir', '/s', '/q', dir], { timeout: 5000, stdio: 'ignore' });
-                    // Verify it's gone
-                    if (!fs.existsSync(dir)) return;
-                } catch (_) { /* noop */ }
-                // If we're here, everything failed. Just rename so next run isn't polluted.
-                try { fs.renameSync(dir, dir + '.orphaned'); } catch (_) { /* noop */ }
-                return; // Don't throw - this is cleanup only
-            }
-            const start = Date.now();
-            while (Date.now() - start < 300) { /* busy-wait 300ms */ }
-        }
-    }
+/**
+ * Remove a temp repo directory.
+ *
+ * On Windows `fs.rmSync` fails with EPERM on the `.git` tree (files Windows
+ * refuses to unlink), and its built-in retries only multiply the wait: the old
+ * 10 attempts x 3 retries x 200 ms plus 300 ms busy-waits took ~23 s, blowing
+ * past mocha's 10 s hook timeout.  `cmd /c rmdir /s /q` removes the same tree
+ * in ~150 ms, so try it right after a single fast `rmSync` attempt.
+ *
+ * Never throws — this is cleanup only.
+ */
+function removeTempRepo(dir: string): void {
+    if (!dir || !fs.existsSync(dir)) { return; }
+    try {
+        fs.rmSync(dir, { recursive: true, force: true });
+        return;
+    } catch { /* EPERM on Windows — fall through to rmdir */ }
+    try {
+        execFileSync('cmd.exe', ['/c', 'rmdir', '/s', '/q', dir], { timeout: 5000, stdio: 'ignore' });
+        if (!fs.existsSync(dir)) { return; }
+    } catch { /* fall through to rename */ }
+    // Last resort: rename so the next run isn't polluted; the OS reclaims TEMP.
+    try { fs.renameSync(dir, dir + '.orphaned'); } catch { /* noop */ }
 }
 
 /** Create a temp git repo with one commit and return its path */
@@ -54,7 +54,7 @@ suite('Feature 25 — Git Context Reader', () => {
     });
 
     suiteTeardown(() => {
-        rmRetry(repoDir);
+        removeTempRepo(repoDir);
     });
 
     test('returns correct branch for a valid git repo', async () => {
@@ -76,7 +76,7 @@ suite('Feature 25 — Git Context Reader', () => {
             const ctx = await readGitContextAsync(tmpDir);
             assert.strictEqual(ctx, undefined, 'should return undefined for non-git directory');
         } finally {
-            rmRetry(tmpDir);
+            removeTempRepo(tmpDir);
         }
     });
 
@@ -99,7 +99,7 @@ suite('Feature 25 — Git Context Cache', () => {
     });
 
     suiteTeardown(() => {
-        rmRetry(repoDir);
+        removeTempRepo(repoDir);
     });
 
     test('caches results and returns same object on second call', async () => {

@@ -93,6 +93,25 @@ import { PromptAnalyzer } from './analytics/promptAnalyzer';
 import { readChronicleCheckpoints, readChronicleSessions } from './parsers/chronicle';
 import { CacheIntegration } from './cache/cacheIntegration';
 import { resolveSharedCacheDir } from './utils/sharedCachePath';
+import {
+    LogService,
+    createDefaultLogSourceRegistry,
+    ExecutedCommandsProvider,
+    UnifiedTimelineProvider,
+    DiffExplorerProvider,
+    CommandsViewProvider,
+    eventOfCommandsNode,
+    registerLogCommands,
+    LogTreeViews,
+    LogEvent,
+    showEventWebview,
+    registerDiffViewer,
+    openVisualDiff,
+    CopilotLogHarvester,
+    ClineLogHarvester,
+    AiderLogHarvester,
+    WindsurfLogHarvester,
+} from './logs';
 import * as path from 'path';
 import { RestApiServer } from './api/restApiServer';
 import { CloudSyncManager } from './cloud/cloudSyncManager';
@@ -177,6 +196,205 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         }
     } else if (enableCache && !isVSCode) {
         channel.appendLine(`[Chat Wizard] Skipping SQLite cache — running in ${appName} (better-sqlite3 NODE_MODULE_VERSION mismatch).`);
+    }
+
+    // ── Watch-logs Phase 1: normalized agent-execution log event store ──────
+    // Uses the same shared directory as the session cache so the log event DB
+    // (chatwizard-log-events.db) is readable across IDEs.
+    //
+    // `LogService` is self-healing: better-sqlite3 is a native dependency, and
+    // when its binding cannot be loaded (extension dev host started with F5
+    // without `npm run rebuild:native`, non-VS Code IDE with a different
+    // Electron ABI, read-only cache dir, …) the service degrades to an
+    // in-memory store instead of throwing. Losing persistence must never take
+    // the whole watch-logs UI down with it.
+    let logService: LogService | undefined;
+    try {
+        const sharedDir = vscode.workspace.getConfiguration('chatwizard').get<string>('sharedCacheDir', '');
+        const cacheDir = resolveSharedCacheDir(sharedDir);
+        logService = new LogService(cacheDir, createDefaultLogSourceRegistry());
+        if (logService.isPersistent) {
+            channel.appendLine(`[Chat Wizard] Watch-logs event store initialised (${logService.store.dbPath}).`);
+        } else {
+            channel.appendLine(
+                '[Chat Wizard] Watch-logs event store running IN MEMORY ' +
+                `(events are not persisted): ${logService.storeError?.message ?? 'SQLite unavailable'}`
+            );
+        }
+    } catch (err) {
+        channel.appendLine(`[Chat Wizard] Watch-logs store init failed (continuing without it): ${err}`);
+    }
+
+    // ── Watch-logs Phase 2/3: Copilot + Cline adapters + panels ───────────
+    // The Copilot adapter replays each session's JSONL (the file the watcher
+    // already parses for chat) into normalized CommandEvent/ToolCallEvent/
+    // DiffEvent/… rows. The Cline adapter does the same for Cline/Roo Code
+    // `ui_messages.json` task files. Both hook the session index's typed
+    // events so initial indexing *and* live rewrites/removals keep the event
+    // store in sync with zero extra watching. Phase 3 adds the Unified
+    // Timeline + Diff Explorer panels on top of the same store.
+    if (logService) {
+        try {
+            const executedCommandsProvider = new ExecutedCommandsProvider(logService, (sessionId) => index.get(sessionId)?.title);
+            const timelineProvider = new UnifiedTimelineProvider(logService, (sessionId) => index.get(sessionId)?.title);
+            const diffExplorerProvider = new DiffExplorerProvider(logService);
+            // One sidebar view ("Commands") whose three sections are the former
+            // Executed Commands / Unified Timeline / Diff Explorer panels.
+            const commandsViewProvider = new CommandsViewProvider(
+                executedCommandsProvider,
+                timelineProvider,
+                diffExplorerProvider
+            );
+            context.subscriptions.push(commandsViewProvider);
+            // Phase 4 (performance): the harvesters fire once per session file,
+            // so the initial index can request hundreds of rebuilds in a burst.
+            // Debounce them into one refresh per quiet window.
+            let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+            const refreshLogPanels = () => {
+                if (refreshTimer) { clearTimeout(refreshTimer); }
+                refreshTimer = setTimeout(() => {
+                    refreshTimer = undefined;
+                    commandsViewProvider.refresh();
+                }, 250);
+            };
+            context.subscriptions.push({
+                dispose: () => { if (refreshTimer) { clearTimeout(refreshTimer); } },
+            });
+            const logHarvester = new CopilotLogHarvester(logService);
+            logHarvester.onEventsChanged = refreshLogPanels;
+            const clineLogHarvester = new ClineLogHarvester(logService);
+            clineLogHarvester.onEventsChanged = refreshLogPanels;
+            const aiderLogHarvester = new AiderLogHarvester(logService);
+            aiderLogHarvester.onEventsChanged = refreshLogPanels;
+            const windsurfLogHarvester = new WindsurfLogHarvester(logService);
+            windsurfLogHarvester.onEventsChanged = refreshLogPanels;
+            const sessionEventListener = index.addTypedChangeListener((event) => {
+                try {
+                    logHarvester.handleIndexEvent(event);
+                } catch {
+                    // Log harvesting must never break session indexing.
+                }
+                try {
+                    clineLogHarvester.handleIndexEvent(event);
+                } catch {
+                    // Log harvesting must never break session indexing.
+                }
+                try {
+                    aiderLogHarvester.handleIndexEvent(event);
+                } catch {
+                    // Log harvesting must never break session indexing.
+                }
+                try {
+                    windsurfLogHarvester.handleIndexEvent(event);
+                } catch {
+                    // Log harvesting must never break session indexing.
+                }
+            });
+            context.subscriptions.push(sessionEventListener);
+            const logWatch = createLogger().withContext('WatchLogs');
+
+            // Visual diffs: register the read-only virtual-document provider that
+            // feeds VS Code's native diff editor (Diff Explorer rows + the
+            // "Visual Diff" button in the detail webview).
+            registerDiffViewer(context);
+
+            /**
+             * Row activation target: a captured diff opens in the diff editor
+             * (side-by-side / inline, like a GUI Git client) — every other event
+             * kind opens the detail webview. Falls back to the webview when the
+             * patch text cannot be turned into two sides.
+             */
+            const openLogEvent = (event: LogEvent): void => {
+                if (event.type === 'diff') {
+                    // Preview mode: arrowing through diff rows reuses one tab
+                    // instead of piling up a tab per row.
+                    void openVisualDiff(event, { preview: true }).then((opened) => {
+                        if (!opened) {
+                            showEventWebview(event, context.subscriptions);
+                            return;
+                        }
+                        logWatch.info('visual diff opened: %s', event.id);
+                    });
+                    return;
+                }
+                showEventWebview(event, context.subscriptions);
+            };
+
+            // Single-click / selection activation: guarantees the detail webview
+            // opens on a plain click too — belt-and-braces on top of each tree
+            // row's `command` (double-click / Enter) so "show full contents"
+            // never depends on the host's click-activation semantics.
+            // `open` lets a view override the target (the Diff Explorer sends
+            // captured diffs to the visual diff editor instead of the webview).
+            const wireClickToDetails = (
+                view: vscode.TreeView<unknown>,
+                pick: (item: unknown) => LogEvent | undefined,
+                open: (event: LogEvent) => void = (event) => showEventWebview(event, context.subscriptions)
+            ): void => {
+                let timer: ReturnType<typeof setTimeout> | undefined;
+                let lastId = '';
+                let lastAt = 0;
+                view.onDidChangeSelection((e) => {
+                    if (e.selection.length === 0) {
+                        // Tree rebuilt / cleared — forget the last opened item so
+                        // the user's next genuine click always opens again.
+                        lastId = '';
+                        return;
+                    }
+                    if (e.selection.length !== 1) { return; }
+                    const event = pick(e.selection[0]);
+                    if (!event) { return; }
+                    const now = Date.now();
+                    if (event.id === lastId && now - lastAt < 800) { return; }
+                    if (timer) { clearTimeout(timer); }
+                    timer = setTimeout(() => {
+                        lastId = event.id;
+                        lastAt = Date.now();
+                        open(event);
+                        logWatch.info('row opened on click: %s (%s)', event.type, event.id);
+                    }, 120);
+                }, undefined, context.subscriptions);
+            };
+
+            // Register every contributed watch-logs command *before* creating the
+            // tree view. The view/title refresh + "Show Details" buttons and the
+            // row context menus are contributed in package.json, so VS Code can
+            // invoke them as soon as the view is visible — if registration were
+            // skipped (or the view creation threw first) the user would see
+            // "command 'chatwizard.logs.refreshAll' not found".
+            // `logTreeViews` is populated below and read lazily by the
+            // "Show Details" handlers.
+            const logTreeViews: LogTreeViews = {};
+            registerLogCommands(
+                context,
+                executedCommandsProvider,
+                timelineProvider,
+                diffExplorerProvider,
+                commandsViewProvider,
+                logTreeViews,
+                logService
+            );
+
+            // The single Commands view is created once; a failure here must not
+            // prevent the commands registered above from working.
+            try {
+                logTreeViews.commands = vscode.window.createTreeView(CommandsViewProvider.viewType, {
+                    treeDataProvider: commandsViewProvider,
+                    showCollapseAll: true,
+                });
+                context.subscriptions.push(logTreeViews.commands);
+            } catch (err) {
+                channel.appendLine(
+                    `[Chat Wizard] Could not create watch-logs view '${CommandsViewProvider.viewType}': ${err}`
+                );
+            }
+
+            if (logTreeViews.commands) {
+                wireClickToDetails(logTreeViews.commands, eventOfCommandsNode, openLogEvent);
+            }
+        } catch (err) {
+            channel.appendLine(`[Chat Wizard] Watch-logs Phase 2/3 UI init failed (continuing without it): ${err}`);
+        }
     }
 
     // Branding status-bar item — created early so all listeners below can call brandingBar.notify()
@@ -634,6 +852,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
         // Register dispose for cache on deactivation
         context.subscriptions.push({ dispose: () => cacheIntegration.dispose() });
+    }
+
+    // ── Watch-logs Phase 1: dispose the log event store on deactivation ─────
+    if (logService) {
+        context.subscriptions.push({ dispose: () => logService.dispose() });
     }
 
     const provider = new SessionTreeProvider(index, context.extensionUri);

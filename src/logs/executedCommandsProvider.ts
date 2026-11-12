@@ -1,0 +1,245 @@
+import * as vscode from 'vscode';
+import { LogService } from './logService';
+import { CommandEvent, LogEvent } from './types';
+import { LogViewFilters, emptyLogFilters, hasActiveFilters, matchesLogFilters } from './logFilters';
+import { createLogger } from '../utils/logger';
+
+/**
+ * src/logs/executedCommandsProvider.ts
+ *
+ * Phase 2 — "Executed Commands" panel.
+ *
+ * The first user-facing surface from `docs/work-plan-watch-logs.md` Phase 2:
+ * a searchable list of every shell / git / build / test command agents ran,
+ * even when the model never mentioned the command in chat text.
+ *
+ * The panel is intentionally tool-agnostic — it renders whatever `CommandEvent`s
+ * the watch-logs store holds (fed by the Copilot, Cline / Roo Code, Aider and
+ * Windsurf adapters). Commands are grouped per session, newest first, and each
+ * row exposes copy + open-session actions.
+ *
+ * Phase 4 adds the shared view filters (`search`, agent, failures-only) so the
+ * section honours exactly the same query as the Unified Timeline.
+ */
+
+const logWatch = createLogger().withContext('WatchLogs');
+
+/** Hard cap on rows pulled out of the store for one render. */
+export const MAX_COMMANDS_PER_QUERY = 2000;
+
+/** Resolve a human-readable session title for an id, when available. */
+export type ExecSessionTitleResolver = (sessionId: string) => string | undefined;
+
+// ---------------------------------------------------------------------------
+// Display helpers (pure, unit-tested)
+// ---------------------------------------------------------------------------
+
+/** First non-empty line of a command, trimmed to a reasonable width. */
+export function firstLineOf(commandText: string, max = 80): string {
+    const line = commandText.split('\n').map((l) => l.trim()).find((l) => l.length > 0) ?? '';
+    if (line.length <= max) { return line; }
+    return `${line.slice(0, max - 1)}…`;
+}
+
+/** Exit-status badge shown in the tree description. */
+export function formatExitBadge(exitCode: number | undefined): string {
+    if (exitCode === undefined) { return 'exit ?'; }
+    return exitCode === 0 ? '✓ exit 0' : `✗ exit ${exitCode}`;
+}
+
+// ---------------------------------------------------------------------------
+// Tree items
+// ---------------------------------------------------------------------------
+
+/** A session header node. Children are the session's `ExecCommandsLeafItem`s. */
+export class ExecCommandsGroupItem extends vscode.TreeItem {
+    readonly sessionId: string;
+    readonly commands: CommandEvent[];
+
+    constructor(
+        sessionId: string,
+        title: string,
+        commands: CommandEvent[],
+        workspacePath?: string
+    ) {
+        const count = commands.length;
+        super(title, commands.length > 0 ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.None);
+        this.sessionId = sessionId;
+        this.commands = commands;
+        this.description = workspacePath && workspacePath.length > 0
+            ? `${count} command${count === 1 ? '' : 's'} · ${workspacePath}`
+            : `${count} command${count === 1 ? '' : 's'}`;
+        this.contextValue = 'execCommandsGroup';
+        this.iconPath = new vscode.ThemeIcon('history');
+    }
+}
+
+/** A single executed command row. */
+export class ExecCommandsLeafItem extends vscode.TreeItem {
+    readonly event: CommandEvent;
+
+    constructor(event: CommandEvent) {
+        super(firstLineOf(event.commandText), vscode.TreeItemCollapsibleState.None);
+        this.event = event;
+        this.description = formatExitBadge(event.exitCode);
+        this.tooltip = event.commandText;
+        this.contextValue = 'execCommand';
+        // Double-click / Enter opens a webview with the full command contents.
+        this.command = {
+            command: 'chatwizard.execCommands.showDetails',
+            title: 'Show Full Command',
+        };
+        const exit = event.exitCode;
+        this.iconPath = new vscode.ThemeIcon(
+            exit === undefined ? 'run'
+            : exit === 0 ? 'terminal'
+            : 'error'
+        );
+    }
+}
+
+export type ExecCommandsTreeNode = ExecCommandsGroupItem | ExecCommandsLeafItem;
+// ---------------------------------------------------------------------------
+// Provider
+// ---------------------------------------------------------------------------
+
+export class ExecutedCommandsProvider implements vscode.TreeDataProvider<ExecCommandsTreeNode> {
+    private readonly _onDidChangeTreeData = new vscode.EventEmitter<ExecCommandsTreeNode | undefined | void>();
+    readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
+
+    private _groups: ExecCommandsGroupItem[] = [];
+    private _filters: LogViewFilters = emptyLogFilters();
+    /**
+     * Phase 4: an empty result set is a valid, cacheable state. Without this
+     * flag every `getChildren()` on a filtered-to-nothing section would re-run
+     * the store query.
+     */
+    private _built = false;
+
+    constructor(
+        private readonly logService: LogService,
+        private readonly resolveSessionTitle?: ExecSessionTitleResolver
+    ) { }
+
+    /**
+     * Replace the active filters and rebuild. `types` is ignored here — this
+     * section only ever renders `command` events.
+     */
+    setFilters(filters: LogViewFilters): void {
+        this._filters = {
+            search: filters.search,
+            tool: filters.tool,
+            failuresOnly: filters.failuresOnly,
+        };
+        this.refresh();
+    }
+
+    /** Current filters (a copy — callers may mutate the result safely). */
+    getFilters(): LogViewFilters {
+        return { ...this._filters };
+    }
+
+    /** True when a search / agent / failures filter is narrowing this section. */
+    filtersActive(): boolean {
+        return hasActiveFilters(this._filters);
+    }
+
+    /** Re-query the store and rebuild the tree. */
+    refresh(): void {
+        this._groups = this._buildGroups();
+        this._built = true;
+        this._onDidChangeTreeData.fire();
+    }
+
+    getChildren(element?: ExecCommandsTreeNode): ExecCommandsTreeNode[] {
+        if (!element) {
+            if (!this._built) { this.refresh(); }
+            return this._groups;
+        }
+        if (element instanceof ExecCommandsGroupItem) {
+            return element.commands.map((c) => new ExecCommandsLeafItem(c));
+        }
+        return [];
+    }
+
+    getTreeItem(element: ExecCommandsTreeNode): vscode.TreeItem {
+        return element;
+    }
+
+    getParent(element: ExecCommandsTreeNode): ExecCommandsGroupItem | undefined {
+        if (element instanceof ExecCommandsLeafItem) {
+            return this._groups.find((g) => g.sessionId === element.event.sessionId);
+        }
+        return undefined;
+    }
+
+    /** All groups currently rendered (useful for tests + stats). */
+    getGroups(): ExecCommandsGroupItem[] {
+        // Lazily build on first read: VS Code normally calls getChildren(),
+        // but tests (and any caller inspecting the tree before it rendered)
+        // must see the store contents rather than a permanently empty list.
+        if (!this._built) {
+            this._groups = this._buildGroups();
+            this._built = true;
+        }
+        return this._groups;
+    }
+
+    private _buildGroups(): ExecCommandsGroupItem[] {
+        let events: LogEvent[];
+        try {
+            events = this.logService.getEvents({
+                type: 'command',
+                tool: this._filters.tool,
+                order: 'desc',
+                limit: MAX_COMMANDS_PER_QUERY,
+            });
+        } catch (err) {
+            // A broken/degraded store must never break tree rendering.
+            logWatch.warn('executed commands query failed: %s', err);
+            return [];
+        }
+
+        const bySession = new Map<string, CommandEvent[]>();
+        for (const event of events) {
+            // Search + failures-only are applied here (the store handles the
+            // type/tool facets); both share the predicates with the timeline.
+            if (!matchesLogFilters(event, {
+                search: this._filters.search,
+                failuresOnly: this._filters.failuresOnly,
+            })) {
+                continue;
+            }
+            // The store narrows the event to its concrete type; cast defensively
+            // here since the public LogEvent union keeps `commandText` optional.
+            const command = event as CommandEvent;
+            const key = command.sessionId ?? '(no session)';
+            const bucket = bySession.get(key);
+            if (bucket) {
+                bucket.push(command);
+            } else {
+                bySession.set(key, [command]);
+            }
+        }
+
+        const groups: ExecCommandsGroupItem[] = [];
+        for (const [sessionId, commands] of bySession) {
+            commands.sort((a, b) => (b.timestamp ?? '').localeCompare(a.timestamp ?? ''));
+            const workspacePath = commands.find((c) => c.workspacePath)?.workspacePath;
+            const customTitle = this.resolveSessionTitle?.(sessionId);
+            const title = customTitle && customTitle.trim().length > 0
+                ? customTitle.trim()
+                : `Session ${sessionId.length > 12 ? sessionId.slice(0, 12) : sessionId}`;
+            groups.push(new ExecCommandsGroupItem(sessionId, title, commands, workspacePath));
+        }
+
+        // Newest command first across groups.
+        groups.sort((a, b) => {
+            const aLast = a.commands[0]?.timestamp ?? '';
+            const bLast = b.commands[0]?.timestamp ?? '';
+            return bLast.localeCompare(aLast);
+        });
+
+        return groups;
+    }
+}
