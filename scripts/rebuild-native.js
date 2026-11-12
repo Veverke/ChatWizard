@@ -251,5 +251,4 @@ function printWindowsToolchainHelp(problems) {
     console.error('');
 }
 
-
 main();
