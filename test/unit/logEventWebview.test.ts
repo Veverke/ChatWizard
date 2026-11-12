@@ -194,3 +194,111 @@ suite('logEventWebview — run command in terminal', () => {
         assert.ok(html.includes("getElementById('runCommandBtn')"));
     });
 });
+
+suite('logEventWebview — per-kind detail variants', () => {
+    type EventInput = Partial<LogEvent> & { id: string; timestamp: string };
+
+    test('shortEventLabel covers every kind and truncates long text', () => {
+        assert.match(shortEventLabel(makeEvent({
+            id: 'f', timestamp: 'T', type: 'fileOperation', operationType: 'move', filePath: '/a.ts',
+        } as EventInput) as LogEvent), /^File Operation: move \/a\.ts/);
+        assert.match(shortEventLabel(makeEvent({
+            id: 't', timestamp: 'T', type: 'toolCall', toolName: 'read_file',
+        } as EventInput) as LogEvent), /^Tool Call: read_file/);
+        assert.match(shortEventLabel(makeEvent({
+            id: 'e', timestamp: 'T', type: 'error', message: 'boom',
+        } as EventInput) as LogEvent), /^Error \/ Failure: boom/);
+        assert.match(shortEventLabel(makeEvent({
+            id: 'p', timestamp: 'T', type: 'plannerStep', description: 'Plan the work',
+        } as EventInput) as LogEvent), /^Planner Step: Plan the work/);
+        assert.match(shortEventLabel(makeEvent({
+            id: 'd', timestamp: 'T', type: 'diff', filePath: '/d.ts', diffText: '',
+        } as EventInput) as LogEvent), /^Diff \/ Patch: \/d\.ts/);
+
+        const longCommand = makeEvent({ id: 'c', timestamp: 'T', commandText: 'x'.repeat(200) } as EventInput) as LogEvent;
+        const label = shortEventLabel(longCommand);
+        assert.strictEqual(label.length, 70, 'label is capped at the max length');
+        assert.ok(label.startsWith('Executed Command: '), `unexpected label: ${label}`);
+        assert.ok(!label.includes('x'.repeat(60)), 'long text is truncated');
+        assert.strictEqual(shortEventLabel(longCommand, 20).length, 20, 'custom max is honoured');
+    });
+
+    test('eventMetaRows only lists facets that exist', () => {
+        const bare = eventMetaRows({
+            id: 'bare', type: 'command', tool: 'cline', commandText: 'x',
+        } as unknown as LogEvent);
+        assert.deepStrictEqual(bare.map(([k]) => k), ['Event kind', 'Tool', 'Event id']);
+
+        const rich = eventMetaRows({
+            id: 'rich', type: 'command', tool: 'cline', commandText: 'x',
+            timestamp: '2026-01-01T00:00:00.000Z', sessionId: 's', workspaceId: 'w',
+            workspacePath: '/repo', messageIndex: 3, sourcePath: '/logs/a.jsonl',
+        } as unknown as LogEvent);
+        assert.deepStrictEqual(rich.map(([k]) => k), [
+            'Event kind', 'Tool', 'Timestamp', 'Session', 'Workspace id',
+            'Workspace path', 'Message index', 'Source log', 'Event id',
+        ]);
+    });
+
+    test('command detail adds stdout/stderr blocks only when present', () => {
+        const bare = buildEventDetailSections(makeEvent({ id: 'c1', timestamp: 'T' } as EventInput) as LogEvent);
+        assert.deepStrictEqual(bare[0].rows.find(([k]) => k === 'Exit code'), ['Exit code', 'unknown']);
+        assert.strictEqual(bare[0].code.length, 1, 'no summaries → only the command block');
+
+        const rich = buildEventDetailSections(makeEvent({
+            id: 'c2', timestamp: 'T', exitCode: 0, cwd: '/repo', shell: 'bash',
+            stdoutSummary: 'all good', stderrSummary: 'a warning',
+        } as EventInput) as LogEvent);
+        assert.deepStrictEqual(rich[0].rows.map(([k]) => k), ['Working directory', 'Shell', 'Exit code']);
+        assert.strictEqual(rich[0].code.length, 3);
+    });
+
+    test('fileOperation detail omits optional rows and raw payload', () => {
+        const [section] = buildEventDetailSections(makeEvent({
+            id: 'f1', timestamp: 'T', type: 'fileOperation', operationType: 'create', filePath: '/a.ts',
+        } as EventInput) as LogEvent);
+        assert.deepStrictEqual(section.rows.map(([k]) => k), ['Operation', 'File path']);
+        assert.deepStrictEqual(section.code, []);
+    });
+
+    test('diff detail reports unknown stats and skips a blank patch', () => {
+        const [section] = buildEventDetailSections(makeEvent({
+            id: 'd1', timestamp: 'T', type: 'diff', filePath: '/d.ts', diffText: '   ',
+        } as EventInput) as LogEvent);
+        assert.deepStrictEqual(section.rows.find(([k]) => k === 'Lines'), ['Lines', 'unknown']);
+        assert.deepStrictEqual(section.code, []);
+    });
+
+    test('toolCall detail exposes success, duration and result metadata', () => {
+        const [section] = buildEventDetailSections(makeEvent({
+            id: 't1', timestamp: 'T', type: 'toolCall', toolName: 'read_file',
+            success: false, durationMs: 12, resultSummary: 'EACCES', raw: 'raw text',
+        } as EventInput) as LogEvent);
+        assert.deepStrictEqual(section.rows.map(([k]) => k), ['Tool', 'Success', 'Duration', 'Result']);
+        assert.deepStrictEqual(section.rows.find(([k]) => k === 'Duration'), ['Duration', '12 ms']);
+        assert.strictEqual(section.code.length, 1, 'raw text only, no arguments block');
+    });
+
+    test('error detail includes the command id and raw text when available', () => {
+        const [section] = buildEventDetailSections(makeEvent({
+            id: 'e1', timestamp: 'T', type: 'error', message: 'boom', commandId: 'cmd-1', raw: 'raw line',
+        } as EventInput) as LogEvent);
+        assert.deepStrictEqual(section.rows.map(([k]) => k), ['Severity', 'Command']);
+        assert.strictEqual(section.code.length, 2);
+    });
+
+    test('plannerStep detail tolerates a step with no metadata', () => {
+        const [section] = buildEventDetailSections(makeEvent({
+            id: 'p1', timestamp: 'T', type: 'plannerStep', description: '   ',
+        } as EventInput) as LogEvent);
+        assert.deepStrictEqual(section.rows, []);
+        assert.deepStrictEqual(section.code, []);
+
+        // An empty row list must not emit an empty table in the page.
+        const html = renderSections(makeEvent({
+            id: 'p2', timestamp: 'T', type: 'plannerStep', description: '',
+        } as EventInput) as LogEvent);
+        assert.ok(html.includes('<h3>Planner Step</h3>'));
+    });
+});
+
