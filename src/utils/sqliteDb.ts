@@ -18,6 +18,7 @@
  *   db.close();
  */
 
+import * as fs from 'fs';
 import * as path from 'path';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -58,6 +59,32 @@ type SqlJsStatement = {
     free(): boolean;
 };
 
+/**
+ * Locate the `sql.js` dist directory that ships `sql-wasm.wasm`.
+ *
+ * This module runs in two different layouts, so a single relative hop from
+ * __dirname is not enough:
+ *   - bundled extension: `<ext>/dist/extension.js`           → `<ext>/node_modules/sql.js/dist`
+ *   - compiled (tests):  `<ext>/out/src/utils/sqliteDb.js`   → `<ext>/node_modules/sql.js/dist`
+ * Walk up until the wasm artefact is found, then fall back to the bundled
+ * layout if nothing matches.
+ *
+ * Exported for the regression test that locks the wasm path resolution.
+ */
+export function resolveSqlJsDistDir(startDir: string = __dirname): string | undefined {
+    let dir = startDir;
+    for (let depth = 0; depth < 8; depth++) {
+        const candidate = path.join(dir, 'node_modules', 'sql.js', 'dist');
+        if (fs.existsSync(path.join(candidate, 'sql-wasm.wasm'))) {
+            return candidate;
+        }
+        const parent = path.dirname(dir);
+        if (parent === dir) { break; }
+        dir = parent;
+    }
+    return undefined;
+}
+
 async function getSqlJs(): Promise<SqlJsStatic> {
     if (!_sqlJsReady) {
         _sqlJsReady = (async () => {
@@ -67,14 +94,11 @@ async function getSqlJs(): Promise<SqlJsStatic> {
             const initSqlJs = require('sql.js') as (config?: {
                 locateFile?: (file: string) => string;
             }) => Promise<SqlJsStatic>;
+            const distDir = resolveSqlJsDistDir()
+                // Last-resort default for the bundled layout.
+                ?? path.join(__dirname, '..', 'node_modules', 'sql.js', 'dist');
             return initSqlJs({
-                locateFile: (file: string) => {
-                    // When running from VSIX: node_modules/sql.js/dist/<file>
-                    // When running from dev:   node_modules/sql.js/dist/<file>
-                    // __dirname is the extension's dist/ folder
-                    const sqlJsDir = path.join(__dirname, '..', 'node_modules', 'sql.js', 'dist');
-                    return path.join(sqlJsDir, file);
-                },
+                locateFile: (file: string) => path.join(distDir, file),
             });
         })();
     }
@@ -118,7 +142,19 @@ async function trySqlJs(dbPath: string): Promise<SqlJsDatabase | null> {
         if (!fs.existsSync(dbPath)) { return null; }
         const buffer = fs.readFileSync(dbPath);
         const SQL = await getSqlJs();
-        return new SQL.Database(buffer);
+        const db = new SQL.Database(buffer);
+        // Validate the payload is a readable SQLite database. sql.js defers the
+        // header check until the first statement, so without this probe a
+        // non-SQLite file would only throw later inside a parser's query() —
+        // the native path validates up front for exactly the same reason.
+        try {
+            const probe = db.prepare('SELECT 1');
+            if (probe) { probe.step(); probe.free(); }
+        } catch {
+            try { db.close(); } catch { /* ignore */ }
+            return null;
+        }
+        return db;
     } catch {
         return null;
     }
@@ -191,10 +227,12 @@ export function openReadonlyDbSync(dbPath: string): SqliteDb | null {
 
     return {
         query<T extends Record<string, unknown> = Record<string, unknown>>(sql: string, params?: unknown[]): T[] {
-            return native.prepare(sql).all(params) as T[];
+            // better-sqlite3 treats an explicit `undefined` as a bind value, so
+            // only pass params when the caller supplied them.
+            return params ? native.prepare(sql).all(params) as T[] : native.prepare(sql).all() as T[];
         },
         get<T extends Record<string, unknown> = Record<string, unknown>>(sql: string, params?: unknown[]): T | undefined {
-            return native.prepare(sql).get(params) as T | undefined;
+            return params ? native.prepare(sql).get(params) as T | undefined : native.prepare(sql).get() as T | undefined;
         },
         close(): void {
             native.close();
