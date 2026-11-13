@@ -246,4 +246,30 @@ suite('DiffExplorerProvider — Phase 4 filters', () => {
         assert.deepStrictEqual(visibleIds(provider).sort(), ['d1', 'd2', 'f1']);
         assert.strictEqual(provider.filtersActive(), false);
     });
+
+    test('setWorkspaceScope restricts the Diff Explorer to the open folder', () => {
+        service.ingestEvents([
+            makeDiff({
+                id: 'other-ws',
+                timestamp: '2026-01-04T10:00:00.000Z',
+                filePath: '/analytics/src/hook.ts',
+                workspacePath: '/repos/vscode-extension-analytics',
+            }),
+            makeDiff({
+                id: 'here',
+                timestamp: '2026-01-05T10:00:00.000Z',
+                filePath: '/chatwizard/src/extension.ts',
+                workspacePath: '/repos/chatwizard',
+            }),
+        ]);
+
+        const provider = new DiffExplorerProvider(service);
+        assert.ok(visibleIds(provider).includes('other-ws'));
+
+        provider.setWorkspaceScope(['/repos/chatwizard']);
+
+        const visible = visibleIds(provider);
+        assert.ok(visible.includes('here'));
+        assert.ok(!visible.includes('other-ws'), 'another workspace’s diffs are hidden');
+    });
 });

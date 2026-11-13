@@ -54,6 +54,122 @@ export function getRooCodeStorageRoot(): string {
     return getClineCompatStorageRoot('rooveterinaryinc.roo-cline');
 }
 
+// ---------------------------------------------------------------------------
+// Cline 4.x ("Cline agent") on-disk sessions
+// ---------------------------------------------------------------------------
+//
+// Cline 4.x no longer writes into VS Code's `globalStorage`. It owns a home
+// directory instead (mirroring the Cline CLI):
+//
+//   <CLINE_DATA_DIR>            (env override, wins when set)
+//   <CLINE_DIR || ~/.cline>/data
+//
+// and stores every chat session as
+//
+//   <data>/sessions/<sessionId>/<sessionId>.json           ← metadata
+//   <data>/sessions/<sessionId>/<sessionId>.messages.json  ← transcript
+//
+// The legacy `tasks/<taskId>/api_conversation_history.json` layout is still
+// read (see `discoverClineTasksAsync`) because upgrading Cline leaves the old
+// task directories behind.
+
+/** One Cline 4.x session directory. */
+export interface ClineV4SessionInfo {
+    /** Session id — the directory name, e.g. `1794419386202_jotez`. */
+    sessionId: string;
+    /** Absolute path of the session directory. */
+    storageDir: string;
+    /** `<sessionId>.json` — session metadata (title, workspace, model, timing). */
+    metaFile: string;
+    /** `<sessionId>.messages.json` — the conversation transcript. */
+    messagesFile: string;
+}
+
+/**
+ * Resolves Cline 4.x's data directory (`.../.cline/data`).
+ *
+ * Priority:
+ *   1. `CLINE_DATA_DIR` environment variable (set by Cline itself when customised)
+ *   2. `<CLINE_DIR>/data`
+ *   3. `~/.cline/data`
+ */
+export function getClineDataRoot(): string {
+    const dataDir = process.env['CLINE_DATA_DIR']?.trim();
+    if (dataDir) { return dataDir; }
+    const clineDir = process.env['CLINE_DIR']?.trim() || path.join(os.homedir(), '.cline');
+    return path.join(clineDir, 'data');
+}
+
+/** Cline 4.x sessions directory (`<data>/sessions`). */
+export function getClineV4SessionsRoot(): string {
+    return path.join(getClineDataRoot(), 'sessions');
+}
+
+/**
+ * Enumerates Cline 4.x session directories under the given root (or the
+ * default `~/.cline/data/sessions`).
+ *
+ * A directory qualifies when it contains `<dirname>.json` (the session
+ * metadata file). The transcript (`<dirname>.messages.json`) is optional — it
+ * may be missing for a brand-new session.
+ *
+ * - Symlinked directories are excluded.
+ * - More than MAX_TASK_DIRS directories triggers a console warning.
+ *
+ * @param override Override the sessions root (tests / user configuration).
+ */
+export async function discoverClineV4SessionsAsync(override?: string): Promise<ClineV4SessionInfo[]> {
+    const root = (override !== undefined && override !== '') ? override : getClineV4SessionsRoot();
+
+    let entries: fs.Dirent[];
+    try {
+        entries = await fs.promises.readdir(root, { withFileTypes: true });
+    } catch {
+        // Directory does not exist or is not readable — no sessions to return.
+        return [];
+    }
+
+    if (entries.length > MAX_TASK_DIRS) {
+        console.warn(
+            `[Chat Wizard] Cline: found ${entries.length} session directories — ` +
+            `only the first ${MAX_TASK_DIRS} will be scanned.`
+        );
+        entries = entries.slice(0, MAX_TASK_DIRS);
+    }
+
+    const results = await Promise.all(entries.map(async (entry): Promise<ClineV4SessionInfo | null> => {
+        if (!entry.isDirectory()) { return null; }
+
+        const storageDir = path.join(root, entry.name);
+
+        // SEC: reject symlinked session directories.
+        try {
+            const lstat = await fs.promises.lstat(storageDir);
+            if (lstat.isSymbolicLink()) { return null; }
+        } catch {
+            return null;
+        }
+
+        const metaFile = path.join(storageDir, `${entry.name}.json`);
+        try {
+            const stat = await fs.promises.stat(metaFile);
+            if (!stat.isFile()) { return null; }
+        } catch {
+            // No metadata file — not a Cline 4.x session directory.
+            return null;
+        }
+
+        return {
+            sessionId: entry.name,
+            storageDir,
+            metaFile,
+            messagesFile: path.join(storageDir, `${entry.name}.messages.json`),
+        };
+    }));
+
+    return results.filter((r): r is ClineV4SessionInfo => r !== null);
+}
+
 /**
  * Enumerates task directories under the given root (or the default Cline root)
  * and returns a `ClineTaskInfo` for each directory that contains

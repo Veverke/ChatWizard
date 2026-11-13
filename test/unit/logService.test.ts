@@ -118,6 +118,37 @@ suite('LogService – watch-logs facade', () => {
         assert.deepStrictEqual(stats.tools, ['cursor']);
     });
 
+    test('stampSessionTitle records the chat title on every event of the session', () => {
+        logService.ingestEvents([
+            makeCommand({ id: 'c1', sessionId: 's1' }),
+            makeCommand({ id: 'c2', sessionId: 's1' }),
+            makeCommand({ id: 'c3', sessionId: 's2' }),
+        ]);
+
+        const updated = logService.stampSessionTitle('s1', '  Chat title  ');
+        assert.strictEqual(updated, 2, 'both events of s1 are stamped');
+
+        const stamped = logService.getEvents({ sessionId: 's1' });
+        assert.deepStrictEqual(stamped.map((e) => e.sessionTitle), ['Chat title', 'Chat title']);
+        assert.deepStrictEqual(
+            logService.getEvents({ sessionId: 's2' }).map((e) => e.sessionTitle),
+            [undefined],
+            'other sessions are untouched'
+        );
+    });
+
+    test('stampSessionTitle is a no-op for blank titles and already-current events', () => {
+        logService.ingestEvents([makeCommand({ id: 'c1', sessionId: 's1' })]);
+
+        assert.strictEqual(logService.stampSessionTitle('s1', undefined), 0);
+        assert.strictEqual(logService.stampSessionTitle('s1', '   '), 0);
+        assert.strictEqual(logService.stampSessionTitle('', 'Title'), 0);
+
+        assert.strictEqual(logService.stampSessionTitle('s1', 'Title'), 1);
+        assert.strictEqual(logService.stampSessionTitle('s1', 'Title'), 0, 'unchanged title is not rewritten');
+        assert.strictEqual(logService.stampSessionTitle('unknown-session', 'Title'), 0);
+    });
+
     test('dispose closes the store', () => {
         logService.dispose();
         assert.strictEqual(logService.store.isOpen, false);

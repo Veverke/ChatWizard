@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { SessionIndex } from '../index/sessionIndex';
 import { parseCopilotSession } from '../parsers/copilot';
+import { parseCopilotAgentSession } from '../parsers/copilotAgent';
 import { parseClaudeSession, DEFAULT_MAX_LINE_CHARS } from '../parsers/claude';
 import {
     discoverCopilotWorkspaces,
@@ -10,13 +11,20 @@ import {
     listSessionFiles,
     listSessionFilesAsync,
     getWorkspaceStorageRoots,
+    discoverCopilotAgentSessionsAsync,
+    getCopilotAgentSessionStateRoot,
 } from '../readers/copilotWorkspace';
 import { Session, SessionSource } from '../types/index';
 import { resolveClaudeProjectsPath, resolveClineStoragePath, resolveRooCodeStoragePath, resolveCursorStoragePath, resolveWindsurfStoragePath, resolveAntigravityBrainPath } from './configPaths';
 import { WorkspaceScopeManager } from './workspaceScope';
 import { getSharedChannel } from '../utils/logger';
-import { discoverClineTasksAsync, discoverRooCodeTasksAsync } from '../readers/clineWorkspace';
-import { parseClineTask } from '../parsers/cline';
+import {
+    discoverClineTasksAsync,
+    discoverRooCodeTasksAsync,
+    discoverClineV4SessionsAsync,
+    getClineV4SessionsRoot,
+} from '../readers/clineWorkspace';
+import { parseClineTask, parseClineV4Session } from '../parsers/cline';
 import { discoverCursorWorkspacesAsync, getCursorGlobalDbPath } from '../readers/cursorWorkspace';
 import { parseCursorWorkspace, parseCursorGlobalDb } from '../parsers/cursor';
 import { discoverWindsurfWorkspacesAsync } from '../readers/windsurfWorkspace';
@@ -215,6 +223,32 @@ export class ChatWizardWatcher implements vscode.Disposable {
                     void this.indexFile(fullPath, 'copilot', wsId, wsPath);
                 });
             }
+
+            // Copilot agent-host sessions (VS Code 1.146+ / Copilot Chat 1.0+):
+            // `<COPILOT_HOME || ~/.copilot>/session-state/<id>/events.jsonl`.
+            // They are global (not per VS Code workspace), so they are watched
+            // once — outside the per-workspace loop above.
+            const agentRoot = getCopilotAgentSessionStateRoot();
+            if (fs.existsSync(agentRoot)) {
+                const agentPattern = new vscode.RelativePattern(
+                    vscode.Uri.file(agentRoot),
+                    '*/{events.jsonl,workspace.yaml}'
+                );
+                const agentWatcher = vscode.workspace.createFileSystemWatcher(agentPattern);
+
+                agentWatcher.onDidCreate((uri) => this.onCopilotAgentFileChanged(uri));
+                agentWatcher.onDidChange((uri) => this.onCopilotAgentFileChanged(uri));
+                agentWatcher.onDidDelete((uri) => {
+                    // Only a removed transcript removes the session; the
+                    // workspace.yaml can be rewritten while the chat runs.
+                    if (!uri.fsPath.endsWith('events.jsonl')) { return; }
+                    const sessionId = path.basename(path.dirname(uri.fsPath));
+                    this.index.remove(sessionId);
+                    this.channel.appendLine(`[live] removed copilot agent session ${sessionId}`);
+                });
+
+                this.disposables.push(agentWatcher);
+            }
         }
 
         if (indexCline) {
@@ -236,6 +270,32 @@ this.index.remove(taskId);
             });
 
             this.disposables.push(clineWatcher);
+
+            // Cline 4.x keeps its history in `~/.cline/data/sessions/<id>/`
+            // (`<id>.json` metadata + `<id>.messages.json` transcript) instead of
+            // VS Code's globalStorage — watch both files, since the transcript
+            // grows while a task runs and the metadata is rewritten on exit.
+            const clineV4Root = getClineV4SessionsRoot();
+            if (fs.existsSync(clineV4Root)) {
+                const clineV4Pattern = new vscode.RelativePattern(
+                    vscode.Uri.file(clineV4Root),
+                    '*/*.json'
+                );
+                const clineV4Watcher = vscode.workspace.createFileSystemWatcher(clineV4Pattern);
+
+                clineV4Watcher.onDidCreate((uri) => this.onClineV4FileChanged(uri));
+                clineV4Watcher.onDidChange((uri) => this.onClineV4FileChanged(uri));
+                clineV4Watcher.onDidDelete((uri) => {
+                    // Only a vanished metadata file removes the session; the
+                    // transcript can be rotated/re-written mid-session.
+                    if (uri.fsPath.endsWith('.messages.json')) { return; }
+                    const sessionId = path.basename(path.dirname(uri.fsPath));
+                    this.index.remove(sessionId);
+                    this.channel.appendLine(`[live] removed cline 4.x session ${sessionId}`);
+                });
+
+                this.disposables.push(clineV4Watcher);
+            }
         }
 
         if (indexRooCode) {
@@ -489,8 +549,8 @@ this.index.remove(taskId);
                 const [claudeSessions, copilotSessions, clineSessions, rooCodeSessions, cursorSessions, windsurfSessions, aiderSessions, antigravitySessions, antigravityJsonSessions, continueSessions, amazonQSessions, geminiSessions, tabnineSessions] = await Promise.all([
                     // Always pass selectedIds (even empty array) — empty = index nothing, no fallback to all.
                     indexClaude       ? this.collectClaudeSessionsAsync(makeProgress('claude'),      selectedIds)  : Promise.resolve([]),
-                    indexCopilot      ? this.collectCopilotSessionsAsync(makeProgress('copilot'),    selectedIds)  : Promise.resolve([]),
-                    indexCline        ? this.collectClineTasksAsync(makeProgress('cline'))                         : Promise.resolve([]),
+                    indexCopilot      ? this.collectAllCopilotSessionsAsync(makeProgress('copilot'),    selectedIds)  : Promise.resolve([]),
+                    indexCline        ? this.collectClineSessionsAsync(makeProgress('cline'))                      : Promise.resolve([]),
                     indexRooCode      ? this.collectRooCodeTasksAsync(makeProgress('roo'))                         : Promise.resolve([]),
                     indexCursor       ? this.collectCursorSessionsAsync(makeProgress('cursor'), undefined, undefined, selectedIds)   : Promise.resolve([]),
                     indexWindsurf     ? this.collectWindsurfSessionsAsync(makeProgress('windsurf'), undefined, selectedIds)           : Promise.resolve([]),
@@ -710,6 +770,65 @@ this.index.remove(taskId);
         }
     }
 
+    /**
+     * Async: every Copilot session — the legacy per-workspace
+     * `chatSessions/*.jsonl` files *and* the newer agent-host sessions in
+     * `~/.copilot/session-state/<id>/`.
+     */
+    async collectAllCopilotSessionsAsync(
+        onProgress?: (current: number, total: number) => void,
+        selectedIds?: string[]
+    ): Promise<Session[]> {
+        const [legacy, agent] = await Promise.all([
+            this.collectCopilotSessionsAsync(onProgress, selectedIds),
+            this.collectCopilotAgentSessionsAsync(),
+        ]);
+        return [...legacy, ...agent];
+    }
+
+    /**
+     * Async: parse every Copilot **agent-host** session
+     * (`<COPILOT_HOME || ~/.copilot>/session-state/<id>/`).
+     *
+     * VS Code 1.146+ / Copilot Chat 1.0+ writes new chats here instead of
+     * `workspaceStorage/<hash>/chatSessions/*.jsonl`, so without this the
+     * Sessions view never shows a chat started after the upgrade.
+     *
+     * These sessions are global (not per VS Code workspace), so they are not
+     * narrowed by the persisted workspace scope — the same choice the Cline 4.x
+     * layout gets. Each one carries its own `cwd`, so workspace grouping and
+     * the workspace-path filters still work.
+     */
+    async collectCopilotAgentSessionsAsync(
+        onProgress?: (current: number, total: number) => void,
+        sessionStateRootOverride?: string
+    ): Promise<Session[]> {
+        try {
+            const infos = await discoverCopilotAgentSessionsAsync(sessionStateRootOverride);
+            const total = infos.length;
+            let current = 0;
+
+            const results = await Promise.all(infos.map(async (info) => {
+                const result = parseCopilotAgentSession(info.sessionDir);
+                current++;
+                onProgress?.(current, total);
+                if (result.errors.length > 0) {
+                    this.channel.appendLine(`[warn] Copilot agent session parse errors in ${info.sessionDir}: ${result.errors.join('; ')}`);
+                }
+                if (result.session.messages.length === 0 ||
+                    result.session.createdAt === new Date(0).toISOString()) {
+                    return null;
+                }
+                return result.session;
+            }));
+
+            return results.filter((s): s is Session => s !== null);
+        } catch (err) {
+            this.channel.appendLine(`[error] Failed to collect Copilot agent sessions: ${err}`);
+            return [];
+        }
+    }
+
     /** Async: parse all Cline tasks using non-blocking directory reads. */
     async collectClineTasksAsync(
         onProgress?: (current: number, total: number) => void,
@@ -738,6 +857,58 @@ this.index.remove(taskId);
             return results.filter((s): s is Session => s !== null);
         } catch (err) {
             this.channel.appendLine(`[error] Failed to collect Cline tasks: ${err}`);
+            return [];
+        }
+    }
+
+    /**
+     * Async: parse every Cline session — legacy `tasks/<id>/` directories *and*
+     * Cline 4.x `<data>/sessions/<id>/` directories.
+     *
+     * Cline 4.x moved its history out of VS Code's globalStorage into
+     * `~/.cline/data`, leaving the old task directories behind, so both layouts
+     * are read. Nothing is de-duplicated: the two id spaces cannot collide
+     * (legacy ids are bare epoch millis, 4.x ids are `<epoch>_<suffix>`).
+     */
+    async collectClineSessionsAsync(
+        onProgress?: (current: number, total: number) => void,
+        _clineRootOverride?: string,
+        _clineV4RootOverride?: string
+    ): Promise<Session[]> {
+        const [legacy, v4] = await Promise.all([
+            this.collectClineTasksAsync(onProgress, _clineRootOverride),
+            this.collectClineV4SessionsAsync(undefined, _clineV4RootOverride),
+        ]);
+        return [...legacy, ...v4];
+    }
+
+    /** Async: parse all Cline 4.x session directories (new `~/.cline/data` layout). */
+    async collectClineV4SessionsAsync(
+        onProgress?: (current: number, total: number) => void,
+        sessionsRootOverride?: string
+    ): Promise<Session[]> {
+        try {
+            const sessions = await discoverClineV4SessionsAsync(sessionsRootOverride);
+            const total = sessions.length;
+            let current = 0;
+
+            const results = await Promise.all(sessions.map(async (info) => {
+                const result = await parseClineV4Session(info.storageDir);
+                current++;
+                onProgress?.(current, total);
+                if (result.errors.length > 0) {
+                    this.channel.appendLine(`[warn] Cline 4.x parse errors in ${info.storageDir}: ${result.errors.join('; ')}`);
+                }
+                if (result.session.messages.length === 0 ||
+                    result.session.createdAt === new Date(0).toISOString()) {
+                    return null;
+                }
+                return result.session;
+            }));
+
+            return results.filter((s): s is Session => s !== null);
+        } catch (err) {
+            this.channel.appendLine(`[error] Failed to collect Cline 4.x sessions: ${err}`);
             return [];
         }
     }
@@ -1390,6 +1561,75 @@ this.index.remove(taskId);
         this.channel.appendLine(`[live] ${verb} cline session ${taskId}`);
     }
 
+    /**
+     * Live update for a Copilot agent-host session directory.
+     *
+     * The transcript is appended to on every turn, so parses are debounced per
+     * session directory (same mechanism the native directory watchers use).
+     */
+    private onCopilotAgentFileChanged(uri: vscode.Uri): void {
+        const sessionDir = path.dirname(uri.fsPath);
+        const prev = this._nodeDebounceMap.get(sessionDir);
+        if (prev) { clearTimeout(prev); }
+        this._nodeDebounceMap.set(sessionDir, setTimeout(() => {
+            this._nodeDebounceMap.delete(sessionDir);
+            this.onCopilotAgentSessionDirChanged(sessionDir);
+        }, 500));
+    }
+
+    private onCopilotAgentSessionDirChanged(sessionDir: string): void {
+        const sessionId = path.basename(sessionDir);
+        const result = parseCopilotAgentSession(sessionDir);
+        if (result.errors.length > 0) {
+            this.channel.appendLine(`[warn] Copilot agent session parse errors in ${sessionDir}: ${result.errors.join('; ')}`);
+        }
+        if (result.session.messages.length === 0 ||
+            result.session.createdAt === new Date(0).toISOString()) {
+            this.channel.appendLine(`[skip] empty/epoch copilot agent session ${sessionId}`);
+            return;
+        }
+        const before = this.index.size;
+        this.index.upsert(result.session);
+        this._liveTracker?.record(result.session.source, result.session.id);
+        const verb = this.index.size > before ? 'added' : 'updated';
+        this.channel.appendLine(`[live] ${verb} copilot agent session ${sessionId}`);
+    }
+
+    /**
+     * Live update for a Cline 4.x session (`~/.cline/data/sessions/<id>/`).
+     *
+     * Both files in the session directory are watched, and the transcript is
+     * rewritten on every agent turn — so the parse is debounced per session
+     * directory (the same mechanism the native directory watchers use).
+     */
+    private onClineV4FileChanged(uri: vscode.Uri): void {
+        const sessionDir = path.dirname(uri.fsPath);
+        const prev = this._nodeDebounceMap.get(sessionDir);
+        if (prev) { clearTimeout(prev); }
+        this._nodeDebounceMap.set(sessionDir, setTimeout(() => {
+            this._nodeDebounceMap.delete(sessionDir);
+            void this.onClineV4SessionDirChanged(sessionDir);
+        }, 500));
+    }
+
+    private async onClineV4SessionDirChanged(sessionDir: string): Promise<void> {
+        const sessionId = path.basename(sessionDir);
+        const result = await parseClineV4Session(sessionDir);
+        if (result.errors.length > 0) {
+            this.channel.appendLine(`[warn] Cline 4.x parse errors in ${sessionDir}: ${result.errors.join('; ')}`);
+        }
+        if (result.session.messages.length === 0 ||
+            result.session.createdAt === new Date(0).toISOString()) {
+            this.channel.appendLine(`[skip] empty/epoch cline 4.x session ${sessionId}`);
+            return;
+        }
+        const before = this.index.size;
+        this.index.upsert(result.session);
+        this._liveTracker?.record(result.session.source, result.session.id);
+        const verb = this.index.size > before ? 'added' : 'updated';
+        this.channel.appendLine(`[live] ${verb} cline 4.x session ${sessionId}`);
+    }
+
     private async onRooCodeFileChanged(uri: vscode.Uri): Promise<void> {
         const taskDir = path.dirname(uri.fsPath);
         const taskId = path.basename(taskDir);
@@ -1743,6 +1983,9 @@ export function filterSessionsByWorkspaceScope(
     }
 
     const normalizedOpen = openFolderPaths.map(p => path.normalize(p).toLowerCase());
+    // NOTE: this rule is mirrored in `src/watcher/sessionScopeFilter.ts`, which
+    // `CacheManager.loadAll` uses when restoring sessions from the SQLite cache
+    // (importing this module from the cache layer would invert the dependency).
 
     return all.filter(s => {
         if (!PATH_SCOPED_SOURCES.has(s.source)) {

@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { LogService } from './logService';
-import { firstLineOf } from './executedCommandsProvider';
+import { firstLineOf, resolveGroupTitle } from './executedCommandsProvider';
 import { LogViewFilters, emptyLogFilters, hasActiveFilters, matchesLogFilters } from './logFilters';
 import { createLogger } from '../utils/logger';
 import {
@@ -171,6 +171,10 @@ export class TimelineGroupItem extends vscode.TreeItem {
         this.description = workspacePath && workspacePath.length > 0
             ? `${count} event${count === 1 ? '' : 's'} · ${workspacePath}`
             : `${count} event${count === 1 ? '' : 's'}`;
+        // The label is the chat title; keep the full session id discoverable.
+        this.tooltip = [title, sessionKey.startsWith('tool:') ? '' : `Session: ${sessionKey}`, workspacePath ?? '']
+            .filter((line) => line && line.length > 0)
+            .join('\n');
         this.contextValue = 'logsTimelineGroup';
         this.iconPath = new vscode.ThemeIcon('history');
     }
@@ -227,6 +231,18 @@ export class UnifiedTimelineProvider implements vscode.TreeDataProvider<UnifiedT
     /** Replace all filters (search / agent / failures / kinds) and rebuild. */
     setFilters(filters: LogViewFilters): void {
         this._filters = { ...filters };
+        this.refresh();
+    }
+
+    /**
+     * Restrict this section to the given workspace roots (the VS Code open
+     * folders). An empty array clears the restriction.
+     */
+    setWorkspaceScope(workspacePaths: string[]): void {
+        this._filters = {
+            ...this._filters,
+            workspacePaths: workspacePaths.length > 0 ? [...workspacePaths] : undefined,
+        };
         this.refresh();
     }
 
@@ -302,6 +318,7 @@ export class UnifiedTimelineProvider implements vscode.TreeDataProvider<UnifiedT
             if (!matchesLogFilters(event, {
                 search: this._filters.search,
                 failuresOnly: this._filters.failuresOnly,
+                workspacePaths: this._filters.workspacePaths,
             })) {
                 continue;
             }
@@ -319,8 +336,7 @@ export class UnifiedTimelineProvider implements vscode.TreeDataProvider<UnifiedT
             sessionEvents.sort((a, b) => (b.timestamp ?? '').localeCompare(a.timestamp ?? ''));
             const workspacePath = sessionEvents.find((e) => e.workspacePath && e.workspacePath.length > 0)?.workspacePath;
             const sessionId = sessionEvents.find((e) => e.sessionId)?.sessionId;
-            const customTitle = sessionId !== undefined ? this.resolveSessionTitle?.(sessionId) : undefined;
-            const title = sessionKeyTitle(key, customTitle);
+            const title = sessionKeyTitle(key, sessionId, sessionEvents, this.resolveSessionTitle);
             groups.push(new TimelineGroupItem(key, title, sessionEvents, workspacePath));
         }
 
@@ -343,10 +359,18 @@ function groupKeyOf(event: LogEvent): string {
     return event.sessionId ?? `tool:${event.tool}`;
 }
 
-function sessionKeyTitle(key: string, customTitle: string | undefined): string {
-    if (customTitle && customTitle.trim().length > 0) { return customTitle.trim(); }
+function sessionKeyTitle(
+    key: string,
+    sessionId: string | undefined,
+    events: LogEvent[],
+    titleResolver: ((sessionId: string) => string | undefined) | undefined
+): string {
+    if (sessionId !== undefined) {
+        // Live index title → harvested title → `Session <id>`.
+        return resolveGroupTitle(sessionId, titleResolver, events);
+    }
     if (key.startsWith('tool:')) {
         return `${key.slice(5)} (unsessioned)`;
     }
-    return `Session ${key.length > 12 ? key.slice(0, 12) : key}`;
+    return resolveGroupTitle(key, titleResolver, events);
 }

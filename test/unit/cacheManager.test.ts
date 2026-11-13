@@ -469,6 +469,73 @@ suite('CacheManager – loadAll scoping and write-path variants', () => {
         assert.ok(index.get('global'));
     });
 
+    test('loadAll restores path-scoped sources whose id is not a workspace hash', async () => {
+        // Cline 4.x sessions use the session id as workspaceId; Cline / Roo /
+        // Aider are scoped by workspacePath, never by workspace id. They must
+        // survive a cache restore or newer chats vanish on the second start.
+        cache.upsertSessions([
+            makeSession({ id: 'cline-v4', source: 'cline', workspaceId: '1794419386202_jotez', workspacePath: '/repo' }),
+            makeSession({ id: 'aider', source: 'aider', workspaceId: 'aider-hash', workspacePath: '/repo' }),
+            makeSession({ id: 'hash-session', source: 'copilot', workspaceId: 'ws-hash-1', workspacePath: '/repo' }),
+        ]);
+
+        const index = new SessionIndex();
+        await cache.loadAll(index, ['ws-hash-1']);
+
+        assert.ok(index.get('cline-v4'), 'Cline 4.x session restored despite a non-hash workspace id');
+        assert.ok(index.get('aider'), 'Aider session restored despite a non-hash workspace id');
+        assert.ok(index.get('hash-session'));
+    });
+
+    test('loadAll restores global Copilot agent chats', async () => {
+        cache.upsertSessions([
+            makeSession({ id: 'agent-chat', source: 'copilot', workspaceId: 'copilot-agent', workspacePath: '/repo' }),
+            makeSession({ id: 'other-ws', source: 'copilot', workspaceId: 'ws-hash-2', workspacePath: '/other' }),
+        ]);
+
+        const index = new SessionIndex();
+        await cache.loadAll(index, ['ws-hash-1']);
+
+        assert.ok(index.get('agent-chat'), 'agent-host chat is restored as a global workspace');
+        assert.ok(!index.get('other-ws'), 'a different workspace hash is still excluded');
+    });
+
+    test('loadAll restores agent chats cached under their old cwd workspace id', async () => {
+        // A previous build stored the agent session with `workspace_id = cwd`
+        // instead of `copilot-agent`; it must still come back.
+        cache.upsertSession(makeSession({
+            id: 'legacy-agent',
+            source: 'copilot',
+            workspaceId: 'C:\\repos\\chatwizard',
+            workspacePath: 'C:\\repos\\chatwizard',
+            filePath: 'C:\\Users\\me\\.copilot\\session-state\\legacy-agent\\events.jsonl',
+        }));
+
+        const index = new SessionIndex();
+        await cache.loadAll(index, ['ws-hash-unrelated']);
+
+        assert.ok(index.get('legacy-agent'), 'agent chat restored from a legacy cache row');
+    });
+
+    test('loadAll applies the open-folder scope to path-scoped sources', async () => {
+        cache.upsertSessions([
+            makeSession({ id: 'in-scope', source: 'cline', workspaceId: 'task-1', workspacePath: path.join('/repos', 'mine', 'app') }),
+            makeSession({ id: 'out-of-scope', source: 'cline', workspaceId: 'task-2', workspacePath: path.join('/repos', 'mine', 'other') }),
+            makeSession({ id: 'id-scoped', source: 'copilot', workspaceId: 'ws-hash-1', workspacePath: path.join('/repos', 'elsewhere') }),
+        ]);
+
+        const index = new SessionIndex();
+        await cache.loadAll(
+            index,
+            ['ws-hash-1'],
+            [path.join('/repos', 'mine', 'app')]
+        );
+
+        assert.ok(index.get('in-scope'), 'session under the open folder is restored');
+        assert.ok(!index.get('out-of-scope'), 'session outside the open folder is dropped');
+        assert.ok(index.get('id-scoped'), 'ID-scoped sources are not path-filtered');
+    });
+
     test('loadAll restores a session that has no messages', async () => {
         cache.upsertSession(makeSession({ id: 'no-messages', messages: [] }));
 

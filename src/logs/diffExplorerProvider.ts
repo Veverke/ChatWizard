@@ -246,7 +246,23 @@ export class DiffExplorerProvider implements vscode.TreeDataProvider<DiffExplore
      * apply here — the Diff Explorer never lists command/error kinds.
      */
     setFilters(filters: LogViewFilters): void {
-        this._filters = { search: filters.search, tool: filters.tool };
+        this._filters = {
+            search: filters.search,
+            tool: filters.tool,
+            workspacePaths: filters.workspacePaths,
+        };
+        this.refresh();
+    }
+
+    /**
+     * Restrict this section to the given workspace roots (the VS Code open
+     * folders). An empty array clears the restriction.
+     */
+    setWorkspaceScope(workspacePaths: string[]): void {
+        this._filters = {
+            ...this._filters,
+            workspacePaths: workspacePaths.length > 0 ? [...workspacePaths] : undefined,
+        };
         this.refresh();
     }
 
@@ -337,7 +353,10 @@ export class DiffExplorerProvider implements vscode.TreeDataProvider<DiffExplore
 
         events = events
             .filter(isDiffCandidate)
-            .filter((event) => matchesLogFilters(event, { search: this._filters.search }));
+            .filter((event) => matchesLogFilters(event, {
+                search: this._filters.search,
+                workspacePaths: this._filters.workspacePaths,
+            }));
 
         const byWorkspace = new Map<string, LogEvent[]>();
         for (const event of events) {

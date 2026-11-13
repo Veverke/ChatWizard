@@ -236,9 +236,25 @@ export class CommandsViewProvider implements vscode.TreeDataProvider<CommandsTre
 
     /** Remove every filter (search, agent, failures and event kind). */
     clearFilters(): void {
-        this.executedCommands.setFilters(emptyLogFilters());
-        this.timeline.setFilters(emptyLogFilters());
-        this.diffs.setFilters(emptyLogFilters());
+        // Preserve the workspace scope: it is a structural view scope, not a
+        // user filter ("clear filters" must not start mixing repositories).
+        const workspacePaths = this.getFilters().workspacePaths;
+        const empty: LogViewFilters = { workspacePaths };
+        this.executedCommands.setFilters(empty);
+        this.timeline.setFilters(empty);
+        this.diffs.setFilters(empty);
+    }
+
+    /**
+     * Restrict all three sections to the given workspace roots (the VS Code
+     * open folders). Called on activation and whenever the workspace folders
+     * change, so the Commands view never shows another repository's activity.
+     */
+    setWorkspaceScope(workspacePaths: string[]): void {
+        this.executedCommands.setWorkspaceScope(workspacePaths);
+        this.timeline.setWorkspaceScope(workspacePaths);
+        this.diffs.setWorkspaceScope(workspacePaths);
+        this._syncSectionDescriptions();
     }
 
     /**
@@ -248,12 +264,15 @@ export class CommandsViewProvider implements vscode.TreeDataProvider<CommandsTre
     getFilters(): LogViewFilters {
         const commands = this.executedCommands.getFilters();
         const timeline = this.timeline.getFilters();
-        return {
+        const filters: LogViewFilters = {
             search: timeline.search ?? commands.search,
             tool: timeline.tool ?? commands.tool,
             failuresOnly: timeline.failuresOnly ?? commands.failuresOnly,
             types: timeline.types,
         };
+        const workspacePaths = timeline.workspacePaths ?? commands.workspacePaths;
+        if (workspacePaths !== undefined) { filters.workspacePaths = workspacePaths; }
+        return filters;
     }
 
     /** True when any filter is active (drives the "· filtered" section suffix). */

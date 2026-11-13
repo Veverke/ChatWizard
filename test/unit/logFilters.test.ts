@@ -10,6 +10,7 @@
  */
 
 import * as assert from 'assert';
+import * as path from 'path';
 import {
     LogViewFilters,
     describeLogFilters,
@@ -20,6 +21,7 @@ import {
     isFailedCommand,
     isFailureEvent,
     matchesLogFilters,
+    matchesWorkspaceScope,
     matchesSearch,
     normalizeSearchQuery,
     searchTokens,
@@ -270,6 +272,45 @@ suite('logFilters — filter descriptions', () => {
             describeLogFilters(filters, (tool) => (tool === 'copilot' ? 'GitHub Copilot' : tool)),
             '"npm test" · GitHub Copilot · failures only · kind: Error / Failure'
         );
+    });
+});
+
+suite('logFilters — workspace scope (structural)', () => {
+    const eventAt = (workspacePath: string | undefined) => ({
+        type: 'command' as const,
+        id: `c-${workspacePath ?? 'none'}`,
+        timestamp: '2026-01-01T10:00:00.000Z',
+        tool: 'cline' as const,
+        sessionId: 's1',
+        commandText: 'npm test',
+        workspacePath,
+    });
+
+    test('matchesWorkspaceScope keeps events under the open folder (case-insensitive on Windows)', () => {
+        const open = path.join('C:', 'Repos', 'Mine', 'ChatWizard');
+        assert.strictEqual(matchesWorkspaceScope(eventAt(path.join('C:', 'Repos', 'Mine', 'ChatWizard', 'src')), [open]), true);
+        assert.strictEqual(matchesWorkspaceScope(eventAt(path.join('c:', 'repos', 'mine', 'chatwizard')), [open]), true,
+            'workspace roots compare case-insensitively');
+        assert.strictEqual(matchesWorkspaceScope(eventAt(path.join('C:', 'Repos', 'Mine', 'ChatWizard-old')), [open]), false,
+            'a sibling folder sharing a prefix is NOT in scope');
+        assert.strictEqual(matchesWorkspaceScope(eventAt(path.join('C:', 'Repos', 'Mine', 'vscode-extension-analytics')), [open]), false);
+    });
+
+    test('no scope means everything matches', () => {
+        assert.strictEqual(matchesWorkspaceScope(eventAt('C:\\anywhere'), []), true);
+        assert.strictEqual(matchesWorkspaceScope(eventAt(undefined), ['C:\\repo']), true,
+            'events without a recorded workspace are kept (cannot be attributed)');
+    });
+
+    test('the workspace scope is applied by matchesLogFilters but is not a user filter', () => {
+        const open = path.join('C:', 'Repos', 'Mine', 'ChatWizard');
+        const filters: LogViewFilters = { workspacePaths: [open] };
+
+        assert.strictEqual(matchesLogFilters(eventAt(path.join('C:', 'Repos', 'Mine', 'ChatWizard', 'docs')), filters), true);
+        assert.strictEqual(matchesLogFilters(eventAt(path.join('C:', 'Repos', 'Mine', 'other')), filters), false);
+        assert.strictEqual(hasActiveFilters(filters), false,
+            '"filtered" must not be reported just because a workspace is open');
+        assert.strictEqual(describeLogFilters(filters), '');
     });
 });
 

@@ -30,6 +30,29 @@ export const MAX_COMMANDS_PER_QUERY = 2000;
 /** Resolve a human-readable session title for an id, when available. */
 export type ExecSessionTitleResolver = (sessionId: string) => string | undefined;
 
+/**
+ * Resolve the label for a session group.
+ *
+ * Order (mirrors the Sessions view — the chat title, never the raw id):
+ *   1. the live session index (so a renamed chat is reflected immediately),
+ *   2. the title captured on the events when they were harvested (sessions
+ *      outside the current workspace scope / retention window),
+ *   3. `Session <id>` only as a last resort.
+ */
+export function resolveGroupTitle(
+    sessionId: string,
+    titleResolver: ExecSessionTitleResolver | undefined,
+    events: ReadonlyArray<{ sessionTitle?: string }>
+): string {
+    const live = titleResolver?.(sessionId);
+    if (live && live.trim().length > 0) { return live.trim(); }
+
+    const harvested = events.find((e) => e.sessionTitle && e.sessionTitle.trim().length > 0)?.sessionTitle;
+    if (harvested && harvested.trim().length > 0) { return harvested.trim(); }
+
+    return `Session ${sessionId.length > 12 ? sessionId.slice(0, 12) : sessionId}`;
+}
+
 // ---------------------------------------------------------------------------
 // Display helpers (pure, unit-tested)
 // ---------------------------------------------------------------------------
@@ -69,6 +92,10 @@ export class ExecCommandsGroupItem extends vscode.TreeItem {
         this.description = workspacePath && workspacePath.length > 0
             ? `${count} command${count === 1 ? '' : 's'} · ${workspacePath}`
             : `${count} command${count === 1 ? '' : 's'}`;
+        // The label is the chat title; keep the full session id discoverable.
+        this.tooltip = [title, `Session: ${sessionId}`, workspacePath ?? '']
+            .filter((line) => line && line.length > 0)
+            .join('\n');
         this.contextValue = 'execCommandsGroup';
         this.iconPath = new vscode.ThemeIcon('history');
     }
@@ -130,7 +157,17 @@ export class ExecutedCommandsProvider implements vscode.TreeDataProvider<ExecCom
             search: filters.search,
             tool: filters.tool,
             failuresOnly: filters.failuresOnly,
+            workspacePaths: filters.workspacePaths,
         };
+        this.refresh();
+    }
+
+    /**
+     * Restrict this section to the given workspace roots (the VS Code open
+     * folders). An empty array clears the restriction.
+     */
+    setWorkspaceScope(workspacePaths: string[]): void {
+        this._filters = { ...this._filters, workspacePaths: workspacePaths.length > 0 ? [...workspacePaths] : undefined };
         this.refresh();
     }
 
@@ -207,6 +244,7 @@ export class ExecutedCommandsProvider implements vscode.TreeDataProvider<ExecCom
             if (!matchesLogFilters(event, {
                 search: this._filters.search,
                 failuresOnly: this._filters.failuresOnly,
+                workspacePaths: this._filters.workspacePaths,
             })) {
                 continue;
             }
@@ -226,10 +264,7 @@ export class ExecutedCommandsProvider implements vscode.TreeDataProvider<ExecCom
         for (const [sessionId, commands] of bySession) {
             commands.sort((a, b) => (b.timestamp ?? '').localeCompare(a.timestamp ?? ''));
             const workspacePath = commands.find((c) => c.workspacePath)?.workspacePath;
-            const customTitle = this.resolveSessionTitle?.(sessionId);
-            const title = customTitle && customTitle.trim().length > 0
-                ? customTitle.trim()
-                : `Session ${sessionId.length > 12 ? sessionId.slice(0, 12) : sessionId}`;
+            const title = resolveGroupTitle(sessionId, this.resolveSessionTitle, commands);
             groups.push(new ExecCommandsGroupItem(sessionId, title, commands, workspacePath));
         }
 

@@ -93,6 +93,7 @@ import { PromptAnalyzer } from './analytics/promptAnalyzer';
 import { readChronicleCheckpoints, readChronicleSessions } from './parsers/chronicle';
 import { CacheIntegration } from './cache/cacheIntegration';
 import { resolveSharedCacheDir } from './utils/sharedCachePath';
+import { recordHostRuntimeInfo } from './utils/hostRuntimeInfo';
 import {
     LogService,
     createDefaultLogSourceRegistry,
@@ -167,6 +168,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         index.setRetentionDays(retentionDays);
     }
 
+    // ── Shared cache directory + extension-host runtime record ───────────────
+    // Both SQLite databases live here, and so does the record of the Electron /
+    // NODE_MODULE_VERSION the native `better-sqlite3` build must match.
+    // `scripts/rebuild-native.js` reads that record so it always rebuilds for
+    // the exact VS Code the extension is running in (the installed VS Code no
+    // longer advertises its Electron version).
+    const sharedCacheDirSetting = vscode.workspace.getConfiguration('chatwizard').get<string>('sharedCacheDir', '');
+    const sharedCacheDir = resolveSharedCacheDir(sharedCacheDirSetting);
+    const hostRuntime = recordHostRuntimeInfo(sharedCacheDir, vscode.version);
+    channel.appendLine(
+        `[Chat Wizard] Extension host: VS Code ${vscode.version}, Electron ${hostRuntime?.electron ?? process.versions['electron'] ?? '?'}, ` +
+        `Node ${hostRuntime?.node ?? process.versions['node']}, NODE_MODULE_VERSION ${hostRuntime?.modules ?? process.versions['modules'] ?? '?'}. ` +
+        `Native modules (better-sqlite3) must be built for that ABI.`
+    );
+
     // ── Feature 24: SQLite Persistent Cache ──────────────────────────────────
     // Only enable the native better-sqlite3 cache in VS Code proper.
     // Cursor, Windsurf, and other non-VS Code IDEs bundle a different Electron
@@ -183,13 +199,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (enableCache && isVSCode) {
         channel.appendLine('[Chat Wizard] Initialising SQLite persistent cache…');
         try {
-            // Feature 24b (shared cache): resolve the cache directory from the
-            // `chatwizard.sharedCacheDir` setting — empty string defaults to a
-            // cross-IDE location outside any IDE's own app-data.
-            const sharedDir = vscode.workspace.getConfiguration('chatwizard').get<string>('sharedCacheDir', '');
-            const cacheDir = resolveSharedCacheDir(sharedDir);
-            channel.appendLine(`[Chat Wizard] Cache directory: ${cacheDir}`);
-            cacheIntegration = new CacheIntegration(cacheDir);
+            // Feature 24b (shared cache): the shared cache directory is resolved
+            // once near the top of activate() — the same path the agent-log
+            // store uses, so both databases stay side by side.
+            channel.appendLine(`[Chat Wizard] Cache directory: ${sharedCacheDir}`);
+            cacheIntegration = new CacheIntegration(sharedCacheDir);
             channel.appendLine('[Chat Wizard] SQLite persistent cache initialised.');
         } catch (err) {
             channel.appendLine(`[Chat Wizard] SQLite cache init failed (continuing without cache): ${err}`);
@@ -210,16 +224,36 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // the whole watch-logs UI down with it.
     let logService: LogService | undefined;
     try {
-        const sharedDir = vscode.workspace.getConfiguration('chatwizard').get<string>('sharedCacheDir', '');
-        const cacheDir = resolveSharedCacheDir(sharedDir);
-        logService = new LogService(cacheDir, createDefaultLogSourceRegistry());
+        logService = new LogService(sharedCacheDir, createDefaultLogSourceRegistry());
         if (logService.isPersistent) {
             channel.appendLine(`[Chat Wizard] Watch-logs event store initialised (${logService.store.dbPath}).`);
         } else {
+            const reason = logService.storeError?.message ?? 'SQLite unavailable';
             channel.appendLine(
                 '[Chat Wizard] Watch-logs event store running IN MEMORY ' +
-                `(events are not persisted): ${logService.storeError?.message ?? 'SQLite unavailable'}`
+                `(events are not persisted, the Commands view starts empty): ${reason}`
             );
+            channel.appendLine(
+                '[Chat Wizard] The SQLite binding (better-sqlite3) must be compiled for this ' +
+                `extension host's ABI (NODE_MODULE_VERSION ${process.versions['modules'] ?? '?'}). ` +
+                'Rebuild it with `npm run rebuild:native` — the script now reads ' +
+                `vscode-host-runtime.json from the cache directory (Electron ${hostRuntime?.electron ?? '?'}).`
+            );
+            // An empty Commands view with a full database is impossible to
+            // diagnose otherwise (`vscode.window.showWarningMessage` avoids
+            // stealing focus; the dropdown explains the fix).
+            void vscode.window
+                .showWarningMessage(
+                    'Chat Wizard: agent-log storage is unavailable for this VS Code version, so the Commands view starts empty. ' +
+                    `Reason: ${reason}`,
+                    'Show Details',
+                    'Dismiss'
+                )
+                .then((choice) => {
+                    if (choice === 'Show Details') {
+                        channel.show(true);
+                    }
+                });
         }
     } catch (err) {
         channel.appendLine(`[Chat Wizard] Watch-logs store init failed (continuing without it): ${err}`);
@@ -235,8 +269,34 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // Timeline + Diff Explorer panels on top of the same store.
     if (logService) {
         try {
-            const executedCommandsProvider = new ExecutedCommandsProvider(logService, (sessionId) => index.get(sessionId)?.title);
-            const timelineProvider = new UnifiedTimelineProvider(logService, (sessionId) => index.get(sessionId)?.title);
+            /**
+             * Session label resolver shared by the Executed Commands and Unified
+             * Timeline sections.
+             *
+             * The Commands view groups rows per chat session and labels each
+             * group with the chat title the Sessions view shows — never the raw
+             * session id. Three sources, in order:
+             *   1. the live session index (custom/sidecar titles included),
+             *   2. the persistent session cache (sessions that are outside the
+             *      current workspace scope / retention window, so not indexed),
+             *   3. the title stamped on the log events at harvest time
+             *      (see `LogService.stampSessionTitle`), applied by the providers.
+             */
+            const resolveLogSessionTitle = (sessionId: string): string | undefined => {
+                try {
+                    const fromIndex = index.getTitleFor(sessionId);
+                    if (fromIndex && fromIndex.trim().length > 0) { return fromIndex; }
+                } catch {
+                    // Index lookups must never break tree rendering.
+                }
+                try {
+                    return cacheIntegration?.cacheManager.getSessionTitle(sessionId);
+                } catch {
+                    return undefined;
+                }
+            };
+            const executedCommandsProvider = new ExecutedCommandsProvider(logService, resolveLogSessionTitle);
+            const timelineProvider = new UnifiedTimelineProvider(logService, resolveLogSessionTitle);
             const diffExplorerProvider = new DiffExplorerProvider(logService);
             // One sidebar view ("Commands") whose three sections are the former
             // Executed Commands / Unified Timeline / Diff Explorer panels.
@@ -246,6 +306,28 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 diffExplorerProvider
             );
             context.subscriptions.push(commandsViewProvider);
+
+            // ── Commands view: restrict to the current workspace ────────────
+            // The agent-log store is shared across every workspace on the
+            // machine (it lives in the shared cache directory), so without this
+            // the view mixes in commands from other repositories that happen to
+            // be indexed. Scope by the VS Code open folder(s) and re-apply
+            // whenever the folders change.
+            const applyLogWorkspaceScope = (): void => {
+                const paths = (vscode.workspace.workspaceFolders ?? []).map(f => f.uri.fsPath);
+                try {
+                    commandsViewProvider.setWorkspaceScope(paths);
+                    channel.appendLine(
+                        `[Chat Wizard] Commands view workspace scope: ${paths.length > 0 ? paths.join(', ') : '(all workspaces)'}`
+                    );
+                } catch (err) {
+                    channel.appendLine(`[Chat Wizard] Could not apply Commands view workspace scope: ${err}`);
+                }
+            };
+            applyLogWorkspaceScope();
+            context.subscriptions.push(
+                vscode.workspace.onDidChangeWorkspaceFolders(() => applyLogWorkspaceScope())
+            );
             // Phase 4 (performance): the harvesters fire once per session file,
             // so the initial index can request hundreds of rebuilds in a burst.
             // Debounce them into one refresh per quiet window.
@@ -2729,6 +2811,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         await scopeManager.initDefault(allAvailable);
 
         const selectedIds = scopeManager.getSelectedIds();
+        const openFolderPaths = scopeManager.getOpenFolderPaths();
         channel.appendLine(
             `[Chat Wizard] Workspace scope initialised — ${selectedIds.length} workspace(s) selected: ${selectedIds.join(', ')}`
         );
@@ -2738,7 +2821,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             const cachedCount = cacheIntegration.cacheManager.getSessionCount();
             if (cachedCount > 0) {
                 channel.appendLine(`[Chat Wizard] Loading ${cachedCount} sessions from SQLite cache…`);
-                await cacheIntegration.loadIntoIndex(index, selectedIds);
+                // Passing the open-folder paths keeps a cache restore identical to a
+                // fresh parse: path-scoped sources (Cline/Roo/Aider) and global
+                // sources (Copilot agent chats) are no longer dropped just because
+                // their workspace id is not a VS Code workspace hash.
+                await cacheIntegration.loadIntoIndex(index, selectedIds, openFolderPaths);
                 channel.appendLine(`[Chat Wizard] Loaded ${cachedCount} cached sessions — only changed files will be re-parsed.`);
             } else {
                 channel.appendLine('[Chat Wizard] Empty cache — will re-parse all source files.');

@@ -18,7 +18,7 @@ import * as path from 'path';
 import { getAntigravityBrainRoot } from '../readers/antigravityWorkspace';
 import { getCursorStorageRoot } from '../readers/cursorWorkspace';
 import { getWindsurfStorageRoot } from '../readers/windsurfWorkspace';
-import { getClineStorageRoot, getRooCodeStorageRoot } from '../readers/clineWorkspace';
+import { getClineStorageRoot, getClineV4SessionsRoot, getRooCodeStorageRoot } from '../readers/clineWorkspace';
 import { getWorkspaceStorageRoots } from '../readers/copilotWorkspace';
 import { LogSourceTool } from './types';
 
@@ -170,8 +170,13 @@ export function createDefaultLogSourceRegistry(): LogSourceRegistry {
         tool: 'cline',
         displayName: 'Cline',
         format: 'json',
-        filePatterns: ['**/api_conversation_history.json', '**/ui_messages.json'],
-        logRoots: [getClineStorageRoot()],
+        // Legacy globalStorage task layout + Cline 4.x `~/.cline/data` layout.
+        filePatterns: [
+            '**/api_conversation_history.json',
+            '**/ui_messages.json',
+            '**/*.messages.json',
+        ],
+        logRoots: [getClineStorageRoot(), getClineV4SessionsRoot()],
         enabledSettingKey: 'chatwizard.indexCline',
         pathOverrideSettingKey: 'chatwizard.clineStoragePath',
         notes: 'ui_messages.json carries terminal commands, tool calls, file ops/edits and errors per task — the Phase 3 adapter (shared with Roo Code).',

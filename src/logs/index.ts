@@ -22,7 +22,14 @@ export * from './logService';
 export * from './logFilters';
 export * from './logStats';
 export * from './adapters/copilotLogAdapter';
+export * from './adapters/copilotAgentLogAdapter';
 export * from './adapters/clineLogAdapter';
+export * from './adapters/clineV4LogAdapter';
+// `agentToolMapping` is intentionally NOT re-exported: several of its helper
+// names (`extractFilePath`, `extractSearchReplace`) already exist on the legacy
+// adapters above. Import it directly where the shared mapping is needed.
+export { classifyAgentTool, normalizeToolName, fileOperationOf } from './adapters/agentToolMapping';
+export type { AgentToolKind, AgentFileOperation } from './adapters/agentToolMapping';
 export * from './adapters/aiderLogAdapter';
 export * from './adapters/windsurfLogAdapter';
 export * from './copilotLogHarvester';

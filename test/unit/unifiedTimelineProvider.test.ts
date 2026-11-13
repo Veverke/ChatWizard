@@ -425,6 +425,39 @@ suite('UnifiedTimelineProvider — tree plumbing and title fallbacks', () => {
         assert.ok(labels.includes('Session abcdefghijkl'), `labels: ${labels.join(', ')}`);
     });
 
+    test('group titles use the title stamped on the events when the session is not resolvable', () => {
+        // Harvested events carry the chat title; the live index no longer knows
+        // this session (workspace scope changed / retention), so the id fallback
+        // must not be shown.
+        service.ingestEvents([
+            makeEvent({
+                id: 'c1',
+                sessionId: '1787652725913',
+                timestamp: '2026-01-01T10:00:00.000Z',
+                sessionTitle: 'process-request-tracking.yml workflow is failing',
+            }),
+        ]);
+
+        const provider = new UnifiedTimelineProvider(service, () => undefined);
+
+        assert.strictEqual(provider.getGroups()[0].label, 'process-request-tracking.yml workflow is failing');
+    });
+
+    test('the live resolver wins over the harvested title (renamed chats follow the Sessions view)', () => {
+        service.ingestEvents([
+            makeEvent({
+                id: 'c1',
+                sessionId: 'sess-a',
+                timestamp: '2026-01-01T10:00:00.000Z',
+                sessionTitle: 'stale harvested title',
+            }),
+        ]);
+
+        const provider = new UnifiedTimelineProvider(service, () => 'Fresh custom title');
+
+        assert.strictEqual(provider.getGroups()[0].label, 'Fresh custom title');
+    });
+
     test('a failing store degrades to an empty tree instead of throwing', () => {
         const broken = { getEvents: () => { throw new Error('store down'); } } as unknown as LogService;
         const provider = new UnifiedTimelineProvider(broken);

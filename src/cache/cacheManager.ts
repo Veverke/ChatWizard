@@ -24,6 +24,7 @@ import * as fs from 'fs';
 import { Session, Message, SessionSource } from '../types/index';
 import type { SessionIndex } from '../index/sessionIndex';
 import { CACHE_SCHEMA_VERSION } from './schemaVersion';
+import { PATH_SCOPED_SOURCES, filterSessionsByWorkspaceScope } from '../watcher/sessionScopeFilter';
 
 // ── Public Types ─────────────────────────────────────────────────────────────
 
@@ -108,11 +109,13 @@ export interface DbSessionNoteRow {
 
 export interface ICacheManager {
     open(): void;
-    loadAll(index: SessionIndex, workspaceIds?: string[]): Promise<void>;
+    loadAll(index: SessionIndex, workspaceIds?: string[], openFolderPaths?: string[]): Promise<void>;
     upsertSession(session: Session): void;
     upsertSessions(sessions: Session[]): void;
     removeSession(sessionId: string): void;
     getParseState(filePath: string): ParseState | undefined;
+    /** Cached chat title for a session id (works without the session being indexed). */
+    getSessionTitle(sessionId: string): string | undefined;
     setParseState(filePath: string, state: ParseState): void;
     searchFts(query: string, limit?: number): FtsResult[];
     addTag(sessionId: string, label: string): void;
@@ -130,6 +133,14 @@ export interface ICacheManager {
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const DB_FILENAME = 'chatwizard-cache.db';
+
+/**
+ * Workspace ids that are not VS Code workspace hashes and must always be
+ * restored from cache regardless of the persisted workspace scope:
+ *   - `cursor-global` / `windsurf-global` — AI-tool global storage DBs;
+ *   - `copilot-agent` — Copilot chats kept in `~/.copilot/session-state`.
+ */
+const GLOBAL_WORKSPACE_IDS: readonly string[] = ['cursor-global', 'windsurf-global', 'copilot-agent'];
 
 // ── CacheManager Implementation ──────────────────────────────────────────────
 
@@ -329,7 +340,7 @@ export class CacheManager implements ICacheManager {
      * Load all sessions from the SQLite DB into the provided SessionIndex.
      * This is the startup path — avoids re-parsing source files.
      */
-    async loadAll(index: SessionIndex, workspaceIds?: string[]): Promise<void> {
+    async loadAll(index: SessionIndex, workspaceIds?: string[], openFolderPaths?: string[]): Promise<void> {
         if (!this.db || !this.stmt) { this.open(); }
         if (!this.db || !this.stmt) {
             throw new Error('CacheManager failed to open database');
@@ -340,19 +351,37 @@ export class CacheManager implements ICacheManager {
 
         let sessionRows: DbSessionRow[];
         if (workspaceIds && workspaceIds.length > 0) {
-            // Always include global workspace IDs (cursor-global, windsurf-global)
-            // so that sessions from AI-tool global storage DBs are loaded from cache
-            // even when the workspace scope filter excludes them. Without this, those
-            // sessions would be silently dropped on startup, and because the index is
-            // already populated, buildInitialIndex() would be skipped — meaning they'd
-            // never be re-parsed.
+            // Always include global workspace IDs (cursor-global, windsurf-global,
+            // copilot-agent) so that sessions from AI tools with their own global
+            // storage are loaded from cache even when the workspace scope filter
+            // excludes them. Without this, those sessions would be silently
+            // dropped on startup, and because the index is already populated,
+            // buildInitialIndex() would be skipped — meaning they'd never be
+            // re-parsed.
+            //
+            // Path-scoped sources (Cline / Roo Code / Aider) are NOT filtered by
+            // workspace id at all: they are collected regardless of `selectedIds`
+            // and scoped by `workspacePath` afterwards (see the filter below).
+            // Leaving them out of the cache query used to make every Cline 4.x
+            // chat (and every cached Cline/Roo/Aider session) disappear on the
+            // second start, because its id is not a VS Code workspace hash.
             const allIds = [...workspaceIds];
-            if (!allIds.includes('cursor-global')) { allIds.push('cursor-global'); }
+            for (const globalId of GLOBAL_WORKSPACE_IDS) {
+                if (!allIds.includes(globalId)) { allIds.push(globalId); }
+            }
             const placeholders = allIds.map(() => '?').join(',');
+            const pathScoped = [...PATH_SCOPED_SOURCES].map(() => '?').join(',');
+            // `file_path LIKE '%events.jsonl'` also picks up Copilot agent chats
+            // that an older build cached under their cwd as the workspace id —
+            // without it those chats stay invisible until a full re-parse.
             const stmt = this.db.prepare(
-                `SELECT * FROM sessions WHERE workspace_id IN (${placeholders}) ORDER BY updated_at DESC`
+                `SELECT * FROM sessions
+                 WHERE workspace_id IN (${placeholders})
+                    OR source IN (${pathScoped})
+                    OR (source = 'copilot' AND file_path LIKE '%events.jsonl')
+                 ORDER BY updated_at DESC`
             );
-            sessionRows = stmt.all(...allIds) as DbSessionRow[];
+            sessionRows = stmt.all(...allIds, ...PATH_SCOPED_SOURCES) as DbSessionRow[];
         } else {
             // No filter — load all sessions (backward compat)
             sessionRows = this.stmt.getAllSessions.all() as DbSessionRow[];
@@ -379,8 +408,16 @@ export class CacheManager implements ICacheManager {
             sessions.push(session);
         }
 
+        // Apply the same workspace-scope rule a fresh parse uses, so restoring
+        // from cache and re-parsing agree on what belongs to this workspace
+        // (Cline / Roo Code / Aider are scoped by path, not by workspace id).
+        const scoped = openFolderPaths && openFolderPaths.length > 0
+            ? filterSessionsByWorkspaceScope(sessions, workspaceIds ?? [], openFolderPaths)
+            : sessions;
+        if (scoped.length === 0) { return; }
+
         // Bulk-upsert into the index
-        index.batchUpsert(sessions);
+        index.batchUpsert(scoped);
     }
 
     /**
@@ -503,6 +540,27 @@ export class CacheManager implements ICacheManager {
             lastSize: row.last_size,
             lastOffset: row.last_offset,
         };
+    }
+
+    /**
+     * Cached chat title for a session id.
+     *
+     * Used by the Commands view to label its session groups with the same title
+     * the Sessions view shows, even when the session is outside the current
+     * workspace scope (and therefore not loaded into the in-memory index).
+     * Returns `undefined` when the session is unknown or has no usable title.
+     */
+    getSessionTitle(sessionId: string): string | undefined {
+        // Read-only helper: never re-open a closed DB just to resolve a label.
+        if (!this.db || !this.stmt) { return undefined; }
+        try {
+            const row = this.stmt.getSession.get(sessionId) as { title?: string } | undefined;
+            const title = row?.title;
+            return typeof title === 'string' && title.trim().length > 0 ? title : undefined;
+        } catch {
+            // A degraded cache must never break the Commands view.
+            return undefined;
+        }
     }
 
     /**

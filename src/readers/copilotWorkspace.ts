@@ -217,3 +217,95 @@ export async function listSessionFilesAsync(storageHashDir: string): Promise<str
         return [];
     }
 }
+
+// ---------------------------------------------------------------------------
+// GitHub Copilot "agent host" sessions (VS Code 1.146+ / Copilot Chat 1.0+)
+// ---------------------------------------------------------------------------
+//
+// Newer VS Code no longer writes Copilot chats into
+// `workspaceStorage/<hash>/chatSessions/*.jsonl`. The Copilot chat host keeps
+// them in its own home directory instead:
+//
+//   <COPILOT_HOME || ~/.copilot>/session-state/<sessionId>/events.jsonl
+//   <COPILOT_HOME || ~/.copilot>/session-state/<sessionId>/workspace.yaml
+//
+// `workspace.yaml` carries the chat title (`name`), `cwd`, git branch and the
+// created/updated timestamps; `events.jsonl` is the transcript.
+// The legacy `chatSessions/*.jsonl` files are still read (older VS Code builds
+// and Copilot versions keep using them).
+
+/** One Copilot agent-host session directory. */
+export interface CopilotAgentSessionInfo {
+    /** Session id — the directory name (a UUID). */
+    sessionId: string;
+    /** Absolute path of the session directory. */
+    sessionDir: string;
+    /** `events.jsonl` — the transcript (may be missing for a brand-new chat). */
+    eventsFile: string;
+    /** `workspace.yaml` — session metadata (title, cwd, git info, timestamps). */
+    workspaceFile: string;
+}
+
+/** Copilot home directory (`COPILOT_HOME`, else `~/.copilot`). */
+export function getCopilotAgentHome(): string {
+    const configured = process.env['COPILOT_HOME']?.trim();
+    return configured && configured !== '' ? configured : path.join(os.homedir(), '.copilot');
+}
+
+/** Copilot agent-host session-state directory (`<home>/session-state`). */
+export function getCopilotAgentSessionStateRoot(): string {
+    return path.join(getCopilotAgentHome(), 'session-state');
+}
+
+/**
+ * Enumerates Copilot agent-host session directories.
+ *
+ * A directory qualifies when it has an `events.jsonl` transcript; the
+ * `workspace.yaml` metadata is optional (it is written when the chat is
+ * created, but a session started seconds ago may only have the transcript).
+ * Hidden dot-directories (e.g. `.session-operation-locks`) are skipped.
+ *
+ * @param override Override the `session-state` root (tests).
+ */
+export async function discoverCopilotAgentSessionsAsync(
+    override?: string
+): Promise<CopilotAgentSessionInfo[]> {
+    const root = (override !== undefined && override !== '') ? override : getCopilotAgentSessionStateRoot();
+
+    let entries: fs.Dirent[];
+    try {
+        entries = await fs.promises.readdir(root, { withFileTypes: true });
+    } catch {
+        // No Copilot home / older Copilot version — nothing to return.
+        return [];
+    }
+
+    const results = await Promise.all(entries.map(async (entry): Promise<CopilotAgentSessionInfo | null> => {
+        if (!entry.isDirectory() || entry.name.startsWith('.')) { return null; }
+
+        const sessionDir = path.join(root, entry.name);
+        try {
+            const lstat = await fs.promises.lstat(sessionDir);
+            if (lstat.isSymbolicLink()) { return null; }
+        } catch {
+            return null;
+        }
+
+        const eventsFile = path.join(sessionDir, 'events.jsonl');
+        try {
+            const stat = await fs.promises.stat(eventsFile);
+            if (!stat.isFile() || stat.size === 0) { return null; }
+        } catch {
+            return null;
+        }
+
+        return {
+            sessionId: entry.name,
+            sessionDir,
+            eventsFile,
+            workspaceFile: path.join(sessionDir, 'workspace.yaml'),
+        };
+    }));
+
+    return results.filter((r): r is CopilotAgentSessionInfo => r !== null);
+}
