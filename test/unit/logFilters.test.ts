@@ -346,4 +346,53 @@ suite('logFilters — resolveWorkspaceScope (Commands view)', () => {
     });
 });
 
+suite('logFilters — search text and filtering edge cases', () => {
+    test('tool-call arguments are searchable and optional', () => {
+        const withArgs = {
+            type: 'toolCall',
+            id: 't1',
+            timestamp: '2026-01-01T10:00:00.000Z',
+            tool: 'copilot',
+            sessionId: 's1',
+            toolName: 'readFile',
+            arguments: { path: '/repo/src/a.ts' },
+        } as unknown as ToolCallEvent;
+
+        const text = eventSearchText(withArgs);
+        assert.ok(text.includes('readFile'));
+        assert.ok(text.includes('/repo/src/a.ts'));
+
+        const noArgs = { ...withArgs, id: 't2', arguments: undefined } as unknown as ToolCallEvent;
+        assert.strictEqual(eventSearchText(noArgs), 'readFile', 'arguments are optional');
+    });
+
+    test('arguments that cannot be serialised never break search', () => {
+        const circular: Record<string, unknown> = {};
+        circular['self'] = circular;
+
+        const circularEvent = {
+            type: 'toolCall',
+            id: 't1',
+            timestamp: '2026-01-01T10:00:00.000Z',
+            tool: 'copilot',
+            toolName: 'run',
+            arguments: circular,
+        } as unknown as ToolCallEvent;
+        assert.strictEqual(eventSearchText(circularEvent), 'run');
+
+        const bigIntEvent = { ...circularEvent, id: 't2', arguments: { n: BigInt(1) } } as unknown as ToolCallEvent;
+        assert.strictEqual(eventSearchText(bigIntEvent), 'run');
+    });
+
+    test('filterEvents applies active filters but returns the array untouched otherwise', () => {
+        const events = [cmd({ id: 'c1' }), cmd({ id: 'c2', tool: 'cline', commandText: 'git status' })];
+
+        assert.strictEqual(filterEvents(events, {}), events, 'no filters → same array, no copy');
+        assert.deepStrictEqual(
+            filterEvents(events, { tool: 'cline' }).map((e) => e.id),
+            ['c2']
+        );
+    });
+});
+
 

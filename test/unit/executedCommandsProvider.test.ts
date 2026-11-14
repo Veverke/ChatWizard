@@ -11,6 +11,7 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import * as vscode from 'vscode';
 import { LogService } from '../../src/logs/logService';
 import { createDefaultLogSourceRegistry } from '../../src/logs/logSourceRegistry';
 import {
@@ -267,5 +268,63 @@ suite('ExecutedCommandsProvider — Phase 4 filters', () => {
         const copy = provider.getFilters();
         copy.search = 'mutated';
         assert.strictEqual(provider.getFilters().search, 'npm');
+    });
+});
+
+suite('ExecutedCommandsProvider — row and resilience edge cases', () => {
+    let dir: string;
+    let service: LogService;
+
+    setup(() => {
+        dir = tmpDir();
+        service = new LogService(dir, createDefaultLogSourceRegistry());
+    });
+
+    teardown(() => {
+        try { service.dispose(); } catch { /* ignore */ }
+        try { fs.rmSync(dir, { recursive: true }); } catch { /* ignore */ }
+    });
+
+    test('an empty session group is a leaf row without a workspace suffix', () => {
+        const group = new ExecCommandsGroupItem('sess-empty', 'Empty chat', []);
+
+        assert.strictEqual(group.collapsibleState, vscode.TreeItemCollapsibleState.None);
+        assert.strictEqual(group.description, '0 commands');
+        assert.strictEqual(group.tooltip, 'Empty chat\nSession: sess-empty');
+    });
+
+    test('leaf rows pick one icon per exit-code state', () => {
+        const iconOf = (exitCode: number | undefined): string => {
+            const item = new ExecCommandsLeafItem(
+                makeCommand({ id: `c-${String(exitCode)}`, timestamp: '2026-01-01T10:00:00.000Z', exitCode })
+            );
+            return (item.iconPath as vscode.ThemeIcon).id;
+        };
+
+        assert.strictEqual(iconOf(undefined), 'run');
+        assert.strictEqual(iconOf(0), 'terminal');
+        assert.strictEqual(iconOf(2), 'error');
+    });
+
+    test('commands without a session id group under (no session), keeping the workspace', () => {
+        service.ingestEvents([
+            makeCommand({ id: 'c1', sessionId: undefined, workspacePath: '/repo', timestamp: '2026-01-01T10:00:00.000Z' }),
+        ]);
+
+        const [group] = new ExecutedCommandsProvider(service).getGroups();
+        assert.strictEqual(group.sessionId, '(no session)');
+        assert.match(String(group.description), /1 command · \/repo/);
+    });
+
+    test('a broken store degrades to an empty tree', () => {
+        const broken = { getEvents: () => { throw new Error('boom'); } } as unknown as LogService;
+        const provider = new ExecutedCommandsProvider(broken);
+
+        assert.deepStrictEqual(provider.getChildren(), [], 'lazy build over a broken store');
+        assert.deepStrictEqual(provider.getGroups(), []);
+
+        const detached = new ExecCommandsLeafItem(makeCommand({ id: 'c1', timestamp: '2026-01-01T10:00:00.000Z' }));
+        assert.deepStrictEqual(provider.getChildren(detached), [], 'leaves have no children');
+        assert.strictEqual(provider.getParent(detached), undefined, 'no group owns a detached leaf');
     });
 });

@@ -543,3 +543,52 @@ suite('UnifiedTimelineProvider — tree plumbing and title fallbacks', () => {
     });
 });
 
+suite('UnifiedTimelineProvider — display and grouping edge cases', () => {
+    let dir: string;
+    let service: LogService;
+
+    setup(() => {
+        dir = tmpDir();
+        service = new LogService(dir, createDefaultLogSourceRegistry());
+    });
+
+    teardown(() => {
+        try { service.dispose(); } catch { /* ignore */ }
+        try { fs.rmSync(dir, { recursive: true }); } catch { /* ignore */ }
+    });
+
+    test('planner steps get a label and lose the time part without a timestamp', () => {
+        const undated = {
+            type: 'plannerStep', id: 'p1', timestamp: '', tool: 'copilot', sessionId: 's1',
+            description: 'plan the refactor', status: 'done', stepType: 'plan',
+        } as unknown as LogEvent;
+
+        assert.strictEqual(eventPrimaryLabel(undated), 'plan the refactor');
+
+        const dated = { ...undated, timestamp: '2026-01-01T10:00:00.000Z' } as LogEvent;
+        assert.ok(
+            eventDescription(undated).length < eventDescription(dated).length,
+            'an empty timestamp adds no · HH:MM suffix'
+        );
+    });
+
+    test('diff descriptions handle a single known line count', () => {
+        const onlyRemoved = {
+            type: 'diff', id: 'd1', timestamp: '2026-01-01T10:00:00.000Z', tool: 'copilot',
+            filePath: '/repo/a.ts', diffText: '', addedLines: undefined, removedLines: 4,
+        } as unknown as LogEvent;
+
+        assert.match(eventDescription(onlyRemoved), /\+0 −4/);
+    });
+
+    test('group workspace paths skip empty values', () => {
+        service.ingestEvents([
+            makeEvent({ id: 'c1', workspacePath: '', timestamp: '2026-01-01T10:00:00.000Z' }),
+            makeEvent({ id: 'c2', workspacePath: '/repo', timestamp: '2026-01-02T10:00:00.000Z' }),
+        ]);
+
+        const [group] = new UnifiedTimelineProvider(service).getGroups();
+        assert.strictEqual(group.description, '2 events · /repo');
+    });
+});
+

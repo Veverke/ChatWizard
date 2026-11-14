@@ -355,3 +355,112 @@ suite('CommandsViewProvider — Phase 4 filters', () => {
     });
 });
 
+suite('CommandsViewProvider — tree plumbing edge cases', () => {
+    let dir: string;
+    let service: LogService;
+    let provider: CommandsViewProvider;
+
+    setup(() => {
+        dir = tmpDir();
+        service = new LogService(dir, createDefaultLogSourceRegistry());
+        provider = new CommandsViewProvider(
+            new ExecutedCommandsProvider(service),
+            new UnifiedTimelineProvider(service),
+            new DiffExplorerProvider(service)
+        );
+        service.ingestEvents([
+            makeCommand({ id: 'c1', timestamp: '2026-01-01T10:00:00.000Z', workspacePath: '/repo' }),
+            makeDiff({ id: 'd1', timestamp: '2026-01-02T10:00:00.000Z' }),
+        ]);
+    });
+
+    teardown(() => {
+        try { provider.dispose(); } catch { /* ignore */ }
+        try { service.dispose(); } catch { /* ignore */ }
+        try { fs.rmSync(dir, { recursive: true }); } catch { /* ignore */ }
+    });
+
+    test('section rows keep their tooltip in sync with the description', () => {
+        const section = new CommandsSectionItem('diffs', 'Diff Explorer', 'diff', '');
+        assert.strictEqual(section.tooltip, 'Diff Explorer', 'no description → plain label');
+
+        section.setDescription('2 changes · 1 file');
+        assert.strictEqual(section.tooltip, 'Diff Explorer — 2 changes · 1 file');
+
+        section.setDescription('');
+        assert.strictEqual(section.tooltip, 'Diff Explorer');
+    });
+
+    test('eventOfCommandsNode ignores values that are not events', () => {
+        assert.strictEqual(eventOfCommandsNode(undefined), undefined);
+        assert.strictEqual(eventOfCommandsNode('nope'), undefined);
+        assert.strictEqual(eventOfCommandsNode({}), undefined);
+        assert.strictEqual(eventOfCommandsNode({ event: { notAType: true } }), undefined);
+
+        // A structurally identical event from another module copy still resolves.
+        const foreign = {
+            type: 'command', id: 'x1', timestamp: '2026-01-01T10:00:00.000Z', tool: 'copilot', commandText: 'npm test',
+        };
+        assert.strictEqual(eventOfCommandsNode({ event: foreign })?.id, 'x1');
+    });
+
+    test('getFilters reports the workspace scope', () => {
+        provider.setWorkspaceScope(['/repo/chatwizard']);
+        assert.deepStrictEqual(provider.getFilters().workspacePaths, ['/repo/chatwizard']);
+    });
+
+    test('getFilters falls back to the commands section scope', () => {
+        const executed = new ExecutedCommandsProvider(service);
+        const mixed = new CommandsViewProvider(
+            executed,
+            new UnifiedTimelineProvider(service),
+            new DiffExplorerProvider(service)
+        );
+        try {
+            executed.setWorkspaceScope(['/repo/chatwizard']);
+            assert.deepStrictEqual(mixed.getFilters().workspacePaths, ['/repo/chatwizard']);
+        } finally {
+            mixed.dispose();
+        }
+    });
+
+    test('getParent maps every node kind back to its section (or file group)', () => {
+        const [commandsSection, timelineSection, diffsSection] = provider.getChildren() as CommandsSectionItem[];
+
+        assert.strictEqual(provider.getParent({} as CommandsTreeNode), undefined, 'unknown nodes have no parent');
+
+        // Session headers are roots of their section.
+        const commandGroups = provider.getChildren(commandsSection) as ExecCommandsGroupItem[];
+        assert.strictEqual(provider.getParent(commandGroups[0]), commandsSection);
+
+        const timelineGroups = provider.getChildren(timelineSection) as TimelineGroupItem[];
+        assert.strictEqual(provider.getParent(timelineGroups[0]), timelineSection);
+
+        // Change rows point at their file group; the file group points at the section.
+        const fileGroups = provider.getChildren(diffsSection) as DiffFileGroupItem[];
+        assert.strictEqual(provider.getParent(fileGroups[0]), diffsSection);
+        const [changeRow] = provider.getChildren(fileGroups[0]);
+        assert.strictEqual(provider.getParent(changeRow), fileGroups[0]);
+
+        // A leaf that is not in the tree still falls back to its section.
+        const detachedCommand = new ExecCommandsLeafItem(
+            makeCommand({ id: 'c-detached', sessionId: 'ghost-session', timestamp: '2026-01-01T10:00:00.000Z' })
+        );
+        assert.strictEqual(provider.getParent(detachedCommand), commandsSection);
+
+        const detachedEvent = new TimelineEventItem(
+            makeCommand({ id: 'c-detached', sessionId: 'ghost-session', timestamp: '2026-01-01T10:00:00.000Z' })
+        );
+        assert.strictEqual(provider.getParent(detachedEvent), timelineSection);
+    });
+
+    test('getChildren yields nothing for rows it does not own', () => {
+        const diffsSection = (provider.getChildren() as CommandsSectionItem[])[2];
+        const fileGroups = provider.getChildren(diffsSection) as DiffFileGroupItem[];
+        const [changeRow] = provider.getChildren(fileGroups[0]);
+
+        assert.deepStrictEqual(provider.getChildren(changeRow), [], 'change rows are leaves');
+        assert.deepStrictEqual(provider.getChildren({} as CommandsTreeNode), [], 'unknown nodes have no children');
+    });
+});
+
