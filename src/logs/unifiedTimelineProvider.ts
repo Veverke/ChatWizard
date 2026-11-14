@@ -153,7 +153,13 @@ export function eventTooltip(event: LogEvent): string {
 
 export type UnifiedTimelineTreeNode = TimelineGroupItem | TimelineEventItem;
 
-/** A session header. */
+/**
+ * A session header.
+ *
+ * Starts **collapsed**, like every group in the Commands view: expanding the
+ * "Unified Timeline" section then lists one row per session (or tool bucket)
+ * instead of spilling the whole event feed into the sidebar.
+ */
 export class TimelineGroupItem extends vscode.TreeItem {
     readonly sessionKey: string;
     readonly events: LogEvent[];
@@ -165,7 +171,7 @@ export class TimelineGroupItem extends vscode.TreeItem {
         workspacePath?: string
     ) {
         const count = events.length;
-        super(title, count > 0 ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.None);
+        super(title, count > 0 ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None);
         this.sessionKey = sessionKey;
         this.events = events;
         this.description = workspacePath && workspacePath.length > 0

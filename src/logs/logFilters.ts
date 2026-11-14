@@ -48,12 +48,13 @@ export interface LogViewFilters {
     types?: LogEventType[];
     /**
      * Restrict to events belonging to the given workspace roots (the VS Code
-     * open folders). Empty/undefined means "no workspace scoping".
+     * open folders, falling back to the ChatWizard workspace selection when no
+     * folder is open). Empty/undefined means "no workspace scoping".
      *
      * This is a structural scope rather than a user filter: it is applied by all
      * three Commands sections so the view never mixes in another repository's
-     * commands while a folder is open, but it is deliberately excluded from
-     * `hasActiveFilters` (the section subtitles must not claim "filtered").
+     * commands, but it is deliberately excluded from `hasActiveFilters` (the
+     * section subtitles must not claim "filtered").
      */
     workspacePaths?: string[];
 }
@@ -189,6 +190,42 @@ export function matchesWorkspaceScope(event: LogEvent, workspacePaths: string[] 
 function normalizeWorkspacePath(p: string): string {
     const normalized = path.normalize(p.replace(/\//g, path.sep));
     return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+}
+
+/**
+ * Resolve the workspace roots the Commands view is restricted to.
+ *
+ * The view mirrors the Sessions view's scope, in this order:
+ *   1. the VS Code open folder(s) — the workspace that is actually active;
+ *   2. otherwise the ChatWizard workspace selection (`Manage Watched
+ *      Workspaces`), so a window without an open folder (a plain "New Window",
+ *      an extension development host, …) still shows only the selected
+ *      repositories instead of every workspace in the shared event store;
+ *   3. otherwise no restriction at all (there is nothing to scope by).
+ *
+ * Blank entries are dropped and duplicates are removed (case-insensitively on
+ * Windows), so callers can feed raw VS Code / discovery paths straight in.
+ */
+export function resolveWorkspaceScope(
+    openFolderPaths: readonly string[],
+    selectedWorkspacePaths: readonly string[]
+): string[] {
+    const dedupe = (entries: readonly string[]): string[] => {
+        const seen = new Set<string>();
+        const paths: string[] = [];
+        for (const entry of entries) {
+            if (!entry || entry.trim().length === 0) { continue; }
+            const key = normalizeWorkspacePath(entry);
+            if (seen.has(key)) { continue; }
+            seen.add(key);
+            paths.push(entry);
+        }
+        return paths;
+    };
+
+    const open = dedupe(openFolderPaths);
+    if (open.length > 0) { return open; }
+    return dedupe(selectedWorkspacePaths);
 }
 
 /**

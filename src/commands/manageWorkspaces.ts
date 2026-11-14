@@ -2,7 +2,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { ScopedWorkspace } from '../types/index';
-import { WorkspaceScopeManager, calcWorkspaceSizeBytes, countWorkspaceSessions } from '../watcher/workspaceScope';
+import { WorkspaceScopeManager, calcWorkspaceSizeBytes, countWorkspaceSessions, workspacePathsForIds } from '../watcher/workspaceScope';
 import { ChatWizardWatcher } from '../watcher/fileWatcher';
 import { SessionIndex } from '../index/sessionIndex';
 import { discoverCopilotWorkspacesAsync } from '../readers/copilotWorkspace';
@@ -32,13 +32,18 @@ type WorkspaceItem = vscode.QuickPickItem & {
  * @param scopeManager  The active WorkspaceScopeManager instance.
  * @param getWatcher  Getter returning the current ChatWizardWatcher (may be undefined if not yet started).
  * @param channel     Output channel for log messages.
+ * @param index       Session index (session counts shown per workspace).
+ * @param onScopeChanged Called after the selection changed, with the workspace
+ *                    folder paths that are now in scope. Lets the Commands view
+ *                    follow the same scope as the Sessions view.
  */
 export function registerManageWorkspacesCommand(
     context: vscode.ExtensionContext,
     scopeManager: WorkspaceScopeManager,
     getWatcher: () => ChatWizardWatcher | undefined,
     channel: vscode.OutputChannel,
-    index: SessionIndex
+    index: SessionIndex,
+    onScopeChanged?: (selectedWorkspacePaths: string[]) => void
 ): void {
     context.subscriptions.push(
         vscode.commands.registerCommand('chatwizard.manageWatchedWorkspaces', async () => {
@@ -295,6 +300,14 @@ export function registerManageWorkspacesCommand(
             channel.appendLine(
                 `[Chat Wizard] Workspace scope updated — ${newIds.length} workspace(s) selected: ${newIds.join(', ')}`
             );
+
+            // Keep the Commands view (`chatwizardCommands`) on exactly the same
+            // workspaces the Sessions view now shows.
+            try {
+                onScopeChanged?.(workspacePathsForIds(allAvailable, newIds));
+            } catch (err) {
+                channel.appendLine(`[Chat Wizard] Could not apply the Commands view workspace scope: ${err}`);
+            }
 
             const watcher = getWatcher();
             if (watcher) {

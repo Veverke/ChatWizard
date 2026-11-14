@@ -74,7 +74,13 @@ export function formatExitBadge(exitCode: number | undefined): string {
 // Tree items
 // ---------------------------------------------------------------------------
 
-/** A session header node. Children are the session's `ExecCommandsLeafItem`s. */
+/**
+ * A session header node. Children are the session's `ExecCommandsLeafItem`s.
+ *
+ * Starts **collapsed**, like every group in the Commands view: expanding the
+ * "Executed Commands" section then lists one row per session instead of
+ * spilling every command of every session into the sidebar.
+ */
 export class ExecCommandsGroupItem extends vscode.TreeItem {
     readonly sessionId: string;
     readonly commands: CommandEvent[];
@@ -86,7 +92,7 @@ export class ExecCommandsGroupItem extends vscode.TreeItem {
         workspacePath?: string
     ) {
         const count = commands.length;
-        super(title, commands.length > 0 ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.None);
+        super(title, count > 0 ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None);
         this.sessionId = sessionId;
         this.commands = commands;
         this.description = workspacePath && workspacePath.length > 0

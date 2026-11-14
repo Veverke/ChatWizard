@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { SessionIndex } from './index/sessionIndex';
 import { Session, ScopedWorkspace, SessionSource, ChronicleData } from './types/index';
 import { ChatWizardWatcher, startWatcher } from './watcher/fileWatcher';
-import { WorkspaceScopeManager } from './watcher/workspaceScope';
+import { WorkspaceScopeManager, workspacePathsForIds } from './watcher/workspaceScope';
 import { discoverCopilotWorkspacesAsync } from './readers/copilotWorkspace';
 import { discoverClaudeWorkspacesAsync } from './readers/claudeWorkspace';
 import { discoverCursorWorkspacesAsync } from './readers/cursorWorkspace';
@@ -112,6 +112,7 @@ import {
     ClineLogHarvester,
     AiderLogHarvester,
     WindsurfLogHarvester,
+    resolveWorkspaceScope,
 } from './logs';
 import * as path from 'path';
 import { RestApiServer } from './api/restApiServer';
@@ -121,6 +122,12 @@ let watcher: ChatWizardWatcher | undefined;
 /** Deferred reference — set after scopeManager is created so the archive listener
  *  (registered before scopeManager) can filter restored sessions by workspace scope. */
 let _scopeManagerRef: WorkspaceScopeManager | undefined;
+/**
+ * Global-state key holding the workspace folder paths of the last resolved
+ * Commands-view scope. Persisted so the first render after a reload is scoped
+ * even though workspace discovery runs asynchronously.
+ */
+const COMMANDS_SCOPE_PATHS_KEY = 'chatwizard.commandsViewWorkspacePaths';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
     const startedAt = Date.now();
@@ -211,6 +218,41 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     } else if (enableCache && !isVSCode) {
         channel.appendLine(`[Chat Wizard] Skipping SQLite cache — running in ${appName} (better-sqlite3 NODE_MODULE_VERSION mismatch).`);
     }
+
+    // ── Commands view workspace scope (structural) ──────────────────────────
+    // The agent-log store is shared by every workspace on the machine (it lives
+    // in the shared cache directory), so the Commands view must be scoped — or
+    // it mixes commands/diffs from other repositories that happen to be
+    // indexed. The scope mirrors the Sessions view:
+    //   1. the VS Code open folder(s) — the workspace that is actually active;
+    //   2. otherwise the ChatWizard workspace selection ("Manage Watched
+    //      Workspaces"), which is what a window without an open folder shows.
+    // It is (re-)applied at activation, whenever the folders change, after
+    // workspace discovery and after the selection changes. The provider is
+    // created further below, so the re-application goes through a deferred
+    // reference.
+    let commandsViewProviderRef: CommandsViewProvider | undefined;
+    // Seed from the persisted selection paths so the first render after a reload
+    // is already scoped (workspace discovery runs asynchronously below).
+    let selectedWorkspaceScopePaths: string[] =
+        context.globalState.get<string[]>(COMMANDS_SCOPE_PATHS_KEY) ?? [];
+    const applyLogWorkspaceScope = (selectedWorkspacePaths?: string[]): void => {
+        if (selectedWorkspacePaths) {
+            selectedWorkspaceScopePaths = selectedWorkspacePaths;
+            void context.globalState.update(COMMANDS_SCOPE_PATHS_KEY, selectedWorkspacePaths);
+        }
+        const openFolderPaths = (vscode.workspace.workspaceFolders ?? []).map(f => f.uri.fsPath);
+        const paths = resolveWorkspaceScope(openFolderPaths, selectedWorkspaceScopePaths);
+        if (!commandsViewProviderRef) { return; }
+        try {
+            commandsViewProviderRef.setWorkspaceScope(paths);
+            channel.appendLine(
+                `[Chat Wizard] Commands view workspace scope: ${paths.length > 0 ? paths.join(', ') : '(all workspaces)'}`
+            );
+        } catch (err) {
+            channel.appendLine(`[Chat Wizard] Could not apply Commands view workspace scope: ${err}`);
+        }
+    };
 
     // ── Watch-logs Phase 1: normalized agent-execution log event store ──────
     // Uses the same shared directory as the session cache so the log event DB
@@ -308,22 +350,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             context.subscriptions.push(commandsViewProvider);
 
             // ── Commands view: restrict to the current workspace ────────────
-            // The agent-log store is shared across every workspace on the
-            // machine (it lives in the shared cache directory), so without this
-            // the view mixes in commands from other repositories that happen to
-            // be indexed. Scope by the VS Code open folder(s) and re-apply
-            // whenever the folders change.
-            const applyLogWorkspaceScope = (): void => {
-                const paths = (vscode.workspace.workspaceFolders ?? []).map(f => f.uri.fsPath);
-                try {
-                    commandsViewProvider.setWorkspaceScope(paths);
-                    channel.appendLine(
-                        `[Chat Wizard] Commands view workspace scope: ${paths.length > 0 ? paths.join(', ') : '(all workspaces)'}`
-                    );
-                } catch (err) {
-                    channel.appendLine(`[Chat Wizard] Could not apply Commands view workspace scope: ${err}`);
-                }
-            };
+            // `applyLogWorkspaceScope()` (declared above) resolves the scope from
+            // the VS Code open folder(s), falling back to the ChatWizard workspace
+            // selection. It is re-applied whenever the folders or the selection
+            // change, and once workspace discovery has resolved the selection.
+            commandsViewProviderRef = commandsViewProvider;
             applyLogWorkspaceScope();
             context.subscriptions.push(
                 vscode.workspace.onDidChangeWorkspaceFolders(() => applyLogWorkspaceScope())
@@ -2295,6 +2326,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                         `[Chat Wizard] Scope reset after path change — ${selectedIds.length} workspace(s): ${selectedIds.join(', ')}`
                     );
 
+                    // The Commands view follows the re-detected scope as well.
+                    applyLogWorkspaceScope(workspacePathsForIds(allAvailable, selectedIds));
+
                     if (watcher) {
                         await watcher.restart();
                         channel.appendLine('[Chat Wizard] Watcher restarted after path change.');
@@ -2777,7 +2811,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     _scopeManagerRef = scopeManager;
 
     // Register the manage-workspaces command (scope changes take effect via watcher.restart()).
-    registerManageWorkspacesCommand(context, scopeManager, () => watcher, channel, index);
+    registerManageWorkspacesCommand(
+        context,
+        scopeManager,
+        () => watcher,
+        channel,
+        index,
+        // Keep the Commands view on the same workspaces the Sessions view shows.
+        (selectedWorkspacePaths) => applyLogWorkspaceScope(selectedWorkspacePaths)
+    );
     registerPaletteCommands(context);
 
     // Yield for webview IPC round-trips, then start the file watcher in the background.
@@ -2815,6 +2857,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         channel.appendLine(
             `[Chat Wizard] Workspace scope initialised — ${selectedIds.length} workspace(s) selected: ${selectedIds.join(', ')}`
         );
+
+        // Keep the Commands view on the same workspaces the Sessions view shows.
+        // This matters when no VS Code folder is open (the open-folder scope is
+        // empty): the Commands view then follows this selection instead of
+        // showing every repository in the shared event store.
+        applyLogWorkspaceScope(workspacePathsForIds(allAvailable, selectedIds));
 
         // ── Feature 24: Try to load sessions from SQLite cache first ────────
         if (cacheIntegration) {

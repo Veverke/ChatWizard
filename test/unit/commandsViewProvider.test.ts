@@ -23,6 +23,7 @@ import { DiffExplorerProvider, DiffEventLeafItem } from '../../src/logs/diffExpl
 import {
     COMMANDS_SECTIONS,
     CommandsSectionItem,
+    CommandsTreeNode,
     CommandsViewProvider,
     describeCommandsSection,
     eventOfCommandsNode,
@@ -131,6 +132,42 @@ suite('CommandsViewProvider — composite tree', () => {
         for (const section of roots) {
             assert.strictEqual(provider.getTreeItem(section).collapsibleState, vscode.TreeItemCollapsibleState.Collapsed);
         }
+    });
+
+    test('every group below the sections starts collapsed too', () => {
+        service.ingestEvents([
+            makeCommand({ id: 'c1', timestamp: '2026-01-01T10:00:00.000Z' }),
+            makeCommand({ id: 'c2', sessionId: 'sess-b', timestamp: '2026-01-01T10:05:00.000Z' }),
+            makeDiff({ id: 'd1', timestamp: '2026-01-02T10:00:00.000Z' }),
+        ]);
+
+        const [commandsSection, timelineSection, diffsSection] = provider.getChildren() as CommandsSectionItem[];
+
+        const assertAllCollapsed = (items: CommandsTreeNode[], what: string): void => {
+            assert.ok(items.length > 0, `${what} must list at least one row`);
+            for (const item of items) {
+                assert.strictEqual(
+                    item.collapsibleState,
+                    vscode.TreeItemCollapsibleState.Collapsed,
+                    `${what} rows must start collapsed`
+                );
+            }
+        };
+
+        // Executed Commands section → session groups.
+        assertAllCollapsed(provider.getChildren(commandsSection), 'Executed Commands sessions');
+        // Unified Timeline section → session groups.
+        assertAllCollapsed(provider.getChildren(timelineSection), 'Unified Timeline sessions');
+        // Diff Explorer section → workspace binders → file groups.
+        const workspaceGroups = provider.getChildren(diffsSection);
+        assertAllCollapsed(workspaceGroups, 'Diff Explorer workspaces');
+        assertAllCollapsed(provider.getChildren(workspaceGroups[0]), 'Diff Explorer files');
+
+        // A re-render must not auto-expand them again.
+        provider.refresh();
+        assertAllCollapsed(provider.getChildren(commandsSection), 'Executed Commands sessions after refresh');
+        assertAllCollapsed(provider.getChildren(timelineSection), 'Unified Timeline sessions after refresh');
+        assertAllCollapsed(provider.getChildren(diffsSection), 'Diff Explorer workspaces after refresh');
     });
 
     test('sections delegate to their provider and count their rows', () => {

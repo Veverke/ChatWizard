@@ -8,7 +8,9 @@
  * `chatwizardDiffExplorer`), which made the Chat Wizard sidebar noisy. VS Code
  * does **not** support nesting a contributed view inside another view, so the
  * three panels are exposed as three collapsible *sections* of one tree view
- * (`chatwizardCommands`) instead — all of them collapsed by default:
+ * (`chatwizardCommands`) instead — all of them collapsed by default, and so is
+ * every group level below them (sessions, workspaces, files), so expanding a
+ * section reveals one compact row per group instead of an expanded event feed:
  *
  *   Commands
  *   ├── Executed Commands   (n commands)
@@ -107,7 +109,9 @@ export function describeCommandsSection(subView: CommandsSubViewId, counts: Comm
  * Sections are built **collapsed** so the Commands view opens compact (and
  * stays compact after a window reload) instead of spilling three expanded
  * event feeds into the sidebar. Expanding one is a per-session user choice, and
- * the explicit "Show …" commands still reveal + expand their section.
+ * the groups below it (sessions / workspaces / files) start collapsed as well,
+ * so a section first shows one compact row per group. The explicit "Show …"
+ * commands still reveal + expand their section.
  */
 export class CommandsSectionItem extends vscode.TreeItem {
     constructor(

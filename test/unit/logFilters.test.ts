@@ -24,6 +24,7 @@ import {
     matchesWorkspaceScope,
     matchesSearch,
     normalizeSearchQuery,
+    resolveWorkspaceScope,
     searchTokens,
 } from '../../src/logs/logFilters';
 import {
@@ -311,6 +312,37 @@ suite('logFilters — workspace scope (structural)', () => {
         assert.strictEqual(hasActiveFilters(filters), false,
             '"filtered" must not be reported just because a workspace is open');
         assert.strictEqual(describeLogFilters(filters), '');
+    });
+});
+
+suite('logFilters — resolveWorkspaceScope (Commands view)', () => {
+    const chatWizard = path.join('C:', 'Repos', 'Mine', 'ChatWizard');
+    const analytics = path.join('C:', 'Repos', 'Mine', 'vscode-extension-analytics');
+
+    test('the open VS Code folder(s) win', () => {
+        assert.deepStrictEqual(
+            resolveWorkspaceScope([chatWizard], [analytics]),
+            [chatWizard],
+            'the active workspace is the open folder, not the selection'
+        );
+    });
+
+    test('falls back to the ChatWizard workspace selection when no folder is open', () => {
+        assert.deepStrictEqual(resolveWorkspaceScope([], [chatWizard]), [chatWizard],
+            'a window without an open folder must not show every repository');
+    });
+
+    test('drops blank entries and duplicates', () => {
+        const duplicate = chatWizard.replace(/\\/g, '/');
+        assert.deepStrictEqual(
+            resolveWorkspaceScope(['', '   '], [chatWizard, duplicate, analytics]),
+            [chatWizard, analytics],
+            'the same folder expressed with either separator is only scoped once'
+        );
+    });
+
+    test('no restriction when neither an open folder nor a selection exists', () => {
+        assert.deepStrictEqual(resolveWorkspaceScope([], []), []);
     });
 });
 

@@ -163,7 +163,12 @@ export function pathToDisplayInfo(filePath: string): { basename: string; dirname
 
 export type DiffExplorerTreeNode = DiffWorkspaceGroupItem | DiffFileGroupItem | DiffEventLeafItem;
 
-/** Workspace binder — root level. */
+/**
+ * Workspace binder — root level.
+ *
+ * Starts **collapsed**, like every group in the Commands view, so opening the
+ * "Diff Explorer" section lists workspaces only.
+ */
 export class DiffWorkspaceGroupItem extends vscode.TreeItem {
     readonly workspaceKey: string;
     readonly groups: DiffFileGroupItem[];
@@ -181,7 +186,12 @@ export class DiffWorkspaceGroupItem extends vscode.TreeItem {
     }
 }
 
-/** A distinct changed file — lists its change events. */
+/**
+ * A distinct changed file — lists its change events.
+ *
+ * Starts **collapsed** so expanding a workspace lists its changed files rather
+ * than every individual change row.
+ */
 export class DiffFileGroupItem extends vscode.TreeItem {
     readonly filePath: string;
     readonly events: LogEvent[];
@@ -189,7 +199,7 @@ export class DiffFileGroupItem extends vscode.TreeItem {
     constructor(filePath: string, events: LogEvent[]) {
         const display = pathToDisplayInfo(filePath);
         super(display.basename || filePath, events.length > 0
-            ? vscode.TreeItemCollapsibleState.Expanded
+            ? vscode.TreeItemCollapsibleState.Collapsed
             : vscode.TreeItemCollapsibleState.None);
         this.filePath = filePath;
         this.events = events;
