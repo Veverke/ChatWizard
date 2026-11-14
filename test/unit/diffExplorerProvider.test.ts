@@ -111,7 +111,7 @@ suite('DiffExplorerProvider — grouping and ordering', () => {
         try { fs.rmSync(dir, { recursive: true }); } catch { /* ignore */ }
     });
 
-    test('groups diffs per workspace → per file with newest first', () => {
+    test('groups changes per file, newest first', () => {
         service.ingestEvents([
             makeDiff({ id: 'd1', filePath: '/repo/src/a.ts', timestamp: '2026-01-01T10:00:00.000Z' }),
             makeDiff({ id: 'd2', filePath: '/repo/src/b.ts', timestamp: '2026-01-02T10:00:00.000Z' }),
@@ -119,21 +119,24 @@ suite('DiffExplorerProvider — grouping and ordering', () => {
         ]);
 
         const provider = new DiffExplorerProvider(service);
-        const workspaces = provider.getWorkspaceGroups();
+        const files = provider.getFileGroups();
 
-        assert.strictEqual(workspaces.length, 1);
-        assert.strictEqual(workspaces[0].label, 'repo', 'workspace group uses the basename');
-
-        const files = workspaces[0].groups;
-        assert.strictEqual(files.length, 3);
+        assert.strictEqual(files.length, 3, 'one row per changed file');
         // Newest change first.
+        assert.strictEqual(files[0].filePath, '/repo/src/new.ts');
         assert.strictEqual(files[0].newestTimestamp, '2026-01-03T10:00:00.000Z');
         assert.strictEqual(files[1].filePath, '/repo/src/b.ts');
+        assert.strictEqual(files[2].filePath, '/repo/src/a.ts');
+
+        // The file rows ARE the section's children — no workspace binder level.
+        assert.deepStrictEqual(provider.getChildren(), files);
+        assert.strictEqual(provider.getParent(files[0]), undefined, 'file groups are roots');
 
         // Each file expands to its change rows.
         const leaves = provider.getChildren(files[1]) as DiffEventLeafItem[];
         assert.strictEqual(leaves.length, 1);
         assert.strictEqual(leaves[0].event.id, 'd2');
+        assert.strictEqual(provider.getParent(leaves[0]), files[1]);
     });
 
     test('patch file-operations are excluded (their DiffEvent carries the change)', () => {
@@ -142,20 +145,19 @@ suite('DiffExplorerProvider — grouping and ordering', () => {
         ]);
 
         const provider = new DiffExplorerProvider(service);
-        assert.strictEqual(provider.getWorkspaceGroups().length, 0);
+        assert.strictEqual(provider.getFileGroups().length, 0);
         assert.strictEqual(provider.getTotalEvents(), 0);
     });
 
-    test('events with no workspace path collapse into an id-based group', () => {
+    test('changes without a recorded workspace still list by file', () => {
         service.ingestEvents([
             makeDiff({ id: 'd1', filePath: '/x.ts', workspacePath: undefined, workspaceId: 'ws-99', timestamp: '2026-01-01T10:00:00.000Z' }),
         ]);
 
         const provider = new DiffExplorerProvider(service);
-        const workspaces = provider.getWorkspaceGroups();
-        assert.strictEqual(workspaces.length, 1);
-        assert.strictEqual(workspaces[0].workspaceKey, 'id:ws-99');
-        assert.strictEqual(workspaces[0].label, 'Unknown workspace');
+        const files = provider.getFileGroups();
+        assert.strictEqual(files.length, 1);
+        assert.strictEqual(files[0].filePath, '/x.ts', 'the changed file is its own row');
     });
 
     test('diff rows activate the visual diff, file ops open the details webview', () => {
@@ -164,7 +166,7 @@ suite('DiffExplorerProvider — grouping and ordering', () => {
             makeFileOp({ id: 'f1', filePath: '/repo/src/b.ts', timestamp: '2026-01-02T10:00:00.000Z' }),
         ]);
         const provider = new DiffExplorerProvider(service);
-        const files = provider.getWorkspaceGroups()[0].groups;
+        const files = provider.getFileGroups();
 
         const diffLeaf = (provider.getChildren(files[1]) as DiffEventLeafItem[])[0];
         assert.strictEqual(diffLeaf.command?.command, 'chatwizard.logs.diff.viewDiff');
@@ -214,7 +216,7 @@ suite('DiffExplorerProvider — Phase 4 filters', () => {
     });
 
     const visibleIds = (provider: DiffExplorerProvider): string[] =>
-        provider.getWorkspaceGroups().flatMap((ws) => ws.groups.flatMap((f) => f.events.map((e) => e.id)));
+        provider.getFileGroups().flatMap((f) => f.events.map((e) => e.id));
 
     test('search narrows by file path', () => {
         const provider = new DiffExplorerProvider(service);

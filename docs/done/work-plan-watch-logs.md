@@ -1287,8 +1287,9 @@ Deliverable: end-to-end flow for one agent.
 >   (`src/logs/unifiedTimelineProvider.ts`) renders every event kind per
 >   session, newest first, with a kind filter.
 > - ✅ **Diff Explorer panel** — `chatwizardDiffExplorer` tree
->   (`src/logs/diffExplorerProvider.ts`) groups changes per workspace → file,
->   with open-patch / copy / open-file actions.
+>   (`src/logs/diffExplorerProvider.ts`) groups changes per changed **file**
+>   (the section is scoped to the active workspace, so no workspace binder row
+>   is needed), with open-patch / copy / open-file actions.
 > - ✅ Wiring (`extension.ts` ← `src/logs/index.ts`), commands, menus,
 >   activation events in `package.json`, unit tests for the new adapters/pure
 >   helpers.
@@ -1451,9 +1452,9 @@ Deliverable: cross-agent view for commands + diffs.
 >   "8 changes · 3 files") and **all three sections start collapsed**, so the
 >   view opens compact instead of spilling three expanded event feeds into the
 >   sidebar. The group levels below a section — session groups in Executed
->   Commands / Unified Timeline, workspace and file groups in Diff Explorer —
->   start collapsed as well, so expanding a section lists one row per group
->   before any individual command / event / change appears. `Chat Wizard: Show
+>   Commands / Unified Timeline and changed-file groups in Diff Explorer — start
+>   collapsed as well, so expanding a section lists one row per group before any
+>   individual command / event / change appears. `Chat Wizard: Show
 >   Executed Commands / Unified Timeline / Diff Explorer` now focus the single
 >   view and reveal the matching section, and the title bar shrank from eight
 >   per-panel buttons to **Refresh Commands**, **Filter Unified Timeline** and
@@ -1475,7 +1476,9 @@ Deliverable: cross-agent view for commands + diffs.
 >   roots, `workspacePathsForIds()` (`src/watcher/workspaceScope.ts`) maps the
 >   selected IDs back to folders, and the scope is re-applied on folder changes,
 >   after workspace discovery and after a selection change. The resolved paths
->   are persisted, so the first render after a reload is already scoped.
+>   are persisted, so the first render after a reload is already scoped. Because
+>   the Diff Explorer is scoped to one workspace, its rows are the changed
+>   **files** directly — the former per-workspace binder level was removed.
 >
 
 - Add:

@@ -19,7 +19,7 @@ import { LogService } from '../../src/logs/logService';
 import { createDefaultLogSourceRegistry } from '../../src/logs/logSourceRegistry';
 import { ExecutedCommandsProvider, ExecCommandsGroupItem, ExecCommandsLeafItem } from '../../src/logs/executedCommandsProvider';
 import { UnifiedTimelineProvider, TimelineGroupItem, TimelineEventItem } from '../../src/logs/unifiedTimelineProvider';
-import { DiffExplorerProvider, DiffEventLeafItem } from '../../src/logs/diffExplorerProvider';
+import { DiffExplorerProvider, DiffEventLeafItem, DiffFileGroupItem } from '../../src/logs/diffExplorerProvider';
 import {
     COMMANDS_SECTIONS,
     CommandsSectionItem,
@@ -158,16 +158,25 @@ suite('CommandsViewProvider — composite tree', () => {
         assertAllCollapsed(provider.getChildren(commandsSection), 'Executed Commands sessions');
         // Unified Timeline section → session groups.
         assertAllCollapsed(provider.getChildren(timelineSection), 'Unified Timeline sessions');
-        // Diff Explorer section → workspace binders → file groups.
-        const workspaceGroups = provider.getChildren(diffsSection);
-        assertAllCollapsed(workspaceGroups, 'Diff Explorer workspaces');
-        assertAllCollapsed(provider.getChildren(workspaceGroups[0]), 'Diff Explorer files');
+        // Diff Explorer section → changed-file groups. The workspace is already in
+        // scope, so there is no workspace binder level any more.
+        const fileGroups = provider.getChildren(diffsSection);
+        assertAllCollapsed(fileGroups, 'Diff Explorer files');
+        const changeRows = provider.getChildren(fileGroups[0]);
+        assert.ok(changeRows.length > 0, 'a changed file expands to its change rows');
+        for (const row of changeRows) {
+            assert.strictEqual(
+                row.collapsibleState,
+                vscode.TreeItemCollapsibleState.None,
+                'change rows are leaves'
+            );
+        }
 
         // A re-render must not auto-expand them again.
         provider.refresh();
         assertAllCollapsed(provider.getChildren(commandsSection), 'Executed Commands sessions after refresh');
         assertAllCollapsed(provider.getChildren(timelineSection), 'Unified Timeline sessions after refresh');
-        assertAllCollapsed(provider.getChildren(diffsSection), 'Diff Explorer workspaces after refresh');
+        assertAllCollapsed(provider.getChildren(diffsSection), 'Diff Explorer files after refresh');
     });
 
     test('sections delegate to their provider and count their rows', () => {
@@ -190,8 +199,9 @@ suite('CommandsViewProvider — composite tree', () => {
         // Two commands + one diff are all timeline events.
         assert.strictEqual(timelineLeaves.length, 3);
 
-        const workspaceGroups = provider.getChildren(diffsSection);
-        assert.strictEqual(workspaceGroups.length, 1, 'Diff Explorer section lists workspace groups');
+        const fileGroups = provider.getChildren(diffsSection) as DiffFileGroupItem[];
+        assert.strictEqual(fileGroups.length, 1, 'Diff Explorer section lists changed files');
+        assert.strictEqual(fileGroups[0].filePath, '/repo/src/a.ts');
 
         assert.deepStrictEqual(provider.counts(), {
             commands: 2,

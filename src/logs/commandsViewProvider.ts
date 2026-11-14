@@ -41,7 +41,6 @@ import {
 } from './unifiedTimelineProvider';
 import {
     DiffExplorerProvider,
-    DiffWorkspaceGroupItem,
     DiffFileGroupItem,
     DiffEventLeafItem,
     DiffExplorerTreeNode,
@@ -171,13 +170,7 @@ export function subViewOfCommandsNode(node: unknown): CommandsSubViewId | undefi
     if (node instanceof CommandsSectionItem) { return node.subView; }
     if (node instanceof ExecCommandsGroupItem || node instanceof ExecCommandsLeafItem) { return 'executedCommands'; }
     if (node instanceof TimelineGroupItem || node instanceof TimelineEventItem) { return 'timeline'; }
-    if (
-        node instanceof DiffWorkspaceGroupItem
-        || node instanceof DiffFileGroupItem
-        || node instanceof DiffEventLeafItem
-    ) {
-        return 'diffs';
-    }
+    if (node instanceof DiffFileGroupItem || node instanceof DiffEventLeafItem) { return 'diffs'; }
     return undefined;
 }
 
@@ -299,8 +292,7 @@ export class CommandsViewProvider implements vscode.TreeDataProvider<CommandsTre
             return this.timeline.getChildren(element);
         }
         if (
-            element instanceof DiffWorkspaceGroupItem
-            || element instanceof DiffFileGroupItem
+            element instanceof DiffFileGroupItem
             || element instanceof DiffEventLeafItem
         ) {
             return this.diffs.getChildren(element);
@@ -340,7 +332,7 @@ export class CommandsViewProvider implements vscode.TreeDataProvider<CommandsTre
     counts(): CommandsSectionCounts {
         const groups = this.executedCommands.getGroups();
         const timelineGroups = this.timeline.getGroups();
-        const workspaceGroups = this.diffs.getWorkspaceGroups();
+        const fileGroups = this.diffs.getFileGroups();
         let failedCommands = 0;
         for (const group of groups) {
             for (const command of group.commands) {
@@ -350,11 +342,8 @@ export class CommandsViewProvider implements vscode.TreeDataProvider<CommandsTre
         return {
             commands: groups.reduce((total, g) => total + g.commands.length, 0),
             events: timelineGroups.reduce((total, g) => total + g.events.length, 0),
-            changes: workspaceGroups.reduce(
-                (total, ws) => total + ws.groups.reduce((n, file) => n + file.events.length, 0),
-                0
-            ),
-            files: workspaceGroups.reduce((total, ws) => total + ws.groups.length, 0),
+            changes: fileGroups.reduce((total, f) => total + f.events.length, 0),
+            files: fileGroups.length,
             failedCommands,
             filtered: this.filtersActive(),
         };
