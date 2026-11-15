@@ -21,6 +21,8 @@
 import { SessionIndexEvent } from '../index/sessionIndex';
 import { Session } from '../types/index';
 import { LogService } from './logService';
+import * as fs from 'fs';
+import * as path from 'path';
 
 export interface ClineHarvestResult {
     /** Number of events persisted for the task dir. */
@@ -77,7 +79,15 @@ export class ClineLogHarvester {
         if (session.source !== 'cline' && session.source !== 'roocode') { return; }
         if (!session.filePath) { return; }
         try {
-            this.ingestTaskDir(session.filePath, session.source);
+            // Cline 4.x writes `<dir>/<id>.messages.json` (tool_use/tool_result)
+            // instead of the legacy `ui_messages.json`; pick whichever exists.
+            const v4File = path.join(session.filePath, `${path.basename(session.filePath)}.messages.json`);
+            if (fs.existsSync(v4File)) {
+                this.logService.ingestClineV4SessionFile(session.filePath, session.source, session.workspacePath);
+            } else {
+                this.ingestTaskDir(session.filePath, session.source);
+            }
+            this.logService.stampSessionTitle(session.id, session.title);
         } catch {
             // Never let log harvesting break session indexing.
         }

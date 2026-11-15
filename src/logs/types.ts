@@ -46,6 +46,17 @@ export interface LogEventBase {
      * tool's own session/thread identifier where available.
      */
     sessionId?: string;
+    /**
+     * Human-readable chat title captured when the event was harvested (the
+     * session's own title at that moment — never the sidecar custom title,
+     * which the UI resolves live).
+     *
+     * The Commands view prefers the live session index so a renamed chat is
+     * reflected immediately; this copy is the fallback for sessions that are
+     * no longer loaded in the index (different workspace scope, retention
+     * window, deleted source file, …) so the tree never shows a bare id.
+     */
+    sessionTitle?: string;
     /** Opaque workspace identifier (hash or path), when known. */
     workspaceId?: string;
     /** Resolved workspace root path, when known. */

@@ -11,11 +11,13 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import * as vscode from 'vscode';
 import { LogService } from '../../src/logs/logService';
 import { createDefaultLogSourceRegistry } from '../../src/logs/logSourceRegistry';
 import {
     DiffExplorerProvider,
     DiffEventLeafItem,
+    DiffFileGroupItem,
     isDiffCandidate,
     diffStatsLabel,
     diffEventDescription,
@@ -111,7 +113,7 @@ suite('DiffExplorerProvider — grouping and ordering', () => {
         try { fs.rmSync(dir, { recursive: true }); } catch { /* ignore */ }
     });
 
-    test('groups diffs per workspace → per file with newest first', () => {
+    test('groups changes per file, newest first', () => {
         service.ingestEvents([
             makeDiff({ id: 'd1', filePath: '/repo/src/a.ts', timestamp: '2026-01-01T10:00:00.000Z' }),
             makeDiff({ id: 'd2', filePath: '/repo/src/b.ts', timestamp: '2026-01-02T10:00:00.000Z' }),
@@ -119,21 +121,24 @@ suite('DiffExplorerProvider — grouping and ordering', () => {
         ]);
 
         const provider = new DiffExplorerProvider(service);
-        const workspaces = provider.getWorkspaceGroups();
+        const files = provider.getFileGroups();
 
-        assert.strictEqual(workspaces.length, 1);
-        assert.strictEqual(workspaces[0].label, 'repo', 'workspace group uses the basename');
-
-        const files = workspaces[0].groups;
-        assert.strictEqual(files.length, 3);
+        assert.strictEqual(files.length, 3, 'one row per changed file');
         // Newest change first.
+        assert.strictEqual(files[0].filePath, '/repo/src/new.ts');
         assert.strictEqual(files[0].newestTimestamp, '2026-01-03T10:00:00.000Z');
         assert.strictEqual(files[1].filePath, '/repo/src/b.ts');
+        assert.strictEqual(files[2].filePath, '/repo/src/a.ts');
+
+        // The file rows ARE the section's children — no workspace binder level.
+        assert.deepStrictEqual(provider.getChildren(), files);
+        assert.strictEqual(provider.getParent(files[0]), undefined, 'file groups are roots');
 
         // Each file expands to its change rows.
         const leaves = provider.getChildren(files[1]) as DiffEventLeafItem[];
         assert.strictEqual(leaves.length, 1);
         assert.strictEqual(leaves[0].event.id, 'd2');
+        assert.strictEqual(provider.getParent(leaves[0]), files[1]);
     });
 
     test('patch file-operations are excluded (their DiffEvent carries the change)', () => {
@@ -142,20 +147,19 @@ suite('DiffExplorerProvider — grouping and ordering', () => {
         ]);
 
         const provider = new DiffExplorerProvider(service);
-        assert.strictEqual(provider.getWorkspaceGroups().length, 0);
+        assert.strictEqual(provider.getFileGroups().length, 0);
         assert.strictEqual(provider.getTotalEvents(), 0);
     });
 
-    test('events with no workspace path collapse into an id-based group', () => {
+    test('changes without a recorded workspace still list by file', () => {
         service.ingestEvents([
             makeDiff({ id: 'd1', filePath: '/x.ts', workspacePath: undefined, workspaceId: 'ws-99', timestamp: '2026-01-01T10:00:00.000Z' }),
         ]);
 
         const provider = new DiffExplorerProvider(service);
-        const workspaces = provider.getWorkspaceGroups();
-        assert.strictEqual(workspaces.length, 1);
-        assert.strictEqual(workspaces[0].workspaceKey, 'id:ws-99');
-        assert.strictEqual(workspaces[0].label, 'Unknown workspace');
+        const files = provider.getFileGroups();
+        assert.strictEqual(files.length, 1);
+        assert.strictEqual(files[0].filePath, '/x.ts', 'the changed file is its own row');
     });
 
     test('diff rows activate the visual diff, file ops open the details webview', () => {
@@ -164,7 +168,7 @@ suite('DiffExplorerProvider — grouping and ordering', () => {
             makeFileOp({ id: 'f1', filePath: '/repo/src/b.ts', timestamp: '2026-01-02T10:00:00.000Z' }),
         ]);
         const provider = new DiffExplorerProvider(service);
-        const files = provider.getWorkspaceGroups()[0].groups;
+        const files = provider.getFileGroups();
 
         const diffLeaf = (provider.getChildren(files[1]) as DiffEventLeafItem[])[0];
         assert.strictEqual(diffLeaf.command?.command, 'chatwizard.logs.diff.viewDiff');
@@ -173,6 +177,25 @@ suite('DiffExplorerProvider — grouping and ordering', () => {
         const fileOpLeaf = (provider.getChildren(files[0]) as DiffEventLeafItem[])[0];
         assert.strictEqual(fileOpLeaf.command?.command, 'chatwizard.logs.diff.showDetails');
         assert.strictEqual(fileOpLeaf.command?.title, 'Show Change Details');
+    });
+
+    test('several changes to one file share a row and render lazily', () => {
+        service.ingestEvents([
+            makeDiff({ id: 'd1', filePath: '/repo/src/a.ts', timestamp: '2026-01-01T10:00:00.000Z' }),
+            makeDiff({ id: 'd2', filePath: '/repo/src/a.ts', timestamp: '2026-01-02T10:00:00.000Z' }),
+        ]);
+
+        const provider = new DiffExplorerProvider(service);
+        // getChildren() before any getFileGroups() read exercises the lazy build.
+        const files = provider.getChildren() as DiffFileGroupItem[];
+
+        assert.strictEqual(files.length, 1, 'one row per file, however many changes');
+        assert.strictEqual(files[0].events.length, 2);
+        assert.strictEqual(files[0].newestTimestamp, '2026-01-02T10:00:00.000Z');
+
+        // Change rows are leaves: asking for their children yields nothing.
+        const [leaf] = provider.getChildren(files[0]) as DiffEventLeafItem[];
+        assert.deepStrictEqual(provider.getChildren(leaf), []);
     });
 
     test('diff tooltips show a short patch preview instead of the whole patch', () => {
@@ -214,7 +237,7 @@ suite('DiffExplorerProvider — Phase 4 filters', () => {
     });
 
     const visibleIds = (provider: DiffExplorerProvider): string[] =>
-        provider.getWorkspaceGroups().flatMap((ws) => ws.groups.flatMap((f) => f.events.map((e) => e.id)));
+        provider.getFileGroups().flatMap((f) => f.events.map((e) => e.id));
 
     test('search narrows by file path', () => {
         const provider = new DiffExplorerProvider(service);
@@ -245,5 +268,121 @@ suite('DiffExplorerProvider — Phase 4 filters', () => {
         provider.setFilters({});
         assert.deepStrictEqual(visibleIds(provider).sort(), ['d1', 'd2', 'f1']);
         assert.strictEqual(provider.filtersActive(), false);
+    });
+
+    test('setWorkspaceScope restricts the Diff Explorer to the open folder', () => {
+        service.ingestEvents([
+            makeDiff({
+                id: 'other-ws',
+                timestamp: '2026-01-04T10:00:00.000Z',
+                filePath: '/analytics/src/hook.ts',
+                workspacePath: '/repos/vscode-extension-analytics',
+            }),
+            makeDiff({
+                id: 'here',
+                timestamp: '2026-01-05T10:00:00.000Z',
+                filePath: '/chatwizard/src/extension.ts',
+                workspacePath: '/repos/chatwizard',
+            }),
+        ]);
+
+        const provider = new DiffExplorerProvider(service);
+        assert.ok(visibleIds(provider).includes('other-ws'));
+
+        provider.setWorkspaceScope(['/repos/chatwizard']);
+
+        const visible = visibleIds(provider);
+        assert.ok(visible.includes('here'));
+        assert.ok(!visible.includes('other-ws'), 'another workspace’s diffs are hidden');
+
+        provider.setWorkspaceScope([]);
+        assert.ok(visibleIds(provider).includes('other-ws'), 'clearing the scope restores everything');
+    });
+});
+
+suite('DiffExplorerProvider — row/helper edge cases', () => {
+    test('only diffs and non-patch file operations are candidates', () => {
+        const command = {
+            type: 'command', id: 'c1', timestamp: '2026-01-01T10:00:00.000Z', tool: 'copilot', commandText: 'npm test',
+        } as unknown as LogEvent;
+        assert.strictEqual(isDiffCandidate(command), false);
+    });
+
+    test('diffStatsLabel handles a single known side', () => {
+        const onlyRemoved = {
+            ...(makeDiff({ id: 'd1', timestamp: '2026-01-01T10:00:00.000Z' }) as DiffEvent),
+            addedLines: undefined,
+            removedLines: 2,
+        };
+        assert.strictEqual(diffStatsLabel(onlyRemoved), '+0 −2');
+    });
+
+    test('renderPatchMarkdown tolerates a missing timestamp, path and session', () => {
+        const incomplete = {
+            ...(makeDiff({ id: 'd1', timestamp: '' }) as DiffEvent),
+            filePath: undefined,
+            sessionId: undefined,
+            addedLines: undefined,
+            removedLines: 3,
+        } as unknown as LogEvent;
+
+        const md = renderPatchMarkdown(incomplete);
+        assert.match(md, /unknown path/);
+        assert.match(md, /\*\*When:\*\* unknown/);
+        assert.match(md, /\+0 −3/);
+        assert.ok(!md.includes('**Session:**'), 'no session row without a session id');
+    });
+
+    test('renderPatchMarkdown carries the rename source and raw payload', () => {
+        const rename = {
+            ...makeFileOp({ id: 'f1', timestamp: '2026-01-01T10:00:00.000Z', operationType: 'rename' }),
+            oldPath: '/repo/src/a.ts',
+            raw: '{"tool":"rename_file"}',
+        } as unknown as LogEvent;
+
+        const md = renderPatchMarkdown(rename);
+        assert.match(md, /\*\*From:\*\* \/repo\/src\/a\.ts/);
+        assert.match(md, /```json/);
+    });
+
+    test('diffEventTooltip singularises a single remaining line', () => {
+        const exact = 'l1\nl2\nl3';
+        assert.strictEqual(
+            diffEventTooltip(makeDiff({ id: 'd1', timestamp: '2026-01-01T10:00:00.000Z', diffText: exact }), 3),
+            exact,
+            'a patch at the limit is shown whole'
+        );
+
+        const oneMore = diffEventTooltip(
+            makeDiff({ id: 'd2', timestamp: '2026-01-01T10:00:00.000Z', diffText: `${exact}\nl4` }),
+            3
+        );
+        assert.match(oneMore, /1 more line —/);
+    });
+
+    test('DiffFileGroupItem renders leaf rows and singular descriptions', () => {
+        const empty = new DiffFileGroupItem('/repo/src/a.ts', []);
+        assert.strictEqual(empty.collapsibleState, vscode.TreeItemCollapsibleState.None);
+        assert.strictEqual(empty.description, '0 changes · /repo/src');
+        assert.strictEqual(empty.newestTimestamp, '');
+
+        const oneRow = new DiffFileGroupItem('a.ts', [makeDiff({ id: 'd1', timestamp: '2026-01-01T10:00:00.000Z' })]);
+        assert.strictEqual(oneRow.description, '1 change', 'no folder → no · suffix');
+        assert.strictEqual(oneRow.label, 'a.ts');
+
+        const twoRows = new DiffFileGroupItem('/repo/src/a.ts', [
+            makeDiff({ id: 'd1', timestamp: '2026-01-01T10:00:00.000Z' }),
+            makeDiff({ id: 'd2', timestamp: '2026-01-02T10:00:00.000Z' }),
+        ]);
+        assert.strictEqual(twoRows.description, '2 changes · /repo/src');
+        assert.strictEqual(twoRows.collapsibleState, vscode.TreeItemCollapsibleState.Collapsed);
+    });
+
+    test('a broken store degrades to an empty tree instead of throwing', () => {
+        const broken = { getEvents: () => { throw new Error('boom'); } } as unknown as LogService;
+        const provider = new DiffExplorerProvider(broken);
+
+        assert.deepStrictEqual(provider.getFileGroups(), []);
+        assert.strictEqual(provider.getTotalEvents(), 0);
     });
 });

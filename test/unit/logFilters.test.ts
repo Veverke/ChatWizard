@@ -10,6 +10,7 @@
  */
 
 import * as assert from 'assert';
+import * as path from 'path';
 import {
     LogViewFilters,
     describeLogFilters,
@@ -20,8 +21,10 @@ import {
     isFailedCommand,
     isFailureEvent,
     matchesLogFilters,
+    matchesWorkspaceScope,
     matchesSearch,
     normalizeSearchQuery,
+    resolveWorkspaceScope,
     searchTokens,
 } from '../../src/logs/logFilters';
 import {
@@ -269,6 +272,134 @@ suite('logFilters — filter descriptions', () => {
         assert.strictEqual(
             describeLogFilters(filters, (tool) => (tool === 'copilot' ? 'GitHub Copilot' : tool)),
             '"npm test" · GitHub Copilot · failures only · kind: Error / Failure'
+        );
+    });
+});
+
+suite('logFilters — workspace scope (structural)', () => {
+    const eventAt = (workspacePath: string | undefined) => ({
+        type: 'command' as const,
+        id: `c-${workspacePath ?? 'none'}`,
+        timestamp: '2026-01-01T10:00:00.000Z',
+        tool: 'cline' as const,
+        sessionId: 's1',
+        commandText: 'npm test',
+        workspacePath,
+    });
+
+    test('matchesWorkspaceScope keeps events under the open folder', () => {
+        const open = path.join('C:', 'Repos', 'Mine', 'ChatWizard');
+        assert.strictEqual(matchesWorkspaceScope(eventAt(path.join('C:', 'Repos', 'Mine', 'ChatWizard', 'src')), [open]), true);
+        // Path comparison follows the host file system: case-insensitive on
+        // Windows, case-sensitive on POSIX (Linux and macOS runners). The
+        // assertion has to follow the same rule, otherwise the test only
+        // passes on the platform it was written on.
+        assert.strictEqual(
+            matchesWorkspaceScope(eventAt(path.join('c:', 'repos', 'mine', 'chatwizard')), [open]),
+            process.platform === 'win32',
+            process.platform === 'win32'
+                ? 'workspace roots compare case-insensitively on Windows'
+                : 'workspace roots compare case-sensitively on POSIX'
+        );
+        assert.strictEqual(matchesWorkspaceScope(eventAt(path.join('C:', 'Repos', 'Mine', 'ChatWizard-old')), [open]), false,
+            'a sibling folder sharing a prefix is NOT in scope');
+        assert.strictEqual(matchesWorkspaceScope(eventAt(path.join('C:', 'Repos', 'Mine', 'vscode-extension-analytics')), [open]), false);
+    });
+
+    test('no scope means everything matches', () => {
+        assert.strictEqual(matchesWorkspaceScope(eventAt('C:\\anywhere'), []), true);
+        assert.strictEqual(matchesWorkspaceScope(eventAt(undefined), ['C:\\repo']), true,
+            'events without a recorded workspace are kept (cannot be attributed)');
+    });
+
+    test('the workspace scope is applied by matchesLogFilters but is not a user filter', () => {
+        const open = path.join('C:', 'Repos', 'Mine', 'ChatWizard');
+        const filters: LogViewFilters = { workspacePaths: [open] };
+
+        assert.strictEqual(matchesLogFilters(eventAt(path.join('C:', 'Repos', 'Mine', 'ChatWizard', 'docs')), filters), true);
+        assert.strictEqual(matchesLogFilters(eventAt(path.join('C:', 'Repos', 'Mine', 'other')), filters), false);
+        assert.strictEqual(hasActiveFilters(filters), false,
+            '"filtered" must not be reported just because a workspace is open');
+        assert.strictEqual(describeLogFilters(filters), '');
+    });
+});
+
+suite('logFilters — resolveWorkspaceScope (Commands view)', () => {
+    const chatWizard = path.join('C:', 'Repos', 'Mine', 'ChatWizard');
+    const analytics = path.join('C:', 'Repos', 'Mine', 'vscode-extension-analytics');
+
+    test('the open VS Code folder(s) win', () => {
+        assert.deepStrictEqual(
+            resolveWorkspaceScope([chatWizard], [analytics]),
+            [chatWizard],
+            'the active workspace is the open folder, not the selection'
+        );
+    });
+
+    test('falls back to the ChatWizard workspace selection when no folder is open', () => {
+        assert.deepStrictEqual(resolveWorkspaceScope([], [chatWizard]), [chatWizard],
+            'a window without an open folder must not show every repository');
+    });
+
+    test('drops blank entries and duplicates', () => {
+        const duplicate = chatWizard.replace(/\\/g, '/');
+        assert.deepStrictEqual(
+            resolveWorkspaceScope(['', '   '], [chatWizard, duplicate, analytics]),
+            [chatWizard, analytics],
+            'the same folder expressed with either separator is only scoped once'
+        );
+    });
+
+    test('no restriction when neither an open folder nor a selection exists', () => {
+        assert.deepStrictEqual(resolveWorkspaceScope([], []), []);
+    });
+});
+
+suite('logFilters — search text and filtering edge cases', () => {
+    test('tool-call arguments are searchable and optional', () => {
+        const withArgs = {
+            type: 'toolCall',
+            id: 't1',
+            timestamp: '2026-01-01T10:00:00.000Z',
+            tool: 'copilot',
+            sessionId: 's1',
+            toolName: 'readFile',
+            arguments: { path: '/repo/src/a.ts' },
+        } as unknown as ToolCallEvent;
+
+        const text = eventSearchText(withArgs);
+        assert.ok(text.includes('readFile'));
+        assert.ok(text.includes('/repo/src/a.ts'));
+
+        const noArgs = { ...withArgs, id: 't2', arguments: undefined } as unknown as ToolCallEvent;
+        assert.strictEqual(eventSearchText(noArgs), 'readFile', 'arguments are optional');
+    });
+
+    test('arguments that cannot be serialised never break search', () => {
+        const circular: Record<string, unknown> = {};
+        circular['self'] = circular;
+
+        const circularEvent = {
+            type: 'toolCall',
+            id: 't1',
+            timestamp: '2026-01-01T10:00:00.000Z',
+            tool: 'copilot',
+            toolName: 'run',
+            arguments: circular,
+        } as unknown as ToolCallEvent;
+        assert.strictEqual(eventSearchText(circularEvent), 'run');
+
+        const bigIntEvent = { ...circularEvent, id: 't2', arguments: { n: BigInt(1) } } as unknown as ToolCallEvent;
+        assert.strictEqual(eventSearchText(bigIntEvent), 'run');
+    });
+
+    test('filterEvents applies active filters but returns the array untouched otherwise', () => {
+        const events = [cmd({ id: 'c1' }), cmd({ id: 'c2', tool: 'cline', commandText: 'git status' })];
+
+        assert.strictEqual(filterEvents(events, {}), events, 'no filters → same array, no copy');
+        assert.deepStrictEqual(
+            filterEvents(events, { tool: 'cline' }).map((e) => e.id),
+            ['c2']
         );
     });
 });

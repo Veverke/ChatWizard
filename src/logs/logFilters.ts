@@ -31,6 +31,7 @@ import {
     ToolCallEvent,
     logEventTypeLabel,
 } from './types';
+import * as path from 'path';
 
 /**
  * Filters applied on top of a watch-logs query.
@@ -45,6 +46,17 @@ export interface LogViewFilters {
     failuresOnly?: boolean;
     /** Restrict to the given event kinds (Unified Timeline kind filter). */
     types?: LogEventType[];
+    /**
+     * Restrict to events belonging to the given workspace roots (the VS Code
+     * open folders, falling back to the ChatWizard workspace selection when no
+     * folder is open). Empty/undefined means "no workspace scoping".
+     *
+     * This is a structural scope rather than a user filter: it is applied by all
+     * three Commands sections so the view never mixes in another repository's
+     * commands, but it is deliberately excluded from `hasActiveFilters` (the
+     * section subtitles must not claim "filtered").
+     */
+    workspacePaths?: string[];
 }
 
 /** A filter set that shows everything. */
@@ -157,7 +169,68 @@ export function isFailureEvent(event: LogEvent): boolean {
     return isFailedCommand(event);
 }
 
-/** AND-combined predicate for every filter dimension. */
+/** True when an event belongs to one of the given workspace roots. */
+export function matchesWorkspaceScope(event: LogEvent, workspacePaths: string[] | undefined): boolean {
+    if (!workspacePaths || workspacePaths.length === 0) { return true; }
+
+    // Events with a recorded workspace are attributed by path. Events without
+    // one cannot be attributed: keep them instead of silently hiding data that
+    // may well belong to the open folder (e.g. unsessioned agent rows).
+    const eventPath = event.workspacePath;
+    if (!eventPath || eventPath.length === 0) { return true; }
+
+    const norm = normalizeWorkspacePath(eventPath);
+    return workspacePaths.some(root => {
+        const normRoot = normalizeWorkspacePath(root);
+        return norm === normRoot || norm.startsWith(`${normRoot}${path.sep}`);
+    });
+}
+
+/** Normalize a workspace path for prefix comparison (Windows: case-insensitive). */
+function normalizeWorkspacePath(p: string): string {
+    const normalized = path.normalize(p.replace(/\//g, path.sep));
+    return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+}
+
+/**
+ * Resolve the workspace roots the Commands view is restricted to.
+ *
+ * The view mirrors the Sessions view's scope, in this order:
+ *   1. the VS Code open folder(s) — the workspace that is actually active;
+ *   2. otherwise the ChatWizard workspace selection (`Manage Watched
+ *      Workspaces`), so a window without an open folder (a plain "New Window",
+ *      an extension development host, …) still shows only the selected
+ *      repositories instead of every workspace in the shared event store;
+ *   3. otherwise no restriction at all (there is nothing to scope by).
+ *
+ * Blank entries are dropped and duplicates are removed (case-insensitively on
+ * Windows), so callers can feed raw VS Code / discovery paths straight in.
+ */
+export function resolveWorkspaceScope(
+    openFolderPaths: readonly string[],
+    selectedWorkspacePaths: readonly string[]
+): string[] {
+    const dedupe = (entries: readonly string[]): string[] => {
+        const seen = new Set<string>();
+        const paths: string[] = [];
+        for (const entry of entries) {
+            if (!entry || entry.trim().length === 0) { continue; }
+            const key = normalizeWorkspacePath(entry);
+            if (seen.has(key)) { continue; }
+            seen.add(key);
+            paths.push(entry);
+        }
+        return paths;
+    };
+
+    const open = dedupe(openFolderPaths);
+    if (open.length > 0) { return open; }
+    return dedupe(selectedWorkspacePaths);
+}
+
+/**
+ * AND-combined predicate for every filter dimension.
+ */
 export function matchesLogFilters(event: LogEvent, filters: LogViewFilters): boolean {
     if (filters.types && filters.types.length > 0 && !filters.types.includes(event.type)) {
         return false;
@@ -169,6 +242,9 @@ export function matchesLogFilters(event: LogEvent, filters: LogViewFilters): boo
         return false;
     }
     if (filters.search && !matchesSearch(event, filters.search)) {
+        return false;
+    }
+    if (!matchesWorkspaceScope(event, filters.workspacePaths)) {
         return false;
     }
     return true;

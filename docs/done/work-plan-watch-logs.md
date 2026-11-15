@@ -1287,8 +1287,9 @@ Deliverable: end-to-end flow for one agent.
 >   (`src/logs/unifiedTimelineProvider.ts`) renders every event kind per
 >   session, newest first, with a kind filter.
 > - ✅ **Diff Explorer panel** — `chatwizardDiffExplorer` tree
->   (`src/logs/diffExplorerProvider.ts`) groups changes per workspace → file,
->   with open-patch / copy / open-file actions.
+>   (`src/logs/diffExplorerProvider.ts`) groups changes per changed **file**
+>   (the section is scoped to the active workspace, so no workspace binder row
+>   is needed), with open-patch / copy / open-file actions.
 > - ✅ Wiring (`extension.ts` ← `src/logs/index.ts`), commands, menus,
 >   activation events in `package.json`, unit tests for the new adapters/pure
 >   helpers.
@@ -1450,11 +1451,14 @@ Deliverable: cross-agent view for commands + diffs.
 >   change events. Each section row carries live counts ("12 commands",
 >   "8 changes · 3 files") and **all three sections start collapsed**, so the
 >   view opens compact instead of spilling three expanded event feeds into the
->   sidebar. `Chat Wizard: Show Executed Commands / Unified
->   Timeline / Diff Explorer` now focus the single view and reveal the
->   matching section, and the title bar shrank from eight per-panel buttons to
->   **Refresh Commands**, **Filter Unified Timeline** and **Show Details for
->   Selection**.
+>   sidebar. The group levels below a section — session groups in Executed
+>   Commands / Unified Timeline and changed-file groups in Diff Explorer — start
+>   collapsed as well, so expanding a section lists one row per group before any
+>   individual command / event / change appears. `Chat Wizard: Show
+>   Executed Commands / Unified Timeline / Diff Explorer` now focus the single
+>   view and reveal the matching section, and the title bar shrank from eight
+>   per-panel buttons to **Refresh Commands**, **Filter Unified Timeline** and
+>   **Show Details for Selection**.
 > - ✅ **One details window** — `showEventWebview()` keeps a single panel and
 >   retargets it on every click (title + contents), instead of opening a new
 >   webview per event id. Closing the window resets the state, so the next
@@ -1464,6 +1468,17 @@ Deliverable: cross-agent view for commands + diffs.
 >   the `chatwizard.execCommands.runInTerminal` command). It opens a VS Code
 >   terminal (`src/logs/runInTerminal.ts`) and sends the command to it, reusing
 >   the captured working directory when it still exists.
+> - ✅ **Workspace scope** — the event store is shared by every repository on the
+>   machine, so the Commands view is restricted to the **active workspace**: the
+>   VS Code open folder(s) when one is open, otherwise the ChatWizard workspace
+>   selection (`Manage Watched Workspaces` — exactly what the Sessions view
+>   shows). `resolveWorkspaceScope()` (`src/logs/logFilters.ts`) picks the
+>   roots, `workspacePathsForIds()` (`src/watcher/workspaceScope.ts`) maps the
+>   selected IDs back to folders, and the scope is re-applied on folder changes,
+>   after workspace discovery and after a selection change. The resolved paths
+>   are persisted, so the first render after a reload is already scoped. Because
+>   the Diff Explorer is scoped to one workspace, its rows are the changed
+>   **files** directly — the former per-workspace binder level was removed.
 >
 
 - Add:

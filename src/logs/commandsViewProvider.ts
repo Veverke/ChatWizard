@@ -8,7 +8,9 @@
  * `chatwizardDiffExplorer`), which made the Chat Wizard sidebar noisy. VS Code
  * does **not** support nesting a contributed view inside another view, so the
  * three panels are exposed as three collapsible *sections* of one tree view
- * (`chatwizardCommands`) instead — all of them collapsed by default:
+ * (`chatwizardCommands`) instead — all of them collapsed by default, and so is
+ * every group level below them (sessions, workspaces, files), so expanding a
+ * section reveals one compact row per group instead of an expanded event feed:
  *
  *   Commands
  *   ├── Executed Commands   (n commands)
@@ -39,7 +41,6 @@ import {
 } from './unifiedTimelineProvider';
 import {
     DiffExplorerProvider,
-    DiffWorkspaceGroupItem,
     DiffFileGroupItem,
     DiffEventLeafItem,
     DiffExplorerTreeNode,
@@ -107,7 +108,9 @@ export function describeCommandsSection(subView: CommandsSubViewId, counts: Comm
  * Sections are built **collapsed** so the Commands view opens compact (and
  * stays compact after a window reload) instead of spilling three expanded
  * event feeds into the sidebar. Expanding one is a per-session user choice, and
- * the explicit "Show …" commands still reveal + expand their section.
+ * the groups below it (sessions / workspaces / files) start collapsed as well,
+ * so a section first shows one compact row per group. The explicit "Show …"
+ * commands still reveal + expand their section.
  */
 export class CommandsSectionItem extends vscode.TreeItem {
     constructor(
@@ -167,13 +170,7 @@ export function subViewOfCommandsNode(node: unknown): CommandsSubViewId | undefi
     if (node instanceof CommandsSectionItem) { return node.subView; }
     if (node instanceof ExecCommandsGroupItem || node instanceof ExecCommandsLeafItem) { return 'executedCommands'; }
     if (node instanceof TimelineGroupItem || node instanceof TimelineEventItem) { return 'timeline'; }
-    if (
-        node instanceof DiffWorkspaceGroupItem
-        || node instanceof DiffFileGroupItem
-        || node instanceof DiffEventLeafItem
-    ) {
-        return 'diffs';
-    }
+    if (node instanceof DiffFileGroupItem || node instanceof DiffEventLeafItem) { return 'diffs'; }
     return undefined;
 }
 
@@ -236,9 +233,25 @@ export class CommandsViewProvider implements vscode.TreeDataProvider<CommandsTre
 
     /** Remove every filter (search, agent, failures and event kind). */
     clearFilters(): void {
-        this.executedCommands.setFilters(emptyLogFilters());
-        this.timeline.setFilters(emptyLogFilters());
-        this.diffs.setFilters(emptyLogFilters());
+        // Preserve the workspace scope: it is a structural view scope, not a
+        // user filter ("clear filters" must not start mixing repositories).
+        const workspacePaths = this.getFilters().workspacePaths;
+        const empty: LogViewFilters = { workspacePaths };
+        this.executedCommands.setFilters(empty);
+        this.timeline.setFilters(empty);
+        this.diffs.setFilters(empty);
+    }
+
+    /**
+     * Restrict all three sections to the given workspace roots (the VS Code
+     * open folders). Called on activation and whenever the workspace folders
+     * change, so the Commands view never shows another repository's activity.
+     */
+    setWorkspaceScope(workspacePaths: string[]): void {
+        this.executedCommands.setWorkspaceScope(workspacePaths);
+        this.timeline.setWorkspaceScope(workspacePaths);
+        this.diffs.setWorkspaceScope(workspacePaths);
+        this._syncSectionDescriptions();
     }
 
     /**
@@ -248,12 +261,15 @@ export class CommandsViewProvider implements vscode.TreeDataProvider<CommandsTre
     getFilters(): LogViewFilters {
         const commands = this.executedCommands.getFilters();
         const timeline = this.timeline.getFilters();
-        return {
+        const filters: LogViewFilters = {
             search: timeline.search ?? commands.search,
             tool: timeline.tool ?? commands.tool,
             failuresOnly: timeline.failuresOnly ?? commands.failuresOnly,
             types: timeline.types,
         };
+        const workspacePaths = timeline.workspacePaths ?? commands.workspacePaths;
+        if (workspacePaths !== undefined) { filters.workspacePaths = workspacePaths; }
+        return filters;
     }
 
     /** True when any filter is active (drives the "· filtered" section suffix). */
@@ -276,8 +292,7 @@ export class CommandsViewProvider implements vscode.TreeDataProvider<CommandsTre
             return this.timeline.getChildren(element);
         }
         if (
-            element instanceof DiffWorkspaceGroupItem
-            || element instanceof DiffFileGroupItem
+            element instanceof DiffFileGroupItem
             || element instanceof DiffEventLeafItem
         ) {
             return this.diffs.getChildren(element);
@@ -317,7 +332,7 @@ export class CommandsViewProvider implements vscode.TreeDataProvider<CommandsTre
     counts(): CommandsSectionCounts {
         const groups = this.executedCommands.getGroups();
         const timelineGroups = this.timeline.getGroups();
-        const workspaceGroups = this.diffs.getWorkspaceGroups();
+        const fileGroups = this.diffs.getFileGroups();
         let failedCommands = 0;
         for (const group of groups) {
             for (const command of group.commands) {
@@ -327,11 +342,8 @@ export class CommandsViewProvider implements vscode.TreeDataProvider<CommandsTre
         return {
             commands: groups.reduce((total, g) => total + g.commands.length, 0),
             events: timelineGroups.reduce((total, g) => total + g.events.length, 0),
-            changes: workspaceGroups.reduce(
-                (total, ws) => total + ws.groups.reduce((n, file) => n + file.events.length, 0),
-                0
-            ),
-            files: workspaceGroups.reduce((total, ws) => total + ws.groups.length, 0),
+            changes: fileGroups.reduce((total, f) => total + f.events.length, 0),
+            files: fileGroups.length,
             failedCommands,
             filtered: this.filtersActive(),
         };

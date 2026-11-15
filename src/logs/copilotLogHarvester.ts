@@ -74,7 +74,15 @@ export class CopilotLogHarvester {
     private _ingestSession(session: Session): void {
         if (session.source !== 'copilot' || !session.filePath) { return; }
         try {
-            this.ingestSessionFile(session.filePath, session.workspaceId ?? '', session.workspacePath);
+            // Copilot agent-host sessions expose `events.jsonl` as their file;
+            // everything else is a legacy `chatSessions/<id>.jsonl` transcript.
+            if (session.filePath.endsWith('events.jsonl')) {
+                const sessionDir = session.filePath.slice(0, session.filePath.length - 'events.jsonl'.length);
+                this.logService.ingestCopilotAgentSessionFile(sessionDir, session.workspacePath);
+            } else {
+                this.ingestSessionFile(session.filePath, session.workspaceId ?? '', session.workspacePath);
+            }
+            this.logService.stampSessionTitle(session.id, session.title);
         } catch {
             // Never let log harvesting break session indexing.
         }

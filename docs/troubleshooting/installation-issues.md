@@ -248,4 +248,70 @@ A release cannot proceed to packaging if the Insiders test run fails.
 
 3. **A quality gate at packaging time is more reliable than runtime checks.**
    The `validate:release` script detects these issues in CI before a VSIX is
+
+---
+
+## "Commands view shows 0 commands after installing a new VSIX"
+
+### Symptom
+
+After installing a freshly packaged VSIX, the **Commands** view lists nothing in
+all three sections (Executed Commands, Unified Timeline, Diff Explorer) even
+though `chatwizard-log-events.db` is full and the **Sessions** view works.
+
+### Root cause
+
+`better-sqlite3` is a **native** module compiled for one
+`NODE_MODULE_VERSION` (ABI). `npm install` compiles it for the host Node.js ABI,
+while the extension host runs inside VS Code's Electron, which uses a different
+ABI. When the ABIs do not match the binding cannot be loaded, so:
+
+- `LogService` degrades to its **in-memory** event store (empty at startup) →
+  the Commands view shows 0 rows in every section;
+- `CacheIntegration` fails too → sessions are re-parsed from disk instead of
+  being served from `chatwizard-cache.db` (Sessions still works, just slower).
+
+Nothing is lost: the database is untouched.
+
+### Why it appeared "suddenly"
+
+A new VS Code major upgrade changes Electron's ABI (e.g. VS Code 1.146 ships
+Electron 43.8.6 / ABI **148**, while a Node 24 build is ABI **137**). Two
+packaging traps made this silent:
+
+1. `scripts/rebuild-native.js` skipped the rebuild because a **stale marker
+   file** still named the previous Electron version — `npm install` had replaced
+   `better_sqlite3.node` with a Node-ABI prebuild without touching the marker.
+2. The installed VS Code no longer advertises `electronVersion` in
+   `resources/app/package.json`, so the script fell back to a hard-coded
+   Electron version that did not match.
+
+### How to verify
+
+1. The Chat Wizard output channel now logs the host identity on activation:
+   `Extension host: VS Code …, Electron …, Node …, NODE_MODULE_VERSION …`, plus
+   `Watch-logs event store running IN MEMORY (…)` when the binding failed.
+2. Watch for the one-time warning notification:
+   *"agent-log storage is unavailable for this VS Code version, so the Commands
+   view starts empty"*.
+
+### Fix
+
+```powershell
+npm run rebuild:native
+```
+
+The script now:
+
+- reads **`vscode-host-runtime.json`** from the shared cache directory (written
+  by the running extension, so it always names the *installed* VS Code's
+  Electron version) — `VSCODE_ELECTRON_VERSION` still overrides it;
+- fingerprints the compiled `better_sqlite3.node` (mtime + size) in the marker,
+  so replacing the binary via `npm install` forces a rebuild instead of being
+  skipped;
+- prints the remediation steps when the Windows C++ toolchain is incomplete.
+
+Then repackage/install the VSIX (`npm run package:vsix:win32-x64`), which runs
+`rebuild:native` first.
+
    ever published, regardless of whether the feature is reachable by tests.

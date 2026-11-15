@@ -29,9 +29,10 @@ const fs   = require('fs');
 const path = require('path');
 const os   = require('os');
 
-const FALLBACK_ELECTRON_VERSION = '42.2.0';
+const FALLBACK_ELECTRON_VERSION = '43.8.6';
 const REPO_ROOT = path.resolve(__dirname, '..');
 const BUILD_DIR = path.join(REPO_ROOT, 'node_modules', 'better-sqlite3', 'build', 'Release');
+const BINARY_FILE = path.join(BUILD_DIR, 'better_sqlite3.node');
 const MARKER_FILE = path.join(BUILD_DIR, '.rebuild-electron-version');
 const PROGRAM_FILES_X86 = process.env['ProgramFiles(x86)'] ?? 'C:\\Program Files (x86)';
 const VSWHERE = path.join(PROGRAM_FILES_X86, 'Microsoft Visual Studio', 'Installer', 'vswhere.exe');
@@ -45,17 +46,19 @@ function main() {
         process.exit(1);
     }
 
-    // 2. Check marker file — skip if already correct
-    try {
-        if (fs.existsSync(MARKER_FILE)) {
-            const prev = fs.readFileSync(MARKER_FILE, 'utf8').trim();
-            if (prev === targetVersion) {
-                console.log(`[rebuild-native] already built for Electron ${targetVersion} — skipping`);
-                return;
-            }
-            console.log(`[rebuild-native] marker changed: ${prev} → ${targetVersion}`);
-        }
-    } catch { /* ignore */ }
+    // 2. Check marker file — skip only when the version matches AND the
+    //    compiled binary is the one that build produced.
+    //
+    //    The marker alone is not trustworthy: `npm install` / `npm rebuild` /
+    //    a fresh `npm ci` replaces `better_sqlite3.node` with a Node-ABI
+    //    prebuild without touching the marker, so a stale marker used to make
+    //    this script skip a rebuild that was actually required. That shipped a
+    //    Node-ABI binary inside a VSIX and the extension host silently fell
+    //    back to the in-memory log store (Commands view showed 0 commands).
+    if (isAlreadyBuiltFor(targetVersion)) {
+        console.log(`[rebuild-native] already built for Electron ${targetVersion} — skipping`);
+        return;
+    }
 
     // 3. Ensure build directory exists
     try { fs.mkdirSync(BUILD_DIR, { recursive: true }); } catch { /* ignore */ }
@@ -75,18 +78,110 @@ function main() {
         throw err;
     }
 
-    // 6. Write marker
-    try { fs.writeFileSync(MARKER_FILE, targetVersion, 'utf8'); } catch { /* ignore */ }
+    // 6. Write marker (version + identity of the binary that was just built)
+    writeMarker(targetVersion);
     console.log(`[rebuild-native] Done — built for Electron ${targetVersion}`);
+}
+
+/**
+ * True when the marker names the target Electron version *and* the compiled
+ * binary still matches the one recorded next to it.
+ */
+function isAlreadyBuiltFor(targetVersion) {
+    if (!fs.existsSync(MARKER_FILE) || !fs.existsSync(BINARY_FILE)) { return false; }
+    try {
+        const raw = fs.readFileSync(MARKER_FILE, 'utf8').trim();
+        const stat = fs.statSync(BINARY_FILE);
+
+        // Legacy marker format: a bare Electron version string.
+        if (!raw.startsWith('{')) {
+            console.log(`[rebuild-native] legacy marker "${raw}" (no binary fingerprint) — rebuilding once to verify`);
+            return false;
+        }
+
+        const marker = JSON.parse(raw);
+        if (marker.electronVersion !== targetVersion) {
+            console.log(`[rebuild-native] marker changed: ${marker.electronVersion} → ${targetVersion}`);
+            return false;
+        }
+        if (marker.binaryMtimeMs !== stat.mtimeMs || marker.binarySize !== stat.size) {
+            console.log('[rebuild-native] better_sqlite3.node was replaced after the last rebuild ' +
+                '(npm install/rebuild?) — rebuilding');
+            return false;
+        }
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+function writeMarker(electronVersion) {
+    try {
+        const stat = fs.statSync(BINARY_FILE);
+        fs.writeFileSync(MARKER_FILE, JSON.stringify({
+            electronVersion,
+            binaryMtimeMs: stat.mtimeMs,
+            binarySize: stat.size,
+            writtenAt: new Date().toISOString(),
+        }, null, 2), 'utf8');
+    } catch { /* ignore */ }
 }
 
 function resolveElectronVersion() {
     const fromEnv = process.env['VSCODE_ELECTRON_VERSION'];
-    if (fromEnv) { return fromEnv; }
-    const fromTest = queryElectronVersionFromVSCode();
-    if (fromTest) { return fromTest; }
+    if (fromEnv) {
+        console.log(`[rebuild-native] Electron ${fromEnv} (from VSCODE_ELECTRON_VERSION)`);
+        return fromEnv;
+    }
+    // The running extension records the exact Electron/NODE_MODULE_VERSION of
+    // the extension host — the only reliable source for the *installed* VS Code
+    // (its package.json no longer ships `electronVersion`).
+    const fromHost = queryElectronVersionFromHostRecord();
+    if (fromHost) {
+        console.log(`[rebuild-native] Electron ${fromHost} (recorded by the running extension host)`);
+        return fromHost;
+    }
+    const fromInstance = queryElectronVersionFromVSCode();
+    if (fromInstance) { return fromInstance; }
     console.warn(`[rebuild-native] Using fallback Electron ${FALLBACK_ELECTRON_VERSION}`);
     return FALLBACK_ELECTRON_VERSION;
+}
+
+/** Candidate shared cache directories (same resolution as the extension). */
+function sharedCacheDirs() {
+    const platform = process.platform;
+    const dirs = [];
+    if (platform === 'win32') {
+        const localAppData = process.env['LOCALAPPDATA'] || path.join(os.homedir(), 'AppData', 'Local');
+        dirs.push(path.join(localAppData, 'ChatWizard'));
+    } else if (platform === 'darwin') {
+        dirs.push(path.join(os.homedir(), 'Library', 'Application Support', 'ChatWizard'));
+    } else {
+        const xdgData = process.env['XDG_DATA_HOME'] || path.join(os.homedir(), '.local', 'share');
+        dirs.push(path.join(xdgData, 'chatwizard'));
+    }
+    return dirs;
+}
+
+/**
+ * Electron version recorded by the extension host via `hostRuntimeInfo.ts`.
+ * Covers the installed VS Code, Cursor, Insiders, … .
+ */
+function queryElectronVersionFromHostRecord() {
+    for (const dir of sharedCacheDirs()) {
+        const file = path.join(dir, 'vscode-host-runtime.json');
+        try {
+            const record = JSON.parse(fs.readFileSync(file, 'utf8'));
+            const electron = String(record.electron ?? '').trim();
+            if (/^\d+\.\d+\.\d+$/.test(electron)) {
+                const ageMin = Math.round((Date.now() - Date.parse(record.recordedAt ?? 0)) / 60000);
+                console.log(`[rebuild-native] Host record ${file} (VS Code ${record.vscodeVersion}, ` +
+                    `NODE_MODULE_VERSION ${record.modules}, recorded ${Number.isFinite(ageMin) ? ageMin + ' min ago' : 'unknown'})`);
+                return electron;
+            }
+        } catch { /* no record yet — try the next candidate */ }
+    }
+    return null;
 }
 
 function queryElectronVersionFromVSCode() {

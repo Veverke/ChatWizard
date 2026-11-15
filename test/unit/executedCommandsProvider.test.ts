@@ -11,6 +11,7 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import * as vscode from 'vscode';
 import { LogService } from '../../src/logs/logService';
 import { createDefaultLogSourceRegistry } from '../../src/logs/logSourceRegistry';
 import {
@@ -82,6 +83,66 @@ suite('ExecutedCommandsProvider — grouping and ordering', () => {
         assert.strictEqual(groups[0].sessionId, 'sess-b');
         assert.strictEqual(groups[0].label, 'Build session', 'title resolver supplies friendly name');
         assert.strictEqual(groups[1].label, 'Session sess-a', 'fallback label when no title resolved');
+    });
+
+    test('harvested event titles label sessions the live index no longer knows', () => {
+        service.ingestEvents([
+            makeCommand({
+                id: 'c1',
+                sessionId: '1787652725913',
+                timestamp: '2026-01-01T10:00:00.000Z',
+                commandText: 'npm run build',
+                sessionTitle: 'process-request-tracking.yml workflow is failing',
+            }),
+        ]);
+
+        const provider = new ExecutedCommandsProvider(service, () => undefined);
+
+        assert.strictEqual(
+            provider.getGroups()[0].label,
+            'process-request-tracking.yml workflow is failing',
+            'the harvested chat title must win over the id fallback'
+        );
+    });
+
+    test('the live resolver wins over the harvested title', () => {
+        service.ingestEvents([
+            makeCommand({
+                id: 'c1',
+                sessionId: 'sess-a',
+                timestamp: '2026-01-01T10:00:00.000Z',
+                sessionTitle: 'stale harvested title',
+            }),
+        ]);
+
+        const provider = new ExecutedCommandsProvider(service, () => 'Renamed chat');
+
+        assert.strictEqual(provider.getGroups()[0].label, 'Renamed chat');
+    });
+
+    test('setWorkspaceScope keeps only the current workspace (Command view)', () => {
+        service.ingestEvents([
+            makeCommand({
+                id: 'c1', sessionId: 'sess-a', timestamp: '2026-01-01T10:00:00.000Z',
+                commandText: 'npm test', workspacePath: path.join('C:', 'Repos', 'Mine', 'ChatWizard'),
+            }),
+            makeCommand({
+                id: 'c2', sessionId: 'sess-b', timestamp: '2026-01-01T10:01:00.000Z',
+                commandText: 'git status', workspacePath: path.join('C:', 'Repos', 'Mine', 'vscode-extension-analytics'),
+            }),
+        ]);
+
+        const provider = new ExecutedCommandsProvider(service);
+        assert.strictEqual(provider.getGroups().length, 2, 'unscoped view shows every workspace');
+
+        provider.setWorkspaceScope([path.join('C:', 'Repos', 'Mine', 'ChatWizard')]);
+
+        const groups = provider.getGroups();
+        assert.strictEqual(groups.length, 1);
+        assert.strictEqual(groups[0].sessionId, 'sess-a');
+
+        provider.setWorkspaceScope([]);
+        assert.strictEqual(provider.getGroups().length, 2, 'clearing the scope restores everything');
     });
 
     test('commands inside a session are sorted newest-first', () => {
@@ -207,5 +268,63 @@ suite('ExecutedCommandsProvider — Phase 4 filters', () => {
         const copy = provider.getFilters();
         copy.search = 'mutated';
         assert.strictEqual(provider.getFilters().search, 'npm');
+    });
+});
+
+suite('ExecutedCommandsProvider — row and resilience edge cases', () => {
+    let dir: string;
+    let service: LogService;
+
+    setup(() => {
+        dir = tmpDir();
+        service = new LogService(dir, createDefaultLogSourceRegistry());
+    });
+
+    teardown(() => {
+        try { service.dispose(); } catch { /* ignore */ }
+        try { fs.rmSync(dir, { recursive: true }); } catch { /* ignore */ }
+    });
+
+    test('an empty session group is a leaf row without a workspace suffix', () => {
+        const group = new ExecCommandsGroupItem('sess-empty', 'Empty chat', []);
+
+        assert.strictEqual(group.collapsibleState, vscode.TreeItemCollapsibleState.None);
+        assert.strictEqual(group.description, '0 commands');
+        assert.strictEqual(group.tooltip, 'Empty chat\nSession: sess-empty');
+    });
+
+    test('leaf rows pick one icon per exit-code state', () => {
+        const iconOf = (exitCode: number | undefined): string => {
+            const item = new ExecCommandsLeafItem(
+                makeCommand({ id: `c-${String(exitCode)}`, timestamp: '2026-01-01T10:00:00.000Z', exitCode })
+            );
+            return (item.iconPath as vscode.ThemeIcon).id;
+        };
+
+        assert.strictEqual(iconOf(undefined), 'run');
+        assert.strictEqual(iconOf(0), 'terminal');
+        assert.strictEqual(iconOf(2), 'error');
+    });
+
+    test('commands without a session id group under (no session), keeping the workspace', () => {
+        service.ingestEvents([
+            makeCommand({ id: 'c1', sessionId: undefined, workspacePath: '/repo', timestamp: '2026-01-01T10:00:00.000Z' }),
+        ]);
+
+        const [group] = new ExecutedCommandsProvider(service).getGroups();
+        assert.strictEqual(group.sessionId, '(no session)');
+        assert.match(String(group.description), /1 command · \/repo/);
+    });
+
+    test('a broken store degrades to an empty tree', () => {
+        const broken = { getEvents: () => { throw new Error('boom'); } } as unknown as LogService;
+        const provider = new ExecutedCommandsProvider(broken);
+
+        assert.deepStrictEqual(provider.getChildren(), [], 'lazy build over a broken store');
+        assert.deepStrictEqual(provider.getGroups(), []);
+
+        const detached = new ExecCommandsLeafItem(makeCommand({ id: 'c1', timestamp: '2026-01-01T10:00:00.000Z' }));
+        assert.deepStrictEqual(provider.getChildren(detached), [], 'leaves have no children');
+        assert.strictEqual(provider.getParent(detached), undefined, 'no group owns a detached leaf');
     });
 });

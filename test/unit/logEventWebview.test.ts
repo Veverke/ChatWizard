@@ -302,3 +302,70 @@ suite('logEventWebview — per-kind detail variants', () => {
     });
 });
 
+suite('logEventWebview — file-op, planner and page edge cases', () => {
+    type EventInput = Partial<LogEvent> & { id: string; timestamp: string };
+
+    test('file-operation detail lists the source, detail and raw payload', () => {
+        const [fileOp] = buildEventDetailSections(makeEvent({
+            id: 'f1',
+            timestamp: '2026-01-01T10:00:00.000Z',
+            type: 'fileOperation',
+            operationType: 'rename',
+            filePath: '/repo/src/new.ts',
+            oldPath: '/repo/src/old.ts',
+            detail: 'renamed by the agent',
+            raw: '{"tool":"rename_file"}',
+        } as EventInput) as LogEvent);
+
+        assert.strictEqual(fileOp.heading, 'File Operation');
+        assert.ok(fileOp.rows.some(([k, v]) => k === 'From' && v === '/repo/src/old.ts'));
+        assert.ok(fileOp.rows.some(([k, v]) => k === 'Detail' && v === 'renamed by the agent'));
+        assert.ok(fileOp.code.some((b) => b.language === 'json' && b.text.includes('rename_file')));
+    });
+
+    test('planner-step detail lists status, step type and description', () => {
+        const [step] = buildEventDetailSections(makeEvent({
+            id: 'p1',
+            timestamp: '2026-01-01T10:00:00.000Z',
+            type: 'plannerStep',
+            description: 'Plan the refactor',
+            status: 'in_progress',
+            stepType: 'plan',
+        } as EventInput) as LogEvent);
+
+        assert.ok(step.rows.some(([k, v]) => k === 'Step type' && v === 'plan'));
+        assert.ok(step.rows.some(([k, v]) => k === 'Status' && v === 'in_progress'));
+        assert.ok(step.code.some((b) => b.language === 'text' && b.text === 'Plan the refactor'));
+    });
+
+    test('diff detail shows the trigger command and a single-sided line count', () => {
+        const [diffSection] = buildEventDetailSections(makeEvent({
+            id: 'd1',
+            timestamp: '2026-01-01T10:00:00.000Z',
+            type: 'diff',
+            filePath: '/repo/a.ts',
+            diffText: '',
+            addedLines: undefined,
+            removedLines: 5,
+            commandId: 'c9',
+        } as EventInput) as LogEvent);
+
+        assert.ok(diffSection.rows.some(([k, v]) => k === 'Lines' && v === '+0 −5'));
+        assert.ok(diffSection.rows.some(([k, v]) => k === 'Triggered by command' && v === 'c9'));
+    });
+
+    test('the detail page drops the action buttons that cannot work', () => {
+        const html = renderEventHtml(makeEvent({
+            id: 'c1',
+            timestamp: '',
+            sessionId: undefined,
+            commandText: 'npm test',
+        } as EventInput) as LogEvent, 'nonce');
+
+        assert.match(html, /unknown time/);
+        assert.ok(!html.includes('id="sessionBtn"'), 'no session button without a session id');
+        assert.ok(!html.includes('id="visualDiffBtn"'), 'no visual diff button for a command');
+        assert.ok(html.includes('id="copyBtn"'));
+    });
+});
+

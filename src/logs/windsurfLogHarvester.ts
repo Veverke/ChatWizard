@@ -114,7 +114,7 @@ export class WindsurfLogHarvester {
         if (this._pending.has(vscdbPath)) { return; }
 
         this._pending.add(vscdbPath);
-        void this._ingest(vscdbPath, session.workspaceId ?? '', session.workspacePath, stamp).finally(() => {
+        void this._ingest(vscdbPath, session.workspaceId ?? '', session.workspacePath, stamp, session).finally(() => {
             this._pending.delete(vscdbPath);
         });
     }
@@ -123,10 +123,12 @@ export class WindsurfLogHarvester {
         vscdbPath: string,
         workspaceId: string,
         workspacePath: string | undefined,
-        stamp: string | undefined
+        stamp: string | undefined,
+        session?: Session
     ): Promise<void> {
         try {
             const result = await this.ingestWorkspaceDb(vscdbPath, workspaceId, workspacePath);
+            if (session) { this.logService.stampSessionTitle(session.id, session.title); }
             if (result.errors.length === 0 && stamp !== undefined) {
                 this._stamps.set(vscdbPath, stamp);
             }

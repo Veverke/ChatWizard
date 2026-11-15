@@ -107,6 +107,33 @@ export class WorkspaceScopeManager {
 }
 
 /**
+ * The workspace folder paths behind a set of scoped workspace IDs.
+ *
+ * One row per folder: Copilot, Cursor and Windsurf all report the same folder
+ * under different IDs, so the result is de-duplicated (case-insensitively on
+ * Windows). IDs that are not in `available` contribute nothing.
+ */
+export function workspacePathsForIds(
+    available: readonly ScopedWorkspace[],
+    ids: readonly string[]
+): string[] {
+    const wanted = new Set(ids);
+    if (wanted.size === 0) { return []; }
+
+    const seen = new Set<string>();
+    const paths: string[] = [];
+    for (const ws of available) {
+        if (!wanted.has(ws.id)) { continue; }
+        if (!ws.workspacePath || ws.workspacePath.trim().length === 0) { continue; }
+        const key = path.normalize(ws.workspacePath).toLowerCase();
+        if (seen.has(key)) { continue; }
+        seen.add(key);
+        paths.push(ws.workspacePath);
+    }
+    return paths;
+}
+
+/**
  * Returns the total size in **bytes** of session data files for a workspace.
  * File selection depends on the source:
  * - **copilot**: `<storageDir>/chatSessions/*.jsonl`

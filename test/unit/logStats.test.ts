@@ -150,6 +150,76 @@ suite('logStats — sessions and edge cases', () => {
     });
 });
 
+suite('logStats — edge cases', () => {
+    const undated = (id: string, sessionId?: string): LogEvent => ({
+        type: 'command',
+        id,
+        timestamp: undefined as unknown as string,
+        tool: 'copilot',
+        sessionId,
+        commandText: 'npm test',
+    } as unknown as LogEvent);
+
+    test('counts file operations, tool calls and planner steps per agent', () => {
+        const events = [
+            { type: 'fileOperation', id: 'f1', timestamp: '2026-01-01T10:00:00.000Z', tool: 'cline', operationType: 'create', filePath: '/repo/a.ts' },
+            { type: 'toolCall', id: 't1', timestamp: '2026-01-01T10:00:00.000Z', tool: 'cline', toolName: 'readFile' },
+            { type: 'plannerStep', id: 'p1', timestamp: '2026-01-01T10:00:00.000Z', tool: 'cline', description: 'plan the change' },
+        ] as unknown as LogEvent[];
+
+        const cline = computeLogStats(events).byTool[0];
+        assert.strictEqual(cline.fileOperations, 1);
+        assert.strictEqual(cline.toolCalls, 1);
+        assert.strictEqual(cline.plannerSteps, 1);
+    });
+
+    test('a diff without line counts contributes zero lines', () => {
+        const bare = {
+            ...diff({ id: 'd1', timestamp: '2026-01-01T10:00:00.000Z' }),
+            addedLines: undefined,
+            removedLines: undefined,
+        } as unknown as LogEvent;
+
+        const report = computeLogStats([bare]);
+        assert.strictEqual(report.diffs, 1);
+        assert.strictEqual(report.addedLines, 0);
+        assert.strictEqual(report.removedLines, 0);
+    });
+
+    test('timestamp bounds handle mixed and missing dates', () => {
+        const descending = computeLogStats([
+            command({ id: 'c-late', timestamp: '2026-01-02T10:00:00.000Z' }),
+            command({ id: 'c-early', timestamp: '2026-01-01T10:00:00.000Z' }),
+        ]);
+        assert.strictEqual(descending.firstTimestamp, '2026-01-01T10:00:00.000Z');
+        assert.strictEqual(descending.lastTimestamp, '2026-01-02T10:00:00.000Z');
+
+        const withUndated = computeLogStats([
+            command({ id: 'c1', timestamp: '2026-01-01T10:00:00.000Z' }),
+            undated('c2', 's2'),
+        ]);
+        assert.strictEqual(withUndated.firstTimestamp, '2026-01-01T10:00:00.000Z');
+        assert.strictEqual(withUndated.lastTimestamp, '2026-01-01T10:00:00.000Z');
+
+        const allUndated = computeLogStats([undated('c3', 's3'), undated('c4', 's4')]);
+        assert.strictEqual(allUndated.firstTimestamp, undefined);
+        assert.strictEqual(allUndated.lastTimestamp, undefined);
+        assert.strictEqual(allUndated.sessions.length, 2, 'undated sessions still sort');
+    });
+
+    test('the markdown report escapes cells and marks missing values', () => {
+        const report = computeLogStats([
+            undated('c1'),
+            { ...undated('c2'), sessionId: 'abc|defghijklmnopqrstuvwxyz' } as LogEvent,
+        ]);
+
+        const md = renderLogStatsMarkdown(report, (tool) => String(tool));
+        assert.ok(md.includes('(no session)'), 'session-less events are labelled');
+        assert.ok(md.includes('abc\\|defghijklmno…'), 'pipes are escaped and long ids truncated');
+        assert.ok(md.includes('—'), 'missing timestamps render as an em dash');
+    });
+});
+
 suite('logStats — markdown report', () => {
     test('formatStatsTime and formatSuccessRate', () => {
         assert.strictEqual(formatStatsTime(undefined), '—');

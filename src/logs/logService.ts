@@ -21,11 +21,14 @@ import {
     LogStoreStats,
     InMemoryLogEventStore,
     LOG_SCHEMA_VERSION,
+    MAX_EVENTS_PER_QUERY,
 } from './logEventStore';
 import { createLogger } from '../utils/logger';
 import { LogSourceRegistry, LogSourceConfig } from './logSourceRegistry';
 import { parseCopilotLogEvents } from './adapters/copilotLogAdapter';
+import { parseCopilotAgentLogEvents } from './adapters/copilotAgentLogAdapter';
 import { parseClineLogEvents } from './adapters/clineLogAdapter';
+import { parseClineV4LogEvents } from './adapters/clineV4LogAdapter';
 import { parseAiderLogEvents } from './adapters/aiderLogAdapter';
 import { parseWindsurfCascadeJson, parseWindsurfLogEvents } from './adapters/windsurfLogAdapter';
 
@@ -38,6 +41,17 @@ export interface ILogService {
     ingestEvents(events: LogEvent[]): void;
     /** Remove all events attached to a chat session. */
     removeEventsForSession(sessionId: string): number;
+    /**
+     * Stamp (or refresh) the cached chat title on every stored event of a
+     * session and return how many rows were updated.
+     *
+     * The Commands view labels each session group with the chat title the
+     * Sessions view shows. It resolves that live from the session index, but
+     * that index only holds the currently-scoped sessions — so harvesters call
+     * this once per ingested session to keep a durable copy of the title next
+     * to the events.
+     */
+    stampSessionTitle(sessionId: string, title: string | undefined): number;
     /** Remove events parsed from a given source log file. */
     removeBySourcePath(sourcePath: string): number;
     /** Number of stored events that were parsed from a given source file. */
@@ -60,6 +74,27 @@ export interface ILogService {
     ingestClineTaskFile(
         taskDir: string,
         source?: 'cline' | 'roocode'
+    ): { ingested: number; errors: string[] };
+    /**
+     * Cline 4.x / Roo Code 4.x — parse `<dir>/<id>.messages.json` (`tool_use` /
+     * `tool_result` parts) and (re)index its normalized agent-execution events.
+     *
+     * The legacy `ui_messages.json` trail stops being written when Cline
+     * upgrades, so without this newer chats would show no commands at all.
+     */
+    ingestClineV4SessionFile(
+        sessionDir: string,
+        source?: 'cline' | 'roocode',
+        workspacePath?: string
+    ): { ingested: number; errors: string[] };
+    /**
+     * Copilot agent host — parse `<dir>/events.jsonl`
+     * (`tool.execution_start` / `tool.execution_complete`) and (re)index its
+     * normalized agent-execution events.
+     */
+    ingestCopilotAgentSessionFile(
+        sessionDir: string,
+        workspacePath?: string
     ): { ingested: number; errors: string[] };
     /**
      * Phase 3 — Parse an Aider `.aider.chat.history.md` and (re)index its
@@ -182,6 +217,39 @@ export class LogService implements ILogService {
         return this.store.removeEventsForSession(sessionId);
     }
 
+    /**
+     * Stamp the cached chat title on every stored event of a session.
+     *
+     * Cheap no-op when the title is blank or already current (harvesters run
+     * this on every upsert), so calling it after each ingest keeps the
+     * Commands view labels in sync with the Sessions view without extra IO.
+     */
+    stampSessionTitle(sessionId: string, title: string | undefined): number {
+        const trimmed = title?.trim();
+        if (!sessionId || !trimmed) { return 0; }
+
+        let events: LogEvent[];
+        try {
+            events = this.store.getEvents({ sessionId, limit: MAX_EVENTS_PER_QUERY });
+        } catch (err) {
+            logServiceLog.warn('stampSessionTitle query failed (skipped): %s', err);
+            return 0;
+        }
+
+        const updated = events
+            .filter((event) => event.sessionTitle !== trimmed)
+            .map((event) => ({ ...event, sessionTitle: trimmed }));
+
+        if (updated.length === 0) { return 0; }
+        try {
+            this.store.upsertEvents(updated);
+        } catch (err) {
+            logServiceLog.warn('stampSessionTitle write failed (skipped): %s', err);
+            return 0;
+        }
+        return updated.length;
+    }
+
     removeBySourcePath(sourcePath: string): number {
         return this.store.removeBySourcePath(sourcePath);
     }
@@ -211,6 +279,47 @@ export class LogService implements ILogService {
     ): { ingested: number; errors: string[] } {
         const result = parseClineLogEvents(taskDir, source);
         const sourcePath = path.join(taskDir, 'ui_messages.json');
+        if (result.events.length > 0 || this.store.countBySourcePath(sourcePath) > 0) {
+            this.store.removeBySourcePath(sourcePath);
+        }
+        if (result.events.length > 0) {
+            this.store.upsertEvents(result.events);
+        }
+        return { ingested: result.events.length, errors: result.errors };
+    }
+
+    /**
+     * Cline 4.x / Roo Code 4.x — `<dir>/<id>.messages.json`.
+     *
+     * The transcript is rewritten on every agent turn, so events previously
+     * parsed from the same file are dropped before the new set is stored.
+     */
+    ingestClineV4SessionFile(
+        sessionDir: string,
+        source: 'cline' | 'roocode' = 'cline',
+        workspacePath?: string
+    ): { ingested: number; errors: string[] } {
+        const sessionId = path.basename(sessionDir);
+        const sourcePath = path.join(sessionDir, `${sessionId}.messages.json`);
+        const result = parseClineV4LogEvents(sessionDir, source, workspacePath);
+        if (result.events.length > 0 || this.store.countBySourcePath(sourcePath) > 0) {
+            this.store.removeBySourcePath(sourcePath);
+        }
+        if (result.events.length > 0) {
+            this.store.upsertEvents(result.events);
+        }
+        return { ingested: result.events.length, errors: result.errors };
+    }
+
+    /**
+     * Copilot agent host — `<dir>/events.jsonl` (tool execution trail).
+     */
+    ingestCopilotAgentSessionFile(
+        sessionDir: string,
+        workspacePath?: string
+    ): { ingested: number; errors: string[] } {
+        const sourcePath = path.join(sessionDir, 'events.jsonl');
+        const result = parseCopilotAgentLogEvents(sessionDir, workspacePath);
         if (result.events.length > 0 || this.store.countBySourcePath(sourcePath) > 0) {
             this.store.removeBySourcePath(sourcePath);
         }

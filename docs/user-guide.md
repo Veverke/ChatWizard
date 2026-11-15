@@ -132,6 +132,33 @@ Aider record output but no exit status; Windsurf does not persist tool execution
 its command rows are marked *derived* in the event details. Diffs likewise: Copilot stores the
 replacement text only (additions-only patches), while Cline and Aider patches carry both sides.
 
+> **Cline 4.x storage.** Cline 4.x moved its chat history out of VS Code's
+> `globalStorage` into its own home directory: `~/.cline/data/sessions/<id>/`
+> (`<id>.json` metadata + `<id>.messages.json` transcript), overridable with the
+> `CLINE_DATA_DIR` / `CLINE_DIR` environment variables. ChatWizard indexes those
+> sessions alongside the legacy `tasks/<id>/` directories (which Cline leaves
+> behind on upgrade), including live updates while a task runs. Their
+> `tool_use` / `tool_result` parts are normalized too, so `run_commands`,
+> `editor` and `apply_patch` calls show up as **commands, file operations and
+> diffs** (with exit codes and captured output) in the Commands view.
+
+> **Copilot agent-host storage.** Newer VS Code (1.146+) / Copilot Chat (1.0+)
+> stopped writing chats to `workspaceStorage/<hash>/chatSessions/*.jsonl` and
+> keeps them in the Copilot home instead:
+> `<COPILOT_HOME || ~/.copilot>/session-state/<id>/` (`workspace.yaml` with the
+> chat title/cwd/git info + `events.jsonl` transcript), overridable with the
+> `COPILOT_HOME` environment variable. ChatWizard indexes both layouts, including
+> live updates while a chat runs, and replays `tool.execution_start` /
+> `tool.execution_complete` into command / diff / error rows.
+
+> **Workspace scoping.** The agent-log store is shared by every workspace on the
+> machine, so the Commands view is scoped to the VS Code folder(s) you have open
+> (`chatwizard` activity while `chatwizard` is open, nothing from
+> `vscode-extension-analytics`). Close all folders — or open a folderless
+> window — to see the unscoped history. The scope follows `File → Add Folder to
+> Workspace` changes immediately.
+
+
 - **Executed Commands** lists every command, newest first, grouped per session, with exit
   badges, copy-to-clipboard, open-session and **Run in Terminal** actions.
 - Clicking any row opens **one shared details window** — subsequent clicks replace its

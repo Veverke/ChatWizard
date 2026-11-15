@@ -18,13 +18,17 @@ import {
  * A file-centric, cross-agent view of every code change the watch-logs store
  * captured: `diff` events (inline edit groups, apply_patch payloads) plus the
  * file operations that never produce a paired diff (create/delete/rename/
- * move/mkdir). Grouped per workspace → per file, newest first, with actions:
+ * move/mkdir). Grouped **per changed file**, newest first:
  *
  *   - open the visual diff — the change in VS Code's native diff editor
  *     (side-by-side / inline, `src/logs/diffViewer.ts`)
  *   - open the patch — renders the raw diff text in a disposable markdown editor
  *   - copy the diff text to the clipboard
  *   - open the affected file (when it still exists on disk)
+ *
+ * The section is scoped to the active workspace (see `resolveWorkspaceScope`),
+ * so the changed files are the section's direct children — a workspace binder
+ * level would only repeat the folder that is already in scope on every row.
  *
  * Feeds today from the GitHub Copilot, Cline / Roo Code, Aider and Windsurf
  * adapters — all of them stream into the same normalized store.
@@ -161,27 +165,15 @@ export function pathToDisplayInfo(filePath: string): { basename: string; dirname
 // Tree items
 // ---------------------------------------------------------------------------
 
-export type DiffExplorerTreeNode = DiffWorkspaceGroupItem | DiffFileGroupItem | DiffEventLeafItem;
+export type DiffExplorerTreeNode = DiffFileGroupItem | DiffEventLeafItem;
 
-/** Workspace binder — root level. */
-export class DiffWorkspaceGroupItem extends vscode.TreeItem {
-    readonly workspaceKey: string;
-    readonly groups: DiffFileGroupItem[];
-
-    constructor(workspaceKey: string, workspacePath: string | undefined, groups: DiffFileGroupItem[]) {
-        super(workspacePath && workspacePath.length > 0
-            ? pathToDisplayInfo(workspacePath).basename || workspacePath
-            : 'Unknown workspace',
-        vscode.TreeItemCollapsibleState.Collapsed);
-        this.workspaceKey = workspaceKey;
-        this.groups = groups;
-        this.description = workspacePath && workspacePath.length > 0 ? workspacePath : `${groups.length} file(s)`;
-        this.contextValue = 'logsDiffWorkspace';
-        this.iconPath = new vscode.ThemeIcon('folder');
-    }
-}
-
-/** A distinct changed file — lists its change events. */
+/**
+ * A distinct changed file — the section's root rows.
+ *
+ * Starts **collapsed**, like every group in the Commands view, so opening the
+ * "Diff Explorer" section lists the changed files rather than every individual
+ * change row.
+ */
 export class DiffFileGroupItem extends vscode.TreeItem {
     readonly filePath: string;
     readonly events: LogEvent[];
@@ -189,7 +181,7 @@ export class DiffFileGroupItem extends vscode.TreeItem {
     constructor(filePath: string, events: LogEvent[]) {
         const display = pathToDisplayInfo(filePath);
         super(display.basename || filePath, events.length > 0
-            ? vscode.TreeItemCollapsibleState.Expanded
+            ? vscode.TreeItemCollapsibleState.Collapsed
             : vscode.TreeItemCollapsibleState.None);
         this.filePath = filePath;
         this.events = events;
@@ -234,7 +226,8 @@ export class DiffExplorerProvider implements vscode.TreeDataProvider<DiffExplore
     private readonly _onDidChangeTreeData = new vscode.EventEmitter<DiffExplorerTreeNode | undefined | void>();
     readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
-    private _workspaceGroups: DiffWorkspaceGroupItem[] = [];
+    /** Changed files, newest first — the section's direct children. */
+    private _fileGroups: DiffFileGroupItem[] = [];
     private _filters: LogViewFilters = emptyLogFilters();
     /** Phase 4: cache "filtered to nothing" so empty sections stop re-querying. */
     private _built = false;
@@ -246,7 +239,23 @@ export class DiffExplorerProvider implements vscode.TreeDataProvider<DiffExplore
      * apply here — the Diff Explorer never lists command/error kinds.
      */
     setFilters(filters: LogViewFilters): void {
-        this._filters = { search: filters.search, tool: filters.tool };
+        this._filters = {
+            search: filters.search,
+            tool: filters.tool,
+            workspacePaths: filters.workspacePaths,
+        };
+        this.refresh();
+    }
+
+    /**
+     * Restrict this section to the given workspace roots (the VS Code open
+     * folders). An empty array clears the restriction.
+     */
+    setWorkspaceScope(workspacePaths: string[]): void {
+        this._filters = {
+            ...this._filters,
+            workspacePaths: workspacePaths.length > 0 ? [...workspacePaths] : undefined,
+        };
         this.refresh();
     }
 
@@ -262,7 +271,7 @@ export class DiffExplorerProvider implements vscode.TreeDataProvider<DiffExplore
 
     /** Re-query the store and rebuild the tree. */
     refresh(): void {
-        this._workspaceGroups = this._buildWorkspaceGroups();
+        this._fileGroups = this._buildFileGroups();
         this._built = true;
         this._onDidChangeTreeData.fire();
     }
@@ -270,10 +279,7 @@ export class DiffExplorerProvider implements vscode.TreeDataProvider<DiffExplore
     getChildren(element?: DiffExplorerTreeNode): DiffExplorerTreeNode[] {
         if (!element) {
             if (!this._built) { this.refresh(); }
-            return this._workspaceGroups;
-        }
-        if (element instanceof DiffWorkspaceGroupItem) {
-            return element.groups;
+            return this._fileGroups;
         }
         if (element instanceof DiffFileGroupItem) {
             return element.events.map((e) => new DiffEventLeafItem(e));
@@ -287,40 +293,30 @@ export class DiffExplorerProvider implements vscode.TreeDataProvider<DiffExplore
 
     getParent(element: DiffExplorerTreeNode): DiffExplorerTreeNode | undefined {
         if (element instanceof DiffEventLeafItem) {
-            for (const ws of this._workspaceGroups) {
-                const fileGroup = ws.groups.find((g) => g.events.some((e) => e.id === element.event.id));
-                if (fileGroup) { return fileGroup; }
-            }
+            return this._fileGroups.find((g) => g.events.some((e) => e.id === element.event.id));
         }
-        if (element instanceof DiffFileGroupItem) {
-            return this._workspaceGroups.find((ws) => ws.groups.includes(element));
-        }
+        // File groups are the roots of this section, so they report the section
+        // row as their parent (the composite view falls back to it).
         return undefined;
     }
 
-    /** Root groups currently rendered (useful for tests + stats). */
-    getWorkspaceGroups(): DiffWorkspaceGroupItem[] {
+    /** Changed-file groups currently rendered (useful for tests + stats). */
+    getFileGroups(): DiffFileGroupItem[] {
         // Lazily build on first read so callers that inspect the tree before
         // VS Code renders it still see the store contents.
         if (!this._built) {
-            this._workspaceGroups = this._buildWorkspaceGroups();
+            this._fileGroups = this._buildFileGroups();
             this._built = true;
         }
-        return this._workspaceGroups;
+        return this._fileGroups;
     }
 
-    /** Total number of change events rendered across all groups. */
+    /** Total number of change events rendered across all files. */
     getTotalEvents(): number {
-        let total = 0;
-        for (const ws of this._workspaceGroups) {
-            for (const file of ws.groups) {
-                total += file.events.length;
-            }
-        }
-        return total;
+        return this._fileGroups.reduce((total, file) => total + file.events.length, 0);
     }
 
-    private _buildWorkspaceGroups(): DiffWorkspaceGroupItem[] {
+    private _buildFileGroups(): DiffFileGroupItem[] {
         let events: LogEvent[];
         try {
             events = this.logService.getEvents({
@@ -337,44 +333,28 @@ export class DiffExplorerProvider implements vscode.TreeDataProvider<DiffExplore
 
         events = events
             .filter(isDiffCandidate)
-            .filter((event) => matchesLogFilters(event, { search: this._filters.search }));
+            .filter((event) => matchesLogFilters(event, {
+                search: this._filters.search,
+                workspacePaths: this._filters.workspacePaths,
+            }));
 
-        const byWorkspace = new Map<string, LogEvent[]>();
+        // The section is already scoped to the active workspace, so the changed
+        // files are grouped directly — no workspace binder level.
+        const byFile = new Map<string, LogEvent[]>();
         for (const event of events) {
-            const key = event.workspacePath && event.workspacePath.length > 0
-                ? event.workspacePath
-                : `id:${event.workspaceId ?? event.sessionId ?? 'unknown'}`;
-            const bucket = byWorkspace.get(key);
-            if (bucket) { bucket.push(event); } else { byWorkspace.set(key, [event]); }
+            const key = getEventFilePath(event) ?? '';
+            const bucket = byFile.get(key);
+            if (bucket) { bucket.push(event); } else { byFile.set(key, [event]); }
         }
 
-        const groups: DiffWorkspaceGroupItem[] = [];
-        for (const [workspaceKey, wsEvents] of byWorkspace) {
-            const byFile = new Map<string, LogEvent[]>();
-            for (const event of wsEvents) {
-                const key = getEventFilePath(event) ?? '';
-                const bucket = byFile.get(key);
-                if (bucket) { bucket.push(event); } else { byFile.set(key, [event]); }
-            }
-
-            const fileGroups: DiffFileGroupItem[] = [];
-            for (const [filePath, fileEvents] of byFile) {
-                fileEvents.sort((a, b) => (b.timestamp ?? '').localeCompare(a.timestamp ?? ''));
-                fileGroups.push(new DiffFileGroupItem(filePath, fileEvents));
-            }
-            fileGroups.sort((a, b) => b.newestTimestamp.localeCompare(a.newestTimestamp));
-
-            const workspacePath = workspaceKey.startsWith('id:') ? undefined : workspaceKey;
-            groups.push(new DiffWorkspaceGroupItem(workspaceKey, workspacePath, fileGroups));
+        const fileGroups: DiffFileGroupItem[] = [];
+        for (const [filePath, fileEvents] of byFile) {
+            fileEvents.sort((a, b) => (b.timestamp ?? '').localeCompare(a.timestamp ?? ''));
+            fileGroups.push(new DiffFileGroupItem(filePath, fileEvents));
         }
 
-        // Newest change first across workspaces.
-        groups.sort((a, b) => {
-            const aNewest = a.groups[0]?.newestTimestamp ?? '';
-            const bNewest = b.groups[0]?.newestTimestamp ?? '';
-            return bNewest.localeCompare(aNewest);
-        });
-
-        return groups;
+        // Newest change first across files.
+        fileGroups.sort((a, b) => b.newestTimestamp.localeCompare(a.newestTimestamp));
+        return fileGroups;
     }
 }

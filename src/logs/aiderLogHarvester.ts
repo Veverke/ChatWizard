@@ -75,6 +75,7 @@ export class AiderLogHarvester {
         if (!session.filePath) { return; }
         try {
             this.ingestHistoryFile(session.filePath, session.workspacePath, session.id);
+            this.logService.stampSessionTitle(session.id, session.title);
         } catch {
             // Never let log harvesting break session indexing.
         }

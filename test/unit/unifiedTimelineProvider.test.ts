@@ -425,6 +425,39 @@ suite('UnifiedTimelineProvider — tree plumbing and title fallbacks', () => {
         assert.ok(labels.includes('Session abcdefghijkl'), `labels: ${labels.join(', ')}`);
     });
 
+    test('group titles use the title stamped on the events when the session is not resolvable', () => {
+        // Harvested events carry the chat title; the live index no longer knows
+        // this session (workspace scope changed / retention), so the id fallback
+        // must not be shown.
+        service.ingestEvents([
+            makeEvent({
+                id: 'c1',
+                sessionId: '1787652725913',
+                timestamp: '2026-01-01T10:00:00.000Z',
+                sessionTitle: 'process-request-tracking.yml workflow is failing',
+            }),
+        ]);
+
+        const provider = new UnifiedTimelineProvider(service, () => undefined);
+
+        assert.strictEqual(provider.getGroups()[0].label, 'process-request-tracking.yml workflow is failing');
+    });
+
+    test('the live resolver wins over the harvested title (renamed chats follow the Sessions view)', () => {
+        service.ingestEvents([
+            makeEvent({
+                id: 'c1',
+                sessionId: 'sess-a',
+                timestamp: '2026-01-01T10:00:00.000Z',
+                sessionTitle: 'stale harvested title',
+            }),
+        ]);
+
+        const provider = new UnifiedTimelineProvider(service, () => 'Fresh custom title');
+
+        assert.strictEqual(provider.getGroups()[0].label, 'Fresh custom title');
+    });
+
     test('a failing store degrades to an empty tree instead of throwing', () => {
         const broken = { getEvents: () => { throw new Error('store down'); } } as unknown as LogService;
         const provider = new UnifiedTimelineProvider(broken);
@@ -507,6 +540,55 @@ suite('UnifiedTimelineProvider — tree plumbing and title fallbacks', () => {
             id: 'n', timestamp: '2026-01-01T10:00:00.000Z', type: 'toolCall', toolName: 'read_file',
         }));
         assert.ok(notACommand.iconPath);
+    });
+});
+
+suite('UnifiedTimelineProvider — display and grouping edge cases', () => {
+    let dir: string;
+    let service: LogService;
+
+    setup(() => {
+        dir = tmpDir();
+        service = new LogService(dir, createDefaultLogSourceRegistry());
+    });
+
+    teardown(() => {
+        try { service.dispose(); } catch { /* ignore */ }
+        try { fs.rmSync(dir, { recursive: true }); } catch { /* ignore */ }
+    });
+
+    test('planner steps get a label and lose the time part without a timestamp', () => {
+        const undated = {
+            type: 'plannerStep', id: 'p1', timestamp: '', tool: 'copilot', sessionId: 's1',
+            description: 'plan the refactor', status: 'done', stepType: 'plan',
+        } as unknown as LogEvent;
+
+        assert.strictEqual(eventPrimaryLabel(undated), 'plan the refactor');
+
+        const dated = { ...undated, timestamp: '2026-01-01T10:00:00.000Z' } as LogEvent;
+        assert.ok(
+            eventDescription(undated).length < eventDescription(dated).length,
+            'an empty timestamp adds no · HH:MM suffix'
+        );
+    });
+
+    test('diff descriptions handle a single known line count', () => {
+        const onlyRemoved = {
+            type: 'diff', id: 'd1', timestamp: '2026-01-01T10:00:00.000Z', tool: 'copilot',
+            filePath: '/repo/a.ts', diffText: '', addedLines: undefined, removedLines: 4,
+        } as unknown as LogEvent;
+
+        assert.match(eventDescription(onlyRemoved), /\+0 −4/);
+    });
+
+    test('group workspace paths skip empty values', () => {
+        service.ingestEvents([
+            makeEvent({ id: 'c1', workspacePath: '', timestamp: '2026-01-01T10:00:00.000Z' }),
+            makeEvent({ id: 'c2', workspacePath: '/repo', timestamp: '2026-01-02T10:00:00.000Z' }),
+        ]);
+
+        const [group] = new UnifiedTimelineProvider(service).getGroups();
+        assert.strictEqual(group.description, '2 events · /repo');
     });
 });
 
