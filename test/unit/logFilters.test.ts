@@ -287,11 +287,20 @@ suite('logFilters — workspace scope (structural)', () => {
         workspacePath,
     });
 
-    test('matchesWorkspaceScope keeps events under the open folder (case-insensitive on Windows)', () => {
+    test('matchesWorkspaceScope keeps events under the open folder', () => {
         const open = path.join('C:', 'Repos', 'Mine', 'ChatWizard');
         assert.strictEqual(matchesWorkspaceScope(eventAt(path.join('C:', 'Repos', 'Mine', 'ChatWizard', 'src')), [open]), true);
-        assert.strictEqual(matchesWorkspaceScope(eventAt(path.join('c:', 'repos', 'mine', 'chatwizard')), [open]), true,
-            'workspace roots compare case-insensitively');
+        // Path comparison follows the host file system: case-insensitive on
+        // Windows, case-sensitive on POSIX (Linux and macOS runners). The
+        // assertion has to follow the same rule, otherwise the test only
+        // passes on the platform it was written on.
+        assert.strictEqual(
+            matchesWorkspaceScope(eventAt(path.join('c:', 'repos', 'mine', 'chatwizard')), [open]),
+            process.platform === 'win32',
+            process.platform === 'win32'
+                ? 'workspace roots compare case-insensitively on Windows'
+                : 'workspace roots compare case-sensitively on POSIX'
+        );
         assert.strictEqual(matchesWorkspaceScope(eventAt(path.join('C:', 'Repos', 'Mine', 'ChatWizard-old')), [open]), false,
             'a sibling folder sharing a prefix is NOT in scope');
         assert.strictEqual(matchesWorkspaceScope(eventAt(path.join('C:', 'Repos', 'Mine', 'vscode-extension-analytics')), [open]), false);
