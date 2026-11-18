@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { LogService } from './logService';
 import { firstLineOf, resolveGroupTitle } from './executedCommandsProvider';
+import { describeLogEvent, toolCallLabel } from './logEventSummary';
 import { LogViewFilters, emptyLogFilters, hasActiveFilters, matchesLogFilters } from './logFilters';
 import { createLogger } from '../utils/logger';
 import {
@@ -32,6 +33,11 @@ import {
  *   - `logsEvent.diff`     → open the change in VS Code's native diff editor
  *     (`openVisualDiff`, falling back to the raw patch text)
  *   - `logsEvent.fileOperation` → reveal the affected file when it exists
+ *
+ * Every row (session and event alike) carries the section's `history` icon;
+ * outcome is carried by colour instead of by icon (red = failed command /
+ * error, yellow = warning), so the merged feed stays visually apart from the
+ * dedicated Terminal Commands / LLM Tool Calls / Diff Explorer sections.
  *
  * Phase 4 extends the kind filter with the shared view filters — free-text
  * search, agent (tool) and "failures only" — so all three sections of the
@@ -66,7 +72,9 @@ export function eventPrimaryLabel(event: LogEvent): string {
             return `${op.operationType} ${op.filePath}`;
         }
         case 'diff': return (event as DiffEvent).filePath;
-        case 'toolCall': return (event as ToolCallEvent).toolName;
+        // `toolName [identifying argument]` — a list of N identical tool names
+        // tells the user nothing; the target (file, command, query) does.
+        case 'toolCall': return toolCallLabel(event as ToolCallEvent, 100);
         case 'error': return firstLineOf((event as ErrorEvent).message, 100);
         case 'plannerStep': return firstLineOf((event as PlannerStepEvent).description, 100);
     }
@@ -93,7 +101,11 @@ export function eventDescription(event: LogEvent): string {
                 ? ` · +${d.addedLines ?? 0} −${d.removedLines ?? 0}` : '';
             return `${logEventTypeLabel('diff')}${stats}${timePart}`;
         }
-        case 'toolCall': return `${logEventTypeLabel('toolCall')}${timePart}`;
+        case 'toolCall': {
+            const t = event as ToolCallEvent;
+            const outcome = t.success === false ? ' · failed' : t.success === true ? ' · ok' : '';
+            return `${logEventTypeLabel('toolCall')}${outcome}${timePart}`;
+        }
         case 'error': {
             const e = event as ErrorEvent;
             const sev = e.severity ? ` · ${e.severity}` : '';
@@ -102,21 +114,34 @@ export function eventDescription(event: LogEvent): string {
         case 'plannerStep': return `${logEventTypeLabel('plannerStep')}${timePart}`;
     }
 }
-/** VS Code codicon for a timeline row (drives the visual hierarchy). */
-export function eventIconId(event: LogEvent): string {
-    switch (event.type) {
-        case 'command': {
-            const c = event as CommandEvent;
-            return c.exitCode === undefined ? 'run'
-                : c.exitCode === 0 ? 'terminal'
-                : 'error';
-        }
-        case 'fileOperation': return 'file';
-        case 'diff': return 'diff';
-        case 'toolCall': return 'tools';
-        case 'error': return ((event as ErrorEvent).severity === 'warning') ? 'warning' : 'error';
-        case 'plannerStep': return 'list-unordered';
+/**
+ * Codicon of every Unified Timeline row.
+ *
+ * The section owns `history` for its session rows *and* its event rows: the
+ * kind is spelled out in the row description ("Command · exit 0",
+ * "Diff / Patch · +1 −1", …), so the icon does not repeat it — and no two
+ * sections of the Commands view share a row icon any more.
+ */
+export const TIMELINE_ROW_ICON = 'history';
+
+/**
+ * Colour carrying the *outcome* of a timeline event (the row icon no longer
+ * encodes the kind): a failed command or an error is red, a warning yellow,
+ * everything else stays uncoloured.
+ */
+export function timelineRowColor(event: LogEvent): vscode.ThemeColor | undefined {
+    if (event.type === 'command') {
+        const exitCode = (event as CommandEvent).exitCode;
+        return exitCode !== undefined && exitCode !== 0
+            ? new vscode.ThemeColor('problemsErrorIcon.foreground')
+            : undefined;
     }
+    if (event.type === 'error') {
+        return new vscode.ThemeColor((event as ErrorEvent).severity === 'warning'
+            ? 'problemsWarningIcon.foreground'
+            : 'problemsErrorIcon.foreground');
+    }
+    return undefined;
 }
 
 /** Full tooltip text (everything we know about the event). */
@@ -134,7 +159,9 @@ export function eventTooltip(event: LogEvent): string {
         }
         case 'toolCall': {
             const t = event as ToolCallEvent;
-            return [t.toolName, t.arguments ? JSON.stringify(t.arguments, null, 2) : '', base].filter(Boolean).join('\n');
+            return [describeLogEvent(event), t.arguments ? JSON.stringify(t.arguments, null, 2) : '', base]
+                .filter(Boolean)
+                .join('\n\n');
         }
         case 'error': {
             const e = event as ErrorEvent;
@@ -191,7 +218,6 @@ export class TimelineEventItem extends vscode.TreeItem {
     readonly event: LogEvent;
 
     constructor(event: LogEvent) {
-        const exitCode = event.type === 'command' ? (event as CommandEvent).exitCode : undefined;
         super(eventPrimaryLabel(event), vscode.TreeItemCollapsibleState.None);
         this.event = event;
         this.description = eventDescription(event);
@@ -202,9 +228,7 @@ export class TimelineEventItem extends vscode.TreeItem {
             command: 'chatwizard.logs.timeline.showDetails',
             title: 'Show Event Details',
         };
-        this.iconPath = new vscode.ThemeIcon(eventIconId(event), exitCode !== undefined && exitCode !== 0
-            ? new vscode.ThemeColor('problemsErrorIcon.foreground')
-            : undefined);
+        this.iconPath = new vscode.ThemeIcon(TIMELINE_ROW_ICON, timelineRowColor(event));
     }
 }
 // ---------------------------------------------------------------------------

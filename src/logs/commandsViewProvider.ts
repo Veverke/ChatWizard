@@ -7,21 +7,35 @@
  * (`chatwizardExecutedCommands`, `chatwizardUnifiedTimeline`,
  * `chatwizardDiffExplorer`), which made the Chat Wizard sidebar noisy. VS Code
  * does **not** support nesting a contributed view inside another view, so the
- * three panels are exposed as three collapsible *sections* of one tree view
+ * panels are exposed as collapsible *sections* of one tree view
  * (`chatwizardCommands`) instead — all of them collapsed by default, and so is
  * every group level below them (sessions, workspaces, files), so expanding a
  * section reveals one compact row per group instead of an expanded event feed:
  *
  *   Commands
- *   ├── Executed Commands   (n commands)
- *   ├── Unified Timeline    (n events)
- *   └── Diff Explorer       (n changes · n files)
+ *   ├── Terminal Commands   (n commands)      terminal
+ *   ├── LLM Tool Calls      (n tool calls)    tools
+ *   ├── Unified Timeline    (n events)        history
+ *   └── Diff Explorer       (n changes · n files)  file-code
+ *
+ * Each section owns its own icon family down to the leaf rows — Terminal
+ * Commands uses `run` / `terminal` / `error` (exit state), LLM Tool Calls
+ * `tools`, the Unified Timeline `history` with the outcome as colour and the
+ * Diff Explorer one icon per file operation (`diff`, `file-add`, `trash`, …) —
+ * so no row of one section looks like a row of another.
+ *
+ * `Terminal Commands` lists `command` events (shell / git / build / test) and
+ * `LLM Tool Calls` lists `toolCall` events (read a file, search, patch, …) —
+ * the two halves of what an agent actually did. Both are event-kind sections
+ * of the same store, so a tool-heavy agent that used to look empty under
+ * "Executed Commands" now has its own section, and the Unified Timeline is the
+ * merged feed of every kind on top of them.
  *
  * `CommandsViewProvider` is a thin composite: it owns the section rows and
  * forwards every other node to the provider that produced it, re-emitting their
  * change events so the single view stays live.
  *
- * Phase 4: the composite also fans one `LogViewFilters` set out to all three
+ * Phase 4: the composite also fans one `LogViewFilters` set out to all
  * sections and prefixes their subtitles with `· N failed` / `· filtered`, so
  * the section header always describes exactly the rows below it.
  */
@@ -33,6 +47,12 @@ import {
     ExecCommandsLeafItem,
     ExecCommandsTreeNode,
 } from './executedCommandsProvider';
+import {
+    ToolCallsProvider,
+    ToolCallsGroupItem,
+    ToolCallLeafItem,
+    ToolCallsTreeNode,
+} from './toolCallsProvider';
 import {
     UnifiedTimelineProvider,
     TimelineGroupItem,
@@ -51,8 +71,15 @@ import { LogViewFilters, emptyLogFilters, hasActiveFilters, isFailedCommand } fr
 /** Contributed id of the single watch-logs sidebar view. */
 export const COMMANDS_VIEW_ID = 'chatwizardCommands';
 
-/** The three former panels, now sections of the Commands view. */
-export type CommandsSubViewId = 'executedCommands' | 'timeline' | 'diffs';
+/**
+ * The sections of the Commands view.
+ *
+ * `executedCommands` keeps its historical id (the palette command and menu
+ * wiring point at it) but now renders under the "Terminal Commands" label,
+ * because "executed command" was ambiguous: the LLM tool calls are executions
+ * too.
+ */
+export type CommandsSubViewId = 'executedCommands' | 'toolCalls' | 'timeline' | 'diffs';
 
 /** Static description of one section (label + codicon). */
 export interface CommandsSectionDefinition {
@@ -63,7 +90,8 @@ export interface CommandsSectionDefinition {
 
 /** Section order (also the order rendered in the tree). */
 export const COMMANDS_SECTIONS: readonly CommandsSectionDefinition[] = [
-    { id: 'executedCommands', label: 'Executed Commands', icon: 'terminal' },
+    { id: 'executedCommands', label: 'Terminal Commands', icon: 'terminal' },
+    { id: 'toolCalls', label: 'LLM Tool Calls', icon: 'tools' },
     { id: 'timeline', label: 'Unified Timeline', icon: 'history' },
     { id: 'diffs', label: 'Diff Explorer', icon: 'diff' },
 ];
@@ -71,6 +99,7 @@ export const COMMANDS_SECTIONS: readonly CommandsSectionDefinition[] = [
 /** Node counts used for the section descriptions. */
 export interface CommandsSectionCounts {
     commands: number;
+    toolCalls: number;
     events: number;
     changes: number;
     files: number;
@@ -91,12 +120,15 @@ export function describeCommandsSection(subView: CommandsSubViewId, counts: Comm
                 : '';
             return `${plural(counts.commands, 'command')}${failed}${filterSuffix}`;
         }
+        case 'toolCalls':
+            return `${plural(counts.toolCalls, 'tool call')}${filterSuffix}`;
         case 'timeline':
             return `${plural(counts.events, 'event')}${filterSuffix}`;
         case 'diffs':
             return `${plural(counts.changes, 'change')} · ${plural(counts.files, 'file')}${filterSuffix}`;
     }
 }
+
 
 // ---------------------------------------------------------------------------
 // Tree items
@@ -138,6 +170,7 @@ export class CommandsSectionItem extends vscode.TreeItem {
 export type CommandsTreeNode =
     | CommandsSectionItem
     | ExecCommandsTreeNode
+    | ToolCallsTreeNode
     | UnifiedTimelineTreeNode
     | DiffExplorerTreeNode;
 
@@ -158,6 +191,7 @@ function isLogEventLike(value: unknown): value is LogEvent {
 /** The `LogEvent` behind a leaf row, whichever section it came from. */
 export function eventOfCommandsNode(node: unknown): LogEvent | undefined {
     if (node instanceof ExecCommandsLeafItem) { return node.event; }
+    if (node instanceof ToolCallLeafItem) { return node.event; }
     if (node instanceof TimelineEventItem) { return node.event; }
     if (node instanceof DiffEventLeafItem) { return node.event; }
     if (!node || typeof node !== 'object') { return undefined; }
@@ -169,6 +203,7 @@ export function eventOfCommandsNode(node: unknown): LogEvent | undefined {
 export function subViewOfCommandsNode(node: unknown): CommandsSubViewId | undefined {
     if (node instanceof CommandsSectionItem) { return node.subView; }
     if (node instanceof ExecCommandsGroupItem || node instanceof ExecCommandsLeafItem) { return 'executedCommands'; }
+    if (node instanceof ToolCallsGroupItem || node instanceof ToolCallLeafItem) { return 'toolCalls'; }
     if (node instanceof TimelineGroupItem || node instanceof TimelineEventItem) { return 'timeline'; }
     if (node instanceof DiffFileGroupItem || node instanceof DiffEventLeafItem) { return 'diffs'; }
     return undefined;
@@ -193,6 +228,7 @@ export class CommandsViewProvider implements vscode.TreeDataProvider<CommandsTre
 
     constructor(
         private readonly executedCommands: ExecutedCommandsProvider,
+        private readonly toolCalls: ToolCallsProvider,
         private readonly timeline: UnifiedTimelineProvider,
         private readonly diffs: DiffExplorerProvider
     ) {
@@ -204,7 +240,7 @@ export class CommandsViewProvider implements vscode.TreeDataProvider<CommandsTre
         }
         // The delegates already know how to rebuild themselves; the composite
         // only has to refresh the counts and re-emit so the single view updates.
-        for (const delegate of [executedCommands, timeline, diffs]) {
+        for (const delegate of [executedCommands, toolCalls, timeline, diffs]) {
             this._delegateSubscriptions.push(delegate.onDidChangeTreeData(() => {
                 this._syncSectionDescriptions();
                 this._onDidChangeTreeData.fire();
@@ -217,6 +253,7 @@ export class CommandsViewProvider implements vscode.TreeDataProvider<CommandsTre
     /** Reload every section from the event store. */
     refresh(): void {
         this.executedCommands.refresh();
+        this.toolCalls.refresh();
         this.timeline.refresh();
         this.diffs.refresh();
     }
@@ -227,6 +264,7 @@ export class CommandsViewProvider implements vscode.TreeDataProvider<CommandsTre
      */
     setFilters(filters: LogViewFilters): void {
         this.executedCommands.setFilters(filters);
+        this.toolCalls.setFilters(filters);
         this.timeline.setFilters(filters);
         this.diffs.setFilters(filters);
     }
@@ -238,17 +276,19 @@ export class CommandsViewProvider implements vscode.TreeDataProvider<CommandsTre
         const workspacePaths = this.getFilters().workspacePaths;
         const empty: LogViewFilters = { workspacePaths };
         this.executedCommands.setFilters(empty);
+        this.toolCalls.setFilters(empty);
         this.timeline.setFilters(empty);
         this.diffs.setFilters(empty);
     }
 
     /**
-     * Restrict all three sections to the given workspace roots (the VS Code
-     * open folders). Called on activation and whenever the workspace folders
+     * Restrict all sections to the given workspace roots (the VS Code open
+     * folders). Called on activation and whenever the workspace folders
      * change, so the Commands view never shows another repository's activity.
      */
     setWorkspaceScope(workspacePaths: string[]): void {
         this.executedCommands.setWorkspaceScope(workspacePaths);
+        this.toolCalls.setWorkspaceScope(workspacePaths);
         this.timeline.setWorkspaceScope(workspacePaths);
         this.diffs.setWorkspaceScope(workspacePaths);
         this._syncSectionDescriptions();
@@ -256,18 +296,19 @@ export class CommandsViewProvider implements vscode.TreeDataProvider<CommandsTre
 
     /**
      * The filters currently narrowing the view — the timeline's kinds plus the
-     * search/agent/failures facets shared by all three sections.
+     * search/agent/failures facets shared by every section.
      */
     getFilters(): LogViewFilters {
         const commands = this.executedCommands.getFilters();
+        const toolCalls = this.toolCalls.getFilters();
         const timeline = this.timeline.getFilters();
         const filters: LogViewFilters = {
-            search: timeline.search ?? commands.search,
-            tool: timeline.tool ?? commands.tool,
-            failuresOnly: timeline.failuresOnly ?? commands.failuresOnly,
+            search: timeline.search ?? toolCalls.search ?? commands.search,
+            tool: timeline.tool ?? toolCalls.tool ?? commands.tool,
+            failuresOnly: timeline.failuresOnly ?? toolCalls.failuresOnly ?? commands.failuresOnly,
             types: timeline.types,
         };
-        const workspacePaths = timeline.workspacePaths ?? commands.workspacePaths;
+        const workspacePaths = timeline.workspacePaths ?? toolCalls.workspacePaths ?? commands.workspacePaths;
         if (workspacePaths !== undefined) { filters.workspacePaths = workspacePaths; }
         return filters;
     }
@@ -287,6 +328,9 @@ export class CommandsViewProvider implements vscode.TreeDataProvider<CommandsTre
         }
         if (element instanceof ExecCommandsGroupItem || element instanceof ExecCommandsLeafItem) {
             return this.executedCommands.getChildren(element);
+        }
+        if (element instanceof ToolCallsGroupItem || element instanceof ToolCallLeafItem) {
+            return this.toolCalls.getChildren(element);
         }
         if (element instanceof TimelineGroupItem || element instanceof TimelineEventItem) {
             return this.timeline.getChildren(element);
@@ -314,6 +358,10 @@ export class CommandsViewProvider implements vscode.TreeDataProvider<CommandsTre
                 return element instanceof ExecCommandsLeafItem
                     ? (this.executedCommands.getParent(element) ?? this.section('executedCommands'))
                     : this.section('executedCommands');
+            case 'toolCalls':
+                return element instanceof ToolCallLeafItem
+                    ? (this.toolCalls.getParent(element) ?? this.section('toolCalls'))
+                    : this.section('toolCalls');
             case 'timeline':
                 return element instanceof TimelineEventItem
                     ? (this.timeline.getParent(element) ?? this.section('timeline'))
@@ -331,6 +379,7 @@ export class CommandsViewProvider implements vscode.TreeDataProvider<CommandsTre
     /** Node counts across every section (exposed for tests + diagnostics). */
     counts(): CommandsSectionCounts {
         const groups = this.executedCommands.getGroups();
+        const toolCallGroups = this.toolCalls.getGroups();
         const timelineGroups = this.timeline.getGroups();
         const fileGroups = this.diffs.getFileGroups();
         let failedCommands = 0;
@@ -341,6 +390,7 @@ export class CommandsViewProvider implements vscode.TreeDataProvider<CommandsTre
         }
         return {
             commands: groups.reduce((total, g) => total + g.commands.length, 0),
+            toolCalls: toolCallGroups.reduce((total, g) => total + g.events.length, 0),
             events: timelineGroups.reduce((total, g) => total + g.events.length, 0),
             changes: fileGroups.reduce((total, f) => total + f.events.length, 0),
             files: fileGroups.length,
@@ -357,6 +407,7 @@ export class CommandsViewProvider implements vscode.TreeDataProvider<CommandsTre
     private _childrenOfSection(subView: CommandsSubViewId): CommandsTreeNode[] {
         switch (subView) {
             case 'executedCommands': return this.executedCommands.getChildren();
+            case 'toolCalls': return this.toolCalls.getChildren();
             case 'timeline': return this.timeline.getChildren();
             case 'diffs': return this.diffs.getChildren();
         }

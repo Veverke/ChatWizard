@@ -108,6 +108,16 @@ suite('detail webview pipeline', () => {
             commands.includes('chatwizardCommands.focus'),
             'the contributed Commands view registers <view>.focus'
         );
+        // UX pass — the LLM Tool Calls section has its own commands.
+        for (const id of [
+            'chatwizard.showToolCalls',
+            'chatwizard.logs.toolCalls.refresh',
+            'chatwizard.logs.toolCalls.copy',
+            'chatwizard.logs.toolCalls.openSession',
+            'chatwizard.logs.toolCalls.showDetails',
+        ]) {
+            assert.ok(commands.includes(id), `${id} is registered`);
+        }
         assert.ok(
             !commands.includes('chatwizardExecutedCommands.focus')
             && !commands.includes('chatwizardUnifiedTimeline.focus')

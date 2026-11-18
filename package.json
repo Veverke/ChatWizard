@@ -780,7 +780,7 @@
       },
       {
         "command": "chatwizard.showExecutedCommands",
-        "title": "Chat Wizard: Show Executed Commands",
+        "title": "Chat Wizard: Show Terminal Commands",
         "category": "Chat Wizard",
         "icon": "$(terminal)"
       },
@@ -796,9 +796,37 @@
       },
       {
         "command": "chatwizard.execCommands.refresh",
-        "title": "Chat Wizard: Refresh Executed Commands",
+        "title": "Chat Wizard: Refresh Terminal Commands",
         "category": "Chat Wizard",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "chatwizard.showToolCalls",
+        "title": "Chat Wizard: Show LLM Tool Calls",
+        "category": "Chat Wizard",
+        "icon": "$(tools)"
+      },
+      {
+        "command": "chatwizard.logs.toolCalls.refresh",
+        "title": "Chat Wizard: Refresh LLM Tool Calls",
+        "category": "Chat Wizard",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "chatwizard.logs.toolCalls.copy",
+        "title": "Chat Wizard: Copy Tool Call",
+        "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.logs.toolCalls.openSession",
+        "title": "Chat Wizard: Open Tool Call Session",
+        "category": "Chat Wizard"
+      },
+      {
+        "command": "chatwizard.logs.toolCalls.showDetails",
+        "title": "Chat Wizard: Show Tool Call Details",
+        "category": "Chat Wizard",
+        "icon": "$(eye)"
       },
       {
         "command": "chatwizard.showUnifiedTimeline",
@@ -1353,6 +1381,21 @@
           "group": "3_run@1"
         },
         {
+          "command": "chatwizard.logs.toolCalls.copy",
+          "when": "viewItem == toolCall",
+          "group": "1_copy@1"
+        },
+        {
+          "command": "chatwizard.logs.toolCalls.openSession",
+          "when": "viewItem == toolCall",
+          "group": "2_open@1"
+        },
+        {
+          "command": "chatwizard.logs.toolCalls.showDetails",
+          "when": "viewItem == toolCall",
+          "group": "1_details@1"
+        },
+        {
           "command": "chatwizard.logs.timeline.showDetails",
           "when": "viewItem == logsEvent.command || viewItem == logsEvent.fileOperation || viewItem == logsEvent.diff || viewItem == logsEvent.error || viewItem == logsEvent.toolCall || viewItem == logsEvent.plannerStep",
           "group": "1_details@1"
@@ -1771,6 +1814,22 @@
         },
         {
           "command": "chatwizard.execCommands.refresh",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.logs.toolCalls.refresh",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.logs.toolCalls.copy",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.logs.toolCalls.openSession",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.logs.toolCalls.showDetails",
           "when": "false"
         },
         {

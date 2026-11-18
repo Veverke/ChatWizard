@@ -3,18 +3,23 @@
  *
  * Phase 4 — "Show full contents" webview for watch-logs panels.
  *
- * Clicking a row in the Executed Commands / Unified Timeline / Diff Explorer
- * sections of the **Commands** view opens a webview showing the *full* contents
- * of that normalized `LogEvent` — everything the tree row's tooltip carries,
- * plus structured metadata and per-kind code blocks:
+ * Clicking a row in the Terminal Commands / LLM Tool Calls / Unified Timeline /
+ * Diff Explorer sections of the **Commands** view opens a webview showing the
+ * *full* contents of that normalized `LogEvent` — everything the tree row's
+ * tooltip carries, a plain-English **Description** of what the command / tool
+ * does, plus structured metadata and per-kind code blocks:
  *
- *   - command      → full command text (+ **▶ Run in Terminal** directly under
- *                    it), cwd/shell/exit code, stdout/stderr
+ *   - every kind   → **Description** (`Runs a Git command: git status`,
+ *                    `Reads a file from the workspace: src/extension.ts`)
+ *   - command      → **Input** (full command text + **▶ Run in Terminal**
+ *                    directly under it, cwd/shell) and **Output** (exit code,
+ *                    stdout, stderr)
+ *   - toolCall     → **Input** (tool name + pretty-printed JSON arguments) and
+ *                    **Output** (success/duration/result, when captured)
  *   - fileOperation→ operation type, file path, from-path, raw payload
  *   - diff         → file path, +/- stats and the full diff/patch text
  *                    (+ a **Visual Diff** button that opens the change in
  *                    VS Code's native side-by-side diff editor)
- *   - toolCall     → tool name + pretty-printed JSON arguments
  *   - error        → severity, message, stack trace
  *   - plannerStep  → description + status
  *
@@ -42,6 +47,12 @@ import { cwThemeCss, syntaxHighlighterCss, cwInteractiveJs, syntaxHighlighterJs 
 import { generateNonce } from '../views/webviewUtils';
 import { openVisualDiff } from './diffViewer';
 import { runCommandInTerminal } from './runInTerminal';
+import {
+    describeLogEvent,
+    toolCallInputText,
+    toolCallLabel,
+    toolCallOutputText,
+} from './logEventSummary';
 
 /** Minimal subscription bag (matches the shape used by `logsCommands.ts`). */
 export interface LogEventWebviewSubscriptions {
@@ -100,7 +111,7 @@ export function shortEventLabel(event: LogEvent, max = 70): string {
             return `${kind}: ${op.operationType} ${op.filePath}`.slice(0, max);
         }
         case 'toolCall':
-            return `${kind}: ${(event as ToolCallEvent).toolName}`.slice(0, max);
+            return `${kind}: ${toolCallLabel(event as ToolCallEvent, max)}`.slice(0, max);
         case 'error':
             return `${kind}: ${firstLine((event as ErrorEvent).message, max)}`.slice(0, max);
         case 'plannerStep':
@@ -123,23 +134,45 @@ export function eventMetaRows(event: LogEvent): [string, string][] {
     return rows;
 }
 
-/** Per-kind detail sections (rows + code blocks) for the webview. */
+/**
+ * Per-kind detail sections (rows + code blocks) for the webview.
+ *
+ * Every event leads with a **Description** section — a plain-English sentence
+ * explaining what the command / tool does — followed by the kind-specific
+ * payload. Rows that describe what the agent *asked for* live under **Input**,
+ * what came back (exit code, captured output, tool result) under **Output**.
+ */
 export function buildEventDetailSections(event: LogEvent): EventDetailSection[] {
+    return [
+        { heading: 'Description', rows: [['What happened', describeLogEvent(event)]], code: [] },
+        ...eventPayloadSections(event),
+    ];
+}
+
+/** The kind-specific sections that follow the shared Description. */
+function eventPayloadSections(event: LogEvent): EventDetailSection[] {
     switch (event.type) {
         case 'command': {
             const c = event as CommandEvent;
-            const rows: [string, string][] = [];
-            if (c.cwd) { rows.push(['Working directory', c.cwd]); }
-            if (c.shell) { rows.push(['Shell', c.shell]); }
-            rows.push(['Exit code', c.exitCode === undefined ? 'unknown' : String(c.exitCode)]);
-            const code: EventCodeBlock[] = [{ language: 'bash', text: c.commandText, action: 'runInTerminal' }];
+            const inputRows: [string, string][] = [];
+            if (c.cwd) { inputRows.push(['Working directory', c.cwd]); }
+            if (c.shell) { inputRows.push(['Shell', c.shell]); }
+            const input: EventDetailSection = {
+                heading: 'Input',
+                rows: inputRows,
+                code: [{ language: 'bash', text: c.commandText, action: 'runInTerminal' }],
+            };
+            const outputRows: [string, string][] = [
+                ['Exit code', c.exitCode === undefined ? 'unknown' : String(c.exitCode)],
+            ];
+            const outputCode: EventCodeBlock[] = [];
             if (c.stdoutSummary && c.stdoutSummary.trim().length > 0) {
-                code.push({ language: 'text', text: c.stdoutSummary });
+                outputCode.push({ language: 'text', text: c.stdoutSummary });
             }
             if (c.stderrSummary && c.stderrSummary.trim().length > 0) {
-                code.push({ language: 'text', text: c.stderrSummary });
+                outputCode.push({ language: 'text', text: c.stderrSummary });
             }
-            return [{ heading: 'Command', rows, code }];
+            return [input, { heading: 'Output', rows: outputRows, code: outputCode }];
         }
         case 'fileOperation': {
             const op = event as FileOperationEvent;
@@ -171,14 +204,30 @@ export function buildEventDetailSections(event: LogEvent): EventDetailSection[] 
         }
         case 'toolCall': {
             const t = event as ToolCallEvent;
-            const rows: [string, string][] = [['Tool', t.toolName]];
-            if (t.success !== undefined) { rows.push(['Success', String(t.success)]); }
-            if (t.durationMs !== undefined) { rows.push(['Duration', `${t.durationMs} ms`]); }
-            if (t.resultSummary) { rows.push(['Result', t.resultSummary]); }
-            const code: EventCodeBlock[] = [];
-            if (t.arguments) { code.push({ language: 'json', text: JSON.stringify(t.arguments, null, 2) }); }
-            if (t.raw && t.raw.trim().length > 0) { code.push({ language: 'text', text: t.raw }); }
-            return [{ heading: 'Tool Call', rows, code }];
+            // Input: the tool + the arguments the model sent.
+            const inputCode: EventCodeBlock[] = [];
+            const argsText = toolCallInputText(t);
+            if (argsText) { inputCode.push({ language: 'json', text: argsText }); }
+            if (t.raw && t.raw.trim().length > 0 && t.raw !== argsText) {
+                inputCode.push({ language: 'text', text: t.raw });
+            }
+            const input: EventDetailSection = {
+                heading: 'Input',
+                rows: [['Tool', t.toolName]],
+                code: inputCode,
+            };
+            // Output: whatever the agent host captured for the call.
+            const outputRows: [string, string][] = [];
+            if (t.success !== undefined) { outputRows.push(['Success', String(t.success)]); }
+            if (t.durationMs !== undefined) { outputRows.push(['Duration', `${t.durationMs} ms`]); }
+            const outputCode: EventCodeBlock[] = [];
+            const result = toolCallOutputText(t);
+            if (result) {
+                outputCode.push({ language: 'text', text: result });
+            } else if (outputRows.length === 0) {
+                outputRows.push(['Result', 'not captured in the agent log']);
+            }
+            return [input, { heading: 'Output', rows: outputRows, code: outputCode }];
         }
         case 'error': {
             const e = event as ErrorEvent;

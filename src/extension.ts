@@ -101,6 +101,7 @@ import {
     LogService,
     createDefaultLogSourceRegistry,
     ExecutedCommandsProvider,
+    ToolCallsProvider,
     UnifiedTimelineProvider,
     DiffExplorerProvider,
     CommandsViewProvider,
@@ -341,12 +342,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 }
             };
             const executedCommandsProvider = new ExecutedCommandsProvider(logService, resolveLogSessionTitle);
+            const toolCallsProvider = new ToolCallsProvider(logService, resolveLogSessionTitle);
             const timelineProvider = new UnifiedTimelineProvider(logService, resolveLogSessionTitle);
             const diffExplorerProvider = new DiffExplorerProvider(logService);
-            // One sidebar view ("Commands") whose three sections are the former
-            // Executed Commands / Unified Timeline / Diff Explorer panels.
+            // One sidebar view ("Commands") whose four sections are Terminal
+            // Commands / LLM Tool Calls / Unified Timeline / Diff Explorer.
             const commandsViewProvider = new CommandsViewProvider(
                 executedCommandsProvider,
+                toolCallsProvider,
                 timelineProvider,
                 diffExplorerProvider
             );
@@ -488,7 +491,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 diffExplorerProvider,
                 commandsViewProvider,
                 logTreeViews,
-                logService
+                logService,
+                toolCallsProvider
             );
 
             // The single Commands view is created once; a failure here must not

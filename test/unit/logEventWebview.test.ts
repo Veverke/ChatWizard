@@ -19,6 +19,7 @@ import {
     renderCodeBlockAction,
     renderSections,
     shortEventLabel,
+    EventDetailSection,
 } from '../../src/logs/logEventWebview';
 import { LogEvent } from '../../src/logs/types';
 
@@ -31,6 +32,21 @@ function makeEvent(overrides: Partial<LogEvent> & { id: string; timestamp: strin
         commandText: 'npm test',
         ...overrides,
     } as LogEvent;
+}
+
+/**
+ * Sections after the shared **Description** section — the per-kind payload
+ * (Input / Output for commands and tool calls, the kind section otherwise).
+ */
+function payloadSections(event: LogEvent): EventDetailSection[] {
+    return buildEventDetailSections(event).slice(1);
+}
+
+/** The section with the given heading (throws when it does not exist). */
+function sectionNamed(event: LogEvent, heading: string): EventDetailSection {
+    const found = buildEventDetailSections(event).find((section) => section.heading === heading);
+    assert.ok(found, `expected a "${heading}" section`);
+    return found as EventDetailSection;
 }
 
 suite('logEventWebview — escapeHtml', () => {
@@ -60,7 +76,7 @@ suite('logEventWebview — display helpers', () => {
     });
 
     test('command detail exposes full text, cwd and exit code', () => {
-        const sections = buildEventDetailSections(makeEvent({
+        const event = makeEvent({
             id: 'c1',
             timestamp: '2026-01-01T10:00:00.000Z',
             commandText: 'npm run build\n-- --config webpack.prod.js',
@@ -68,15 +84,25 @@ suite('logEventWebview — display helpers', () => {
             exitCode: 1,
             shell: 'bash',
             stdoutSummary: 'compiled',
-        }));
-        assert.strictEqual(sections[0].heading, 'Command');
-        assert.ok(sections[0].code.some((b) => b.language === 'bash' && b.text.includes('npm run build')));
-        assert.ok(sections[0].code.some((b) => b.language === 'text' && b.text === 'compiled'));
-        assert.deepStrictEqual(sections[0].rows, [['Working directory', '/repo'], ['Shell', 'bash'], ['Exit code', '1']]);
+        });
+        // Input: where / how it ran + the command text itself.
+        const input = sectionNamed(event, 'Input');
+        assert.ok(input.code.some((b) => b.language === 'bash' && b.text.includes('npm run build')));
+        assert.deepStrictEqual(input.rows, [['Working directory', '/repo'], ['Shell', 'bash']]);
+
+        // Output: exit code + captured stdout.
+        const output = sectionNamed(event, 'Output');
+        assert.deepStrictEqual(output.rows, [['Exit code', '1']]);
+        assert.ok(output.code.some((b) => b.language === 'text' && b.text === 'compiled'));
+
+        // The Description section leads and explains what the command does.
+        const description = sectionNamed(event, 'Description');
+        assert.strictEqual(buildEventDetailSections(event)[0].heading, 'Description');
+        assert.match(description.rows[0][1], /Runs a Node\.js package-manager command/);
     });
 
     test('diff detail carries stats and the full patch text', () => {
-        const sections = buildEventDetailSections(makeEvent({
+        const sections = payloadSections(makeEvent({
             id: 'd1',
             timestamp: '2026-01-01T10:00:00.000Z',
             type: 'diff',
@@ -93,7 +119,7 @@ suite('logEventWebview — display helpers', () => {
     });
 
     test('toolCall detail pretty-prints its arguments as JSON', () => {
-        const sections = buildEventDetailSections(makeEvent({
+        const sections = payloadSections(makeEvent({
             id: 't1',
             timestamp: '2026-01-01T10:00:00.000Z',
             type: 'toolCall',
@@ -106,7 +132,7 @@ suite('logEventWebview — display helpers', () => {
     });
 
     test('error detail includes message and stack trace', () => {
-        const sections = buildEventDetailSections(makeEvent({
+        const sections = payloadSections(makeEvent({
             id: 'e1',
             timestamp: '2026-01-01T10:00:00.000Z',
             type: 'error',
@@ -159,7 +185,7 @@ suite('logEventWebview — HTML rendering', () => {
 
 suite('logEventWebview — run command in terminal', () => {
     test('the command code block carries the run action', () => {
-        const sections = buildEventDetailSections(makeEvent({ id: 'c1', timestamp: '2026-01-01T10:00:00.000Z' }));
+        const sections = payloadSections(makeEvent({ id: 'c1', timestamp: '2026-01-01T10:00:00.000Z' }));
         assert.strictEqual(sections[0].code[0].action, 'runInTerminal');
         // Only the command itself gets the button — not its stdout/stderr.
         assert.strictEqual(sections[0].code.length, 1);
@@ -241,20 +267,23 @@ suite('logEventWebview — per-kind detail variants', () => {
     });
 
     test('command detail adds stdout/stderr blocks only when present', () => {
-        const bare = buildEventDetailSections(makeEvent({ id: 'c1', timestamp: 'T' } as EventInput) as LogEvent);
-        assert.deepStrictEqual(bare[0].rows.find(([k]) => k === 'Exit code'), ['Exit code', 'unknown']);
+        const bare = payloadSections(makeEvent({ id: 'c1', timestamp: 'T' } as EventInput) as LogEvent);
+        assert.deepStrictEqual(bare[1].rows.find(([k]) => k === 'Exit code'), ['Exit code', 'unknown']);
         assert.strictEqual(bare[0].code.length, 1, 'no summaries → only the command block');
+        assert.strictEqual(bare[1].code.length, 0, 'empty output → no blocks');
 
-        const rich = buildEventDetailSections(makeEvent({
+        const richEvent = makeEvent({
             id: 'c2', timestamp: 'T', exitCode: 0, cwd: '/repo', shell: 'bash',
             stdoutSummary: 'all good', stderrSummary: 'a warning',
-        } as EventInput) as LogEvent);
-        assert.deepStrictEqual(rich[0].rows.map(([k]) => k), ['Working directory', 'Shell', 'Exit code']);
-        assert.strictEqual(rich[0].code.length, 3);
+        } as EventInput) as LogEvent;
+        const rich = payloadSections(richEvent);
+        assert.deepStrictEqual(rich[0].rows, [['Working directory', '/repo'], ['Shell', 'bash']]);
+        assert.deepStrictEqual(rich[1].rows, [['Exit code', '0']]);
+        assert.strictEqual(rich[1].code.length, 2);
     });
 
     test('fileOperation detail omits optional rows and raw payload', () => {
-        const [section] = buildEventDetailSections(makeEvent({
+        const [section] = payloadSections(makeEvent({
             id: 'f1', timestamp: 'T', type: 'fileOperation', operationType: 'create', filePath: '/a.ts',
         } as EventInput) as LogEvent);
         assert.deepStrictEqual(section.rows.map(([k]) => k), ['Operation', 'File path']);
@@ -262,25 +291,43 @@ suite('logEventWebview — per-kind detail variants', () => {
     });
 
     test('diff detail reports unknown stats and skips a blank patch', () => {
-        const [section] = buildEventDetailSections(makeEvent({
+        const [section] = payloadSections(makeEvent({
             id: 'd1', timestamp: 'T', type: 'diff', filePath: '/d.ts', diffText: '   ',
         } as EventInput) as LogEvent);
         assert.deepStrictEqual(section.rows.find(([k]) => k === 'Lines'), ['Lines', 'unknown']);
         assert.deepStrictEqual(section.code, []);
     });
 
-    test('toolCall detail exposes success, duration and result metadata', () => {
-        const [section] = buildEventDetailSections(makeEvent({
+    test('toolCall detail exposes input arguments and output metadata', () => {
+        const event = makeEvent({
             id: 't1', timestamp: 'T', type: 'toolCall', toolName: 'read_file',
+            arguments: { path: 'src/a.ts' },
             success: false, durationMs: 12, resultSummary: 'EACCES', raw: 'raw text',
-        } as EventInput) as LogEvent);
-        assert.deepStrictEqual(section.rows.map(([k]) => k), ['Tool', 'Success', 'Duration', 'Result']);
-        assert.deepStrictEqual(section.rows.find(([k]) => k === 'Duration'), ['Duration', '12 ms']);
-        assert.strictEqual(section.code.length, 1, 'raw text only, no arguments block');
+        } as EventInput) as LogEvent;
+
+        const input = sectionNamed(event, 'Input');
+        assert.deepStrictEqual(input.rows, [['Tool', 'read_file']]);
+        assert.strictEqual(input.code[0].language, 'json');
+        assert.ok(input.code[0].text.includes('"path": "src/a.ts"'));
+        assert.ok(input.code.some((block) => block.language === 'text' && block.text === 'raw text'));
+
+        const output = sectionNamed(event, 'Output');
+        assert.deepStrictEqual(output.rows, [['Success', 'false'], ['Duration', '12 ms']]);
+        assert.deepStrictEqual(output.code, [{ language: 'text', text: 'EACCES' }]);
+
+        assert.match(sectionNamed(event, 'Description').rows[0][1], /Reads a file from the workspace: src\/a\.ts/);
+    });
+
+    test('toolCall detail says when no output was captured', () => {
+        const output = sectionNamed(makeEvent({
+            id: 't1', timestamp: 'T', type: 'toolCall', toolName: 'grep', arguments: { query: 'needle' },
+        } as EventInput) as LogEvent, 'Output');
+        assert.deepStrictEqual(output.rows, [['Result', 'not captured in the agent log']]);
+        assert.deepStrictEqual(output.code, []);
     });
 
     test('error detail includes the command id and raw text when available', () => {
-        const [section] = buildEventDetailSections(makeEvent({
+        const [section] = payloadSections(makeEvent({
             id: 'e1', timestamp: 'T', type: 'error', message: 'boom', commandId: 'cmd-1', raw: 'raw line',
         } as EventInput) as LogEvent);
         assert.deepStrictEqual(section.rows.map(([k]) => k), ['Severity', 'Command']);
@@ -288,7 +335,7 @@ suite('logEventWebview — per-kind detail variants', () => {
     });
 
     test('plannerStep detail tolerates a step with no metadata', () => {
-        const [section] = buildEventDetailSections(makeEvent({
+        const [section] = payloadSections(makeEvent({
             id: 'p1', timestamp: 'T', type: 'plannerStep', description: '   ',
         } as EventInput) as LogEvent);
         assert.deepStrictEqual(section.rows, []);
@@ -306,7 +353,7 @@ suite('logEventWebview — file-op, planner and page edge cases', () => {
     type EventInput = Partial<LogEvent> & { id: string; timestamp: string };
 
     test('file-operation detail lists the source, detail and raw payload', () => {
-        const [fileOp] = buildEventDetailSections(makeEvent({
+        const [fileOp] = payloadSections(makeEvent({
             id: 'f1',
             timestamp: '2026-01-01T10:00:00.000Z',
             type: 'fileOperation',
@@ -324,7 +371,7 @@ suite('logEventWebview — file-op, planner and page edge cases', () => {
     });
 
     test('planner-step detail lists status, step type and description', () => {
-        const [step] = buildEventDetailSections(makeEvent({
+        const [step] = payloadSections(makeEvent({
             id: 'p1',
             timestamp: '2026-01-01T10:00:00.000Z',
             type: 'plannerStep',
@@ -339,7 +386,7 @@ suite('logEventWebview — file-op, planner and page edge cases', () => {
     });
 
     test('diff detail shows the trigger command and a single-sided line count', () => {
-        const [diffSection] = buildEventDetailSections(makeEvent({
+        const [diffSection] = payloadSections(makeEvent({
             id: 'd1',
             timestamp: '2026-01-01T10:00:00.000Z',
             type: 'diff',

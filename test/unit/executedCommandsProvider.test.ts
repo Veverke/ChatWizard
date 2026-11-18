@@ -18,6 +18,8 @@ import {
     ExecutedCommandsProvider,
     ExecCommandsGroupItem,
     ExecCommandsLeafItem,
+    EXEC_COMMANDS_GROUP_ICON,
+    execCommandIconId,
     firstLineOf,
     formatExitBadge,
 } from '../../src/logs/executedCommandsProvider';
@@ -294,6 +296,10 @@ suite('ExecutedCommandsProvider — row and resilience edge cases', () => {
     });
 
     test('leaf rows pick one icon per exit-code state', () => {
+        assert.strictEqual(execCommandIconId(undefined), 'run');
+        assert.strictEqual(execCommandIconId(0), 'terminal');
+        assert.strictEqual(execCommandIconId(2), 'error');
+
         const iconOf = (exitCode: number | undefined): string => {
             const item = new ExecCommandsLeafItem(
                 makeCommand({ id: `c-${String(exitCode)}`, timestamp: '2026-01-01T10:00:00.000Z', exitCode })
@@ -304,6 +310,34 @@ suite('ExecutedCommandsProvider — row and resilience edge cases', () => {
         assert.strictEqual(iconOf(undefined), 'run');
         assert.strictEqual(iconOf(0), 'terminal');
         assert.strictEqual(iconOf(2), 'error');
+    });
+
+    test('a failed command turns its icon red, a clean one stays plain', () => {
+        const failed = new ExecCommandsLeafItem(
+            makeCommand({ id: 'c1', timestamp: '2026-01-01T10:00:00.000Z', exitCode: 3 })
+        );
+        assert.strictEqual(
+            ((failed.iconPath as vscode.ThemeIcon).color as vscode.ThemeColor).id,
+            'problemsErrorIcon.foreground'
+        );
+
+        const passed = new ExecCommandsLeafItem(
+            makeCommand({ id: 'c2', timestamp: '2026-01-01T10:00:00.000Z', exitCode: 0 })
+        );
+        assert.strictEqual((passed.iconPath as vscode.ThemeIcon).color, undefined);
+
+        const unknown = new ExecCommandsLeafItem(
+            makeCommand({ id: 'c3', timestamp: '2026-01-01T10:00:00.000Z' })
+        );
+        assert.strictEqual((unknown.iconPath as vscode.ThemeIcon).color, undefined);
+    });
+
+    test('session rows wear the section icon, not the Unified Timeline one', () => {
+        const group = new ExecCommandsGroupItem('sess-a', 'Fix the build', [
+            makeCommand({ id: 'c1', timestamp: '2026-01-01T10:00:00.000Z' }),
+        ]);
+        assert.strictEqual((group.iconPath as vscode.ThemeIcon).id, EXEC_COMMANDS_GROUP_ICON);
+        assert.strictEqual(EXEC_COMMANDS_GROUP_ICON, 'terminal');
     });
 
     test('commands without a session id group under (no session), keeping the workspace', () => {

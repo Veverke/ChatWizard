@@ -18,6 +18,8 @@ import {
     DiffExplorerProvider,
     DiffEventLeafItem,
     DiffFileGroupItem,
+    compareDiffFilePaths,
+    diffEventIconId,
     isDiffCandidate,
     diffStatsLabel,
     diffEventDescription,
@@ -25,7 +27,7 @@ import {
     pathToDisplayInfo,
     renderPatchMarkdown,
 } from '../../src/logs/diffExplorerProvider';
-import { DiffEvent, LogEvent } from '../../src/logs/types';
+import { DiffEvent, FileOperationType, LogEvent } from '../../src/logs/types';
 
 function makeDiff(overrides: Partial<LogEvent> & { id: string; timestamp: string }): LogEvent {
     return {
@@ -98,6 +100,36 @@ suite('DiffExplorerProvider — selection & display helpers', () => {
         assert.match(md, /\+new/);
         assert.match(md, /-old/);
     });
+
+    test('diffEventIconId gives each file operation its own codicon', () => {
+        assert.strictEqual(diffEventIconId(makeDiff({ id: 'd1', timestamp: 'T' })), 'diff');
+
+        const iconOf = (operationType: FileOperationType): string =>
+            diffEventIconId(makeFileOp({ id: `f-${operationType}`, timestamp: 'T', operationType }));
+        assert.strictEqual(iconOf('create'), 'file-add');
+        assert.strictEqual(iconOf('delete'), 'trash');
+        assert.strictEqual(iconOf('rename'), 'arrow-swap');
+        assert.strictEqual(iconOf('move'), 'move');
+        assert.strictEqual(iconOf('mkdir'), 'new-folder');
+        assert.strictEqual(iconOf('patch'), 'diff');
+
+        const unknown = {
+            type: 'fileOperation', id: 'f-unknown', timestamp: 'T', tool: 'copilot',
+            filePath: '/a', operationType: 'explode',
+        } as unknown as LogEvent;
+        assert.strictEqual(diffEventIconId(unknown), 'file', 'unknown operations fall back to the file icon');
+    });
+
+    test('compareDiffFilePaths is case-insensitive and total', () => {
+        assert.ok(compareDiffFilePaths('/repo/A.ts', '/repo/b.ts') < 0, 'A sorts before b');
+        assert.ok(compareDiffFilePaths('/repo/b.ts', '/repo/A.ts') > 0);
+        assert.strictEqual(compareDiffFilePaths('/repo/a.ts', '/repo/a.ts'), 0);
+        assert.notStrictEqual(
+            compareDiffFilePaths('/repo/a.ts', '/repo/A.ts'),
+            0,
+            'the case-sensitive tiebreaker keeps the order total'
+        );
+    });
 });
 suite('DiffExplorerProvider — grouping and ordering', () => {
     let dir: string;
@@ -113,7 +145,7 @@ suite('DiffExplorerProvider — grouping and ordering', () => {
         try { fs.rmSync(dir, { recursive: true }); } catch { /* ignore */ }
     });
 
-    test('groups changes per file, newest first', () => {
+    test('groups changes per file, files listed alphabetically', () => {
         service.ingestEvents([
             makeDiff({ id: 'd1', filePath: '/repo/src/a.ts', timestamp: '2026-01-01T10:00:00.000Z' }),
             makeDiff({ id: 'd2', filePath: '/repo/src/b.ts', timestamp: '2026-01-02T10:00:00.000Z' }),
@@ -124,11 +156,11 @@ suite('DiffExplorerProvider — grouping and ordering', () => {
         const files = provider.getFileGroups();
 
         assert.strictEqual(files.length, 3, 'one row per changed file');
-        // Newest change first.
-        assert.strictEqual(files[0].filePath, '/repo/src/new.ts');
-        assert.strictEqual(files[0].newestTimestamp, '2026-01-03T10:00:00.000Z');
-        assert.strictEqual(files[1].filePath, '/repo/src/b.ts');
-        assert.strictEqual(files[2].filePath, '/repo/src/a.ts');
+        // The section's direct children are the changed files, by path.
+        assert.deepStrictEqual(
+            files.map((f) => f.filePath),
+            ['/repo/src/a.ts', '/repo/src/b.ts', '/repo/src/new.ts']
+        );
 
         // The file rows ARE the section's children — no workspace binder level.
         assert.deepStrictEqual(provider.getChildren(), files);
@@ -139,6 +171,49 @@ suite('DiffExplorerProvider — grouping and ordering', () => {
         assert.strictEqual(leaves.length, 1);
         assert.strictEqual(leaves[0].event.id, 'd2');
         assert.strictEqual(provider.getParent(leaves[0]), files[1]);
+    });
+
+    test('change rows inside a file keep the edit timeline (newest first)', () => {
+        service.ingestEvents([
+            makeFileOp({ id: 'f-del', filePath: '/repo/src/a.ts', operationType: 'delete', timestamp: '2026-01-05T10:00:00.000Z' }),
+            makeFileOp({ id: 'f-create', filePath: '/repo/src/a.ts', operationType: 'create', timestamp: '2026-01-01T10:00:00.000Z' }),
+            makeDiff({ id: 'd1', filePath: '/repo/src/a.ts', timestamp: '2026-01-03T10:00:00.000Z' }),
+            makeDiff({ id: 'd-other', filePath: '/repo/src/z.ts', timestamp: '2026-01-04T10:00:00.000Z' }),
+        ]);
+
+        const provider = new DiffExplorerProvider(service);
+        const files = provider.getFileGroups();
+
+        assert.deepStrictEqual(
+            files.map((f) => f.filePath),
+            ['/repo/src/a.ts', '/repo/src/z.ts'],
+            'files are ordered by path, not by their newest change'
+        );
+        assert.deepStrictEqual(
+            files[0].events.map((e) => e.id),
+            ['f-del', 'd1', 'f-create'],
+            'change rows stay chronological: newest first, whatever their kind'
+        );
+        assert.deepStrictEqual(
+            (provider.getChildren(files[0]) as DiffEventLeafItem[]).map((leaf) => leaf.event.id),
+            ['f-del', 'd1', 'f-create'],
+            'the tree renders the same chronological order'
+        );
+    });
+
+    test('file order is alphabetical, not by newest change', () => {
+        service.ingestEvents([
+            makeDiff({ id: 'd-b', filePath: '/repo/src/b.ts', timestamp: '2026-01-05T10:00:00.000Z' }),
+            makeDiff({ id: 'd-a', filePath: '/repo/src/a.ts', timestamp: '2026-01-01T10:00:00.000Z' }),
+            makeDiff({ id: 'd-C', filePath: '/repo/src/C.ts', timestamp: '2026-01-03T10:00:00.000Z' }),
+        ]);
+
+        const files = new DiffExplorerProvider(service).getFileGroups();
+        assert.deepStrictEqual(
+            files.map((f) => f.filePath),
+            ['/repo/src/a.ts', '/repo/src/b.ts', '/repo/src/C.ts'],
+            'paths sort case-insensitively; a recent change does not promote a file'
+        );
     });
 
     test('patch file-operations are excluded (their DiffEvent carries the change)', () => {
@@ -170,11 +245,11 @@ suite('DiffExplorerProvider — grouping and ordering', () => {
         const provider = new DiffExplorerProvider(service);
         const files = provider.getFileGroups();
 
-        const diffLeaf = (provider.getChildren(files[1]) as DiffEventLeafItem[])[0];
+        const diffLeaf = (provider.getChildren(files[0]) as DiffEventLeafItem[])[0];
         assert.strictEqual(diffLeaf.command?.command, 'chatwizard.logs.diff.viewDiff');
         assert.strictEqual(diffLeaf.command?.title, 'Open Visual Diff');
 
-        const fileOpLeaf = (provider.getChildren(files[0]) as DiffEventLeafItem[])[0];
+        const fileOpLeaf = (provider.getChildren(files[1]) as DiffEventLeafItem[])[0];
         assert.strictEqual(fileOpLeaf.command?.command, 'chatwizard.logs.diff.showDetails');
         assert.strictEqual(fileOpLeaf.command?.title, 'Show Change Details');
     });
@@ -191,7 +266,11 @@ suite('DiffExplorerProvider — grouping and ordering', () => {
 
         assert.strictEqual(files.length, 1, 'one row per file, however many changes');
         assert.strictEqual(files[0].events.length, 2);
-        assert.strictEqual(files[0].newestTimestamp, '2026-01-02T10:00:00.000Z');
+        assert.deepStrictEqual(
+            files[0].events.map((e) => e.id),
+            ['d2', 'd1'],
+            'the newest change comes first'
+        );
 
         // Change rows are leaves: asking for their children yields nothing.
         const [leaf] = provider.getChildren(files[0]) as DiffEventLeafItem[];
@@ -364,7 +443,6 @@ suite('DiffExplorerProvider — row/helper edge cases', () => {
         const empty = new DiffFileGroupItem('/repo/src/a.ts', []);
         assert.strictEqual(empty.collapsibleState, vscode.TreeItemCollapsibleState.None);
         assert.strictEqual(empty.description, '0 changes · /repo/src');
-        assert.strictEqual(empty.newestTimestamp, '');
 
         const oneRow = new DiffFileGroupItem('a.ts', [makeDiff({ id: 'd1', timestamp: '2026-01-01T10:00:00.000Z' })]);
         assert.strictEqual(oneRow.description, '1 change', 'no folder → no · suffix');
@@ -376,6 +454,24 @@ suite('DiffExplorerProvider — row/helper edge cases', () => {
         ]);
         assert.strictEqual(twoRows.description, '2 changes · /repo/src');
         assert.strictEqual(twoRows.collapsibleState, vscode.TreeItemCollapsibleState.Collapsed);
+    });
+
+    test('change rows and file rows wear the section’s own icons', () => {
+        const leafIcon = (event: LogEvent): string =>
+            (new DiffEventLeafItem(event).iconPath as vscode.ThemeIcon).id;
+
+        assert.strictEqual(leafIcon(makeDiff({ id: 'd1', timestamp: 'T' })), 'diff');
+        assert.strictEqual(
+            leafIcon(makeFileOp({ id: 'f1', timestamp: 'T', operationType: 'create' })),
+            'file-add'
+        );
+        assert.strictEqual(
+            leafIcon(makeFileOp({ id: 'f2', timestamp: 'T', operationType: 'delete' })),
+            'trash'
+        );
+
+        const group = new DiffFileGroupItem('/repo/src/a.ts', [makeDiff({ id: 'd1', timestamp: 'T' })]);
+        assert.strictEqual((group.iconPath as vscode.ThemeIcon).id, 'file-code');
     });
 
     test('a broken store degrades to an empty tree instead of throwing', () => {
