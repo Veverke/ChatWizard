@@ -8,7 +8,7 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { SemanticIndexer, SemanticIndexerVsCodeApi } from '../../src/search/semanticIndexer';
+import { SemanticIndexer, SemanticIndexerVsCodeApi, ModelUnavailableDetails } from '../../src/search/semanticIndexer';
 import { IEmbeddingEngine, ISemanticIndex, SEMANTIC_DIMS } from '../../src/search/semanticContracts';
 import { SemanticMessageResult } from '../../src/search/types';
 import { Session, Message } from '../../src/types/index';
@@ -45,6 +45,7 @@ function makeVsCodeApiStub(): SemanticIndexerVsCodeApi {
         showIndexingComplete() {},
         markModelDownloaded(_storagePath: string) {},
         showModelReady() {},
+        showModelUnavailable(_details: ModelUnavailableDetails) {},
     };
 }
 

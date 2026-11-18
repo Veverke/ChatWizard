@@ -18,8 +18,10 @@
  */
 
 import { parentPort } from 'worker_threads';
+import { resolveLocalModel } from './localModelPath';
 
-const DOWNLOAD_TIMEOUT_MS = 300_000; // 5 minutes
+/** How long to wait for the model to load (a local/cached folder returns instantly). */
+const DOWNLOAD_TIMEOUT_MS = 180_000; // 3 minutes
 const SEMANTIC_DIMS = 384;
 /** Throttle progress messages to at most one per 200ms to avoid flooding
  *  the main thread's message queue during model download. */
@@ -29,12 +31,49 @@ type PipelineCallable = {
     (texts: string[], options: Record<string, unknown>): Promise<{ data: ArrayLike<number> }>;
 };
 
+/** Subset of the transformers.js `env` object we configure. */
+type TransformersEnv = {
+    cacheDir?: string;
+    allowLocalModels?: boolean;
+    allowRemoteModels?: boolean;
+    localModelPath?: string;
+    remoteHost?: string;
+};
+
+/** Model source supplied by the parent (`EmbeddingModelSource`). */
+type ModelSource = {
+    localModelPath?: string;
+    mirrorHost?: string;
+};
+
+const MODEL_ID = 'Xenova/all-MiniLM-L6-v2';
+
 let pipelineFn: PipelineCallable | undefined;
-let initDone = false;
 
 if (!parentPort) {
     throw new Error('embeddingWorker must be run as a worker_threads Worker');
 }
+
+/** Collapses any thrown value into a single-line message. */
+function errorMessage(err: unknown): string {
+    const message = err instanceof Error ? err.message : String(err);
+    return message.replace(/\s+/g, ' ').trim();
+}
+
+/** Ensures a usable `remoteHost` value (scheme + trailing slash). */
+function normaliseHost(raw: string): string {
+    const trimmed = raw.trim();
+    if (!trimmed || !/^https?:\/\//i.test(trimmed)) {
+        return '';
+    }
+    return trimmed.endsWith('/') ? trimmed : `${trimmed}/`;
+}
+
+/** Sends a diagnostic line to the parent, which writes it to the output channel. */
+function postLog(level: 'info' | 'warn' | 'error', message: string): void {
+    parentPort?.postMessage({ type: 'log', level, message });
+}
+
 
 parentPort.on('message', async (msg: unknown) => {
     const request = msg as Record<string, unknown>;
@@ -44,10 +83,16 @@ parentPort.on('message', async (msg: unknown) => {
         switch (type) {
             case 'init': {
                 const cacheDir = String(request['cacheDir'] ?? '');
+                const source = (request['modelSource'] ?? {}) as ModelSource;
 
                 // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-explicit-any
                 const xenovaModule = require('@xenova/transformers') as any;
-                const { pipeline, env } = xenovaModule as { pipeline: Function; env: { cacheDir: string } };
+                const pipeline = xenovaModule.pipeline as (
+                    task: string,
+                    model: string,
+                    options: Record<string, unknown>,
+                ) => Promise<unknown>;
+                const env = xenovaModule.env as TransformersEnv;
 
                 env.cacheDir = cacheDir;
 
@@ -71,15 +116,11 @@ parentPort.on('message', async (msg: unknown) => {
                 };
 
                 pipelineFn = await withTimeout(
-                    pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', {
-                        cache_dir: cacheDir,
-                        progress_callback: progressCallback,
-                    }),
+                    loadPipeline(pipeline, env, source, cacheDir, progressCallback),
                     DOWNLOAD_TIMEOUT_MS,
                     'ONNX model download / load',
                 ) as unknown as PipelineCallable;
 
-                initDone = true;
                 parentPort!.postMessage({ type: 'init_done' });
                 break;
             }
@@ -108,7 +149,6 @@ parentPort.on('message', async (msg: unknown) => {
             case 'terminate': {
                 // Flush any remaining work and exit.
                 pipelineFn = undefined;
-                initDone = false;
                 process.exit(0);
                 break;
             }
@@ -117,13 +157,71 @@ parentPort.on('message', async (msg: unknown) => {
                 parentPort!.postMessage({ type: 'error', error: `Unknown message type: ${type}` });
         }
     } catch (err) {
+        // An init failure must be distinguishable from a failed embedBatch:
+        // the parent settles its `init` promise on `init_error` and would
+        // otherwise wait forever (that was the "Downloading AI model…" hang).
         parentPort!.postMessage({
-            type: 'error',
+            type: type === 'init' ? 'init_error' : 'error',
             id: request['id'] as number | undefined,
-            error: String(err),
+            error: errorMessage(err),
         });
     }
 });
+
+/**
+ * Builds the feature-extraction pipeline.
+ *
+ * A local folder (prepared by `SemanticModelInstaller`) is always preferred and
+ * disables remote models, so transformers.js performs no network I/O at all.
+ * The mirror/remote branch remains for the legacy path (no installer wired).
+ */
+async function loadPipeline(
+    pipeline: (task: string, model: string, options: Record<string, unknown>) => Promise<unknown>,
+    env: TransformersEnv,
+    source: ModelSource,
+    cacheDir: string,
+    progressCallback: (progress: Record<string, unknown>) => void,
+): Promise<unknown> {
+    const localPath = String(source.localModelPath ?? '').trim();
+    if (localPath) {
+        const local = resolveLocalModel(localPath);
+        if (local.missing.length > 0) {
+            throw new Error(
+                `Local model folder "${localPath}" is incomplete — missing ${local.missing.join(', ')}`,
+            );
+        }
+        env.allowLocalModels = true;
+        env.allowRemoteModels = false;
+        env.localModelPath = local.root;
+        postLog(
+            'info',
+            `Loading model from disk — folder=${local.modelFolder} modelId=${local.modelId} `
+            + `onnx=${local.onnxFile} quantized=${local.quantized} allowRemoteModels=false`,
+        );
+        const created = await pipeline('feature-extraction', local.modelId, {
+            cache_dir: cacheDir,
+            progress_callback: progressCallback,
+            quantized: local.quantized,
+        });
+        postLog('info', 'feature-extraction pipeline ready (local files only — no network access)');
+        return created;
+    }
+
+    const mirror = normaliseHost(String(source.mirrorHost ?? process.env['HF_ENDPOINT'] ?? ''));
+    if (mirror) {
+        env.remoteHost = mirror;
+    }
+    postLog(
+        'warn',
+        `No local model folder — loading from ${mirror || 'https://huggingface.co/'} (cache dir: ${cacheDir})`,
+    );
+    const created = await pipeline('feature-extraction', MODEL_ID, {
+        cache_dir: cacheDir,
+        progress_callback: progressCallback,
+    });
+    postLog('info', 'feature-extraction pipeline ready (remote/cached model)');
+    return created;
+}
 
 /**
  * Wraps a promise with a timeout. The timer is properly cleaned up when the

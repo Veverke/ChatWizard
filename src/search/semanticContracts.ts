@@ -19,10 +19,24 @@ export const SEMANTIC_MIN_SCORE = 0.35;
  */
 export type SemanticScope = 'both' | 'user' | 'assistant';
 
+/**
+ * Where the embedding model comes from.
+ *
+ * `localModelPath` wins when set: the loader is then told to read files from
+ * that folder and never touch the network (`allowRemoteModels = false`).
+ * `mirrorHost` is the legacy remote path, used only when no folder is supplied.
+ */
+export interface EmbeddingModelSource {
+    /** Folder containing `config.json`, `tokenizer.json` and `onnx/*.onnx`. */
+    localModelPath?: string;
+    /** Hugging Face-compatible host, e.g. `https://hf-mirror.com`. */
+    mirrorHost?: string;
+}
+
 /** Wraps @xenova/transformers — loads the ONNX model and produces normalized embeddings */
 export interface IEmbeddingEngine {
     readonly isReady: boolean;
-    load(onProgress?: (message: string) => void): Promise<void>;
+    load(onProgress?: (message: string) => void, modelSource?: EmbeddingModelSource): Promise<void>;
     embed(text: string): Promise<Float32Array>;
     /** Embed multiple texts in a single pipeline call. Falls back to sequential embed() if batching fails. */
     embedBatch(texts: string[]): Promise<Float32Array[]>;
@@ -47,6 +61,12 @@ export interface ISemanticIndexer {
     readonly isReady: boolean;
     readonly isIndexing: boolean;
     readonly indexedCount: number;
+    /**
+     * Set when the AI model could not be loaded (blocked network, missing files,
+     * corrupt download…). The indexer then stays not-ready and the extension
+     * keeps working without semantic search instead of retrying forever.
+     */
+    readonly modelLoadError?: string;
     initialize(): Promise<void>;
     scheduleSession(session: Session): void;
     removeSession(sessionId: string): void;
@@ -63,6 +83,8 @@ export class NullSemanticIndexer implements ISemanticIndexer {
     readonly isReady = false;
     readonly isIndexing = false;
     readonly indexedCount = 0;
+    /** Present for symmetry with the real indexer — semantic search is simply off. */
+    readonly modelLoadError: string | undefined = undefined;
     async initialize(): Promise<void> { /* no-op */ }
     scheduleSession(_session: Session): void { /* no-op */ }
     removeSession(_sessionId: string): void { /* no-op */ }

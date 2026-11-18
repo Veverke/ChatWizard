@@ -4,7 +4,7 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { SemanticIndexer, SemanticIndexerVsCodeApi } from '../../src/search/semanticIndexer';
+import { SemanticIndexer, SemanticIndexerVsCodeApi, ModelUnavailableDetails } from '../../src/search/semanticIndexer';
 import { SemanticIndex } from '../../src/search/semanticIndex';
 import { IEmbeddingEngine, ISemanticIndex, SEMANTIC_DIMS, SemanticScope } from '../../src/search/semanticContracts';
 import { SemanticSearchResult, SemanticMessageResult } from '../../src/search/types';
@@ -22,16 +22,35 @@ function makeSession(id: string, text: string): Session {
 
 // ── Stub factories ────────────────────────────────────────────────────────────
 
-/** Creates a SemanticIndexerVsCodeApi stub. */
+/** Creates a SemanticIndexerVsCodeApi stub that records the interactions under test. */
 function makeVsCodeApiStub(opts: {
     consentResult?: boolean;
     isFirstUse?: boolean;
-} = {}): SemanticIndexerVsCodeApi & { loadProgressCallCount: number; indexingProgressCallCount: number } {
-    const counts = { loadProgressCallCount: 0, indexingProgressCallCount: 0 };
+} = {}): SemanticIndexerVsCodeApi & {
+    loadProgressCallCount: number;
+    indexingProgressCallCount: number;
+    consentCallCount: number;
+    modelUnavailableCount: number;
+    modelReadyCount: number;
+    lastUnavailable: ModelUnavailableDetails | undefined;
+} {
+    const counts = {
+        loadProgressCallCount: 0,
+        indexingProgressCallCount: 0,
+        consentCallCount: 0,
+        modelUnavailableCount: 0,
+        modelReadyCount: 0,
+    };
+    let lastUnavailable: ModelUnavailableDetails | undefined;
     return {
         get loadProgressCallCount() { return counts.loadProgressCallCount; },
         get indexingProgressCallCount() { return counts.indexingProgressCallCount; },
+        get consentCallCount() { return counts.consentCallCount; },
+        get modelUnavailableCount() { return counts.modelUnavailableCount; },
+        get modelReadyCount() { return counts.modelReadyCount; },
+        get lastUnavailable() { return lastUnavailable; },
         async showConsentDialog(): Promise<boolean> {
+            counts.consentCallCount++;
             return opts.consentResult ?? true;
         },
         isFirstUse(_storagePath: string): boolean {
@@ -47,7 +66,11 @@ function makeVsCodeApiStub(opts: {
         },
         showIndexingComplete(_count: number): void { /* no-op in tests */ },
         markModelDownloaded(_storagePath: string): void { /* no-op in tests */ },
-        showModelReady(): void { /* no-op in tests */ },
+        showModelReady(): void { counts.modelReadyCount++; },
+        showModelUnavailable(details: ModelUnavailableDetails): void {
+            counts.modelUnavailableCount++;
+            lastUnavailable = details;
+        },
     };
 }
 
@@ -244,6 +267,7 @@ suite('SemanticIndexer.initialize', () => {
             showIndexingComplete(_count: number): void { /* no-op */ },
             markModelDownloaded(_storagePath: string): void { /* no-op */ },
             showModelReady(): void { /* no-op */ },
+            showModelUnavailable(_details: ModelUnavailableDetails): void { /* no-op */ },
         };
         const indexer = new SemanticIndexer('/storage', () => engine, () => index, api);
         await indexer.initialize();
@@ -263,6 +287,7 @@ suite('SemanticIndexer.initialize', () => {
             showIndexingComplete(_count: number): void { /* no-op */ },
             markModelDownloaded(_storagePath: string): void { /* no-op */ },
             showModelReady(): void { /* no-op */ },
+            showModelUnavailable(_details: ModelUnavailableDetails): void { /* no-op */ },
         };
         const indexer = new SemanticIndexer('/storage', () => engine, () => index, api);
         await indexer.initialize();
@@ -290,14 +315,76 @@ suite('SemanticIndexer.initialize', () => {
         indexer.dispose();
     });
 
-    test('propagates engine.load() errors', async () => {
-        const err = new Error('model download failed');
-        const engine = makeEngineStub({ loadError: err });
+    test('model load failure degrades gracefully instead of throwing', async () => {
+        const engine = makeEngineStub({ loadError: new Error('fetch failed') });
         const index = makeIndexStub();
         const api = makeVsCodeApiStub({ isFirstUse: false });
-        const indexer = new SemanticIndexer('/storage', () => engine, () => index, api);
-        await assert.rejects(() => indexer.initialize(), /model download failed/);
+        const storageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'semantic-indexer-fail-'));
+        const indexer = new SemanticIndexer(storageDir, () => engine, () => index, api);
+
+        await indexer.initialize(); // resolves — the extension keeps working
+
         assert.strictEqual(indexer.isReady, false);
+        assert.ok(indexer.modelLoadError, 'modelLoadError should be set');
+        assert.match(indexer.modelLoadError ?? '', /fetch failed/);
+        assert.strictEqual(api.modelUnavailableCount, 1, 'one notification only');
+        assert.strictEqual(api.lastUnavailable?.kind, 'blocked');
+        assert.ok(
+            fs.existsSync(path.join(storageDir, 'models', '.chatwizard-model-failed')),
+            'failure marker should be recorded',
+        );
+        await assert.rejects(() => indexer.search('query', 5), /unavailable/i);
+        indexer.dispose();
+    });
+
+    test('a recorded failure suppresses consent + download progress on the next start', async () => {
+        const engine = makeEngineStub();
+        const index = makeIndexStub();
+        const storageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'semantic-indexer-retry-'));
+        fs.mkdirSync(path.join(storageDir, 'models'), { recursive: true });
+        fs.writeFileSync(
+            path.join(storageDir, 'models', '.chatwizard-model-failed'),
+            JSON.stringify({ at: new Date().toISOString(), kind: 'blocked', message: 'fetch failed' }),
+        );
+        // isFirstUse=true would normally trigger the consent dialog and the
+        // "Downloading AI model…" progress notification.
+        const api = makeVsCodeApiStub({ isFirstUse: true });
+        const indexer = new SemanticIndexer(storageDir, () => engine, () => index, api);
+
+        await indexer.initialize();
+
+        assert.strictEqual(api.consentCallCount, 0, 'consent was already given');
+        assert.strictEqual(api.loadProgressCallCount, 0, 'no download notification on retry');
+        assert.strictEqual(engine.loadCallCount, 1);
+        assert.strictEqual(indexer.isReady, true);
+        assert.ok(
+            !fs.existsSync(path.join(storageDir, 'models', '.chatwizard-model-failed')),
+            'marker cleared after a successful load',
+        );
+        indexer.dispose();
+    });
+
+    test('repeated failures do not repeat the notification', async () => {
+        const engine = makeEngineStub({ loadError: new Error('fetch failed') });
+        const index = makeIndexStub();
+        const storageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'semantic-indexer-notify-'));
+        fs.mkdirSync(path.join(storageDir, 'models'), { recursive: true });
+        fs.writeFileSync(
+            path.join(storageDir, 'models', '.chatwizard-model-failed'),
+            JSON.stringify({
+                at: new Date().toISOString(),
+                kind: 'blocked',
+                message: 'fetch failed',
+                noticeAt: new Date().toISOString(),
+            }),
+        );
+        const api = makeVsCodeApiStub({ isFirstUse: false });
+        const indexer = new SemanticIndexer(storageDir, () => engine, () => index, api);
+
+        await indexer.initialize();
+
+        assert.strictEqual(indexer.isReady, false);
+        assert.strictEqual(api.modelUnavailableCount, 0, 'notice was shown recently');
         indexer.dispose();
     });
 });

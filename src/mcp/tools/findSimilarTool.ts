@@ -60,10 +60,17 @@ export class FindSimilarTool implements IMcpTool {
         }
 
         if (!this.semanticIndexer.isReady) {
+            const reason = this.semanticIndexer.modelLoadError;
             return {
                 content: [{
                     type: 'text',
-                    text: 'Semantic search is not available. Enable it in ChatWizard settings and allow the AI model to download.',
+                    text: reason
+                        ? `Semantic search is unavailable — the AI model could not be loaded (${reason}). `
+                            + 'Fix it with "Chat Wizard: Configure AI Model Source…" (mirror host or local model folder). '
+                            + 'Keyword search (chatwizard_search) is unaffected.'
+                        : 'Semantic search is not available. Enable chatwizard.enableSemanticSearch and let the AI model load '
+                            + '(use "Chat Wizard: Configure AI Model Source…" on networks that block the download). '
+                            + 'Keyword search (chatwizard_search) is unaffected.',
                 }],
                 isError: true,
             };

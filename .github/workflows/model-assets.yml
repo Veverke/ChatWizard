@@ -1,0 +1,119 @@
+name: Semantic model assets
+
+# Builds and publishes the embedding model used by semantic search as *release
+# assets*. The extension downloads from
+#   https://github.com/<owner>/<repo>/releases/download/<tag>/<file>
+# which keeps working on networks that block huggingface.co.
+#
+# Every input has a default: clicking "Run workflow" produces a complete,
+# checksum-verified asset set for the current model. Re-run only when you
+# intentionally change the model or revision (a new tag is cleaner).
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag that hosts the assets (created if missing)'
+        required: true
+        default: 'semantic-model-v1'
+      repo:
+        description: 'Hugging Face model repo id'
+        required: true
+        default: 'Xenova/all-MiniLM-L6-v2'
+      revision:
+        description: 'Model revision (branch, tag or commit)'
+        required: true
+        default: 'main'
+      source:
+        description: 'Hub or mirror base URL (e.g. https://hf-mirror.com)'
+        required: true
+        default: 'https://huggingface.co'
+      files:
+        description: 'Comma-separated files, relative to the model folder'
+        required: true
+        default: 'config.json,tokenizer.json,tokenizer_config.json,onnx/model_quantized.onnx'
+      draft:
+        description: 'Create the release as a draft'
+        type: boolean
+        default: false
+      overwrite:
+        description: 'Replace assets that already exist with the same name'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: model-assets-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ inputs.tag }}
+      MODEL_REPO: ${{ inputs.repo }}
+      MODEL_REVISION: ${{ inputs.revision }}
+      MODEL_SOURCE: ${{ inputs.source }}
+      MODEL_FILES: ${{ inputs.files }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+
+      - name: Install dev dependencies (tsx)
+        run: npm ci --ignore-scripts
+
+      # Uses the same downloader the extension uses: redirects, retries,
+      # size/SHA-256 verification and atomic writes.
+      - name: Download and verify the model files
+        run: |
+          npx tsx scripts/prepare-model-assets.ts \
+            --source "$MODEL_SOURCE" \
+            --repo "$MODEL_REPO" \
+            --revision "$MODEL_REVISION" \
+            --files "$MODEL_FILES" \
+            --out .model-assets \
+            --tag "$TAG"
+
+      - name: Show the asset set
+        run: |
+          ls -la .model-assets
+          cat .model-assets/manifest.json
+
+      - name: Create the release when it does not exist
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists — reusing it."
+          else
+            gh release create "$TAG" \
+              --title "Semantic model assets ($TAG)" \
+              --notes "Checksum-verified embedding model ($MODEL_REPO @ $MODEL_REVISION) used by Chat Wizard semantic search. Downloaded by the extension when huggingface.co is unreachable." \
+              ${{ inputs.draft && '--draft' || '' }}
+          fi
+
+      - name: Upload the assets
+        run: |
+          if [ "${{ inputs.overwrite }}" = "true" ]; then
+            gh release upload "$TAG" .model-assets/* --clobber
+          else
+            gh release upload "$TAG" .model-assets/*
+          fi
+
+      - name: Summary
+        run: |
+          {
+            echo "### Semantic model assets published"
+            echo ""
+            echo "Tag: \`$TAG\`"
+            echo ""
+            echo "| File | Size | SHA-256 |"
+            echo "|---|---|---|"
+            node -e "const m=require('./.model-assets/manifest.json'); for (const [f,e] of Object.entries(m.files)) console.log('| ' + e.asset + ' | ' + (e.size/1048576).toFixed(1) + ' MB | \`' + e.sha256 + '\` |');"
+            echo ""
+            echo "Download URL prefix: \`${{ github.server_url }}/${{ github.repository }}/releases/download/$TAG/\`"
+          } >> "$GITHUB_STEP_SUMMARY"

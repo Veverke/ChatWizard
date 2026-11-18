@@ -315,3 +315,123 @@ Then repackage/install the VSIX (`npm run package:vsix:win32-x64`), which runs
 `rebuild:native` first.
 
    ever published, regardless of whether the feature is reachable by tests.
+
+---
+
+## "Could not find any Python installation to use" / rebuild fails on a locked-down machine
+
+`npm run build:install:vscode` → `package:vsix:<platform>` → `rebuild:native`
+compiles `better-sqlite3` with node-gyp. On a corporate Windows machine three
+*independent* problems can stop that compile. They surface one after another, so
+fixing one only reveals the next.
+
+### 1. `Error: Could not find any Python installation to use`
+
+node-gyp's Python search is narrow. In order it probes:
+
+1. `--python` / `NODE_GYP_FORCE_PYTHON` / `PYTHON`
+2. the `py.exe` launcher
+3. `python3` and `python` on `PATH`
+4. `%LOCALAPPDATA%\Programs\Python\Python{311,310,39,38}\python.exe` and the
+   equivalent `%ProgramFiles%` locations
+
+Two very common setups match none of these:
+
+- **uv-managed interpreters** — uv installs CPython to
+  `%APPDATA%\uv\python\cpython-<version>-windows-x86_64-none\python.exe` and does
+  **not** put it on `PATH`. Only `python3.15.exe`-style shims appear in
+  `%USERPROFILE%\.local\bin`, and node-gyp looks for the exact names
+  `python3` / `python`.
+- **The Microsoft Store alias** — `%LOCALAPPDATA%\Microsoft\WindowsApps\python.exe`
+  is a 0-byte stub that prints *"Python was not found; run without arguments to
+  install from the Microsoft Store"* and exits with code **9009**. When that
+  directory precedes a real install in `PATH`, node-gyp's probe fails even though
+  Python *is* installed.
+
+`scripts/rebuild-native.js` now resolves the interpreter itself (explicit env →
+`PATH` → `uv python find` → install dirs, rejecting the Store stub by exit code
+and by path) and exports the result as `PYTHON` for the `@electron/rebuild`
+child, which node-gyp then uses. When nothing usable is found it prints the
+remediation instead of node-gyp's opaque message.
+
+Manual equivalents:
+
+```powershell
+uv python install --default        # adds python.exe to %USERPROFILE%\.local\bin (ahead of the Store alias)
+setx PYTHON "C:\Path\To\python.exe"  # any interpreter; needs a new shell
+npm config set python "C:\Path\To\python.exe"
+```
+
+### 2. `Error: Could not find any Visual Studio installation to use`
+
+This appears *after* Python is fixed, and it is usually a false negative: VS with
+"Desktop development with C++" and the Windows SDK are installed, but node-gyp
+cannot enumerate them. node-gyp finds VS by compiling `Find-VisualStudio.cs` at
+run time with PowerShell's `Add-Type`; endpoint protection (Avecto, AppLocker,
+some EDR products) denies writing the compiler response file, so the compile
+fails and node-gyp reports "no Visual Studio":
+
+```
+Add-Type : (0) : Error opening response file
+'C:\Users\<user>\AppData\Local\Temp\<tmp>\<tmp>.cmdline' -- 'Access is denied.'
+...
+FullyQualifiedErrorId : COMPILER_ERRORS,Microsoft.PowerShell.Commands.AddTypeCommand
+```
+
+(node-gyp only shows those details with `npm_config_loglevel=silly`.)
+
+When `VCINSTALLDIR`, `VSCMD_VER` and `WindowsSDKVersion` are set, node-gyp takes
+its VS-developer-prompt fast path and never invokes PowerShell. The script now
+derives those three values with `vswhere` + the installed SDK and exports them,
+so no developer prompt is required. Note node-gyp computes the VS root as
+`path.resolve(VCINSTALLDIR, '..')`, so `VCINSTALLDIR` must end in `\VC`.
+
+Manual equivalent:
+
+```powershell
+$env:VCINSTALLDIR      = 'C:\Program Files\Microsoft Visual Studio\18\Community\VC'
+$env:VSCMD_VER         = '18.12.12405.243'      # vswhere -property installationVersion
+$env:WindowsSDKVersion = '10.0.26100.0\'        # trailing backslash, as in VsDevCmd
+npm run rebuild:native
+```
+
+### 3. `Error: unable to get local issuer certificate` (code `UNABLE_TO_GET_ISSUER_CERT_LOCALLY`)
+
+Raised while node-gyp downloads the Electron headers on first use (nothing is
+cached in `%USERPROFILE%\.electron-gyp` yet). TLS inspection proxies re-sign the
+connection with an internal CA that lives in the Windows certificate store —
+which Node.js does **not** read. Point Node at a PEM export of that CA:
+
+```powershell
+$out = "$env:USERPROFILE\.certs\corporate-root-ca.pem"
+$sb = New-Object System.Text.StringBuilder
+foreach ($loc in 'LocalMachine','CurrentUser') {
+  foreach ($store in 'Root','CA') {
+    $s = New-Object System.Security.Cryptography.X509Certificates.X509Store($store, $loc)
+    try { $s.Open('ReadOnly'); foreach ($c in $s.Certificates) {
+      if ($c.Subject -notmatch 'YourProxyRootCA|YourEnterpriseCA') { continue }
+      [void]$sb.AppendLine('-----BEGIN CERTIFICATE-----')
+      [void]$sb.AppendLine([Convert]::ToBase64String($c.RawData, 'InsertLineBreaks'))
+      [void]$sb.AppendLine('-----END CERTIFICATE-----')
+    } } finally { $s.Close() }
+  }
+}
+Set-Content -Path $out -Value $sb.ToString() -Encoding ascii
+setx NODE_EXTRA_CA_CERTS $out
+```
+
+The root *and* the issuing intermediate both have to be in the bundle — a chain
+that only misses the intermediate fails with the same error. Once the headers
+are in `%USERPROFILE%\.electron-gyp\<electron-version>`, later builds no longer
+download anything.
+
+### 4. `Need to install the following packages: @vscode/vsce … Ok to proceed? (y)`
+
+`@vscode/vsce` is resolved through `npx`, so on a machine without it cached npx
+stops for confirmation and hangs every non-interactive run. `package-vsix.mjs`
+now passes `npx --yes`. If a run is interrupted at that prompt, press `n`, then
+run `git checkout -- .vscodeignore` and delete
+`node_modules/@xenova/transformers/node_modules` — the script's `finally` block
+(stub cleanup + `.vscodeignore` revert) does not execute when the process is
+killed.
+

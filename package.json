@@ -534,6 +534,24 @@
         "icon": "$(sparkle)"
       },
       {
+        "command": "chatwizard.configureSemanticModel",
+        "title": "Configure AI Model Source…",
+        "category": "Chat Wizard",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "chatwizard.retrySemanticModel",
+        "title": "Retry Loading the AI Model",
+        "category": "Chat Wizard",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "chatwizard.resetSemanticModelCache",
+        "title": "Reset AI Model Cache",
+        "category": "Chat Wizard",
+        "icon": "$(trash)"
+      },
+      {
         "command": "chatwizard.views",
         "title": "View…",
         "category": "Chat Wizard",
@@ -2073,6 +2091,16 @@
             "minimum": 0,
             "maximum": 1,
             "description": "Minimum similarity score (0–1) for a session to appear in topic similarity search results. Lower values show more (but less relevant) results. Recommended range: 0.30–0.45."
+          },
+          "chatwizard.semanticModelPath": {
+            "type": "string",
+            "default": "",
+            "markdownDescription": "Path to a local folder holding the semantic-search AI model, for networks that block the model download. The folder (or its parent) must contain `config.json`, `tokenizer.json` and `onnx/model_quantized.onnx` — the layout of `Xenova/all-MiniLM-L6-v2` on the Hugging Face Hub.\n\nWhen set, the model is read from disk and **no download is attempted**. Run **Chat Wizard: Configure AI Model Source…** to pick the folder interactively."
+          },
+          "chatwizard.semanticModelMirror": {
+            "type": "string",
+            "default": "",
+            "markdownDescription": "Alternative HTTPS host that mirrors the Hugging Face model files (for example `https://hf-mirror.com` or an internal HF-compatible server). Use this when `huggingface.co` is blocked by a corporate proxy.\n\nLeave empty to use the official host (the `HF_ENDPOINT` environment variable is honoured too, and the ChatWizard GitHub release asset is used as a last resort)."
           },
           "chatwizard.mcp.reranker.enabled": {
             "type": "boolean",

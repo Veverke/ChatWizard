@@ -2,7 +2,7 @@
 
 import * as assert from 'assert';
 import { EmbeddingEngine, PipelineFactory } from '../../src/search/embeddingEngine';
-import { SEMANTIC_DIMS } from '../../src/search/semanticContracts';
+import { SEMANTIC_DIMS, EmbeddingModelSource } from '../../src/search/semanticContracts';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -71,6 +71,39 @@ suite('EmbeddingEngine.isReady', () => {
 // ── load() ────────────────────────────────────────────────────────────────────
 
 suite('EmbeddingEngine.load', () => {
+    test('forwards the model source to the pipeline factory', async () => {
+        let received: EmbeddingModelSource | undefined;
+        const factory: PipelineFactory = async (_cacheDir, _onProgress, modelSource) => {
+            received = modelSource;
+            return async () => ({ data: new Float32Array(SEMANTIC_DIMS) });
+        };
+        const eng = new EmbeddingEngine('/cache', factory);
+        await eng.load(undefined, { localModelPath: '/models/all-MiniLM-L6-v2' });
+        assert.strictEqual(received?.localModelPath, '/models/all-MiniLM-L6-v2');
+    });
+
+    test('exposes the failure and allows a retry after a failed load', async () => {
+        let attempts = 0;
+        const factory: PipelineFactory = async () => {
+            attempts++;
+            if (attempts === 1) {
+                throw new Error('fetch failed');
+            }
+            return async () => ({ data: new Float32Array(SEMANTIC_DIMS) });
+        };
+        const eng = new EmbeddingEngine('/cache', factory);
+
+        await assert.rejects(() => eng.load(), /fetch failed/);
+        assert.match(eng.loadError ?? '', /fetch failed/);
+        assert.strictEqual(eng.isReady, false);
+
+        // The failed promise is not cached — a retry actually retries.
+        await eng.load();
+        assert.strictEqual(eng.isReady, true);
+        assert.strictEqual(eng.loadError, undefined);
+        assert.strictEqual(attempts, 2);
+    });
+
     test('calls the factory exactly once on first load', async () => {
         const mock = makeMockFactory();
         const eng = new EmbeddingEngine('/cache', mock.factory);

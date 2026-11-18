@@ -24,7 +24,7 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { SemanticIndexer, SemanticIndexerVsCodeApi } from '../../src/search/semanticIndexer';
+import { SemanticIndexer, SemanticIndexerVsCodeApi, ModelUnavailableDetails } from '../../src/search/semanticIndexer';
 import { IEmbeddingEngine, ISemanticIndex, SEMANTIC_DIMS, SemanticScope } from '../../src/search/semanticContracts';
 import { SemanticMessageResult } from '../../src/search/types';
 import { Session, Message } from '../../src/types/index';
@@ -113,6 +113,7 @@ class ProgressCapturingApi implements SemanticIndexerVsCodeApi {
     showIndexingComplete(_count: number): void { /* no-op */ }
     markModelDownloaded(_storagePath: string): void { /* no-op */ }
     showModelReady(): void { /* no-op */ }
+    showModelUnavailable(_details: ModelUnavailableDetails): void { /* no-op */ }
 }
 
 /** Trivial in-memory index. */

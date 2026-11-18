@@ -174,8 +174,11 @@ createStubs();
 patchVscodeignore();
 
 try {
+    // `--yes`: @vscode/vsce is not a devDependency, so npx would otherwise stop
+    // at "Need to install the following packages … Ok to proceed? (y)", which
+    // hangs every non-interactive run (CI, build:install:* scripts).
     execSync(
-        `npx @vscode/vsce package --target ${platform} --out ${vsixName} --allow-star-activation`,
+        `npx --yes @vscode/vsce package --target ${platform} --out ${vsixName} --allow-star-activation`,
         { cwd: ROOT, stdio: 'inherit' },
     );
 } finally {
