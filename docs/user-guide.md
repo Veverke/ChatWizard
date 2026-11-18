@@ -475,6 +475,15 @@ Finds sessions by **meaning**, not keywords. Useful when you remember the concep
 "chatwizard.enableSemanticSearch": true
 ```
 A ~22 MB model downloads on first use.
+The download is verified and only happens once — semantic search itself never
+touches the network.
+
+> **Blocked network?** If the download cannot complete (corporate proxy / TLS
+> interception), Chat Wizard tells you once and keeps working without semantic
+> search — keyword search is unaffected. Use
+> **`Chat Wizard: Configure AI Model Source…`** to pick a mirror host or a local
+> model folder. See
+> [troubleshooting/semantic-model-download.md](troubleshooting/semantic-model-download.md).
 
 **Invoke:**
 ```
@@ -919,6 +928,12 @@ The server uses a 64-character bearer token stored in VS Code's secret storage �
 **Semantic search tools return "not available"**
 - `chatwizard_find_similar` and the semantic path of `chatwizard_get_context` require `chatwizard.enableSemanticSearch: true`
 - `chatwizard_search` (keyword) is always available regardless of semantic search status
+- If the model could not be downloaded (blocked corporate network), the MCP tool says so — fix it with **Chat Wizard: Configure AI Model Source…** or a local model folder (see [troubleshooting/semantic-model-download.md](troubleshooting/semantic-model-download.md))
+
+**"Downloading AI model…" never finishes**
+- This is the model download being blocked or intercepted. The notification now closes with an error instead of hanging, and the extension keeps working without semantic search
+- Options: **Chat Wizard: Configure AI Model Source…** → mirror host (`https://hf-mirror.com`) or a local model folder; or set `HTTPS_PROXY`/`HTTP_PROXY` before starting VS Code
+- A previous bad download can be cleared with **Chat Wizard: Reset AI Model Cache**, then **Chat Wizard: Retry Loading the AI Model**
 
 ---
 
@@ -1237,8 +1252,10 @@ corresponding `chatwizard.index*` toggle.
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `chatwizard.enableSemanticSearch` | `false` | Enable topic-similarity search (~22 MB model) |
+| `chatwizard.enableSemanticSearch` | `true` | Enable topic-similarity search (~22 MB model, downloaded once after a consent prompt) |
 | `chatwizard.semanticMinScore` | `0.35` | Match threshold (0–1); lower = more results |
+| `chatwizard.semanticModelPath` | `""` | Local model folder — skips the download entirely |
+| `chatwizard.semanticModelMirror` | `""` | Mirror host (e.g. `https://hf-mirror.com`) when huggingface.co is blocked |
 | `chatwizard.enablePersistentCache` | `true` | Cache semantic search model across sessions to reduce startup time |
 
 ### Cloud Sync

@@ -144,6 +144,30 @@ export class SemanticSearchPanel {
             }
 
             if (!indexer.isReady) {
+                const unavailable = indexer.modelLoadError;
+                if (unavailable) {
+                    // The model failed to load (blocked network, missing files, …).
+                    // Never claim "still loading" — that is what made the feature look
+                    // stuck; offer the way out instead.
+                    quickPick.items = [
+                        {
+                            label: '$(warning) Semantic search is unavailable — the AI model could not be loaded',
+                            description: 'Keyword search still works',
+                            detail: unavailable,
+                            summary: undefined as unknown as SessionSummary,
+                            score: 0,
+                            alwaysShow: true,
+                        },
+                        {
+                            label: '$(gear) Configure AI model source…',
+                            description: 'Mirror host, local model folder, or retry the download',
+                            summary: undefined as unknown as SessionSummary,
+                            score: 0,
+                            alwaysShow: true,
+                        },
+                    ];
+                    return;
+                }
                 quickPick.items = [{
                     label: `$(loading~spin) Semantic index still loading model\u2026 please wait`,
                     summary: undefined as unknown as SessionSummary,
@@ -235,7 +259,12 @@ export class SemanticSearchPanel {
 
         quickPick.onDidAccept(() => {
             const active = quickPick.activeItems[0];
-            if (active && active.summary) {
+            if (!active) { return; }
+            if (active.label.startsWith('$(gear)')) {
+                void vscode.commands.executeCommand('chatwizard.configureSemanticModel');
+                return;
+            }
+            if (active.summary) {
                 vscode.commands.executeCommand('chatwizard.openSession', active.summary);
             }
         });

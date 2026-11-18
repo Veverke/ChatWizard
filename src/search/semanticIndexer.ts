@@ -4,16 +4,34 @@ import * as vscode from 'vscode';
 import { createHash } from 'crypto';
 import * as path from 'path';
 import * as fs from 'fs';
-import { ISemanticIndexer, IEmbeddingEngine, ISemanticIndex, SemanticScope, SEMANTIC_MIN_SCORE } from './semanticContracts';
+import { ISemanticIndexer, IEmbeddingEngine, ISemanticIndex, EmbeddingModelSource, SemanticScope, SEMANTIC_MIN_SCORE } from './semanticContracts';
 import { SemanticSearchResult } from './types';
 import { Session } from '../types/index';
 import { createLogger, type BoundLogger, withTimeout } from '../utils/logger';
+import type { IModelInstaller } from './semanticModelInstaller';
+import {
+    classifyModelError,
+    modelFailureHint,
+    modelFailureSummary,
+    type ModelFailureKind,
+} from './modelLoadDiagnostics';
 
 const EMBEDDINGS_FILENAME = 'semantic-embeddings.bin';
 const FINGERPRINTS_FILENAME_SUFFIX = '.meta.json';
 const FINGERPRINTS_FILE_VERSION = 1;
 const SAVE_DEBOUNCE_MS = 5_000;
 const MODEL_CACHE_SUBDIR = 'models';
+/**
+ * Records the last failed model load.  Its presence also means "the user already
+ * consented to the download", which is what stops the consent dialog and the
+ * "Downloading AI model…" notification from reappearing on every reload when the
+ * network blocks the download.
+ */
+export const SEMANTIC_MODEL_FAILURE_MARKER = '.chatwizard-model-failed';
+/** Written once the model is on disk and loadable. */
+export const SEMANTIC_MODEL_READY_MARKER = '.chatwizard-ready';
+/** Don't repeat the "semantic search unavailable" notice more often than this. */
+const FAILURE_NOTICE_INTERVAL_MS = 24 * 60 * 60 * 1000;
 /**
  * Lock file name (in global storage) for serialising bulk embedding across
  * VS Code instances.  Each instance tries to atomically create this directory
@@ -42,6 +60,21 @@ const EMBED_CHUNK_SIZE = 30;
 const YIELD_INTERVAL = 1;
 /** Max time to wait for embedBatch() before falling back to zero-vectors. */
 const EMBED_TIMEOUT_MS = 30_000;
+
+/**
+ * Details handed to the UI when the AI model cannot be loaded.
+ * The extension uses them for a single, actionable notification — after which it
+ * keeps running without semantic search.
+ */
+export interface ModelUnavailableDetails {
+    kind: ModelFailureKind;
+    /** One-sentence reason, e.g. "the AI model could not be downloaded …". */
+    summary: string;
+    /** Multi-line, actionable guidance (logged and shown in the panel). */
+    hint: string;
+    /** Raw error message (already trimmed). */
+    message: string;
+}
 
 /**
  * Injectable VS Code interactions — replace in unit tests to avoid real UI dialogs.
@@ -77,6 +110,12 @@ export interface SemanticIndexerVsCodeApi {
     markModelDownloaded(storagePath: string): void;
     /** Notify the user that the model downloaded successfully and is ready. */
     showModelReady(): void;
+    /**
+     * Notify the user (once) that semantic search cannot run because the AI model
+     * is unavailable. Implementations should offer a way to fix the source and to
+     * disable the feature — never block or re-open the download progress UI.
+     */
+    showModelUnavailable(details: ModelUnavailableDetails): void;
 }
 
 /**
@@ -88,7 +127,8 @@ export interface SemanticGlobalState {
     update(key: string, value: unknown): Thenable<void>;
 }
 
-const CONSENT_KEY = 'chatwizard.semanticConsentGiven';
+/** globalState key holding the one-time model-download consent. */
+export const SEMANTIC_CONSENT_KEY = 'chatwizard.semanticConsentGiven';
 
 export function defaultVsCodeApi(globalState?: SemanticGlobalState): SemanticIndexerVsCodeApi {
     return {
@@ -106,12 +146,12 @@ export function defaultVsCodeApi(globalState?: SemanticGlobalState): SemanticInd
             // update() may not have completed before shutdown — the sentinel file
             // is written synchronously and is the reliable fallback.
             if (globalState) {
-                const consented = globalState.get<boolean>(CONSENT_KEY) ?? false;
+                const consented = globalState.get<boolean>(SEMANTIC_CONSENT_KEY) ?? false;
                 if (consented) { return false; }
             }
             // Fallback (tests / no globalState / async update didn't persist):
             // check the sentinel file written synchronously by markModelDownloaded().
-            return !fs.existsSync(path.join(storagePath, MODEL_CACHE_SUBDIR, '.chatwizard-ready'));
+            return !fs.existsSync(path.join(storagePath, MODEL_CACHE_SUBDIR, SEMANTIC_MODEL_READY_MARKER));
         },
         async loadModelWithProgress(task: (report: (msg: string) => void) => Promise<void>): Promise<void> {
             await vscode.window.withProgress(
@@ -155,7 +195,7 @@ export function defaultVsCodeApi(globalState?: SemanticGlobalState): SemanticInd
                 fs.mkdirSync(dir, { recursive: true });
             }
             try {
-                fs.writeFileSync(path.join(dir, '.chatwizard-ready'), '');
+                fs.writeFileSync(path.join(dir, SEMANTIC_MODEL_READY_MARKER), '');
             } catch {
                 // Non-critical: if writing fails the consent dialog may reappear on next reload.
             }
@@ -163,13 +203,30 @@ export function defaultVsCodeApi(globalState?: SemanticGlobalState): SemanticInd
             if (globalState) {
                 // Also persist consent in globalState — survives across windows and reloads.
                 // This is fire-and-forget; the sentinel file above is the reliable source.
-                void globalState.update(CONSENT_KEY, true);
+                void globalState.update(SEMANTIC_CONSENT_KEY, true);
             }
         },
         showModelReady(): void {
             void vscode.window.showInformationMessage(
                 'Chat Wizard: AI model downloaded successfully — semantic search is ready.'
             );
+        },
+        showModelUnavailable(details: ModelUnavailableDetails): void {
+            void vscode.window.showErrorMessage(
+                `Chat Wizard: semantic search is unavailable — ${details.summary}. Keyword search still works.`,
+                'Fix Model Source…',
+                'Retry',
+                'Disable',
+            ).then(choice => {
+                if (choice === 'Fix Model Source…') {
+                    void vscode.commands.executeCommand('chatwizard.configureSemanticModel');
+                } else if (choice === 'Retry') {
+                    void vscode.commands.executeCommand('chatwizard.retrySemanticModel');
+                } else if (choice === 'Disable') {
+                    void vscode.workspace.getConfiguration('chatwizard')
+                        .update('enableSemanticSearch', false, vscode.ConfigurationTarget.Global);
+                }
+            });
         },
     };
 }
@@ -181,6 +238,16 @@ interface QueueEntry {
     messageIndex: number;
     paragraphIndex: number;
     text: string;
+}
+
+/** Persisted record of the last failed model load (see FAILURE_MARKER_FILENAME). */
+interface ModelFailureRecord {
+    /** ISO timestamp of the failed attempt. */
+    at: string;
+    kind: ModelFailureKind;
+    message: string;
+    /** ISO timestamp of the last user notification (suppresses repeat toasts). */
+    noticeAt?: string;
 }
 
 /** Hash only the content that contributes entries to the semantic index. */
@@ -215,6 +282,12 @@ export class SemanticIndexer implements ISemanticIndexer {
     private _isReady = false;
     private _declined = false;
     private _disposed = false;
+    /** Message of the failure that left semantic search unavailable (undefined = fine). */
+    private _modelLoadError: string | undefined;
+    /** Optional model provisioner (download/local folder). Null ⇒ legacy in-worker fetch. */
+    private readonly _modelInstaller: IModelInstaller | undefined;
+    /** `<storage>/models/.chatwizard-model-failed` */
+    private readonly _failureMarkerPath: string;
 
     // Embedding queue
     private _queue: QueueEntry[] = [];
@@ -272,14 +345,17 @@ export class SemanticIndexer implements ISemanticIndexer {
         queueStartDebounceMs?: number,
         parentLog?: BoundLogger,
         embeddingsFilePath?: string,
+        modelInstaller?: IModelInstaller,
     ) {
         this.embeddingsPath = embeddingsFilePath ?? path.join(storagePath, EMBEDDINGS_FILENAME);
         this._bulkLockPath = path.join(storagePath, GLOBAL_BULK_LOCK);
+        this._failureMarkerPath = path.join(storagePath, MODEL_CACHE_SUBDIR, SEMANTIC_MODEL_FAILURE_MARKER);
         this.storagePath = storagePath;
         this.engine = engineFactory(path.join(storagePath, MODEL_CACHE_SUBDIR));
         this.index = indexFactory();
         this.vsCodeApi = vsCodeApi ?? defaultVsCodeApi();
         this._queueStartDebounceMs = queueStartDebounceMs ?? QUEUE_START_DEBOUNCE_MS;
+        this._modelInstaller = modelInstaller;
         this.log = parentLog?.withContext('SemanticIndexer') ?? createLogger().withContext('SemanticIndexer');
         this.fingerprintsPath = `${this.embeddingsPath}${FINGERPRINTS_FILENAME_SUFFIX}`;
     }
@@ -307,6 +383,11 @@ export class SemanticIndexer implements ISemanticIndexer {
         return this._queueRunning;
     }
 
+    /** Set when the AI model could not be loaded — semantic search is then unavailable. */
+    get modelLoadError(): string | undefined {
+        return this._modelLoadError;
+    }
+
     /** Expose the embedding engine for downstream consumers (e.g. KB classification fallback). */
     get embeddingEngine(): IEmbeddingEngine {
         return this.engine;
@@ -317,37 +398,60 @@ export class SemanticIndexer implements ISemanticIndexer {
     /**
      * Loads the model (with optional first-use consent dialog) and restores the
      * persisted index from disk. Idempotent — resolves immediately if already ready.
-     * On user decline, resolves without error and marks the session as declined.
+     *
+     * Never throws for model problems: semantic search is optional, so a failure
+     * is reported once, recorded, and the extension continues without it (keyword
+     * search, tree, analytics, MCP keyword tools are unaffected).
      */
     async initialize(): Promise<void> {
         if (this._isReady || this._declined || this._disposed) {
             return;
         }
 
-        // First-use consent
-        const isFirstDownload = this.vsCodeApi.isFirstUse(this.storagePath);
-        if (isFirstDownload) {
+        // `isFirstUse` === "the model has never been provisioned on this machine".
+        const modelReadyOnDisk = !this.vsCodeApi.isFirstUse(this.storagePath);
+        // A recorded failure means consent was already given — never ask again and
+        // never re-open the "Downloading AI model…" notification on every reload.
+        const previousFailure = this._readFailureMarker();
+        const needsConsent = !modelReadyOnDisk && previousFailure === undefined;
+        if (previousFailure) {
+            this.log.warn(
+                'Previous model load failed at %s (%s): %s — retrying silently, no notification',
+                previousFailure.at,
+                previousFailure.kind,
+                previousFailure.message,
+            );
+        } else {
+            this.log.info(
+                'Model state: %s, consent: %s',
+                modelReadyOnDisk ? 'available on disk' : 'not on disk',
+                needsConsent ? 'needed' : 'already given',
+            );
+        }
+
+        if (needsConsent) {
             const consented = await this.vsCodeApi.showConsentDialog();
             if (!consented) {
+                this.log.info('User declined the AI model download — semantic search stays off (keyword search unaffected).');
                 this._declined = true;
                 return;
             }
+            this.log.info('User accepted the AI model download.');
         }
 
-        // Load model — only show the progress indicator on first download.
-        // On subsequent reloads the model is cached locally, so a notification
-        // would be misleading ("Downloading" = already on disk) and visually noisy.
-        if (isFirstDownload) {
-            await this.vsCodeApi.loadModelWithProgress(async (report) => {
-                await this.engine.load(report);
-            });
-        } else {
-            await this.engine.load();
+        try {
+            await this._provisionAndLoadModel(needsConsent);
+        } catch (err) {
+            this._handleModelUnavailable(err, previousFailure);
+            return;
         }
 
-        // Persist the marker only after a successful download so that the popup
-        // reappears if the download fails and the user opens VS Code again.
-        if (isFirstDownload) {
+        this._modelLoadError = undefined;
+        this._clearFailureMarker();
+        this.log.info('AI model loaded successfully%s.', previousFailure ? ' (recovered from a previous failure)' : '');
+
+        // Persist the marker only after a successful load.
+        if (!modelReadyOnDisk) {
             this.vsCodeApi.markModelDownloaded(this.storagePath);
             this.vsCodeApi.showModelReady();
         }
@@ -365,6 +469,103 @@ export class SemanticIndexer implements ISemanticIndexer {
         await this._loadSessionFingerprints();
 
         this._isReady = true;
+        this.log.info(
+            'Semantic search is ACTIVE — %d vector(s) indexed, %d session fingerprint(s).',
+            this.index.size,
+            this._sessionFingerprints.size,
+        );
+    }
+
+    /**
+     * Acquires the model (download or local folder) and loads it.
+     *
+     * The progress notification is shown only for an expected, first download.
+     * Retries after a recorded failure stay silent — the user already saw the
+     * failure notice, and a notification on every reload is exactly what made
+     * this feature feel broken.
+     */
+    private async _provisionAndLoadModel(showProgress: boolean): Promise<void> {
+        const run = async (report: (msg: string) => void): Promise<void> => {
+            let source: EmbeddingModelSource | undefined;
+            if (this._modelInstaller) {
+                const installed = await this._modelInstaller.ensureModel(report);
+                this.log.info('Model provisioned from %s (%s)', installed.source, installed.folder);
+                source = { localModelPath: installed.folder };
+            } else {
+                this.log.warn('No model installer wired — falling back to the transformers.js loader.');
+            }
+            await this.engine.load(report, source);
+        };
+
+        if (showProgress) {
+            this.log.info('Acquiring the AI model (download progress is shown to the user).');
+            await this.vsCodeApi.loadModelWithProgress(run);
+        } else {
+            this.log.info('Acquiring the AI model silently (cached model or a retry — no notification).');
+            await run(() => { /* silent */ });
+        }
+    }
+
+    /**
+     * Records a failed model load and tells the user once. The indexer stays
+     * not-ready, so every caller degrades gracefully instead of blocking.
+     */
+    private _handleModelUnavailable(error: unknown, previousFailure: ModelFailureRecord | undefined): void {
+        const failure = classifyModelError(error);
+        const hint = modelFailureHint(failure.kind);
+        this._modelLoadError = failure.message;
+
+        this.log.error('Semantic search unavailable (%s): %s', failure.kind, failure.message);
+        this.log.info(hint);
+
+        const now = Date.now();
+        const lastNotice = previousFailure?.noticeAt ? Date.parse(previousFailure.noticeAt) : Number.NaN;
+        const notify = Number.isNaN(lastNotice) || (now - lastNotice) > FAILURE_NOTICE_INTERVAL_MS;
+
+        this._writeFailureMarker({
+            at: new Date(now).toISOString(),
+            kind: failure.kind,
+            message: failure.message,
+            noticeAt: notify ? new Date(now).toISOString() : previousFailure?.noticeAt,
+        });
+
+        if (notify) {
+            this.vsCodeApi.showModelUnavailable({
+                kind: failure.kind,
+                summary: modelFailureSummary(failure.kind),
+                hint,
+                message: failure.message,
+            });
+        }
+
+        // Release worker threads / WASM memory — nothing else will use the engine.
+        this.engine.dispose();
+    }
+
+    private _readFailureMarker(): ModelFailureRecord | undefined {
+        try {
+            const parsed = JSON.parse(fs.readFileSync(this._failureMarkerPath, 'utf8')) as ModelFailureRecord;
+            return parsed && typeof parsed === 'object' && typeof parsed.at === 'string' ? parsed : undefined;
+        } catch {
+            return undefined;
+        }
+    }
+
+    private _writeFailureMarker(record: ModelFailureRecord): void {
+        try {
+            fs.mkdirSync(path.dirname(this._failureMarkerPath), { recursive: true });
+            fs.writeFileSync(this._failureMarkerPath, JSON.stringify(record));
+        } catch {
+            // Non-critical: worst case the user is asked/notified once more.
+        }
+    }
+
+    private _clearFailureMarker(): void {
+        try {
+            fs.rmSync(this._failureMarkerPath, { force: true });
+        } catch {
+            // Non-critical.
+        }
     }
 
     // ── scheduleSession() ───────────────────────────────────────────────────
@@ -523,6 +724,12 @@ export class SemanticIndexer implements ISemanticIndexer {
 
     async search(query: string, topK: number, minScore = SEMANTIC_MIN_SCORE, scope: SemanticScope = 'both'): Promise<SemanticSearchResult[]> {
         if (!this._isReady) {
+            if (this._modelLoadError) {
+                throw new Error(
+                    'Semantic search is unavailable — the AI model could not be loaded '
+                    + `(${this._modelLoadError}). Keyword search still works.`,
+                );
+            }
             throw new Error('SemanticIndexer is not ready. Call initialize() first.');
         }
         const queryVector = await this.engine.embed(query);

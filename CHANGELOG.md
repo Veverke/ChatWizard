@@ -1,5 +1,22 @@
 # Change Log
 
+## [Unreleased]
+
+### Semantic search — blocked-network downloads and graceful degradation
+
+- **Fixed: "Downloading AI model…" could hang forever.** When the model failed to load, the inference worker reported the error without an id, so the parent never settled its init promise and the progress notification stayed on screen indefinitely (log: `Worker error: TypeError: fetch failed`). Init failures now reject through a dedicated `init_error` message, with a parent-side timeout as a backstop.
+- **Fixed: retry loop on every start.** A failed download never wrote the model-ready marker, so every VS Code start re-showed the consent dialog, the download notification and an error. Failures are now recorded (`models/.chatwizard-model-failed`); the next start retries silently and does not repeat the notification for 24 h.
+- **Model downloads are now performed by Chat Wizard, not the model runtime.** Files are streamed to `*.partial`, verified (size + SHA-256 from `manifest.json`, JSON parse, ONNX sanity checks) and atomically renamed, so a proxy's HTML block page can no longer poison the cache. Sources are tried in order: configured local folder → previously downloaded folder → mirror host / `HF_ENDPOINT` → official Hub → Chat Wizard GitHub release asset. `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY` (with `CONNECT` tunnelling and basic auth) are honoured.
+- **TLS-inspecting corporate proxies now work without configuration.** Node ignores the operating system trust store, which is why a re-signed connection surfaced as an opaque `fetch failed`. The downloader merges Node's bundled roots with the OS store (`tls.getCACertificates('system')`, following VS Code's `http.systemCertificates`) and with `NODE_EXTRA_CA_CERTS`; certificate verification stays enabled. The output channel logs the effective trust store (`TLS trust: 159 CA certificate(s) — Node bundled (118) + OS store (85) + extra (0)`).
+- **transformers.js now loads strictly from disk** (`allowRemoteModels = false`), so `fetch failed` cannot occur during embedding and the extension never makes a network call after the model is present.
+- **Graceful degradation:** if the model cannot be obtained, semantic search is disabled for the session and the user gets a single actionable notification — *Fix Model Source… / Retry / Disable* — while keyword search, the session tree, analytics and the MCP keyword tools keep working. `ISemanticIndexer.modelLoadError` lets the UI explain the state instead of showing "still loading model…".
+- **New settings:** `chatwizard.semanticModelPath` (local model folder, fully offline) and `chatwizard.semanticModelMirror` (e.g. `https://hf-mirror.com` for networks that block huggingface.co).
+- **New commands:** `Chat Wizard: Configure AI Model Source…`, `Chat Wizard: Retry Loading the AI Model`, `Chat Wizard: Reset AI Model Cache`.
+- **New workflow:** `.github/workflows/model-assets.yml` downloads the model, verifies it and publishes the 4 files plus `manifest.json` as release assets on a configurable tag (default `semantic-model-v1`) — every input has a default, so one click produces a complete asset set. `scripts/prepare-model-assets.ts` does the same locally and reuses the production downloader. `scripts/hash-model-assets.mjs` writes the same `manifest.json` from files you already have (no network), for internal file servers and hand-made release assets.
+- **Troubleshooting guide:** `docs/troubleshooting/semantic-model-download.md` (symptoms → log lines → fixes, including the `NODE_EXTRA_CA_CERTS` fix for TLS-inspecting proxies, mirror hosts and offline model folders).
+- **Docs corrected:** the Semantic Search settings tables now state the shipped default (`chatwizard.enableSemanticSearch` = `true`); earlier tables said `false`. The troubleshooting guide's sample log output matches the real `[Semantic …]` prefixes.
+- **Diagnostic logging:** the output channel now shows the full model lifecycle with a stable `[Semantic …]` prefix — source options, which source was tried (and why one failed), per-file verification results, download size/duration, the effective transformers.js configuration (`allowRemoteModels=false`, model folder, ONNX file), worker start-up time, and two unambiguous markers: `AI model loaded successfully.` and `Semantic search is ACTIVE — N vector(s) indexed`. Failures log the classification (`blocked`/`proxy`/`not-found`/`corrupt`/`timeout`/`local-incomplete`) plus copy-pasteable guidance.
+
 ## [1.6.0] - 2026-08-05
 
 ### Knowledge Base (Feature 23)

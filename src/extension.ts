@@ -48,9 +48,12 @@ import { TelemetryRecorder } from './telemetry/telemetryRecorder';
 import { registerManageWorkspacesCommand } from './commands/manageWorkspaces';
 import { registerPaletteCommands } from './commands/paletteCommands';
 import { registerSessionLifecycleCommands } from './commands/sessionLifecycleCommands';
-import { SemanticIndexer, defaultVsCodeApi } from './search/semanticIndexer';
+import { SemanticIndexer, defaultVsCodeApi, SEMANTIC_CONSENT_KEY } from './search/semanticIndexer';
 import { EmbeddingEngine } from './search/embeddingEngine';
 import { SemanticIndex } from './search/semanticIndex';
+import { SemanticModelInstaller, DEFAULT_FALLBACK_BASE_URL, type SemanticModelSourceOptions } from './search/semanticModelInstaller';
+import { resolveLocalModel } from './search/localModelPath';
+import { registerSemanticModelCommands } from './search/semanticModelCommands';
 import { extractWorkItemsFromSession } from './utils/workItemExtractor';
 import { SemanticSearchPanel } from './search/semanticSearchPanel';
 import { McpServer } from './mcp/mcpServer';
@@ -647,11 +650,49 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // Instantiated only when chatwizard.enableSemanticSearch is true (default).
     // The typed change listener below keeps it in sync with the main session index.
     const semanticEmbeddingsUri = vscode.Uri.joinPath(context.storageUri ?? context.globalStorageUri, 'semantic-embeddings.bin');
+    /** Model cache root: `<globalStorage>/models` (markers + downloaded model folders). */
+    const semanticModelsDir = path.join(context.globalStorageUri.fsPath, 'models');
     let semanticIndexer: SemanticIndexer | null = null;
+    /** Debounces restarts triggered by settings changes (a command may change two keys). */
+    let semanticRestartTimer: ReturnType<typeof setTimeout> | undefined;
+
+    /**
+     * Where the model should come from, resolved on every model load so settings
+     * changes take effect on retry without a reload.
+     *
+     * Pre-staged model: an IT-deployable build can ship the files in
+     * `resources/models/` (already whitelisted in `.vscodeignore`).
+     */
+    function resolveSemanticModelSource(): SemanticModelSourceOptions {
+        const cfg = vscode.workspace.getConfiguration('chatwizard');
+        const httpCfg = vscode.workspace.getConfiguration('http');
+        const configuredPath = (cfg.get<string>('semanticModelPath') ?? '').trim();
+        const bundledRoot = path.join(context.extensionUri.fsPath, 'resources', 'models');
+        const bundledUsable = resolveLocalModel(bundledRoot).missing.length === 0;
+        return {
+            localModelPath: configuredPath || (bundledUsable ? bundledRoot : ''),
+            mirrorHost: (cfg.get<string>('semanticModelMirror') ?? '').trim() || undefined,
+            fallbackBaseUrl: DEFAULT_FALLBACK_BASE_URL,
+            // Honour the proxy the user configured for VS Code itself (env vars
+            // are the fallback inside the downloader).
+            proxyUrl: (httpCfg.get<string>('proxy') ?? '').trim() || undefined,
+            // Corporate networks re-sign TLS with their own root; VS Code reads
+            // the OS store for its own traffic (`http.systemCertificates`,
+            // default true), so mirror that choice for our downloads.
+            useSystemCertificates: httpCfg.get<boolean>('systemCertificates') ?? true,
+        };
+    }
 
     function createAndInitSemanticIndexer(): void {
         try {
             const semanticLog = createLogger(channel).withContext('Semantic');
+            // Owns model provisioning: local folder → cache → mirror → HF → GitHub asset.
+            // The transformers loader is then handed a folder and never touches the network.
+            const modelInstaller = new SemanticModelInstaller(
+                path.join(semanticModelsDir, 'downloaded'),
+                resolveSemanticModelSource,
+                semanticLog.withContext('ModelInstaller'),
+            );
             const indexer = new SemanticIndexer(
                 context.globalStorageUri.fsPath, // model cache dir (shared across workspaces)
                 (cacheDir) => new EmbeddingEngine(cacheDir, undefined, semanticLog),
@@ -660,6 +701,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 undefined, /* queueStartDebounceMs */
                 semanticLog,
                 semanticEmbeddingsUri.fsPath, // embeddings file (per-workspace)
+                modelInstaller,
             );
             channel.appendLine('[Chat Wizard] SemanticIndexer constructed.');
             // Feature 43: Apply semantic index max age from config
@@ -673,6 +715,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             setKbEmbeddingEngine(indexer.embeddingEngine);
             channel.appendLine('[Chat Wizard] KB embedding engine registered via SemanticIndexer.');
             void indexer.initialize().then(() => {
+                if (!indexer.isReady) {
+                    // No model (blocked network, declined consent, …). The indexer
+                    // already notified the user; keyword search is unaffected.
+                    channel.appendLine(
+                        '[Chat Wizard] Semantic search unavailable — keyword search remains active.'
+                        + (indexer.modelLoadError ? ` Reason: ${indexer.modelLoadError}` : ''),
+                    );
+                    return;
+                }
                 const cachedCount = indexer.indexedCount;
                 const summaries = index.getAllSummaries();
                 if (cachedCount > 0) {
@@ -689,16 +740,45 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                     }
                 }
             }).catch((err: unknown) => {
+                // Model problems are reported (once) inside the indexer — this only
+                // fires for unexpected failures, so log instead of alarming the user.
                 channel.appendLine(`[Chat Wizard] Semantic indexer init failed: ${err}`);
-                void vscode.window.showErrorMessage(
-                    `Chat Wizard: Failed to initialize semantic search — ${String(err)}. Reload VS Code to retry.`
-                );
             });
         } catch (err) {
             channel.appendLine(`[Chat Wizard] Failed to construct SemanticIndexer: ${err}`);
             // Don't throw — the extension can still function without semantic search.
         }
     }
+
+    /** Dispose the semantic indexer and start over (new settings, retry, reset cache). */
+    function restartSemanticIndexer(): void {
+        if (semanticIndexer) {
+            semanticIndexer.dispose();
+            semanticIndexer = null;
+        }
+        if (vscode.workspace.getConfiguration('chatwizard').get<boolean>('enableSemanticSearch') ?? true) {
+            createAndInitSemanticIndexer();
+        }
+    }
+
+    /** Coalesces rapid settings changes into one indexer restart. */
+    function scheduleSemanticRestart(): void {
+        if (semanticRestartTimer !== undefined) {
+            clearTimeout(semanticRestartTimer);
+        }
+        semanticRestartTimer = setTimeout(() => {
+            semanticRestartTimer = undefined;
+            restartSemanticIndexer();
+        }, 300);
+    }
+
+    // Commands: configure the model source, retry, or clear a corrupt cache.
+    registerSemanticModelCommands(context, {
+        modelsDir: semanticModelsDir,
+        restart: restartSemanticIndexer,
+        isEnabled: () => vscode.workspace.getConfiguration('chatwizard').get<boolean>('enableSemanticSearch') ?? true,
+        clearConsent: async () => { await context.globalState.update(SEMANTIC_CONSENT_KEY, undefined); },
+    });
 
     if (vscode.workspace.getConfiguration('chatwizard').get<boolean>('enableSemanticSearch') ?? true) {
         createAndInitSemanticIndexer();
@@ -738,6 +818,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         get isReady()      { return (semanticIndexer ?? _nullIndexerForProxy).isReady; },
         get isIndexing()   { return (semanticIndexer ?? _nullIndexerForProxy).isIndexing; },
         get indexedCount() { return (semanticIndexer ?? _nullIndexerForProxy).indexedCount; },
+        get modelLoadError() { return (semanticIndexer ?? _nullIndexerForProxy).modelLoadError; },
         initialize()       { return (semanticIndexer ?? _nullIndexerForProxy).initialize(); },
         scheduleSession(s) { return (semanticIndexer ?? _nullIndexerForProxy).scheduleSession(s); },
         removeSession(id)  { return (semanticIndexer ?? _nullIndexerForProxy).removeSession(id); },
@@ -2288,6 +2369,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                     semanticIndexer.dispose();
                     semanticIndexer = null;
                 }
+            }
+            if (
+                e.affectsConfiguration('chatwizard.semanticModelPath') ||
+                e.affectsConfiguration('chatwizard.semanticModelMirror')
+            ) {
+                // New model source → reload it (debounced: one command may set both).
+                channel.appendLine('[Chat Wizard] Semantic model source changed — restarting semantic search.');
+                scheduleSemanticRestart();
             }
             if (
                 e.affectsConfiguration('chatwizard.claudeProjectsPath') ||

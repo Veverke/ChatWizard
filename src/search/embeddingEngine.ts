@@ -2,11 +2,16 @@
 
 import * as path from 'path';
 import { Worker } from 'worker_threads';
-import { IEmbeddingEngine, SEMANTIC_DIMS } from './semanticContracts';
+import { EmbeddingModelSource, IEmbeddingEngine, SEMANTIC_DIMS } from './semanticContracts';
 import { createLogger, type BoundLogger, withTimeout } from '../utils/logger';
 
-/** How long (ms) before we give up on downloading the ONNX model. */
-const DOWNLOAD_TIMEOUT_MS = 300_000; // 5 minutes
+/**
+ * How long the parent waits for a worker to report `init_done`.
+ * Sits above the worker's own DOWNLOAD_TIMEOUT_MS (180s) so a worker that dies
+ * silently, or never answers, still produces an error instead of a hung promise
+ * — the cause of the "Downloading AI model…" notification that never closed.
+ */
+const INIT_TIMEOUT_MS = 240_000; // 4 minutes
 
 /** How long (ms) before a pending embedBatch response is considered stuck. */
 const EMBED_RPC_TIMEOUT_MS = 120_000;
@@ -33,6 +38,7 @@ type PipelineCallable = {
 export type PipelineFactory = (
     cacheDir: string,
     onProgress?: (message: string) => void,
+    modelSource?: EmbeddingModelSource,
 ) => Promise<PipelineCallable>;
 
 /** Default factory — delegates to a pool of worker threads for parallel ONNX inference. */
@@ -40,10 +46,17 @@ async function defaultPipelineFactory(
     cacheDir: string,
     onProgress?: (message: string) => void,
     parentLog?: BoundLogger,
+    modelSource?: EmbeddingModelSource,
 ): Promise<PipelineCallable> {
     const workerPath = path.resolve(__dirname, 'embeddingWorker.js');
     const log: BoundLogger = parentLog?.withContext('EmbeddingWorker') ?? createLogger().withContext('EmbeddingWorker');
-    log.info('Spawning %d worker threads from %s', POOL_SIZE, workerPath);
+    log.info(
+        'Loading the semantic model — %s (cache dir: %s)',
+        modelSource?.localModelPath ? `local folder ${modelSource.localModelPath}` : 'remote/cached model',
+        cacheDir,
+    );
+    log.debug('Spawning %d worker threads from %s', POOL_SIZE, workerPath);
+    const startedAt = Date.now();
 
     interface WorkerHandle {
         worker: Worker;
@@ -57,7 +70,15 @@ async function defaultPipelineFactory(
         let nextId = 1;
         const pending = new Map<number, { resolve: (dataBuffer: ArrayBuffer, dims: number) => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }>();
         let resolveInit: (() => void) | undefined;
-        const initDone = new Promise<void>((resolve) => { resolveInit = resolve; });
+        let rejectInit: ((error: Error) => void) | undefined;
+        let initSettled = false;
+        const initDone = new Promise<void>((resolve, reject) => { resolveInit = resolve; rejectInit = reject; });
+        /** Resolves or rejects the init promise exactly once. */
+        const settleInit = (error?: Error): void => {
+            if (initSettled) { return; }
+            initSettled = true;
+            if (error) { rejectInit?.(error); } else { resolveInit?.(); }
+        };
         let disposed = false;
 
         worker.on('message', (msg: Record<string, unknown>) => {
@@ -66,8 +87,30 @@ async function defaultPipelineFactory(
                 onProgress(String(msg['message'] ?? ''));
                 return;
             }
+            if (type === 'log') {
+                // Worker diagnostics (model source, effective transformers env).
+                const text = String(msg['message'] ?? '');
+                const level = String(msg['level'] ?? 'info');
+                if (level === 'error') {
+                    log.error(text);
+                } else if (level === 'warn') {
+                    log.warn(text);
+                } else {
+                    log.info(text);
+                }
+                return;
+            }
             if (type === 'init_done') {
-                resolveInit?.();
+                settleInit();
+                return;
+            }
+            if (type === 'init_error') {
+                // The model could not be loaded. Rejecting here is what closes the
+                // "Downloading AI model…" progress notification instead of leaving
+                // it on screen forever.
+                const errorMsg = String(msg['error'] ?? 'The AI model could not be loaded');
+                log.error('Model load failed: %s', errorMsg);
+                settleInit(new Error(errorMsg));
                 return;
             }
             if (type === 'result') {
@@ -105,7 +148,7 @@ async function defaultPipelineFactory(
                 entry.reject(err);
             }
             pending.clear();
-            resolveInit?.();
+            settleInit(err);
         });
 
         worker.on('exit', (code) => {
@@ -117,10 +160,10 @@ async function defaultPipelineFactory(
                 entry.reject(new Error(`Worker exited with code ${code}`));
             }
             pending.clear();
-            resolveInit?.();
+            settleInit(new Error(`Embedding worker exited with code ${code} before the AI model was ready`));
         });
 
-        worker.postMessage({ type: 'init', cacheDir });
+        worker.postMessage({ type: 'init', cacheDir, modelSource });
 
         const callable = (texts: string[]): Promise<{ data: ArrayLike<number> }> => {
             const id = nextId++;
@@ -144,14 +187,39 @@ async function defaultPipelineFactory(
             });
         };
 
-        return initDone.then(() => ({ worker, callable, pending, disposed }));
+        const ready = withTimeout(initDone, INIT_TIMEOUT_MS, 'Loading the semantic-search AI model');
+        return ready.then(
+            () => ({ worker, callable, pending, disposed }),
+            (err: Error) => {
+                // Never leave a worker behind that failed (or never answered) its init.
+                try { worker.terminate(); } catch { /* already gone */ }
+                throw err;
+            },
+        );
     }
 
-    // Spawn all workers and wait for init
-    const handles: WorkerHandle[] = await Promise.all(
+    // Spawn all workers and wait for init.
+    // allSettled (not all) so a single failure still lets us tear the survivors
+    // down — previously a half-initialised pool leaked its worker threads.
+    const settled = await Promise.allSettled(
         Array.from({ length: POOL_SIZE }, () => spawnSingleWorker()),
     );
-    log.info('All %d workers ready', handles.length);
+    const handles: WorkerHandle[] = [];
+    const initFailures: Error[] = [];
+    for (const result of settled) {
+        if (result.status === 'fulfilled') {
+            handles.push(result.value);
+        } else {
+            initFailures.push(result.reason instanceof Error ? result.reason : new Error(String(result.reason)));
+        }
+    }
+    if (initFailures.length > 0) {
+        for (const handle of handles) {
+            try { handle.worker.terminate(); } catch { /* already gone */ }
+        }
+        throw initFailures[0];
+    }
+    log.info('All %d workers ready in %dms', handles.length, Date.now() - startedAt);
 
     // Round-robin index — only the first worker forwards progress to avoid duplicates
     let rrIndex = 0;
@@ -267,6 +335,7 @@ export class EmbeddingEngine implements IEmbeddingEngine {
     private _isReady = false;
     private loadPromise: Promise<void> | undefined;
     private _disposed = false;
+    private _loadError: string | undefined;
     private readonly log: BoundLogger;
 
     constructor(cacheDir: string, pipelineFactory?: PipelineFactory, parentLog?: BoundLogger) {
@@ -279,30 +348,48 @@ export class EmbeddingEngine implements IEmbeddingEngine {
         return this._isReady;
     }
 
+    /** Message of the last failed load (`undefined` when nothing failed / after success). */
+    get loadError(): string | undefined {
+        return this._loadError;
+    }
+
     /**
      * Loads the model. Idempotent — resolves immediately if already loaded.
      * Concurrent calls await the same underlying promise.
      * Does not catch errors; callers are responsible for error handling.
+     * A failed load clears the cached promise, so a later call retries.
      */
-    async load(onProgress?: (message: string) => void): Promise<void> {
+    async load(onProgress?: (message: string) => void, modelSource?: EmbeddingModelSource): Promise<void> {
         if (this._isReady) {
             return;
         }
         if (!this.loadPromise) {
-            this.loadPromise = this.doLoad(onProgress);
+            this.loadPromise = this.doLoad(onProgress, modelSource);
         }
         return this.loadPromise;
     }
 
-    private async doLoad(onProgress?: (message: string) => void): Promise<void> {
-        if (this.factory) {
-            // Test / DI mode — use the injected factory directly on this thread.
-            this.pipelineFn = await this.factory(this.cacheDir, onProgress);
-        } else {
-            // Production mode — spawn a worker thread for ONNX inference.
-            this.pipelineFn = await defaultPipelineFactory(this.cacheDir, onProgress, this.log);
+    private async doLoad(
+        onProgress?: (message: string) => void,
+        modelSource?: EmbeddingModelSource,
+    ): Promise<void> {
+        try {
+            if (this.factory) {
+                // Test / DI mode — use the injected factory directly on this thread.
+                this.pipelineFn = await this.factory(this.cacheDir, onProgress, modelSource);
+            } else {
+                // Production mode — spawn a worker thread for ONNX inference.
+                this.pipelineFn = await defaultPipelineFactory(this.cacheDir, onProgress, this.log, modelSource);
+            }
+            this._loadError = undefined;
+            this._isReady = true;
+        } catch (err) {
+            this._loadError = err instanceof Error ? err.message : String(err);
+            this.pipelineFn = undefined;
+            this._isReady = false;
+            this.loadPromise = undefined; // allow a later retry (e.g. after the user fixes the source)
+            throw err;
         }
-        this._isReady = true;
     }
 
     /**
