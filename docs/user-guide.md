@@ -1342,7 +1342,7 @@ corresponding `chatwizard.index*` toggle.
 | `chatwizard.enableTelemetry` | `false` | Write local-only usage events to a JSONL file in extension storage; never transmitted externally |
 | `chatwizard.sessionRetentionDays` | `0` (disabled) | Auto-delete sessions older than N days |
 | `chatwizard.didYouKnow.enabled` | `true` | Show/hide the 🐿️ Did You Know status bar nudge |
-| `chatwizard.didYouKnowInterval` | `300` | Seconds between nudge tips (default 5 min) |
+| `chatwizard.didYouKnowInterval` | `600` | Seconds between nudge tips (default 5 min) |
 
 ---
 

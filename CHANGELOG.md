@@ -104,7 +104,7 @@
 
 ### "Did You Know" Nudge
 
-- The squirrel mascot (`BrandingStatusBarItem`) now cycles through section headings from `docs/user-guide.md` at a configurable interval (`chatwizard.didYouKnowInterval`, default 300 seconds).
+- The squirrel mascot (`BrandingStatusBarItem`) now cycles through section headings from `docs/user-guide.md` at a configurable interval (`chatwizard.didYouKnowInterval`, default 600 seconds).
 - Clicking the nudge opens the corresponding section in the user guide. The nudge list deduplicates headings and skips TOC entries.
 - Configurable via `chatwizard.didYouKnowEnabled` (default: `true`).
 
