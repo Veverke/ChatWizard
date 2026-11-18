@@ -71,9 +71,41 @@ suite('semanticModelInstaller.buildBaseUrls', () => {
         assert.deepStrictEqual(urls, ['http://localhost:1234/models/']);
     });
 
+    test('honours HF_ENDPOINT as the mirror and normalizes revisions', () => {
+        const savedEndpoint = process.env['HF_ENDPOINT'];
+        try {
+            process.env['HF_ENDPOINT'] = 'https://hf.internal/';
+            const mirrored = buildBaseUrls({ fallbackBaseUrl: 'https://github.com/x/y/releases/download/t/' });
+            assert.strictEqual(mirrored[0], 'https://hf.internal/Xenova/all-MiniLM-L6-v2/resolve/main/');
+
+            delete process.env['HF_ENDPOINT'];
+            // A pinned revision is trimmed and the repo path loses its slashes.
+            const pinned = buildBaseUrls({ revision: '  v1.2  ', repoPath: '/custom/repo/' });
+            assert.strictEqual(pinned[0], 'https://huggingface.co/custom/repo/resolve/v1.2/');
+
+            // A blank revision means "main" rather than an empty URL segment.
+            const blank = buildBaseUrls({ revision: '   ' });
+            assert.ok(blank[0].includes('/resolve/main/'), blank[0]);
+        } finally {
+            if (savedEndpoint === undefined) {
+                delete process.env['HF_ENDPOINT'];
+            } else {
+                process.env['HF_ENDPOINT'] = savedEndpoint;
+            }
+        }
+    });
+
+    test('a blank mirror host does not produce a source', () => {
+        const urls = buildBaseUrls({ mirrorHost: '   ', fallbackBaseUrl: '' });
+        assert.deepStrictEqual(urls, ['https://huggingface.co/Xenova/all-MiniLM-L6-v2/resolve/main/']);
+    });
+
     test('hostLabel returns the host, or the input when unparseable', () => {
         assert.strictEqual(hostLabel('https://huggingface.co/a/b/'), 'huggingface.co');
         assert.strictEqual(hostLabel('not a url'), 'not a url');
+        // No host at all (file: URL) and no value at all both stay readable.
+        assert.strictEqual(hostLabel('file:///tmp/model/'), 'file:///tmp/model/');
+        assert.strictEqual(hostLabel(''), 'unknown');
     });
 });
 
@@ -140,11 +172,16 @@ suite('semanticModelInstaller.ensureModel', () => {
             const installer = new SemanticModelInstaller(path.join(storageDir, 'cache'), () => options);
 
             assert.strictEqual(installer.isModelPresent(), false);
-            const installed = await installer.ensureModel();
+            const progress: string[] = [];
+            const installed = await installer.ensureModel(message => progress.push(message));
             assert.strictEqual(installed.downloaded, true);
             assert.strictEqual(installed.source.startsWith('127.0.0.1'), true, `unexpected source ${installed.source}`);
             assert.ok(fs.existsSync(path.join(installed.folder, 'onnx', 'model_quantized.onnx')));
             assert.strictEqual(installer.isModelPresent(), true);
+            assert.ok(
+                progress.some(message => /Fetching the AI model from 127\.0\.0\.1/.test(message)),
+                `expected a download notice, got:\n${progress.join('\n')}`,
+            );
 
             const reused = await installer.ensureModel();
             assert.strictEqual(reused.source, 'cache');
@@ -152,5 +189,40 @@ suite('semanticModelInstaller.ensureModel', () => {
         } finally {
             await server.close();
         }
+    });
+
+    test('reuses a model left by an earlier cache layout', async () => {
+        // transformers.js used to cache under <root>/huggingface.co/<org>/<id>/resolve/<rev>;
+        // an upgraded install must keep that 23 MB instead of downloading it again.
+        const legacy = path.join(
+            storageDir, 'huggingface.co', SEMANTIC_MODEL_ORG, SEMANTIC_MODEL_ID, 'resolve', 'main',
+        );
+        fs.mkdirSync(path.join(legacy, 'onnx'), { recursive: true });
+        fs.writeFileSync(path.join(legacy, 'config.json'), '{}');
+        fs.writeFileSync(path.join(legacy, 'tokenizer.json'), '{}');
+        fs.writeFileSync(path.join(legacy, 'onnx', 'model_quantized.onnx'), 'x');
+
+        const logs: string[] = [];
+        const installer = new SemanticModelInstaller(
+            path.join(storageDir, 'cache'),
+            () => ({
+                mirrorHost: 'https://hf-mirror.com',
+                fallbackBaseUrl: 'https://github.com/x/y/releases/download/t',
+            }),
+            {
+                info: (message: string) => logs.push(message),
+                warn: (message: string) => logs.push(message),
+                error: (message: string) => logs.push(message),
+            },
+        );
+
+        const installed = await installer.ensureModel();
+        assert.strictEqual(installed.folder, legacy);
+        assert.strictEqual(installed.source, 'cache');
+        assert.strictEqual(installed.downloaded, false);
+        assert.ok(logs.some(line => /Reusing a model/.test(line)), logs.join('\n'));
+        // The configured mirror and fallback are reported so a bug report shows them.
+        assert.ok(logs.some(line => /mirror: https:\/\/hf-mirror\.com/.test(line)), logs.join('\n'));
+        assert.ok(logs.some(line => /fallback: https:\/\/github\.com/.test(line)), logs.join('\n'));
     });
 });

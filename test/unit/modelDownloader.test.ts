@@ -13,6 +13,7 @@ import {
     downloadModelFiles,
     encodeRelativePath,
     normalizeBaseUrl,
+    resolveProxy,
     shouldBypassProxy,
 } from '../../src/search/modelDownloader';
 
@@ -61,6 +62,15 @@ async function startServer(routes: Record<string, Route>): Promise<TestServer> {
 }
 
 const PROXY_VARS = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy'] as const;
+
+/** Puts an environment variable back exactly as it was (`undefined` = delete it). */
+function restoreEnv(key: string, value: string | undefined): void {
+    if (value === undefined) {
+        delete process.env[key];
+    } else {
+        process.env[key] = value;
+    }
+}
 
 suite('modelDownloader.downloadModelFiles', () => {
     const savedEnv: Record<string, string | undefined> = {};
@@ -330,6 +340,185 @@ suite('modelDownloader.downloadModelFiles', () => {
         const result = await downloadModelFiles({ baseUrls: [], files: [], destDir });
         assert.deepStrictEqual(result.files, []);
     });
+
+    test('maps a nested onnx/ file onto the flat release asset name', async () => {
+        // GitHub releases are flat: the workflow publishes `onnx/model_quantized.onnx`
+        // as `model_quantized.onnx` and records the rename in the manifest.
+        const onnx = Buffer.alloc(1024 * 1024 + 8, 5);
+        const manifest = JSON.stringify({
+            version: 1,
+            files: {
+                'onnx/model_quantized.onnx': {
+                    asset: 'model_quantized.onnx',
+                    size: onnx.length,
+                    sha256: crypto.createHash('sha256').update(onnx).digest('hex'),
+                },
+            },
+        });
+        const server = await startServer({
+            '/manifest.json': { body: manifest },
+            '/model_quantized.onnx': { body: onnx },
+        });
+        try {
+            await downloadModelFiles({
+                baseUrls: [server.baseUrl],
+                files: ['onnx/model_quantized.onnx'],
+                destDir,
+                attempts: 1,
+            });
+            assert.ok(fs.existsSync(path.join(destDir, 'onnx', 'model_quantized.onnx')));
+            assert.ok(
+                !server.requests.includes('/onnx/model_quantized.onnx'),
+                'the flattened asset name must be requested, not the nested path',
+            );
+        } finally {
+            await server.close();
+        }
+    });
+
+    test('rejects a file whose sha256 does not match the manifest', async () => {
+        // Same byte count, different content — only the hash can catch this.
+        const body = '{"model_type":"bert"}';
+        const manifest = JSON.stringify({
+            version: 1,
+            files: { 'config.json': { size: Buffer.byteLength(body), sha256: 'deadbeef' } },
+        });
+        const server = await startServer({
+            '/manifest.json': { body: manifest },
+            '/config.json': { body },
+        });
+        try {
+            await assert.rejects(
+                () => downloadModelFiles({
+                    baseUrls: [server.baseUrl],
+                    files: ['config.json'],
+                    destDir,
+                    attempts: 1,
+                }),
+                /sha256|corrupt/i,
+            );
+            assert.ok(!fs.existsSync(path.join(destDir, 'config.json')));
+        } finally {
+            await server.close();
+        }
+    });
+
+    test('rejects an ONNX sized file that is an HTML page', async () => {
+        // A proxy that serves an error page for the weights: big enough to pass
+        // the size floor, but the first byte says it is markup, not protobuf.
+        const body = Buffer.concat([
+            Buffer.from('<html><body>blocked</body></html>'),
+            Buffer.alloc(1024 * 1024, 32),
+        ]);
+        const server = await startServer({ '/onnx/model.onnx': { body } });
+        try {
+            await assert.rejects(
+                () => downloadModelFiles({
+                    baseUrls: [server.baseUrl],
+                    files: ['onnx/model.onnx'],
+                    destDir,
+                    attempts: 1,
+                }),
+                /HTML page|corrupt/i,
+            );
+            assert.ok(!fs.existsSync(path.join(destDir, 'onnx', 'model.onnx')));
+        } finally {
+            await server.close();
+        }
+    });
+
+    test('treats an unparseable manifest as absent', async () => {
+        const server = await startServer({
+            '/manifest.json': { body: '{not json' },
+            '/config.json': { body: '{"model_type":"bert"}' },
+        });
+        try {
+            const result = await downloadModelFiles({
+                baseUrls: [server.baseUrl],
+                files: ['config.json'],
+                destDir,
+                attempts: 1,
+            });
+            assert.strictEqual(result.baseUrl, server.baseUrl);
+            assert.ok(fs.existsSync(path.join(destDir, 'config.json')));
+        } finally {
+            await server.close();
+        }
+    });
+
+    test('treats a manifest without a files map as absent', async () => {
+        const server = await startServer({
+            '/manifest.json': { body: '{"version":1}' },
+            '/config.json': { body: '{"model_type":"bert"}' },
+        });
+        try {
+            await downloadModelFiles({
+                baseUrls: [server.baseUrl],
+                files: ['config.json'],
+                destDir,
+                attempts: 1,
+            });
+            assert.ok(fs.existsSync(path.join(destDir, 'config.json')));
+        } finally {
+            await server.close();
+        }
+    });
+
+    test('skips blank sources instead of treating them as a failure', async () => {
+        const server = await startServer({ '/config.json': { body: '{}' } });
+        try {
+            const result = await downloadModelFiles({
+                baseUrls: ['   ', '', server.baseUrl],
+                files: ['config.json'],
+                destDir,
+                attempts: 1,
+            });
+            assert.strictEqual(result.baseUrl, server.baseUrl);
+        } finally {
+            await server.close();
+        }
+    });
+
+    test('streams progress and diagnostics while falling back to a second source', async () => {
+        const partial = await startServer({ '/config.json': { body: '{"model_type":"bert"}' } });
+        const full = await startServer({
+            '/config.json': { body: '{"model_type":"bert"}' },
+            '/tokenizer.json': { body: '{"version":"1.0"}' },
+        });
+        const progress: string[] = [];
+        const log: string[] = [];
+        try {
+            const result = await downloadModelFiles({
+                baseUrls: [partial.baseUrl, full.baseUrl],
+                files: ['config.json', 'tokenizer.json'],
+                destDir,
+                attempts: 1,
+                onProgress: message => progress.push(message),
+                onLog: message => log.push(message),
+            });
+            assert.strictEqual(result.baseUrl, full.baseUrl);
+            assert.ok(
+                log.some(line => /1 file\(s\) already on disk/.test(line)),
+                `expected a partial-source note, got:\n${log.join('\n')}`,
+            );
+            assert.ok(
+                log.some(line => /No manifest\.json/.test(line)),
+                `expected a manifest note, got:\n${log.join('\n')}`,
+            );
+            assert.ok(
+                log.some(line => /✗ .* failed:/.test(line)),
+                `expected the failed source to be logged, got:\n${log.join('\n')}`,
+            );
+            assert.ok(
+                progress.some(line => /Downloading tokenizer\.json \(1\/1\): 100%/.test(line)),
+                `expected byte progress, got:\n${progress.join('\n')}`,
+            );
+            assert.ok(progress.some(line => /Source unavailable/.test(line)));
+        } finally {
+            await partial.close();
+            await full.close();
+        }
+    });
 });
 
 suite('modelDownloader helpers', () => {
@@ -337,6 +526,8 @@ suite('modelDownloader helpers', () => {
         assert.strictEqual(normalizeBaseUrl('https://x/y'), 'https://x/y/');
         assert.strictEqual(normalizeBaseUrl('https://x/y/'), 'https://x/y/');
         assert.strictEqual(normalizeBaseUrl('  '), '');
+        // A caller may hand over an unset setting rather than an empty string.
+        assert.strictEqual(normalizeBaseUrl(undefined as unknown as string), '');
     });
 
     test('encodeRelativePath keeps separators but encodes segments', () => {
@@ -360,5 +551,92 @@ suite('modelDownloader helpers', () => {
                 process.env['NO_PROXY'] = saved;
             }
         }
+    });
+
+    test('shouldBypassProxy reads no_proxy too and ignores blank input', () => {
+        const savedUpper = process.env['NO_PROXY'];
+        const savedLower = process.env['no_proxy'];
+        try {
+            // Nothing configured at all, and no hostname to compare.
+            delete process.env['NO_PROXY'];
+            delete process.env['no_proxy'];
+            assert.strictEqual(shouldBypassProxy('huggingface.co'), false);
+            assert.strictEqual(shouldBypassProxy(''), false);
+
+            // Lowercase spelling is honoured and matches subdomains.
+            process.env['no_proxy'] = 'internal.example';
+            assert.strictEqual(shouldBypassProxy('internal.example'), true);
+            assert.strictEqual(shouldBypassProxy('git.internal.example'), true);
+            assert.strictEqual(shouldBypassProxy('notinternal.example'), false);
+        } finally {
+            restoreEnv('NO_PROXY', savedUpper);
+            restoreEnv('no_proxy', savedLower);
+        }
+    });
+});
+
+suite('modelDownloader.resolveProxy', () => {
+    const ENV_KEYS = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'NO_PROXY', 'no_proxy'] as const;
+    const saved: Record<string, string | undefined> = {};
+
+    setup(() => {
+        for (const key of ENV_KEYS) {
+            saved[key] = process.env[key];
+            delete process.env[key];
+        }
+    });
+
+    teardown(() => {
+        for (const key of ENV_KEYS) {
+            restoreEnv(key, saved[key]);
+        }
+    });
+
+    test('returns undefined when nothing is configured', () => {
+        assert.strictEqual(resolveProxy(undefined), undefined);
+        assert.strictEqual(resolveProxy('   '), undefined);
+    });
+
+    test('adds a scheme to a bare host:port value', () => {
+        const proxy = resolveProxy('proxy.corp:8080');
+        assert.strictEqual(proxy?.protocol, 'http:');
+        assert.strictEqual(proxy?.hostname, 'proxy.corp');
+        assert.strictEqual(proxy?.port, '8080');
+    });
+
+    test('keeps an explicit scheme', () => {
+        const proxy = resolveProxy('https://proxy.corp:8443');
+        assert.strictEqual(proxy?.protocol, 'https:');
+        assert.strictEqual(proxy?.hostname, 'proxy.corp');
+    });
+
+    test('falls back to the proxy environment variables in order', () => {
+        process.env['http_proxy'] = 'http://lower-http.corp:81';
+        assert.strictEqual(resolveProxy(undefined)?.hostname, 'lower-http.corp');
+        process.env['HTTP_PROXY'] = 'http://upper-http.corp:82';
+        assert.strictEqual(resolveProxy(undefined)?.hostname, 'upper-http.corp');
+        process.env['https_proxy'] = 'http://lower-https.corp:83';
+        assert.strictEqual(resolveProxy(undefined)?.hostname, 'lower-https.corp');
+        process.env['HTTPS_PROXY'] = 'http://upper-https.corp:84';
+        assert.strictEqual(resolveProxy(undefined)?.hostname, 'upper-https.corp');
+    });
+
+    test('an explicit proxy wins over the environment', () => {
+        process.env['HTTPS_PROXY'] = 'http://env.corp:8080';
+        assert.strictEqual(resolveProxy('http://explicit.corp:3128')?.hostname, 'explicit.corp');
+    });
+
+    test('NO_PROXY bypasses the proxy for matching targets', () => {
+        process.env['HTTPS_PROXY'] = 'http://env.corp:8080';
+        process.env['NO_PROXY'] = '.huggingface.co';
+        assert.strictEqual(resolveProxy(undefined, 'https://huggingface.co/x'), undefined);
+        assert.strictEqual(resolveProxy(undefined, 'https://example.com/x')?.hostname, 'env.corp');
+    });
+
+    test('an unusable proxy value is ignored instead of thrown', () => {
+        // Unparseable (unbalanced IPv6 bracket) and host-less values both fall
+        // back to "no proxy" rather than breaking the download.
+        assert.strictEqual(resolveProxy('http://[::1'), undefined);
+        assert.strictEqual(resolveProxy('file:///tmp/proxy.sock'), undefined);
     });
 });
