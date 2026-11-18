@@ -114,10 +114,10 @@ Eight panels live under the Chat Wizard Activity Bar icon:
 ### Watch Agent Logs Panels
 
 The **Commands** panel is the home of the _watch-logs_ subsystem (Phase 2/3 of
-`docs/work-plan-watch-logs.md`). It contains three collapsible sections — **Executed
-Commands**, **Unified Timeline** and **Diff Explorer** — instead of three separate
-sidebar views; all three start collapsed so the panel opens compact. AI models do not
-run commands themselves — the *host tools* execute
+`docs/work-plan-watch-logs.md`). It contains four collapsible sections — **Terminal
+Commands**, **LLM Tool Calls**, **Unified Timeline** and **Diff Explorer** — instead of
+separate sidebar views; all of them start collapsed so the panel opens compact. AI models
+do not run commands themselves — the *host tools* execute
 them, and ChatWizard replays the agent-execution trail each tool writes to disk:
 
 | Tool | Source file | What is captured |
@@ -159,23 +159,46 @@ replacement text only (additions-only patches), while Cline and Aider patches ca
 > Workspace` changes immediately.
 
 
-- **Executed Commands** lists every command, newest first, grouped per session, with exit
-  badges, copy-to-clipboard, open-session and **Run in Terminal** actions.
+- **Terminal Commands** lists every shell / git / build / test command, newest first,
+  grouped per session, with exit badges, copy-to-clipboard, open-session and
+  **Run in Terminal** actions. This section holds `command` events only.
+- **LLM Tool Calls** is the counterpart for structured tool invocations — reading a file
+  (`view` / `read_file`), searching the codebase, asking a question, and so on. Rows are
+  self-describing: the label is `toolName [identifying argument]`
+  (`view [src/extension.ts]`, `powershell [npm test]`), so a list of identical tool names
+  is actually readable. The section shares the filter bar, the workspace scope and the
+  per-session grouping of the other sections.
 - Clicking any row opens **one shared details window** — subsequent clicks replace its
   contents instead of opening another tab, so browsing a long log never leaves you lost
-  among a dozen webviews. Command rows show a **▶ Run in Terminal** button directly under
-  the command text (it re-runs the command in a fresh VS Code terminal, using the captured
-  working directory when it still exists).
+  among a dozen webviews. Every event starts with a plain-English **Description** of what
+  the command / tool does (`Runs a Git command: git status`,
+  `Reads a file from the workspace: src/extension.ts`), followed by **Input** and
+  **Output** sections when the event has them: commands show their text / working
+  directory / shell as input and their exit code plus captured stdout/stderr as output,
+  tool calls show their JSON arguments as input and the captured result as output.
+  Command rows also show a **▶ Run in Terminal** button directly under the command text
+  (it re-runs the command in a fresh VS Code terminal, using the captured working
+  directory when it still exists).
 - **Unified Timeline** mixes all six event kinds (commands, file operations, diffs, tool
   calls, errors, planner steps). Use the filter icon (or
   `Chat Wizard: Filter Unified Timeline…`) to focus on failures, diffs, or commands only.
-- **Diff Explorer** groups changes by workspace → file. Double-click a change (or use
+  Tool-call rows carry the same `toolName [target]` label as the LLM Tool Calls section.
+- **Diff Explorer** lists every changed file **alphabetically** — each file expands into its
+  change rows **newest first**, so you keep the edit timeline of that file (`create`,
+  `diff`, `move`, `rename`, …), interleaved as they actually happened. Double-click a change
+  (or use
   `Open Visual Diff`) to see it in VS Code's native diff editor — side-by-side or inline,
   with coloured rows, word-level highlighting and "collapse unchanged regions", exactly like
   a GUI Git client. `Open Patch` renders the raw patch text in a disposable markdown editor;
   `Copy Change` copies the diff text; `Open File` reveals the affected file when it still
   exists. The change rows' hover tooltip shows only a short patch preview.
-- **One filter bar for all three sections** (Phase 4). The filter button in the view title
+- **One icon family per section.** Terminal Commands rows use `run` (exit code unknown) /
+  `terminal` (exit 0) / `error` (failed), LLM Tool Calls rows use `tools`, Unified Timeline
+  rows use `history` with the outcome as colour (red = failed command / error, yellow =
+  warning) and Diff Explorer rows use one icon per operation
+  (`diff`, `file-add`, `trash`, `arrow-swap`, `move`, `new-folder`) — so a row names its
+  section at a glance, even when the tree is deep.
+- **One filter bar for all four sections** (Phase 4). The filter button in the view title
   bar (or `Chat Wizard: Filter Agent Logs…`) opens a menu with the current state of every
   facet:
   - **Search Agent Logs…** (`chatwizard.logs.search`) — case-insensitive free text; all words
@@ -184,7 +207,7 @@ replacement text only (additions-only patches), while Cline and Aider patches ca
     stack traces, planner descriptions, plus the agent name and workspace path.
   - **Filter by Agent…** (`chatwizard.logs.filterByAgent`) — restrict to one AI tool.
   - **Show Failures Only** (`chatwizard.logs.toggleFailures`) — failed commands (non-zero exit
-    code) and non-warning `error` events.
+    code), failed tool calls (`success: false`) and non-warning `error` events.
   - **Filter by Event Kind…** (`chatwizard.logs.timeline.filter`) — the Unified Timeline's
     kind filter, which now composes with the facets above.
   - **Clear All Filters** (`chatwizard.logs.clearFilters`) — reset everything.
@@ -1241,7 +1264,8 @@ Leave a path override empty to use the platform default location.
 
 ### Watch Logs
 
-The Executed Commands / Unified Timeline / Diff Explorer sections of the **Commands** panel
+The Terminal Commands / LLM Tool Calls / Unified Timeline / Diff Explorer sections of the
+**Commands** panel
 re-use the same source toggles and path overrides as the session index
 (`chatwizard.indexCopilot` + `chatwizard.copilotStoragePath` gate the Copilot
 agent-execution log stream). Events are stored in `chatwizard-log-events.db` next to the
@@ -1391,7 +1415,8 @@ corresponding `chatwizard.index*` toggle.
 | `chatwizard.deleteFolder` | Chat Wizard: Delete Folder |
 | `chatwizard.setSessionStatus` | Chat Wizard: Set Session Status… |
 | `chatwizard.searchAnnotations` | Chat Wizard: Search Annotations |
-| `chatwizard.showExecutedCommands` | Chat Wizard: Show Executed Commands |
+| `chatwizard.showExecutedCommands` | Chat Wizard: Show Terminal Commands |
+| `chatwizard.showToolCalls` | Chat Wizard: Show LLM Tool Calls |
 | `chatwizard.showUnifiedTimeline` | Chat Wizard: Show Unified Timeline |
 | `chatwizard.showDiffExplorer` | Chat Wizard: Show Diff Explorer |
 | `chatwizard.logs.filterMenu` | Chat Wizard: Filter Agent Logs… |

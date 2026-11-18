@@ -18,7 +18,10 @@ import {
  * A file-centric, cross-agent view of every code change the watch-logs store
  * captured: `diff` events (inline edit groups, apply_patch payloads) plus the
  * file operations that never produce a paired diff (create/delete/rename/
- * move/mkdir). Grouped **per changed file**, newest first:
+ * move/mkdir). Grouped **per changed file**, the changed files listed
+ * **alphabetically** (`compareDiffFilePaths`) and each file expanding into its
+ * change rows **newest first**, so the section reads like a file index whose
+ * entries keep the timeline of the edits made to them:
  *
  *   - open the visual diff — the change in VS Code's native diff editor
  *     (side-by-side / inline, `src/logs/diffViewer.ts`)
@@ -88,6 +91,26 @@ export function diffEventLabel(event: LogEvent): string {
     return event.type === 'diff'
         ? 'diff'
         : (event as FileOperationEvent).operationType;
+}
+
+/**
+ * VS Code codicon for a change row — one icon per operation, so the Diff
+ * Explorer's leaves never wear the generic `file` (or the Unified Timeline's
+ * `history`) icon of another section.
+ */
+export function diffEventIconId(event: LogEvent): string {
+    if (event.type === 'diff') { return 'diff'; }
+    switch ((event as FileOperationEvent).operationType) {
+        case 'create': return 'file-add';
+        case 'delete': return 'trash';
+        case 'rename': return 'arrow-swap';
+        case 'move': return 'move';
+        case 'mkdir': return 'new-folder';
+        // `patch` operations are filtered out (isDiffCandidate), but a store
+        // written by an older adapter may still carry one.
+        case 'patch': return 'diff';
+        default: return 'file';
+    }
 }
 
 /**
@@ -161,6 +184,24 @@ export function pathToDisplayInfo(filePath: string): { basename: string; dirname
     }
     return { basename: normalized.slice(idx + 1), dirname: normalized.slice(0, idx) };
 }
+
+/**
+ * Case-insensitive collation with a case-sensitive tiebreaker.
+ *
+ * `sensitivity: 'base'` alone reports `a.ts` and `A.ts` as equal, which would
+ * make the sort order depend on the input order; the second comparison makes
+ * the order total (and therefore stable across refreshes).
+ */
+function collate(a: string, b: string): number {
+    return a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true })
+        || a.localeCompare(b);
+}
+
+/** Alphabetical comparison of two changed-file paths (case-insensitive). */
+export function compareDiffFilePaths(a: string, b: string): number {
+    return collate(a, b);
+}
+
 // ---------------------------------------------------------------------------
 // Tree items
 // ---------------------------------------------------------------------------
@@ -192,11 +233,6 @@ export class DiffFileGroupItem extends vscode.TreeItem {
         this.iconPath = new vscode.ThemeIcon('file-code');
         this.tooltip = filePath;
     }
-
-    /** Sorting key: the newest event timestamp of this file's changes. */
-    get newestTimestamp(): string {
-        return this.events[0]?.timestamp ?? '';
-    }
 }
 
 /** A single change row. */
@@ -215,7 +251,7 @@ export class DiffEventLeafItem extends vscode.TreeItem {
         this.command = event.type === 'diff'
             ? { command: 'chatwizard.logs.diff.viewDiff', title: 'Open Visual Diff' }
             : { command: 'chatwizard.logs.diff.showDetails', title: 'Show Change Details' };
-        this.iconPath = new vscode.ThemeIcon(event.type === 'diff' ? 'diff' : 'file');
+        this.iconPath = new vscode.ThemeIcon(diffEventIconId(event));
     }
 }
 // ---------------------------------------------------------------------------
@@ -226,7 +262,7 @@ export class DiffExplorerProvider implements vscode.TreeDataProvider<DiffExplore
     private readonly _onDidChangeTreeData = new vscode.EventEmitter<DiffExplorerTreeNode | undefined | void>();
     readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
-    /** Changed files, newest first — the section's direct children. */
+    /** Changed files, alphabetically — the section's direct children. */
     private _fileGroups: DiffFileGroupItem[] = [];
     private _filters: LogViewFilters = emptyLogFilters();
     /** Phase 4: cache "filtered to nothing" so empty sections stop re-querying. */
@@ -349,12 +385,16 @@ export class DiffExplorerProvider implements vscode.TreeDataProvider<DiffExplore
 
         const fileGroups: DiffFileGroupItem[] = [];
         for (const [filePath, fileEvents] of byFile) {
+            // Change rows inside one file keep the edit timeline: newest
+            // first, so a file's history reads chronologically.
             fileEvents.sort((a, b) => (b.timestamp ?? '').localeCompare(a.timestamp ?? ''));
             fileGroups.push(new DiffFileGroupItem(filePath, fileEvents));
         }
 
-        // Newest change first across files.
-        fileGroups.sort((a, b) => b.newestTimestamp.localeCompare(a.newestTimestamp));
+        // The section's direct children are the changed files, listed
+        // alphabetically (case-insensitive, with a case-sensitive tiebreaker)
+        // so a file is found by name instead of by "when was it last touched".
+        fileGroups.sort((a, b) => compareDiffFilePaths(a.filePath, b.filePath));
         return fileGroups;
     }
 }

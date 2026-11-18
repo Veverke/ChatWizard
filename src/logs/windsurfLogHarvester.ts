@@ -44,7 +44,8 @@ export interface WindsurfHarvestResult {
 export class WindsurfLogHarvester {
     /**
      * Optional callback invoked after the event store changes — used to refresh
-     * the Executed Commands / Unified Timeline / Diff Explorer providers.
+     * the Terminal Commands / LLM Tool Calls / Unified Timeline / Diff Explorer
+     * providers.
      */
     public onEventsChanged?: () => void;
 

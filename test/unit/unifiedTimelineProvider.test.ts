@@ -11,16 +11,18 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import * as vscode from 'vscode';
 import { LogService } from '../../src/logs/logService';
 import { createDefaultLogSourceRegistry } from '../../src/logs/logSourceRegistry';
 import {
     UnifiedTimelineProvider,
     TimelineEventItem,
     TimelineGroupItem,
+    TIMELINE_ROW_ICON,
     formatEventTime,
     eventPrimaryLabel,
     eventDescription,
-    eventIconId,
+    timelineRowColor,
     eventTooltip,
 } from '../../src/logs/unifiedTimelineProvider';
 import { LogEvent } from '../../src/logs/types';
@@ -66,20 +68,45 @@ suite('UnifiedTimelineProvider — display helpers', () => {
             eventPrimaryLabel(makeEvent({ id: 't1', timestamp: '2026-01-01T10:00:00.000Z', type: 'toolCall', toolName: 'run_in_terminal' })),
             'run_in_terminal'
         );
+        // Tool calls carry the argument that identifies them, so a long list of
+        // identical tool names stays readable.
+        assert.strictEqual(
+            eventPrimaryLabel(makeEvent({
+                id: 't2', timestamp: '2026-01-01T10:00:00.000Z', type: 'toolCall',
+                toolName: 'view', arguments: { path: 'src/extension.ts' },
+            })),
+            'view [src/extension.ts]'
+        );
+        assert.strictEqual(
+            eventPrimaryLabel(makeEvent({
+                id: 't3', timestamp: '2026-01-01T10:00:00.000Z', type: 'toolCall',
+                toolName: 'powershell', arguments: { command: 'npm test -- --watch' },
+            })),
+            'powershell [npm test -- --watch]'
+        );
         assert.strictEqual(
             eventPrimaryLabel(makeEvent({ id: 'e1', timestamp: '2026-01-01T10:00:00.000Z', type: 'error', message: 'command failed' })),
             'command failed'
         );
     });
 
-    test('eventIconId reflects severity signals', () => {
-        assert.strictEqual(eventIconId(makeEvent({ id: 'c1', timestamp: '2026-01-01T10:00:00.000Z', exitCode: 0 })), 'terminal');
-        assert.strictEqual(eventIconId(makeEvent({ id: 'c2', timestamp: '2026-01-01T10:00:00.000Z', exitCode: 1 })), 'error');
-        assert.strictEqual(eventIconId(makeEvent({ id: 'd1', timestamp: '2026-01-01T10:00:00.000Z', type: 'diff', filePath: '/x', diffText: '' })), 'diff');
+    test('every timeline row wears the section icon; outcome rides on colour', () => {
+        const passing = new TimelineEventItem(makeEvent({ id: 'c1', timestamp: '2026-01-01T10:00:00.000Z', exitCode: 0 }));
+        assert.strictEqual((passing.iconPath as vscode.ThemeIcon).id, TIMELINE_ROW_ICON);
+        assert.strictEqual((passing.iconPath as vscode.ThemeIcon).color, undefined);
+
+        const failing = new TimelineEventItem(makeEvent({ id: 'c2', timestamp: '2026-01-01T10:00:00.000Z', exitCode: 1 }));
+        assert.strictEqual((failing.iconPath as vscode.ThemeIcon).id, TIMELINE_ROW_ICON);
         assert.strictEqual(
-            eventIconId(makeEvent({ id: 'w1', timestamp: '2026-01-01T10:00:00.000Z', type: 'error', message: 'warn', severity: 'warning' })),
-            'warning'
+            ((failing.iconPath as vscode.ThemeIcon).color as vscode.ThemeColor).id,
+            'problemsErrorIcon.foreground'
         );
+
+        // The kind no longer picks the icon: a diff row looks like a command row.
+        const diffRow = new TimelineEventItem(makeEvent({
+            id: 'd1', timestamp: '2026-01-01T10:00:00.000Z', type: 'diff', filePath: '/x', diffText: '',
+        }));
+        assert.strictEqual((diffRow.iconPath as vscode.ThemeIcon).id, TIMELINE_ROW_ICON);
     });
 
     test('eventDescription includes kind + relevant metadata', () => {
@@ -290,7 +317,7 @@ suite('UnifiedTimelineProvider — tooltips, tree plumbing and title fallbacks',
                 id: 't1', timestamp: '2026-01-01T10:00:00.000Z', type: 'toolCall',
                 toolName: 'read_file', arguments: { path: '/a.ts' },
             })),
-            'read_file\n{\n  "path": "/a.ts"\n}'
+            'Reads a file from the workspace: /a.ts\n\n{\n  "path": "/a.ts"\n}'
         );
         assert.strictEqual(
             eventTooltip(makeEvent({
@@ -333,33 +360,33 @@ suite('UnifiedTimelineProvider — tooltips, tree plumbing and title fallbacks',
         assert.match(desc({ type: 'plannerStep', description: 'x' }), /^Planner Step/);
     });
 
-    test('eventIconId maps exit codes and severities to codicons', () => {
-        assert.strictEqual(eventIconId(makeEvent({ id: 'a', timestamp: '2026-01-01T10:00:00.000Z' })), 'run');
-        assert.strictEqual(eventIconId(makeEvent({ id: 'b', timestamp: '2026-01-01T10:00:00.000Z', exitCode: 0 })), 'terminal');
-        assert.strictEqual(eventIconId(makeEvent({ id: 'c', timestamp: '2026-01-01T10:00:00.000Z', exitCode: 1 })), 'error');
+    test('timelineRowColor colours failed commands, errors and warnings only', () => {
         assert.strictEqual(
-            eventIconId(makeEvent({ id: 'd', timestamp: '2026-01-01T10:00:00.000Z', type: 'error', message: 'x', severity: 'warning' })),
-            'warning'
+            timelineRowColor(makeEvent({ id: 'a', timestamp: '2026-01-01T10:00:00.000Z' })),
+            undefined,
+            'unknown exit stays uncoloured'
         );
         assert.strictEqual(
-            eventIconId(makeEvent({ id: 'e', timestamp: '2026-01-01T10:00:00.000Z', type: 'error', message: 'x' })),
-            'error'
+            timelineRowColor(makeEvent({ id: 'b', timestamp: '2026-01-01T10:00:00.000Z', exitCode: 0 })),
+            undefined,
+            'a clean exit stays uncoloured'
         );
         assert.strictEqual(
-            eventIconId(makeEvent({ id: 'f', timestamp: '2026-01-01T10:00:00.000Z', type: 'fileOperation', operationType: 'create', filePath: '/a' })),
-            'file'
+            (timelineRowColor(makeEvent({ id: 'c', timestamp: '2026-01-01T10:00:00.000Z', exitCode: 1 })) as vscode.ThemeColor).id,
+            'problemsErrorIcon.foreground'
         );
         assert.strictEqual(
-            eventIconId(makeEvent({ id: 'g', timestamp: '2026-01-01T10:00:00.000Z', type: 'diff', filePath: '/a', diffText: '' })),
-            'diff'
+            (timelineRowColor(makeEvent({ id: 'd', timestamp: '2026-01-01T10:00:00.000Z', type: 'error', message: 'x', severity: 'warning' })) as vscode.ThemeColor).id,
+            'problemsWarningIcon.foreground'
         );
         assert.strictEqual(
-            eventIconId(makeEvent({ id: 'h', timestamp: '2026-01-01T10:00:00.000Z', type: 'toolCall', toolName: 't' })),
-            'tools'
+            (timelineRowColor(makeEvent({ id: 'e', timestamp: '2026-01-01T10:00:00.000Z', type: 'error', message: 'x' })) as vscode.ThemeColor).id,
+            'problemsErrorIcon.foreground'
         );
         assert.strictEqual(
-            eventIconId(makeEvent({ id: 'i', timestamp: '2026-01-01T10:00:00.000Z', type: 'plannerStep', description: 'd' })),
-            'list-unordered'
+            timelineRowColor(makeEvent({ id: 'f', timestamp: '2026-01-01T10:00:00.000Z', type: 'fileOperation', operationType: 'create', filePath: '/a' })),
+            undefined,
+            'file operations carry no severity'
         );
     });
 });
@@ -482,7 +509,7 @@ suite('UnifiedTimelineProvider — tree plumbing and title fallbacks', () => {
             eventTooltip(makeEvent({
                 id: 't1', timestamp: '2026-01-01T10:00:00.000Z', type: 'toolCall', toolName: 'read_file',
             })),
-            'read_file'
+            'Reads a file from the workspace'
         );
         assert.strictEqual(
             eventTooltip(makeEvent({
@@ -532,14 +559,19 @@ suite('UnifiedTimelineProvider — tree plumbing and title fallbacks', () => {
     test('leaves mark failing commands with an error-coloured icon', () => {
         const failing = new TimelineEventItem(makeEvent({ id: 'f', timestamp: '2026-01-01T10:00:00.000Z', exitCode: 1 }));
         assert.ok(failing.iconPath, 'nonzero exit gets a themed colour');
+        assert.strictEqual(
+            ((failing.iconPath as vscode.ThemeIcon).color as vscode.ThemeColor).id,
+            'problemsErrorIcon.foreground'
+        );
 
         const passing = new TimelineEventItem(makeEvent({ id: 'p', timestamp: '2026-01-01T10:00:00.000Z', exitCode: 0 }));
-        assert.ok(passing.iconPath);
+        assert.strictEqual((passing.iconPath as vscode.ThemeIcon).id, TIMELINE_ROW_ICON);
+        assert.strictEqual((passing.iconPath as vscode.ThemeIcon).color, undefined);
 
         const notACommand = new TimelineEventItem(makeEvent({
             id: 'n', timestamp: '2026-01-01T10:00:00.000Z', type: 'toolCall', toolName: 'read_file',
         }));
-        assert.ok(notACommand.iconPath);
+        assert.strictEqual((notACommand.iconPath as vscode.ThemeIcon).id, TIMELINE_ROW_ICON);
     });
 });
 

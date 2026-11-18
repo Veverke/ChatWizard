@@ -1479,6 +1479,38 @@ Deliverable: cross-agent view for commands + diffs.
 >   are persisted, so the first render after a reload is already scoped. Because
 >   the Diff Explorer is scoped to one workspace, its rows are the changed
 >   **files** directly — the former per-workspace binder level was removed.
+> **Implementation note (2026-11)** — Commands view: commands vs. tool calls, and
+> self-describing rows (follow-up to the UX pass above):
+> - ✅ **"Executed Commands" only ever listed `command` events** — the shell /
+>   git / build / test invocations. Everything an agent did through a structured
+>   tool (`view`, `grep`, `apply_patch`, …) is a `ToolCallEvent`, so tool-heavy
+>   agents (GitHub Copilot's agent host in particular) looked empty there while
+>   the Unified Timeline lit up with rows. The section is now labelled
+>   **Terminal Commands**, and a new **LLM Tool Calls** section
+>   (`src/logs/toolCallsProvider.ts`) lists `toolCall` events with the same
+>   per-session grouping, workspace scope and shared filters (search / agent /
+>   failures-only). `failuresOnly` now also keeps tool calls with
+>   `success: false`. The Commands view order is: **Terminal Commands → LLM Tool
+>   Calls → Unified Timeline → Diff Explorer**.
+> - ✅ **Rows are self-describing** — `src/logs/logEventSummary.ts` derives the
+>   identifying argument of a tool call from the arguments the adapters stored
+>   (file path, shell command, search query, URL, nested MCP `input`). Tree
+>   labels render it in square brackets (`view [src/extension.ts]`,
+>   `powershell [npm test -- --watch]`, trimmed with the file name preserved),
+>   so a list of N identical tool names is readable. The Unified Timeline uses
+>   the same label.
+> - ✅ **The detail webview explains the event** — every row now opens with a
+>   **Description** section (`Runs a Git command: git status`,
+>   `Reads a file from the workspace: src/extension.ts`), followed by
+>   **Input** / **Output** sections where they apply: commands show their text,
+>   working directory and shell as input, and exit code plus captured
+>   stdout/stderr as output; tool calls show their JSON arguments as input and
+>   the captured result (or `not captured in the agent log`) as output. The
+>   command catalog recognises npm / git / dotnet / pytest / docker / … families;
+>   known agent tools get a catalogue sentence, unknown tools a generic one.
+>
+
+
 >
 
 - Add:

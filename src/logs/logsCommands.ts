@@ -3,14 +3,14 @@
  *
  * Phase 2/3 — Commands for the watch-logs **Commands** view.
  *
- * The three former panels ("Executed Commands", "Unified Timeline", "Diff
- * Explorer") are sections of one contributed tree view
- * (`chatwizardCommands`, see `commandsViewProvider.ts`). All commands are
- * registered through the extension `context` so they follow the same disposal
- * pattern as every other ChatWizard command.
+ * The watch-logs panels are sections of one contributed tree view
+ * (`chatwizardCommands`, see `commandsViewProvider.ts`): **Terminal Commands**,
+ * **LLM Tool Calls**, **Unified Timeline** and **Diff Explorer**. All commands
+ * are registered through the extension `context` so they follow the same
+ * disposal pattern as every other ChatWizard command.
  *
- * The three "Show …" commands now focus that single view and reveal the
- * requested section, so they no longer need a view of their own.
+ * The per-section "Show …" commands focus that single view and reveal the
+ * requested section, so they do not need a view of their own.
  *
  * Phase 4 adds the view-wide filters (free-text search, agent, failures-only),
  * the single **Filter Agent Logs** menu that fronts them, and the per-agent
@@ -19,6 +19,7 @@
 
 import * as vscode from 'vscode';
 import { ExecutedCommandsProvider, ExecCommandsLeafItem } from './executedCommandsProvider';
+import { ToolCallsProvider, ToolCallLeafItem } from './toolCallsProvider';
 import {
     UnifiedTimelineProvider,
     TimelineEventItem,
@@ -28,6 +29,7 @@ import { DiffExplorerProvider, DiffEventLeafItem, renderPatchMarkdown } from './
 import { openVisualDiff } from './diffViewer';
 import { showEventWebview } from './logEventWebview';
 import { runCommandInTerminal } from './runInTerminal';
+import { toolCallInputText, toolCallLabel } from './logEventSummary';
 import {
     CommandsSubViewId,
     CommandsTreeNode,
@@ -75,7 +77,8 @@ export function registerLogCommands(
     diffExplorerProvider?: DiffExplorerProvider,
     commandsViewProvider?: CommandsViewProvider,
     treeViews?: LogTreeViews,
-    logService?: LogService
+    logService?: LogService,
+    toolCallsProvider?: ToolCallsProvider
 ): void {
     const push = (command: string, handler: (...args: any[]) => unknown): void => {
         context.subscriptions.push(vscode.commands.registerCommand(command, handler));
@@ -93,10 +96,11 @@ export function registerLogCommands(
         if (commandsViewProvider) { return commandsViewProvider.getFilters(); }
         const timeline = timelineProvider?.getFilters();
         const commands = provider.getFilters();
+        const toolCalls = toolCallsProvider?.getFilters();
         return {
-            search: timeline?.search ?? commands.search,
-            tool: timeline?.tool ?? commands.tool,
-            failuresOnly: timeline?.failuresOnly ?? commands.failuresOnly,
+            search: timeline?.search ?? toolCalls?.search ?? commands.search,
+            tool: timeline?.tool ?? toolCalls?.tool ?? commands.tool,
+            failuresOnly: timeline?.failuresOnly ?? toolCalls?.failuresOnly ?? commands.failuresOnly,
             types: timeline?.types,
         };
     };
@@ -110,6 +114,7 @@ export function registerLogCommands(
         provider.setFilters(filters);
         timelineProvider?.setFilters(filters);
         diffExplorerProvider?.setFilters(filters);
+        toolCallsProvider?.setFilters(filters);
     };
 
     /** Short confirmation message describing the resulting filter state. */
@@ -220,7 +225,7 @@ export function registerLogCommands(
         writeFilters(next);
         vscode.window.showInformationMessage(
             next.failuresOnly
-                ? 'Showing failures only: failed commands (non-zero exit) and error events.'
+                ? 'Showing failures only: failed commands (non-zero exit), failed tool calls and error events.'
                 : 'Showing all agent log events.'
         );
     });
@@ -325,7 +330,9 @@ export function registerLogCommands(
         }
     });
 
-    // ── Section 1: Executed Commands ───────────────────────────────────────
+    // ── Section 1: Terminal Commands ───────────────────────────────────────
+    // Only `command` events (shell / git / build / test). LLM tool calls live
+    // in their own section below — that split is what makes the tree readable.
     push('chatwizard.showExecutedCommands', () => showSection('executedCommands'));
 
     push('chatwizard.execCommands.copy', (item?: ExecCommandsLeafItem) => {
@@ -371,7 +378,41 @@ export function registerLogCommands(
         return showEventWebview(event, context.subscriptions);
     });
 
-    // ── Section 2: Unified Timeline ────────────────────────────────────────
+    // ── Section 2: LLM Tool Calls ──────────────────────────────────────────
+    // `toolCall` events: read a file (view/read_file), search the codebase,
+    // run a shell command from the agent host, ask a question, … They are the
+    // bulk of what a modern agent does, so they get their own section instead
+    // of only appearing inside the Unified Timeline.
+    push('chatwizard.showToolCalls', () => showSection('toolCalls'));
+
+    push('chatwizard.logs.toolCalls.refresh', () => {
+        toolCallsProvider?.refresh();
+    });
+
+    push('chatwizard.logs.toolCalls.copy', (item?: ToolCallLeafItem) => {
+        if (!item) { return; }
+        const text = toolCallInputText(item.event) ?? toolCallLabel(item.event);
+        void vscode.env.clipboard.writeText(text);
+        vscode.window.showInformationMessage('Copied tool call to clipboard');
+    });
+
+    push('chatwizard.logs.toolCalls.openSession', (item?: ToolCallLeafItem) => {
+        if (!item) { return; }
+        openSessionById(item.event.sessionId);
+    });
+
+    push('chatwizard.logs.toolCalls.showDetails', (item?: unknown) => {
+        const target = item ?? selectedNode();
+        const event = eventOfCommandsNode(target);
+        if (!event || event.type !== 'toolCall') {
+            vscode.window.showInformationMessage('Select a tool call first, then run "Show Tool Call Details".');
+            return undefined;
+        }
+        logWatch.info('toolCalls.showDetails → %s', event.id);
+        return showEventWebview(event, context.subscriptions);
+    });
+
+    // ── Section 3: Unified Timeline ────────────────────────────────────────
     push('chatwizard.showUnifiedTimeline', () => showSection('timeline'));
 
     push('chatwizard.logs.timeline.refresh', () => {
@@ -427,7 +468,7 @@ export function registerLogCommands(
         return showEventWebview(event, context.subscriptions);
     });
 
-    // ── Section 3: Diff Explorer ───────────────────────────────────────────
+    // ── Section 4: Diff Explorer ───────────────────────────────────────────
     push('chatwizard.showDiffExplorer', () => showSection('diffs'));
 
     push('chatwizard.logs.diffs.refresh', () => {
@@ -494,6 +535,7 @@ export function registerLogCommands(
         provider.refresh();
         timelineProvider?.refresh();
         diffExplorerProvider?.refresh();
+        toolCallsProvider?.refresh();
     });
 
     push('chatwizard.logs.showSelectedDetails', async (node?: unknown) => {

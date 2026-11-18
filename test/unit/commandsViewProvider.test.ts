@@ -3,10 +3,10 @@
  *
  * UX pass — the single "Commands" sidebar view.
  *
- * The three watch-logs panels (Executed Commands / Unified Timeline / Diff
- * Explorer) are now sections of one tree view. These tests cover the section
- * rows, the delegated children/parents, the live counts and the node helpers
- * used by the commands. Providers are constructed against an in-memory
+ * The watch-logs panels (Terminal Commands / LLM Tool Calls / Unified Timeline
+ * / Diff Explorer) are now sections of one tree view. These tests cover the
+ * section rows, the delegated children/parents, the live counts and the node
+ * helpers used by the commands. Providers are constructed against an in-memory
  * `LogService`, so no VS Code host is required.
  */
 
@@ -18,6 +18,7 @@ import * as vscode from 'vscode';
 import { LogService } from '../../src/logs/logService';
 import { createDefaultLogSourceRegistry } from '../../src/logs/logSourceRegistry';
 import { ExecutedCommandsProvider, ExecCommandsGroupItem, ExecCommandsLeafItem } from '../../src/logs/executedCommandsProvider';
+import { ToolCallsProvider, ToolCallsGroupItem, ToolCallLeafItem } from '../../src/logs/toolCallsProvider';
 import { UnifiedTimelineProvider, TimelineGroupItem, TimelineEventItem } from '../../src/logs/unifiedTimelineProvider';
 import { DiffExplorerProvider, DiffEventLeafItem, DiffFileGroupItem } from '../../src/logs/diffExplorerProvider';
 import {
@@ -29,7 +30,7 @@ import {
     eventOfCommandsNode,
     subViewOfCommandsNode,
 } from '../../src/logs/commandsViewProvider';
-import { CommandEvent, LogEvent } from '../../src/logs/types';
+import { CommandEvent, LogEvent, ToolCallEvent } from '../../src/logs/types';
 
 function makeCommand(overrides: Partial<CommandEvent> & { id: string; timestamp: string }): CommandEvent {
     return {
@@ -40,6 +41,18 @@ function makeCommand(overrides: Partial<CommandEvent> & { id: string; timestamp:
         workspacePath: '/repo',
         ...overrides,
     } as CommandEvent;
+}
+
+function makeToolCall(overrides: Partial<ToolCallEvent> & { id: string; timestamp: string }): ToolCallEvent {
+    return {
+        type: 'toolCall',
+        tool: 'copilot',
+        toolName: 'view',
+        arguments: { path: 'src/extension.ts' },
+        sessionId: 'sess-a',
+        workspacePath: '/repo',
+        ...overrides,
+    } as ToolCallEvent;
 }
 
 function makeDiff(overrides: Partial<LogEvent> & { id: string; timestamp: string }): LogEvent {
@@ -65,22 +78,59 @@ function tmpDir(): string {
 
 suite('CommandsViewProvider — section helpers', () => {
     test('describes every section with singular/plural counts', () => {
-        const counts = { commands: 1, events: 2, changes: 3, files: 1 };
+        const counts = { commands: 1, toolCalls: 4, events: 2, changes: 3, files: 1 };
         assert.strictEqual(describeCommandsSection('executedCommands', counts), '1 command');
+        assert.strictEqual(describeCommandsSection('toolCalls', counts), '4 tool calls');
         assert.strictEqual(describeCommandsSection('timeline', counts), '2 events');
         assert.strictEqual(describeCommandsSection('diffs', counts), '3 changes · 1 file');
         assert.strictEqual(
-            describeCommandsSection('executedCommands', { commands: 0, events: 0, changes: 0, files: 0 }),
+            describeCommandsSection('toolCalls', { commands: 0, toolCalls: 0, events: 0, changes: 0, files: 0 }),
+            '0 tool calls'
+        );
+        assert.strictEqual(
+            describeCommandsSection('executedCommands', { commands: 0, toolCalls: 0, events: 0, changes: 0, files: 0 }),
             '0 commands'
         );
     });
 
     test('section definitions keep the documented order', () => {
         assert.deepStrictEqual(COMMANDS_SECTIONS.map((s) => s.label), [
-            'Executed Commands',
+            'Terminal Commands',
+            'LLM Tool Calls',
             'Unified Timeline',
             'Diff Explorer',
         ]);
+    });
+
+    test('every sub view owns a distinct row and leaf icon', () => {
+        const groupIcons = {
+            executedCommands: (new ExecCommandsGroupItem('s', 'S', []).iconPath as vscode.ThemeIcon).id,
+            toolCalls: (new ToolCallsGroupItem('s', 'S', []).iconPath as vscode.ThemeIcon).id,
+            timeline: (new TimelineGroupItem('s', 'S', []).iconPath as vscode.ThemeIcon).id,
+            diffs: (new DiffFileGroupItem('/repo/a.ts', []).iconPath as vscode.ThemeIcon).id,
+        };
+        assert.deepStrictEqual(groupIcons, {
+            executedCommands: 'terminal',
+            toolCalls: 'tools',
+            timeline: 'history',
+            diffs: 'file-code',
+        });
+        assert.strictEqual(
+            new Set(Object.values(groupIcons)).size,
+            4,
+            'the session / file rows of the four sections are visually distinct'
+        );
+
+        // Leaves are section-specific too: the Unified Timeline no longer
+        // borrows the terminal / tools / diff icons of the dedicated sections.
+        const leafIcons = [
+            (new ExecCommandsLeafItem(makeCommand({ id: 'c1', timestamp: 'T', exitCode: 0 })).iconPath as vscode.ThemeIcon).id,
+            (new ToolCallLeafItem(makeToolCall({ id: 't1', timestamp: 'T' })).iconPath as vscode.ThemeIcon).id,
+            (new TimelineEventItem(makeCommand({ id: 'c2', timestamp: 'T' })).iconPath as vscode.ThemeIcon).id,
+            (new DiffEventLeafItem(makeDiff({ id: 'd1', timestamp: 'T' })).iconPath as vscode.ThemeIcon).id,
+        ];
+        assert.deepStrictEqual(leafIcons, ['terminal', 'tools', 'history', 'diff']);
+        assert.strictEqual(new Set(leafIcons).size, 4, 'no two sections share a leaf icon');
     });
 });
 
@@ -94,6 +144,7 @@ suite('CommandsViewProvider — composite tree', () => {
         service = new LogService(dir, createDefaultLogSourceRegistry());
         provider = new CommandsViewProvider(
             new ExecutedCommandsProvider(service),
+            new ToolCallsProvider(service),
             new UnifiedTimelineProvider(service),
             new DiffExplorerProvider(service)
         );
@@ -105,20 +156,22 @@ suite('CommandsViewProvider — composite tree', () => {
         try { fs.rmSync(dir, { recursive: true }); } catch { /* ignore */ }
     });
 
-    test('roots are the three sections, in order', () => {
+    test('roots are the four sections, in order', () => {
         const roots = provider.getChildren() as CommandsSectionItem[];
-        assert.strictEqual(roots.length, 3);
+        assert.strictEqual(roots.length, 4);
         assert.deepStrictEqual(roots.map((r) => r.label), [
-            'Executed Commands',
+            'Terminal Commands',
+            'LLM Tool Calls',
             'Unified Timeline',
             'Diff Explorer',
         ]);
         assert.strictEqual(roots[0].subView, 'executedCommands');
-        assert.strictEqual(roots[1].subView, 'timeline');
-        assert.strictEqual(roots[2].subView, 'diffs');
+        assert.strictEqual(roots[1].subView, 'toolCalls');
+        assert.strictEqual(roots[2].subView, 'timeline');
+        assert.strictEqual(roots[3].subView, 'diffs');
     });
 
-    test('all three sections start collapsed', () => {
+    test('all four sections start collapsed', () => {
         const roots = provider.getChildren() as CommandsSectionItem[];
         for (const section of roots) {
             assert.strictEqual(
@@ -138,10 +191,12 @@ suite('CommandsViewProvider — composite tree', () => {
         service.ingestEvents([
             makeCommand({ id: 'c1', timestamp: '2026-01-01T10:00:00.000Z' }),
             makeCommand({ id: 'c2', sessionId: 'sess-b', timestamp: '2026-01-01T10:05:00.000Z' }),
+            makeToolCall({ id: 't1', timestamp: '2026-01-01T10:06:00.000Z' }),
             makeDiff({ id: 'd1', timestamp: '2026-01-02T10:00:00.000Z' }),
         ]);
 
-        const [commandsSection, timelineSection, diffsSection] = provider.getChildren() as CommandsSectionItem[];
+        const [commandsSection, toolCallsSection, timelineSection, diffsSection] =
+            provider.getChildren() as CommandsSectionItem[];
 
         const assertAllCollapsed = (items: CommandsTreeNode[], what: string): void => {
             assert.ok(items.length > 0, `${what} must list at least one row`);
@@ -154,8 +209,10 @@ suite('CommandsViewProvider — composite tree', () => {
             }
         };
 
-        // Executed Commands section → session groups.
-        assertAllCollapsed(provider.getChildren(commandsSection), 'Executed Commands sessions');
+        // Terminal Commands section → session groups.
+        assertAllCollapsed(provider.getChildren(commandsSection), 'Terminal Commands sessions');
+        // LLM Tool Calls section → session groups.
+        assertAllCollapsed(provider.getChildren(toolCallsSection), 'LLM Tool Calls sessions');
         // Unified Timeline section → session groups.
         assertAllCollapsed(provider.getChildren(timelineSection), 'Unified Timeline sessions');
         // Diff Explorer section → changed-file groups. The workspace is already in
@@ -174,7 +231,8 @@ suite('CommandsViewProvider — composite tree', () => {
 
         // A re-render must not auto-expand them again.
         provider.refresh();
-        assertAllCollapsed(provider.getChildren(commandsSection), 'Executed Commands sessions after refresh');
+        assertAllCollapsed(provider.getChildren(commandsSection), 'Terminal Commands sessions after refresh');
+        assertAllCollapsed(provider.getChildren(toolCallsSection), 'LLM Tool Calls sessions after refresh');
         assertAllCollapsed(provider.getChildren(timelineSection), 'Unified Timeline sessions after refresh');
         assertAllCollapsed(provider.getChildren(diffsSection), 'Diff Explorer files after refresh');
     });
@@ -183,21 +241,34 @@ suite('CommandsViewProvider — composite tree', () => {
         service.ingestEvents([
             makeCommand({ id: 'c1', timestamp: '2026-01-01T10:00:00.000Z' }),
             makeCommand({ id: 'c2', timestamp: '2026-01-01T10:05:00.000Z', commandText: 'git status' }),
+            makeToolCall({ id: 't1', timestamp: '2026-01-01T10:06:00.000Z' }),
+            makeToolCall({
+                id: 't2', timestamp: '2026-01-01T10:07:00.000Z', toolName: 'powershell',
+                arguments: { command: 'npm test' },
+            }),
             makeDiff({ id: 'd1', timestamp: '2026-01-02T10:00:00.000Z' }),
         ]);
 
-        const [commandsSection, timelineSection, diffsSection] = provider.getChildren() as CommandsSectionItem[];
+        const [commandsSection, toolCallsSection, timelineSection, diffsSection] =
+            provider.getChildren() as CommandsSectionItem[];
 
         const commandGroups = provider.getChildren(commandsSection) as ExecCommandsGroupItem[];
-        assert.ok(commandGroups.length > 0, 'Executed Commands section lists session groups');
+        assert.ok(commandGroups.length > 0, 'Terminal Commands section lists session groups');
         const leaves = provider.getChildren(commandGroups[0]) as ExecCommandsLeafItem[];
         assert.strictEqual(leaves.length, 2);
+
+        const toolCallGroups = provider.getChildren(toolCallsSection) as ToolCallsGroupItem[];
+        assert.ok(toolCallGroups.length > 0, 'LLM Tool Calls section lists session groups');
+        const toolCallLeaves = provider.getChildren(toolCallGroups[0]) as ToolCallLeafItem[];
+        assert.strictEqual(toolCallLeaves.length, 2);
+        assert.strictEqual(toolCallLeaves[1].label, 'view [src/extension.ts]', 'rows identify their target');
+        assert.strictEqual(toolCallLeaves[0].label, 'powershell [npm test]');
 
         const timelineGroups = provider.getChildren(timelineSection) as TimelineGroupItem[];
         assert.ok(timelineGroups.length > 0, 'Unified Timeline section lists session groups');
         const timelineLeaves = provider.getChildren(timelineGroups[0]) as TimelineEventItem[];
-        // Two commands + one diff are all timeline events.
-        assert.strictEqual(timelineLeaves.length, 3);
+        // Two commands + two tool calls + one diff are all timeline events.
+        assert.strictEqual(timelineLeaves.length, 5);
 
         const fileGroups = provider.getChildren(diffsSection) as DiffFileGroupItem[];
         assert.strictEqual(fileGroups.length, 1, 'Diff Explorer section lists changed files');
@@ -205,14 +276,16 @@ suite('CommandsViewProvider — composite tree', () => {
 
         assert.deepStrictEqual(provider.counts(), {
             commands: 2,
-            events: 3,
+            toolCalls: 2,
+            events: 5,
             changes: 1,
             files: 1,
             failedCommands: 0,
             filtered: false,
         });
         assert.strictEqual(commandsSection.description, '2 commands');
-        assert.strictEqual(timelineSection.description, '3 events');
+        assert.strictEqual(toolCallsSection.description, '2 tool calls');
+        assert.strictEqual(timelineSection.description, '5 events');
         assert.strictEqual(diffsSection.description, '1 change · 1 file');
     });
 
@@ -241,8 +314,10 @@ suite('CommandsViewProvider — composite tree', () => {
 
     test('section lookup supports reveal()', () => {
         const roots = provider.getChildren() as CommandsSectionItem[];
-        assert.strictEqual(provider.section('timeline'), roots[1]);
-        assert.strictEqual(provider.section('diffs'), roots[2]);
+        assert.strictEqual(provider.section('executedCommands'), roots[0]);
+        assert.strictEqual(provider.section('toolCalls'), roots[1]);
+        assert.strictEqual(provider.section('timeline'), roots[2]);
+        assert.strictEqual(provider.section('diffs'), roots[3]);
     });
 });
 
@@ -250,9 +325,11 @@ suite('CommandsViewProvider — composite tree', () => {
 suite('CommandsViewProvider — node helpers', () => {
     test('eventOfCommandsNode resolves leaves of every section', () => {
         const command = makeCommand({ id: 'c1', timestamp: '2026-01-01T10:00:00.000Z' });
+        const toolCall = makeToolCall({ id: 't1', timestamp: '2026-01-01T10:00:00.000Z' });
         const diff = makeDiff({ id: 'd1', timestamp: '2026-01-01T10:00:00.000Z' });
 
         assert.strictEqual(eventOfCommandsNode(new ExecCommandsLeafItem(command)), command);
+        assert.strictEqual(eventOfCommandsNode(new ToolCallLeafItem(toolCall)), toolCall);
         assert.strictEqual(eventOfCommandsNode(new TimelineEventItem(diff)), diff);
         assert.strictEqual(eventOfCommandsNode(new DiffEventLeafItem(diff)), diff);
         assert.strictEqual(
@@ -264,9 +341,11 @@ suite('CommandsViewProvider — node helpers', () => {
 
     test('subViewOfCommandsNode maps groups and leaves to their section', () => {
         const command = makeCommand({ id: 'c1', timestamp: '2026-01-01T10:00:00.000Z' });
+        const toolCall = makeToolCall({ id: 't1', timestamp: '2026-01-01T10:00:00.000Z' });
         const section = new CommandsSectionItem('diffs', 'Diff Explorer', 'diff', '0 changes');
 
         assert.strictEqual(subViewOfCommandsNode(new ExecCommandsLeafItem(command)), 'executedCommands');
+        assert.strictEqual(subViewOfCommandsNode(new ToolCallLeafItem(toolCall)), 'toolCalls');
         assert.strictEqual(subViewOfCommandsNode(new TimelineEventItem(command)), 'timeline');
         assert.strictEqual(subViewOfCommandsNode(new DiffEventLeafItem(command)), 'diffs');
         assert.strictEqual(subViewOfCommandsNode(section), 'diffs');
@@ -284,12 +363,17 @@ suite('CommandsViewProvider — Phase 4 filters', () => {
         service = new LogService(dir, createDefaultLogSourceRegistry());
         provider = new CommandsViewProvider(
             new ExecutedCommandsProvider(service),
+            new ToolCallsProvider(service),
             new UnifiedTimelineProvider(service),
             new DiffExplorerProvider(service)
         );
         service.ingestEvents([
             makeCommand({ id: 'c1', timestamp: '2026-01-01T10:00:00.000Z', commandText: 'npm test', exitCode: 0 }),
             makeCommand({ id: 'c2', timestamp: '2026-01-01T10:05:00.000Z', commandText: 'npm run build', exitCode: 2 }),
+            makeToolCall({
+                id: 't1', timestamp: '2026-01-01T10:06:00.000Z', toolName: 'powershell',
+                arguments: { command: 'npm run lint' }, success: false,
+            }),
             makeDiff({ id: 'd1', timestamp: '2026-01-02T10:00:00.000Z', filePath: '/repo/src/app.ts' }),
         ]);
     });
@@ -301,7 +385,7 @@ suite('CommandsViewProvider — Phase 4 filters', () => {
     });
 
     test('describeCommandsSection adds failed / filtered suffixes', () => {
-        const base = { commands: 2, events: 3, changes: 1, files: 1 };
+        const base = { commands: 2, toolCalls: 1, events: 4, changes: 1, files: 1 };
         assert.strictEqual(
             describeCommandsSection('executedCommands', { ...base, failedCommands: 1 }),
             '2 commands · 1 failed'
@@ -310,25 +394,30 @@ suite('CommandsViewProvider — Phase 4 filters', () => {
             describeCommandsSection('executedCommands', { ...base, failedCommands: 0, filtered: true }),
             '2 commands · filtered'
         );
-        assert.strictEqual(describeCommandsSection('timeline', { ...base, filtered: true }), '3 events · filtered');
+        assert.strictEqual(describeCommandsSection('toolCalls', { ...base, filtered: true }), '1 tool call · filtered');
+        assert.strictEqual(describeCommandsSection('timeline', { ...base, filtered: true }), '4 events · filtered');
         assert.strictEqual(describeCommandsSection('diffs', { ...base, filtered: true }), '1 change · 1 file · filtered');
     });
 
-    test('counts report failed commands', () => {
+    test('counts report failed commands and tool calls', () => {
         assert.strictEqual(provider.counts().failedCommands, 1);
+        assert.strictEqual(provider.counts().toolCalls, 1);
         assert.strictEqual(provider.counts().filtered, false);
     });
 
     test('setFilters narrows every section and flags them as filtered', () => {
         provider.setFilters({ search: 'npm run', failuresOnly: true });
-        const [commandsSection, timelineSection, diffsSection] = provider.getChildren() as CommandsSectionItem[];
+        const [commandsSection, toolCallsSection, timelineSection, diffsSection] =
+            provider.getChildren() as CommandsSectionItem[];
 
         const counts = provider.counts();
         assert.strictEqual(counts.commands, 1, 'only the failed "npm run build" command matches');
+        assert.strictEqual(counts.toolCalls, 1, 'only the failed "npm run lint" tool call matches');
         assert.strictEqual(counts.filtered, true);
         assert.strictEqual(provider.filtersActive(), true);
         assert.strictEqual(commandsSection.description, '1 command · 1 failed · filtered');
-        assert.strictEqual(timelineSection.description, '1 event · filtered');
+        assert.strictEqual(toolCallsSection.description, '1 tool call · filtered');
+        assert.strictEqual(timelineSection.description, '2 events · filtered');
         assert.strictEqual(diffsSection.description, '0 changes · 0 files · filtered');
         // The diff file does not match the text query.
         assert.deepStrictEqual(provider.getChildren(diffsSection), []);
@@ -352,6 +441,7 @@ suite('CommandsViewProvider — Phase 4 filters', () => {
         });
         assert.strictEqual(provider.filtersActive(), false);
         assert.strictEqual(provider.counts().commands, 2);
+        assert.strictEqual(provider.counts().toolCalls, 1);
     });
 });
 
@@ -365,11 +455,13 @@ suite('CommandsViewProvider — tree plumbing edge cases', () => {
         service = new LogService(dir, createDefaultLogSourceRegistry());
         provider = new CommandsViewProvider(
             new ExecutedCommandsProvider(service),
+            new ToolCallsProvider(service),
             new UnifiedTimelineProvider(service),
             new DiffExplorerProvider(service)
         );
         service.ingestEvents([
             makeCommand({ id: 'c1', timestamp: '2026-01-01T10:00:00.000Z', workspacePath: '/repo' }),
+            makeToolCall({ id: 't1', timestamp: '2026-01-01T10:01:00.000Z' }),
             makeDiff({ id: 'd1', timestamp: '2026-01-02T10:00:00.000Z' }),
         ]);
     });
@@ -413,6 +505,7 @@ suite('CommandsViewProvider — tree plumbing edge cases', () => {
         const executed = new ExecutedCommandsProvider(service);
         const mixed = new CommandsViewProvider(
             executed,
+            new ToolCallsProvider(service),
             new UnifiedTimelineProvider(service),
             new DiffExplorerProvider(service)
         );
@@ -425,13 +518,19 @@ suite('CommandsViewProvider — tree plumbing edge cases', () => {
     });
 
     test('getParent maps every node kind back to its section (or file group)', () => {
-        const [commandsSection, timelineSection, diffsSection] = provider.getChildren() as CommandsSectionItem[];
+        const [commandsSection, toolCallsSection, timelineSection, diffsSection] =
+            provider.getChildren() as CommandsSectionItem[];
 
         assert.strictEqual(provider.getParent({} as CommandsTreeNode), undefined, 'unknown nodes have no parent');
 
         // Session headers are roots of their section.
         const commandGroups = provider.getChildren(commandsSection) as ExecCommandsGroupItem[];
         assert.strictEqual(provider.getParent(commandGroups[0]), commandsSection);
+
+        const toolCallGroups = provider.getChildren(toolCallsSection) as ToolCallsGroupItem[];
+        assert.strictEqual(provider.getParent(toolCallGroups[0]), toolCallsSection);
+        const [toolCallRow] = provider.getChildren(toolCallGroups[0]);
+        assert.strictEqual(provider.getParent(toolCallRow), toolCallGroups[0]);
 
         const timelineGroups = provider.getChildren(timelineSection) as TimelineGroupItem[];
         assert.strictEqual(provider.getParent(timelineGroups[0]), timelineSection);
@@ -448,6 +547,11 @@ suite('CommandsViewProvider — tree plumbing edge cases', () => {
         );
         assert.strictEqual(provider.getParent(detachedCommand), commandsSection);
 
+        const detachedToolCall = new ToolCallLeafItem(
+            makeToolCall({ id: 't-detached', sessionId: 'ghost-session', timestamp: '2026-01-01T10:00:00.000Z' })
+        );
+        assert.strictEqual(provider.getParent(detachedToolCall), toolCallsSection);
+
         const detachedEvent = new TimelineEventItem(
             makeCommand({ id: 'c-detached', sessionId: 'ghost-session', timestamp: '2026-01-01T10:00:00.000Z' })
         );
@@ -455,7 +559,7 @@ suite('CommandsViewProvider — tree plumbing edge cases', () => {
     });
 
     test('getChildren yields nothing for rows it does not own', () => {
-        const diffsSection = (provider.getChildren() as CommandsSectionItem[])[2];
+        const diffsSection = (provider.getChildren() as CommandsSectionItem[])[3];
         const fileGroups = provider.getChildren(diffsSection) as DiffFileGroupItem[];
         const [changeRow] = provider.getChildren(fileGroups[0]);
 

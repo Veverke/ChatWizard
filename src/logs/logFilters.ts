@@ -11,8 +11,8 @@
  *                   error message, planner step, workspace path, agent name).
  *                   Multiple words are AND-ed, matching is case-insensitive.
  *   - **agent**   — restrict to the events one AI tool produced (`LogSourceTool`).
- *   - **failures**— only failed commands (`exitCode !== 0`) and non-warning
- *                   `error` events.
+ *   - **failures**— only failed commands (`exitCode !== 0`), failed tool calls
+ *                   (`success === false`) and non-warning `error` events.
  *
  * The predicates are pure so both the tree providers (which post-filter the
  * rows they pull from the store) and the unit tests can share them without a
@@ -158,13 +158,16 @@ export function isFailedCommand(event: LogEvent): boolean {
 }
 
 /**
- * True when an event represents a failure: a failed command or an `error`
- * event. `warning`-severity errors are deliberately excluded so "failures
- * only" stays actionable.
+ * True when an event represents a failure: a failed command, a tool call the
+ * agent reported as failed, or an `error` event. `warning`-severity errors are
+ * deliberately excluded so "failures only" stays actionable.
  */
 export function isFailureEvent(event: LogEvent): boolean {
     if (event.type === 'error') {
         return (event as ErrorEvent).severity !== 'warning';
+    }
+    if (event.type === 'toolCall') {
+        return (event as ToolCallEvent).success === false;
     }
     return isFailedCommand(event);
 }

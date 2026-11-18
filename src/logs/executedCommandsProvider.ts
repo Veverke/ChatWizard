@@ -7,19 +7,25 @@ import { createLogger } from '../utils/logger';
 /**
  * src/logs/executedCommandsProvider.ts
  *
- * Phase 2 — "Executed Commands" panel.
+ * Phase 2 — "Terminal Commands" section of the Commands view.
  *
  * The first user-facing surface from `docs/work-plan-watch-logs.md` Phase 2:
  * a searchable list of every shell / git / build / test command agents ran,
  * even when the model never mentioned the command in chat text.
  *
- * The panel is intentionally tool-agnostic — it renders whatever `CommandEvent`s
- * the watch-logs store holds (fed by the Copilot, Cline / Roo Code, Aider and
- * Windsurf adapters). Commands are grouped per session, newest first, and each
- * row exposes copy + open-session actions.
+ * This section lists `command` events only — structured agent tool calls
+ * (reading a file, searching, patching, …) are `toolCall` events and live in
+ * their own "LLM Tool Calls" section (`toolCallsProvider.ts`). Splitting the
+ * two is what makes both lists readable; the Unified Timeline remains the
+ * merged feed of every kind.
+ *
+ * The section is intentionally tool-agnostic — it renders whatever
+ * `CommandEvent`s the watch-logs store holds (fed by the Copilot, Cline / Roo
+ * Code, Aider and Windsurf adapters). Commands are grouped per session, newest
+ * first, and each row exposes copy + open-session actions.
  *
  * Phase 4 adds the shared view filters (`search`, agent, failures-only) so the
- * section honours exactly the same query as the Unified Timeline.
+ * section honours exactly the same query as the other sections.
  */
 
 const logWatch = createLogger().withContext('WatchLogs');
@@ -70,6 +76,25 @@ export function formatExitBadge(exitCode: number | undefined): string {
     return exitCode === 0 ? '✓ exit 0' : `✗ exit ${exitCode}`;
 }
 
+/**
+ * Codicon of the session rows in the Terminal Commands section.
+ *
+ * Every section of the Commands view owns one icon (`terminal` / `tools` /
+ * `history` / `file-code`) so a row says which sub view it belongs to without
+ * being expanded — the sections used to share the Unified Timeline's
+ * `history` (watch-like circle with an arrow) icon.
+ */
+export const EXEC_COMMANDS_GROUP_ICON = 'terminal';
+
+/**
+ * Codicon for an executed command row — the terminal family only: `run` while
+ * the exit code is unknown, `terminal` for a clean exit and `error` for a
+ * failure. Nothing else in the Commands view uses these three icons.
+ */
+export function execCommandIconId(exitCode: number | undefined): string {
+    return exitCode === undefined ? 'run' : exitCode === 0 ? 'terminal' : 'error';
+}
+
 // ---------------------------------------------------------------------------
 // Tree items
 // ---------------------------------------------------------------------------
@@ -103,7 +128,7 @@ export class ExecCommandsGroupItem extends vscode.TreeItem {
             .filter((line) => line && line.length > 0)
             .join('\n');
         this.contextValue = 'execCommandsGroup';
-        this.iconPath = new vscode.ThemeIcon('history');
+        this.iconPath = new vscode.ThemeIcon(EXEC_COMMANDS_GROUP_ICON);
     }
 }
 
@@ -124,9 +149,12 @@ export class ExecCommandsLeafItem extends vscode.TreeItem {
         };
         const exit = event.exitCode;
         this.iconPath = new vscode.ThemeIcon(
-            exit === undefined ? 'run'
-            : exit === 0 ? 'terminal'
-            : 'error'
+            execCommandIconId(exit),
+            // A failed command keeps its terminal-family icon but turns red,
+            // matching how the Unified Timeline colours failures.
+            exit !== undefined && exit !== 0
+                ? new vscode.ThemeColor('problemsErrorIcon.foreground')
+                : undefined
         );
     }
 }
