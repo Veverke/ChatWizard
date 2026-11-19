@@ -832,7 +832,11 @@ suite('logsCommands — unified timeline', () => {
 
     test('openDiff falls back to the patch text when nothing is renderable', async () => {
         await h.run('chatwizard.logs.timeline.openDiff', { event: diffEvent({ diffText: '' }) });
-        await settle();
+        // The fallback is fire-and-forget and awaits a real
+        // `vscode.workspace.openTextDocument`, so poll instead of sleeping: a
+        // fixed sleep is not a reliable barrier on a loaded host (macOS /
+        // Insiders CI regularly needs more than 20ms to create the document).
+        await waitFor(() => h.showTextDocument.called);
 
         assert.strictEqual(h.executed.some((e) => e.command === 'vscode.diff'), false);
         assert.ok(h.showTextDocument.called, 'the raw patch opens in a text editor');
@@ -901,7 +905,9 @@ suite('logsCommands — diffs', () => {
         assert.strictEqual(h.showTextDocument.called, false);
 
         h.run('chatwizard.logs.diff.openPatch', { event: diffEvent() });
-        await settle();
+        // Same fire-and-forget path as `timeline.openDiff` above — poll for the
+        // editor instead of assuming it opens within one fixed sleep.
+        await waitFor(() => h.showTextDocument.called);
         assert.ok(h.showTextDocument.calledOnce, 'the patch opens in an editor');
     });
 
