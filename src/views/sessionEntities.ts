@@ -14,7 +14,7 @@
 import type { ExtractedEntities } from '../types/index';
 
 /** Field name of a regex-extracted entity type in `ExtractedEntities`. */
-export type EntityTypeKey = 'filePaths' | 'functionNames' | 'errors' | 'decisions';
+export type EntityTypeKey = 'filePaths' | 'functionNames' | 'errors' | 'decisions' | 'uris';
 
 /** One entry of the first (entity type) dropdown plus its (sorted) second-dropdown values. */
 export interface EntityTypeGroup {
@@ -32,6 +32,7 @@ export const ENTITY_TYPE_DEFS: ReadonlyArray<{ key: EntityTypeKey; label: string
     { key: 'functionNames', label: 'Functions' },
     { key: 'errors',        label: 'Errors' },
     { key: 'decisions',     label: 'Decisions' },
+    { key: 'uris',          label: 'Uris' },
 ];
 
 /**
@@ -197,7 +198,7 @@ export function buildEntityTypeGroups(entities?: ExtractedEntities | null): Enti
 
     const groups = new Map<string, MutableEntityGroup>();
 
-    // 1. Regex-extracted entities (Files, Functions, Errors, Decisions)
+    // 1. Regex-extracted entities (Files, Functions, Errors, Decisions, Uris)
     for (const def of ENTITY_TYPE_DEFS) {
         addValues(groups, def.label, def.key, normalizeEntityValues(entities[def.key]));
     }

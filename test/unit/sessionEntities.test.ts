@@ -124,11 +124,12 @@ suite('sessionEntities – entity dropdown model', () => {
                 functionNames: ['fn'],
                 errors: ['TypeError'],
                 decisions: ['we chose X'],
+                uris: ['https://example.com'],
                 semantic: ['GraphQL'],
             }));
             assert.deepStrictEqual(
                 groups.map(g => g.label),
-                ['Concepts', 'Decisions', 'Errors', 'Files', 'Functions']
+                ['Concepts', 'Decisions', 'Errors', 'Files', 'Functions', 'Uris']
             );
         });
 
@@ -144,6 +145,16 @@ suite('sessionEntities – entity dropdown model', () => {
             const groups = buildEntityTypeGroups(entities({ filePaths: ['a.ts'] }));
             assert.strictEqual(groups.length, 1);
             assert.strictEqual(groups[0].label, 'Files');
+        });
+
+        test('gives URIs their own type, with sorted values', () => {
+            const groups = buildEntityTypeGroups(entities({
+                uris: ['https://b.example/docs', 'http://a.example'],
+            }));
+            assert.strictEqual(groups.length, 1);
+            assert.strictEqual(groups[0].label, 'Uris');
+            assert.strictEqual(groups[0].key, 'uris');
+            assert.deepStrictEqual(groups[0].items, ['http://a.example', 'https://b.example/docs']);
         });
 
         test('sorts the values inside each type alphabetically', () => {

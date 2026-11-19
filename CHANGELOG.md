@@ -2,6 +2,38 @@
 
 ## [Unreleased]
 
+### Session reader — clickable links
+
+- **Bare URLs become links.** `http://…`, `https://…` and scheme-less `www.…` addresses written in a prompt or a response are rendered as anchors instead of plain text, so they open in the default browser like any Markdown link. `www.…` links get an explicit `https://` scheme, and `<https://…>` angle-bracket autolinks lose their brackets.
+- **The address stays intact.** Sentence punctuation that follows a URL stays outside the link (`see http://example.com.`), balanced parentheses are kept (`…/wiki/Foo_(bar)`) while an unbalanced closing paren is dropped, and query strings keep their `&` separators.
+- **No double-linking.** `[label](url)` Markdown links keep their label formatting and their URL is not auto-linked a second time; URLs inside inline code and fenced code blocks stay verbatim.
+
+### Entities — URIs
+
+- **New `Uris` entity type.** The regex entity pass now collects absolute URIs (`http://…`, `https://…`, `www.…`) from the conversation, de-duplicated case-insensitively and capped at 30, with trailing sentence punctuation / Markdown emphasis trimmed off. They show up in the reader's **Entities → Uris** dropdown (picking one searches the transcript, like any other entity) and in `chatwizard_search` via `entityType: "uris"`.
+- The extraction cache invalidates itself (`ENTITIES_VERSION` 4), so existing sessions gain the new entity type on the next background pass.
+
+### Session reader — remove turns from a conversation
+
+- **Select a turn, delete it.** Clicking a prompt or a response in the reader now selects it (focus outline) and reveals a **⊗ remove** button in the turn header; right-clicking a turn opens a context menu whose **Remove turn from conversation** item does the same thing. `Esc` or a click outside the turns clears the selection.
+- **Persisted in the chat database.** Removals are written to a new `removed_turns` table in `chatwizard-cache.db` (cache schema v2 — the upgrade is additive, no re-parse needed) together with the turn's full payload. The `messages` row is kept and flagged, so message indices stay stable: bookmarks, annotations and code blocks keep pointing at the right turns. The bookmark / note attached to the removed turn itself is dropped.
+- **The conversation notes what was removed.** The reader header shows *Removed: N turns* and, only when something was removed, an **original full conversation** link.
+- **Original full conversation.** That link rebuilds the complete chat — every removed turn included — from the chat DB, writes it to `<shared cache folder>/original-conversations/<title>-<id>.md` and opens it in a text editor. Because the payload is archived, the original survives re-parsing, restarts, source-file pruning and even a turn vanishing from the source file.
+- **Removed turns stop leaking everywhere else.** They are excluded from the reader, the FTS index and search results (plain, regex and snippet paths), the semantic index, the Prompt Library, the Code Blocks panel, `SessionIndex.search()`, and the *User Requests* count; the "Response not available" placeholder is suppressed when the reply was removed rather than lost.
+- Only offered when the persistent cache is available (`chatwizard.enablePersistentCache`, VS Code) — otherwise the remove affordances are hidden because the removal could not be persisted.
+
+### Session reader — load the whole transcript
+
+- **New "Load all messages" button at the top of the reader.** Long sessions still open with the first 50 messages only, but the sticky toolbar now carries a *Load all messages* button that streams the entire transcript in 20-message batches. It shows a spinner and a *Loading all messages…* label while running, hides the per-batch *Load more messages…* button (which would only append the same ranges), and disappears once nothing is left to load.
+- **Search now covers the whole conversation.** Pressing `Ctrl+F`, typing in the search box, picking an entity from the Entities row, or opening a session from search results before the transcript is fully loaded now triggers the full load automatically and re-runs the query as soon as the last batch lands — previously the match counter and the ▲/▼ navigation silently only saw the initially rendered excerpt. The counter shows *Loading all messages…* until the final result set is known.
+- **No duplicated messages.** Batch appends wait for the initial window stream to finish (`streamInFlight`, cleared only by the stream that owns the current `streamVersion`), and stale load requests are dropped when the panel is re-rendered mid-load.
+- **Bulk batches stay cheap.** Load-all batches skip the per-batch whole-document role-filter / bookmark passes (applied once at the end) and filter only the incoming nodes, so a 1000-message load does not rescan the whole DOM 50 times.
+
+### Copilot agent-host — chat titles
+
+- **Fixed: a chat whose title is stored as a YAML block scalar showed `|-` instead of its title.** Copilot writes `name: |-` (or `|`, `|+`, `>`, `>-`, `>+`) followed by an indented multi-line prompt for auto-titled chats — which is how child chats created from a parent session are stored — and `workspace.yaml` was parsed with a flat `key: value` regex, so the title became the block-scalar header. Block scalars are now parsed (indentation, literal/folded style, chomping) and the title resolves to the chat's first line, falling back to the first user turn when the block is empty.
+- **Fixed: double-quoted titles showed raw `\r\n` escapes.** Newer Copilot builds write `name: "line one\r\nline two"`; quoted scalars are now unescaped per YAML (`\n`, `\r`, `\t`, `\"`, `\\`, `\xNN`, `\uNNNN`), so the tree shows the real first line instead of the escape text.
+
 ### Session scope — Copilot agent-host chats no longer leak across workspaces
 
 - **Fixed: chats opened in another workspace still appeared in the Sessions view.** VS Code 1.146+/Copilot Chat 1.0+ keeps every chat in the machine-global `~/.copilot/session-state`, and every chat shares the synthetic `copilot-agent` workspace id. That id was treated as "always in scope", so chats whose `workspace.yaml` `cwd` was a different repository (e.g. `C:\src\selling` while working in `C:\src\_\ChatWizard`) were listed by this window. Agent-host chats are now **path-scoped** by their `cwd` — the same open-folder rule Cline 4.x / Roo Code / Aider already used — in all four ingestion paths: the batch collector, the SQLite cache restore, the live file watcher and the archive restore.

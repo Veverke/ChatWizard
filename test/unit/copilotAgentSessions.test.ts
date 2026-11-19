@@ -183,6 +183,60 @@ suite('Copilot agent-host — workspace.yaml + preamble helpers', () => {
         assert.strictEqual(parsed['summary_count'], '0');
     });
 
+    test('reads |- block scalars (auto-titled / child-chat names)', () => {
+        const parsed = parseCopilotAgentWorkspaceYaml(
+            [
+                `id: ${SESSION_ID}`,
+                'name: |-',
+                '  Investigate the root cause of a recurring BDD failure.',
+                '',
+                '  ## The error',
+                '  System.Net.Http.HttpRequestException',
+                'user_named: false',
+                'summary_count: 1',
+                '',
+            ].join('\n')
+        );
+
+        assert.strictEqual(
+            parsed['name'],
+            'Investigate the root cause of a recurring BDD failure.\n\n## The error\nSystem.Net.Http.HttpRequestException'
+        );
+        // Lines after the block must still parse as sibling keys.
+        assert.strictEqual(parsed['user_named'], 'false');
+        assert.strictEqual(parsed['summary_count'], '1');
+    });
+
+    test('folds > block scalars and keeps nested indentation in | scalars', () => {
+        const folded = parseCopilotAgentWorkspaceYaml(
+            ['name: >-', '  fix the', '  failing BDD', 'cwd: C:\\repo'].join('\n')
+        );
+        assert.strictEqual(folded['name'], 'fix the failing BDD');
+        assert.strictEqual(folded['cwd'], 'C:\\repo');
+
+        const literal = parseCopilotAgentWorkspaceYaml(
+            ['name: |', '  first', '    indented deeper', '  last', 'user_named: false'].join('\n')
+        );
+        assert.strictEqual(literal['name'], 'first\n  indented deeper\nlast\n');
+        assert.strictEqual(literal['user_named'], 'false');
+    });
+
+    test('an empty block scalar is an empty value, not the header marker', () => {
+        const parsed = parseCopilotAgentWorkspaceYaml(['name: |-', 'user_named: false'].join('\n'));
+
+        assert.strictEqual(parsed['name'], '');
+        assert.strictEqual(parsed['user_named'], 'false');
+    });
+
+    test('unescapes double-quoted scalars (\\r\\n, \\\\ and \\")', () => {
+        const parsed = parseCopilotAgentWorkspaceYaml(
+            ['name: "line one\\r\\nline two\\\\tail \\"quoted\\""', "branch: 'it''s'"].join('\n')
+        );
+
+        assert.strictEqual(parsed['name'], 'line one\r\nline two\\tail "quoted"');
+        assert.strictEqual(parsed['branch'], "it's");
+    });
+
     test('stripCopilotAgentPreamble removes the injected <current_datetime> block', () => {
         assert.strictEqual(
             stripCopilotAgentPreamble('<current_datetime>2026-11-13T01:23:49.066+02:00</current_datetime>\n\nhello'),
@@ -237,6 +291,47 @@ suite('Copilot agent-host — parseCopilotAgentSession', () => {
         const { session } = parseCopilotAgentSession(dir);
         assert.strictEqual(session.title, 'testing - today is  nov 13rd');
         assert.strictEqual(session.workspacePath, 'C:\\repo');
+    });
+
+    test('derives the title from a block-scalar name instead of the |- marker', () => {
+        const yaml = [
+            `id: ${SESSION_ID}`,
+            'cwd: C:\\repo',
+            'name: |-',
+            '  Investigate the root cause of a recurring BDD failure.',
+            '',
+            '  ## The error',
+            '  System.Net.Http.HttpRequestException',
+            'created_at: 2026-11-01T10:00:00.000Z',
+            'updated_at: 2026-11-01T10:05:00.000Z',
+            '',
+        ].join('\n');
+        const dir = writeSession(root, SESSION_ID, EVENTS, yaml);
+
+        const { session } = parseCopilotAgentSession(dir);
+        assert.strictEqual(session.title, 'Investigate the root cause of a recurring BDD failure.');
+        assert.strictEqual(session.workspacePath, 'C:\\repo');
+    });
+
+    test('derives the title from the first line of a quoted multi-line name', () => {
+        const yaml = [
+            `id: ${SESSION_ID}`,
+            'cwd: C:\\repo',
+            'name: "line one\\r\\nline two"',
+            '',
+        ].join('\n');
+        const dir = writeSession(root, SESSION_ID, EVENTS, yaml);
+
+        const { session } = parseCopilotAgentSession(dir);
+        assert.strictEqual(session.title, 'line one');
+    });
+
+    test('an empty block-scalar name falls back to the first user turn', () => {
+        const yaml = `id: ${SESSION_ID}\ncwd: C:\\repo\nname: |-\n`;
+        const dir = writeSession(root, SESSION_ID, EVENTS, yaml);
+
+        const { session } = parseCopilotAgentSession(dir);
+        assert.strictEqual(session.title, 'testing - today is  nov 13rd');
     });
 
     test('a session without workspace.yaml still parses (cwd from session.start)', () => {

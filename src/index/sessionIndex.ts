@@ -342,7 +342,8 @@ export class SessionIndex {
         const prompts: Prompt[] = [];
         for (const session of this.sessions.values()) {
             session.messages.forEach((message, messageIndex) => {
-                if (message.role === 'user') {
+                // Feature 51 — turns removed from the conversation by the user.
+                if (message.role === 'user' && !message.removed) {
                     prompts.push({
                         content: message.content,
                         sessionId: session.id,
@@ -366,6 +367,8 @@ export class SessionIndex {
         const blocks: IndexedCodeBlock[] = [];
         for (const session of this.sessions.values()) {
             for (const message of session.messages) {
+                // Feature 51 — code blocks of removed turns stay out of the view.
+                if (message.removed) { continue; }
                 for (const block of message.codeBlocks) {
                     blocks.push({
                         language: block.language,
@@ -392,6 +395,8 @@ export class SessionIndex {
         let count = 0;
         for (const session of this.sessions.values()) {
             for (const message of session.messages) {
+                // Feature 51 — removed turns are not part of the conversation.
+                if (message.removed) { continue; }
                 count += message.codeBlocks.length;
             }
         }
@@ -444,6 +449,8 @@ export class SessionIndex {
             }
 
             const matched = session.messages.some(message => {
+                // Feature 51 — removed turns are not searchable.
+                if (message.removed) { return false; }
                 if (message.role === 'user' && !searchPrompts) {
                     return false;
                 }

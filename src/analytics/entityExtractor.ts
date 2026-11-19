@@ -4,6 +4,7 @@
 //   - Function and class names
 //   - Error messages and HTTP status codes
 //   - Decision phrases
+//   - Absolute URIs (http(s):// and www. links) — Feature 53
 //   - Semantic entities (frameworks, APIs, concepts, tools, languages) via LLM
 //
 // extractEntities() is a pure function — no I/O, fully unit-testable.
@@ -15,7 +16,7 @@ import { SidecarMetadataStore } from '../index/sidecarMetadataStore';
 import { extractEntitiesWithLlm } from './entityLlmExtractor';
 
 /** Current version of the extractor — bump when extraction logic changes to invalidate caches. */
-export const ENTITIES_VERSION = 3;
+export const ENTITIES_VERSION = 4;
 
 // ─── Regex patterns ───────────────────────────────────────────────────────────
 
@@ -66,6 +67,16 @@ const HTTP_STATUS_RE = /\b(?:4\d\d|5\d\d)\s+(?:bad request|unauthorized|payment 
 
 const DECISION_RE = /\b(?:I\s+(?:decided|chose|will use|am going to|have decided|went with)|we\s+(?:chose|decided|will use|went with|are going to)|the\s+(?:approach|decision|plan|strategy|solution)\s+is|decided\s+to\s+use|going\s+with|sticking\s+with|opted\s+for)\s+.{0,80}/gi;
 
+/**
+ * Absolute URIs — `http(s)://…` links plus scheme-less `www.…` URLs.
+ * Applied to the raw conversation text, so the trailing-punctuation trimmer
+ * below removes sentence punctuation that is not part of the URI.
+ */
+const URI_RE = /\b(?:https?:\/\/|www\.)[^\s<>"'`]+/gi;
+
+/** Trailing characters that end a sentence rather than a URI. */
+const URI_TRAILING_RE = /[.,;:!?'"*_\]]+$/;
+
 // ─── Extractor ────────────────────────────────────────────────────────────────
 
 /**
@@ -79,8 +90,9 @@ export function extractEntities(session: Session): ExtractedEntities {
     const functionNames = extractFunctionNames(allContent);
     const errors = extractErrors(allContent);
     const decisions = extractDecisions(allContent);
+    const uris = extractUris(allContent);
 
-    return { filePaths, functionNames, errors, decisions };
+    return { filePaths, functionNames, errors, decisions, uris };
 }
 
 function extractUnique(text: string, re: RegExp, maxItems: number): string[] {
@@ -153,6 +165,47 @@ function extractFunctionNames(text: string): string[] {
     return results;
 }
 
+/**
+ * Collects URIs mentioned in the conversation — `http(s)://…` links and
+ * `www.…` URLs — de-duplicated case-insensitively and capped at 30.
+ *
+ * Sentence punctuation that follows a URI is not part of it (`see
+ * http://example.com.`), while a closing paren is kept only when it balances an
+ * opening one (`…/wiki/Foo_(bar)`). Markdown emphasis markers are trimmed too,
+ * so `**https://example.com**` yields the bare URL.
+ */
+function extractUris(text: string): string[] {
+    const seen = new Set<string>();
+    const results: string[] = [];
+    const clone = new RegExp(URI_RE.source, URI_RE.flags);
+    let m: RegExpExecArray | null;
+
+    while ((m = clone.exec(text)) !== null && results.length < 30) {
+        const uri = trimUri(m[0]);
+        const key = uri.toLowerCase();
+        if (uri && !seen.has(key)) {
+            seen.add(key);
+            results.push(uri);
+        }
+    }
+
+    return results;
+}
+
+/** Trims sentence punctuation (and unbalanced closing parens) off a URI. */
+function trimUri(raw: string): string {
+    let uri = raw.replace(URI_TRAILING_RE, '');
+
+    while (/\)$/.test(uri)) {
+        const opens  = (uri.match(/\(/g) ?? []).length;
+        const closes = (uri.match(/\)/g) ?? []).length;
+        if (closes <= opens) { break; }
+        uri = uri.slice(0, -1).replace(URI_TRAILING_RE, '');
+    }
+
+    return uri;
+}
+
 function extractDecisions(text: string): string[] {
     const results: string[] = [];
     const clone = new RegExp(DECISION_RE.source, DECISION_RE.flags);
@@ -193,8 +246,13 @@ export async function extractEntitiesSmart(session: Session): Promise<ExtractedE
     if (semantic && semantic.length > 0) {
         // Deduplicate against regex-extracted values
         const seen = new Set<string>(
-            [...regexResult.filePaths, ...regexResult.functionNames, ...regexResult.errors, ...regexResult.decisions]
-                .map(v => v.toLowerCase()),
+            [
+                ...regexResult.filePaths,
+                ...regexResult.functionNames,
+                ...regexResult.errors,
+                ...regexResult.decisions,
+                ...(regexResult.uris ?? []),
+            ].map(v => v.toLowerCase()),
         );
         const filtered = semantic.filter(item => !seen.has(item.toLowerCase()));
         return { ...regexResult, semantic: filtered };

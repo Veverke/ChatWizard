@@ -53,25 +53,186 @@ export interface CopilotAgentEvent {
     parentId?: string | null;
 }
 
+/** Parsed YAML block-scalar header (`|`, `|-`, `|+`, `>`, `>-`, `>+`, optional indent indicator). */
+interface BlockScalarHeader {
+    /** `>` (folded) instead of `|` (literal). */
+    folded: boolean;
+    /** `-` strips trailing newlines, `+` keeps them, `''` clips to one. */
+    chomp: '' | '-' | '+';
+    /** Explicit indentation indicator (`|2`), 0 when absent. */
+    indentIndicator: number;
+}
+
+/**
+ * Recognizes a block-scalar header, e.g. `|-` in `name: |-`.
+ * Returns `null` for ordinary scalars.
+ */
+function parseBlockScalarHeader(value: string): BlockScalarHeader | null {
+    if (value.length === 0 || (value[0] !== '|' && value[0] !== '>')) { return null; }
+    if (value.length > 3) { return null; }
+
+    let chomp: '' | '-' | '+' = '';
+    let indentIndicator = 0;
+    for (const ch of value.slice(1)) {
+        if (ch === '-' || ch === '+') {
+            if (chomp !== '') { return null; }
+            chomp = ch;
+        } else if (ch >= '1' && ch <= '9') {
+            if (indentIndicator !== 0) { return null; }
+            indentIndicator = Number(ch);
+        } else {
+            return null;
+        }
+    }
+    return { folded: value[0] === '>', chomp, indentIndicator };
+}
+
+/** Number of leading whitespace characters (YAML indentation). */
+function indentationOf(line: string): number {
+    return line.length - line.trimStart().length;
+}
+
+/** Folds the lines of a `>`-style block scalar (single breaks → spaces, blank lines → newlines). */
+function foldBlockLines(lines: string[]): string {
+    let folded = '';
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (i === 0) {
+            folded = line;
+        } else if (line === '' || lines[i - 1] === '') {
+            folded += `\n${line}`;
+        } else {
+            folded += ` ${line}`;
+        }
+    }
+    return folded;
+}
+
+/**
+ * Reads the indented body of a block scalar starting after its header line.
+ *
+ * @returns the scalar text (chomped per the header) and the index of the first
+ *          line that is no longer part of the scalar.
+ */
+function readBlockScalar(
+    lines: string[],
+    startIndex: number,
+    header: BlockScalarHeader
+): { text: string; nextIndex: number } {
+    let blockIndent = header.indentIndicator;
+    if (blockIndent === 0) {
+        // Derive the indentation from the first non-empty line. A sibling key at
+        // column 0 means the block is empty (e.g. `name: |-` followed by `cwd:`).
+        let probe = startIndex;
+        while (probe < lines.length && lines[probe].trim().length === 0) { probe++; }
+        const detected = probe < lines.length ? indentationOf(lines[probe]) : 0;
+        if (detected === 0) {
+            return { text: '', nextIndex: startIndex };
+        }
+        blockIndent = detected;
+    }
+
+    const body: string[] = [];
+    let index = startIndex;
+    for (; index < lines.length; index++) {
+        const line = lines[index];
+        if (line.trim().length === 0) {
+            body.push('');
+            continue;
+        }
+        if (indentationOf(line) < blockIndent) { break; }
+        body.push(line.slice(blockIndent));
+    }
+
+    // Trailing blank lines are chomping markers, not content.
+    while (body.length > 0 && body[body.length - 1].trim() === '') { body.pop(); }
+
+    let text = header.folded ? foldBlockLines(body) : body.join('\n');
+    if (text.length > 0 && header.chomp !== '-') {
+        text += '\n'; // clip (`''`) / keep (`+`) — one trailing break is enough here
+    }
+    return { text, nextIndex: index };
+}
+
+/** Expands the escape sequences YAML allows inside a double-quoted scalar. */
+function unescapeDoubleQuoted(value: string): string {
+    return value.replace(/\\(x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8}|[\s\S])/g, (match, esc: string) => {
+        switch (esc[0]) {
+            case '0': return '\0';
+            case 'a': return '\x07';
+            case 'b': return '\b';
+            case 't': return '\t';
+            case 'n': return '\n';
+            case 'v': return '\v';
+            case 'f': return '\f';
+            case 'r': return '\r';
+            case 'e': return '\x1b';
+            case ' ': return ' ';
+            case '"': return '"';
+            case '/': return '/';
+            case '\\': return '\\';
+            case 'N': return '\u0085';
+            case '_': return '\u00a0';
+            case 'L': return '\u2028';
+            case 'P': return '\u2029';
+            case 'x':
+            case 'u':
+            case 'U': {
+                const codePoint = parseInt(esc.slice(1), 16);
+                return Number.isFinite(codePoint) && codePoint >= 0 && codePoint <= 0x10FFFF
+                    ? String.fromCodePoint(codePoint)
+                    : match;
+            }
+            default: return match;
+        }
+    });
+}
+
+/** Removes the quoting of a single-line YAML scalar and unescapes it. */
+function unquoteYamlScalar(value: string): string {
+    if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
+        return unescapeDoubleQuoted(value.slice(1, -1));
+    }
+    if (value.length >= 2 && value.startsWith("'") && value.endsWith("'")) {
+        return value.slice(1, -1).replace(/''/g, "'");
+    }
+    return value;
+}
+
 /**
  * Parse the small YAML dialect Copilot writes to `workspace.yaml`
- * (flat `key: value` pairs, optional single/double quotes).
+ * (flat `key: value` pairs, optional single/double quotes, `|`/`>` block
+ * scalars).
+ *
+ * Block scalars matter for the title: Copilot writes `name: |-` followed by an
+ * indented multi-line prompt for auto-titled chats (child chats inherited from
+ * a parent session, for example), and newer builds instead use a double-quoted
+ * scalar with `\r\n` escapes. Both must resolve to the chat's title rather than
+ * to the literal `|-` marker or to the raw escape text.
  *
  * Deliberately not a general YAML parser: the file only ever holds scalars,
  * and pulling in a YAML dependency for this would be overkill.
  */
 export function parseCopilotAgentWorkspaceYaml(raw: string): Record<string, string> {
     const result: Record<string, string> = {};
-    for (const line of raw.split(/\r?\n/)) {
-        const trimmed = line.trim();
+    const lines = raw.split(/\r?\n/);
+
+    for (let i = 0; i < lines.length; i++) {
+        const trimmed = lines[i].trim();
         if (trimmed.length === 0 || trimmed.startsWith('#')) { continue; }
         const match = /^([A-Za-z0-9_-]+)\s*:\s*(.*)$/.exec(trimmed);
         if (!match) { continue; }
-        let value = match[2].trim();
-        if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-            value = value.slice(1, -1);
+
+        const key = match[1];
+        const inline = match[2].trim();
+        const header = parseBlockScalarHeader(inline);
+        if (header) {
+            const { text, nextIndex } = readBlockScalar(lines, i + 1, header);
+            result[key] = text;
+            i = nextIndex - 1;
+            continue;
         }
-        result[match[1]] = value;
+        result[key] = unquoteYamlScalar(inline);
     }
     return result;
 }
@@ -227,7 +388,9 @@ export function parseCopilotAgentSession(sessionDir: string, workspaceId?: strin
 
     const workspacePath = meta['cwd'] || meta['git_root'] || cwd;
     const firstUser = messages.find(m => m.role === 'user')?.content ?? '';
-    const title = meta['name']?.trim() || firstLine(firstUser) || 'Untitled Session';
+    // `name` may be a whole multi-line prompt (block scalar / escaped \r\n);
+    // the chat's title is its first line. Never surface the raw `|-` marker.
+    const title = firstLine(meta['name'] ?? '') || firstLine(firstUser) || 'Untitled Session';
 
     let createdAt = meta['created_at'] || firstTs;
     let updatedAt = meta['updated_at'] || lastTs;

@@ -50,7 +50,7 @@ export class SearchTool implements IMcpTool {
             },
             entityType: {
                 type: 'string',
-                enum: ['filePaths', 'functionNames', 'errors', 'decisions'],
+                enum: ['filePaths', 'functionNames', 'errors', 'decisions', 'uris'],
                 description: 'Filter to sessions that contain the specified entity type (requires entity extraction to have run).',
             },
             entityValue: {
@@ -84,7 +84,7 @@ export class SearchTool implements IMcpTool {
 
         const source = typeof input['source'] === 'string' ? input['source'] : undefined;
         const workspaceId = typeof input['workspaceId'] === 'string' ? input['workspaceId'] : undefined;
-        const entityType = typeof input['entityType'] === 'string' ? input['entityType'] as 'filePaths' | 'functionNames' | 'errors' | 'decisions' : undefined;
+        const entityType = typeof input['entityType'] === 'string' ? input['entityType'] as 'filePaths' | 'functionNames' | 'errors' | 'decisions' | 'uris' : undefined;
         const entityValue = typeof input['entityValue'] === 'string' ? input['entityValue'] : undefined;
 
         const { results } = this.ftse.search({

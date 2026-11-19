@@ -8,6 +8,12 @@ import { Message } from '../types/index';
 export interface VisibleMessage {
     msg:     Message;
     origIdx: number;
+    /**
+     * Feature 51 — true when the message that follows this one in the original
+     * conversation was removed by the user. Used to suppress the "Response not
+     * available" placeholder: the reply exists, it was hidden on purpose.
+     */
+    nextRemoved?: boolean;
 }
 
 // ── Pre-compiled regex constants (module-level, compiled once) ────────────────
@@ -40,6 +46,15 @@ const RE_BOLD        = /\*\*(.+?)\*\*/g;
 const RE_ITALIC      = /\*(.+?)\*/g;
 const RE_STRIKE      = /~~(.+?)~~/g;
 const RE_LINK        = /\[([^\]]+)\]\(([^)]+)\)/g;
+// Auto-link patterns (Feature 52 — bare URLs typed/pasted into a message)
+const RE_BARE_URL    = /\b(?:https?:\/\/|www\.)[^\s<>"'`]+/gi;
+// Angle-bracket autolinks — matched on the already-escaped text, so the
+// brackets are `&lt;` / `&gt;`. `.*?` keeps `&amp;` query separators intact.
+const RE_ANGLED_URL  = /&lt;((?:https?:\/\/|www\.).*?)&gt;/gi;
+const RE_URL_TRAILING = /[.,;:!?'"]+$/;
+const RE_URL_CLOSE_PAREN = /\)$/;
+const RE_ANCHOR_PLACEHOLDER_G = /\x00LA(\d+)\x00/g;
+const RE_WWW_PREFIX = /^www\./i;
 // escapeHtml patterns
 const RE_ESC_CONTROL = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g;
 
@@ -182,9 +197,12 @@ export function renderMessage(
 
     const bookmarkBtn = `<button class="cw-bookmark-btn" data-msg-orig-idx="${origIdx}" title="Bookmark this message">&#9733;</button>`;
     const annotationBtn = `<button class="cw-annotation-btn" data-msg-orig-idx="${origIdx}" title="Add note">&#128221;</button>`;
+    // Feature 51 — remove this turn from the conversation (also reachable from
+    // the turn's context menu). Revealed when the turn is selected / hovered.
+    const removeBtn = `<button class="cw-remove-btn" data-msg-orig-idx="${origIdx}" title="Remove this turn from the conversation" aria-label="Remove this turn">&#8856;</button>`;
     let html = `<div class="message ${roleClass} cw-fade-item"${fadeStyle} data-msg-idx="${origIdx}" id="cw-msg-${turnLabel}">
   <div class="message-header">
-    <span class="role-label">${label}</span><span class="cw-turn-label">${turnLabel}</span>${timestamp}${bookmarkBtn}${annotationBtn}<button class="cw-copy-ref-btn" data-turn="${turnLabel}" title="Copy as reference (${turnLabel})">&#10697;</button>
+    <span class="role-label">${label}</span><span class="cw-turn-label">${turnLabel}</span>${timestamp}${bookmarkBtn}${annotationBtn}<button class="cw-copy-ref-btn" data-turn="${turnLabel}" title="Copy as reference (${turnLabel})">&#10697;</button>${removeBtn}
   </div>
   <div class="message-body" data-raw="${escapeHtml(msg.content)}">${renderedContent}</div>
 </div>`;
@@ -196,7 +214,10 @@ export function renderMessage(
     //   • session has some assistant messages but this one is unanswered → aborted/cancelled.
     const nextEntry = visibleMessages[visibleIdx + 1];
     const hasAssistant = visibleMessages.some(vm => vm.msg.role === 'assistant');
-    if (msg.role === 'user' && (!nextEntry || nextEntry.msg.role === 'user')) {
+    // Feature 51 — when the AI reply that used to follow this prompt was removed
+    // by the user, stay silent instead of claiming it is "cancelled or incomplete".
+    const replyRemoved = visibleMessages[visibleIdx]?.nextRemoved === true;
+    if (msg.role === 'user' && !replyRemoved && (!nextEntry || nextEntry.msg.role === 'user')) {
         if (hasAssistant) {
             const noticeText = msg.interrupted
                 ? '&#9888; Superseded &mdash; a new prompt arrived while AI was processing this one'
@@ -228,13 +249,87 @@ export function escapeHtml(text: string): string {
         .replace(RE_NON_ASCII, c => `&#${c.codePointAt(0)};`);
 }
 
-function applyInline(text: string): string {
+/** Bold / italic / strikethrough — inline formatting that is not a link. */
+function applyEmphasis(text: string): string {
     return text
         .replace(RE_BOLD_ITALIC, '<strong><em>$1</em></strong>')
         .replace(RE_BOLD,        '<strong>$1</strong>')
         .replace(RE_ITALIC,      '<em>$1</em>')
-        .replace(RE_STRIKE,      '<del>$1</del>')
-        .replace(RE_LINK,        '<a href="$2">$1</a>');
+        .replace(RE_STRIKE,      '<del>$1</del>');
+}
+
+/**
+ * Strips sentence punctuation that trails a bare URL instead of belonging to
+ * it — `see http://example.com.` keeps the dot outside the link.
+ *
+ * A closing paren is kept only when it balances an opening one, so
+ * `(http://example.com)` drops the paren while
+ * `http://en.wikipedia.org/wiki/Foo_(bar)` keeps it.
+ */
+function trimUrlTrailing(url: string): string {
+    let trimmed = url.replace(RE_URL_TRAILING, '');
+
+    while (RE_URL_CLOSE_PAREN.test(trimmed)) {
+        const opens  = (trimmed.match(/\(/g) ?? []).length;
+        const closes = (trimmed.match(/\)/g) ?? []).length;
+        if (closes <= opens) { break; }
+        trimmed = trimmed.slice(0, -1).replace(RE_URL_TRAILING, '');
+    }
+
+    return trimmed;
+}
+
+/** Adds the scheme a scheme-less `www.` URL needs to be navigable. */
+function toHref(url: string): string {
+    return RE_WWW_PREFIX.test(url) ? `https://${url}` : url;
+}
+
+/**
+ * Turns bare URLs typed into a message (`http://…`, `https://…`, `www.…`)
+ * into anchors so they are clickable instead of printed as plain text.
+ *
+ * `www.` URLs get an explicit `https://` scheme — otherwise the reader host
+ * would treat them as a relative navigation.
+ */
+function linkifyBareUrls(text: string): string {
+    return text.replace(RE_BARE_URL, (match: string) => {
+        const url = trimUrlTrailing(match);
+        if (url === '') { return match; }
+
+        const trailing = match.slice(url.length);
+        return `<a href="${toHref(url)}">${url}</a>${trailing}`;
+    });
+}
+
+function applyInline(text: string): string {
+    // 1. Protect markdown links first: their URL must not be auto-linked a
+    //    second time (which would nest anchors), and their label keeps its
+    //    emphasis formatting.
+    const anchors: { label: string; url: string; literalLabel?: boolean }[] = [];
+    let out = text.replace(RE_LINK, (_m, label: string, url: string) => {
+        anchors.push({ label, url });
+        return `\x00LA${anchors.length - 1}\x00`;
+    });
+
+    // 2. Angle-bracket autolinks (`<https://…>`, escaped by now): the brackets
+    //    are markup, not part of the address, so consume them and link the URI
+    //    itself instead of leaving `&lt;` / `&gt;` glued to the anchor.
+    out = out.replace(RE_ANGLED_URL, (_m, url: string) => {
+        anchors.push({ label: url, url: toHref(url), literalLabel: true });
+        return `\x00LA${anchors.length - 1}\x00`;
+    });
+
+    // 3. Emphasis first so `**http://…**` links inside the emphasis, then
+    //    auto-link any bare URL that is left.
+    out = linkifyBareUrls(applyEmphasis(out));
+
+    // 4. Restore the protected anchors — markdown labels keep their emphasis
+    //    formatting, angle-bracket labels are emitted verbatim.
+    return out.replace(RE_ANCHOR_PLACEHOLDER_G, (_m, idx: string) => {
+        const anchor = anchors[+idx];
+        const label = anchor.literalLabel ? anchor.label : applyEmphasis(anchor.label);
+        return `<a href="${anchor.url}">${label}</a>`;
+    });
 }
 
 export function markdownToHtml(markdown: string): string {

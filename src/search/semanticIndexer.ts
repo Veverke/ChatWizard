@@ -254,6 +254,9 @@ interface ModelFailureRecord {
 function sessionFingerprint(session: Session): string {
     const hash = createHash('sha256');
     hash.update(session.title ?? '');
+    // Feature 51 — a removal changes the indexed content without changing any
+    // message text, so the removed count participates in the fingerprint.
+    hash.update(`\0removed:${session.messages.filter(m => m.removed).length}`);
     for (const message of session.messages) {
         hash.update('\0');
         hash.update(message.role);
@@ -653,6 +656,8 @@ export class SemanticIndexer implements ISemanticIndexer {
 
         for (let msgIdx = 0; msgIdx < session.messages.length; msgIdx++) {
             const msg = session.messages[msgIdx];
+            // Feature 51 — turns removed from the conversation are not embedded.
+            if (msg.removed) { continue; }
             const text = msg.content?.trim();
             if (!text) { continue; }
 

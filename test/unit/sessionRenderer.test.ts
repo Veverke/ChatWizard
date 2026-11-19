@@ -120,6 +120,70 @@ suite('sessionRenderer', () => {
             assert.ok(html.includes('text-align:right'));
             assert.ok(html.includes('</table>'));
         });
+
+        suite('bare URL auto-linking', () => {
+            test('links bare http and https URLs', () => {
+                const html = markdownToHtml('See http://www.google.com and https://example.com/docs');
+                assert.ok(html.includes('<a href="http://www.google.com">http://www.google.com</a>'));
+                assert.ok(html.includes('<a href="https://example.com/docs">https://example.com/docs</a>'));
+            });
+
+            test('gives scheme-less www URLs an https href', () => {
+                const html = markdownToHtml('www.github.com');
+                assert.ok(html.includes('<a href="https://www.github.com">www.github.com</a>'));
+            });
+
+            test('keeps trailing sentence punctuation outside the link', () => {
+                const html = markdownToHtml('Read http://example.com.');
+                assert.ok(html.includes('<a href="http://example.com">http://example.com</a>.</p>'));
+            });
+
+            test('keeps balanced parentheses inside the link', () => {
+                const html = markdownToHtml('https://en.wikipedia.org/wiki/Foo_(bar)');
+                assert.ok(html.includes('href="https://en.wikipedia.org/wiki/Foo_(bar)"'));
+            });
+
+            test('drops an unbalanced closing parenthesis', () => {
+                const html = markdownToHtml('(see http://example.com/base)');
+                assert.ok(html.includes('<a href="http://example.com/base">http://example.com/base</a>)'));
+            });
+
+            test('does not re-link markdown link URLs', () => {
+                const html = markdownToHtml('[docs](https://example.com/docs)');
+                assert.strictEqual(html, '<p><a href="https://example.com/docs">docs</a></p>');
+            });
+
+            test('links a URL wrapped in bold markup', () => {
+                const html = markdownToHtml('**https://example.com**');
+                assert.ok(html.includes('<strong><a href="https://example.com">https://example.com</a></strong>'));
+            });
+
+            test('leaves URLs in inline code untouched', () => {
+                const html = markdownToHtml('Use `http://example.com` literally');
+                assert.ok(html.includes('<code>http://example.com</code>'));
+                assert.ok(!html.includes('<a '));
+            });
+
+            test('leaves URLs in fenced code blocks untouched', () => {
+                const html = markdownToHtml('```\ncurl http://example.com\n```');
+                assert.ok(html.includes('curl http://example.com'));
+                assert.ok(!html.includes('<a '));
+            });
+
+            test('links angle-bracket autolinks without the brackets', () => {
+                const html = markdownToHtml('see <https://example.com> and <https://example.com/?a=1&b=2>');
+                assert.ok(html.includes('<a href="https://example.com">https://example.com</a>'));
+                assert.ok(html.includes('href="https://example.com/?a=1&amp;b=2"'));
+                assert.ok(!html.includes('&lt;'), `unexpected escaped bracket: ${html}`);
+                assert.ok(!html.includes('&gt;'), `unexpected escaped bracket: ${html}`);
+            });
+
+            test('keeps query-string separators intact', () => {
+                const html = markdownToHtml('https://example.com/?a=1&b=2');
+                assert.ok(html.includes('href="https://example.com/?a=1&amp;b=2"'));
+                assert.ok(!html.includes('b=2;</a>'), `query separator leaked out of the URL: ${html}`);
+            });
+        });
     });
 
     suite('renderMessage', () => {

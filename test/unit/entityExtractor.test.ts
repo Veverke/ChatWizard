@@ -152,6 +152,57 @@ suite('entityExtractor', () => {
             assert.deepStrictEqual(result.functionNames, []);
             assert.deepStrictEqual(result.errors, []);
             assert.deepStrictEqual(result.decisions, []);
+            assert.deepStrictEqual(result.uris, []);
+        });
+
+        test('extracts http(s) and scheme-less www URIs', () => {
+            const session = makeSession({
+                id: 's1',
+                messages: [
+                    msg('user', 'Compare http://www.google.com with https://example.com/docs and www.github.com.'),
+                ],
+            });
+            assert.deepStrictEqual(extractEntities(session).uris, [
+                'http://www.google.com',
+                'https://example.com/docs',
+                'www.github.com',
+            ]);
+        });
+
+        test('trims sentence punctuation and unbalanced closing parens off URIs', () => {
+            const session = makeSession({
+                id: 's1',
+                messages: [
+                    msg('user', 'See (http://example.org/base), then https://example.com/a?b=1.'),
+                    msg('assistant', 'Wikipedia: https://en.wikipedia.org/wiki/Foo_(bar).'),
+                ],
+            });
+            const uris = extractEntities(session).uris ?? [];
+            assert.ok(uris.includes('http://example.org/base'), `got: ${uris.join(', ')}`);
+            assert.ok(uris.includes('https://example.com/a?b=1'), `got: ${uris.join(', ')}`);
+            assert.ok(uris.includes('https://en.wikipedia.org/wiki/Foo_(bar)'), `got: ${uris.join(', ')}`);
+        });
+
+        test('strips markdown emphasis markers around URIs', () => {
+            const session = makeSession({
+                id: 's1',
+                messages: [msg('user', '**https://example.com**')],
+            });
+            assert.deepStrictEqual(extractEntities(session).uris, ['https://example.com']);
+        });
+
+        test('de-duplicates URIs case-insensitively', () => {
+            const session = makeSession({
+                id: 's1',
+                messages: [msg('user', 'HTTPS://Example.com and https://example.com')],
+            });
+            assert.strictEqual((extractEntities(session).uris ?? []).length, 1);
+        });
+
+        test('limits URIs to 30 items', () => {
+            const many = Array.from({ length: 40 }, (_, i) => `https://example.com/page${i}`).join(' ');
+            const session = makeSession({ id: 's1', messages: [msg('user', many)] });
+            assert.ok((extractEntities(session).uris ?? []).length <= 30);
         });
 
         test('deduplicates extracted entities', () => {

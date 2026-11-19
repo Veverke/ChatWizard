@@ -224,6 +224,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         channel.appendLine(`[Chat Wizard] Skipping SQLite cache — running in ${appName} (better-sqlite3 NODE_MODULE_VERSION mismatch).`);
     }
 
+    // Feature 51 — turn removal is persisted in the chat DB, so the reader only
+    // offers it when the cache is available.
+    SessionWebviewPanel._cacheStore = cacheIntegration?.cacheManager;
+
     // ── Commands view workspace scope (structural) ──────────────────────────
     // The agent-log store is shared by every workspace on the machine (it lives
     // in the shared cache directory), so the Commands view must be scoped — or
@@ -542,6 +546,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // Refresh the index sidecar cache after bookmark/annotation changes so re-opened sessions see the latest data.
     SessionWebviewPanel._onSidecarChanged = async (sessionId: string) => {
         await index.refreshSidecarMeta(sessionId);
+    };
+    // Feature 51 — the reader can remove turns from a conversation; re-publish the
+    // mutated session so the index caches, views and chat DB stay in sync.
+    SessionWebviewPanel._onSessionMutated = (session: import('./types/index').Session) => {
+        index.upsert(session);
     };
 
     // Migrate legacy pin state from globalState → sidecarStore (run once, version-gated).

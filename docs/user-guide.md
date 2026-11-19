@@ -17,6 +17,7 @@ ChatWizard indexes every AI chat session from all your tools (Copilot, Claude, C
    - [Session Status Lifecycle](#session-status-lifecycle)
    - [Session Bookmarks](#session-bookmarks)
    - [Inline Annotations](#inline-annotations)
+   - [Removing Turns from a Conversation](#removing-turns-from-a-conversation)
    - [Session Linking](#session-linking)
    - [Session Tagging](#session-tagging)
    - [Session Archive](#session-archive)
@@ -246,7 +247,7 @@ The Sessions panel is the central hub — every AI session across all tools and 
 
 ### Browsing Sessions
 
-Sessions appear as a list. Click any session to open it in a Markdown reader with full syntax-highlighted code blocks.
+Sessions appear as a list. Click any session to open it in a Markdown reader with full syntax-highlighted code blocks. Links in a conversation are clickable — Markdown links as well as bare `http://…`, `https://…` and `www.…` addresses — and open in your default browser; URLs inside code blocks stay as plain text.
 
 ### Sorting & Grouping
 
@@ -364,6 +365,41 @@ Annotations are stored in the per-workspace metadata file and survive restarts. 
 ```
 Ctrl+Shift+P → Chat Wizard: Search Annotations
 ```
+
+### Removing Turns from a Conversation
+
+Long conversations often carry noise — a cancelled prompt, a wrong answer, a
+pasted dump that adds nothing. You can remove individual turns from the reader
+without touching the original transcript on disk.
+
+**Removing a turn:**
+- **Click** a prompt or a response to select it — the turn gets an outline and
+  its **⊗ remove** button appears in the header. Click it to delete the turn.
+- Or **right-click** the turn → **Remove turn from conversation**.
+- Press **Esc** (or click anywhere outside the turns) to clear the selection.
+
+**What happens:**
+- The turn disappears from the conversation immediately.
+- The conversation header reports it: *Removed: 2 turns*, together with an
+  **original full conversation** link.
+- The removal is persisted in the chat database (`chatwizard-cache.db`,
+  `removed_turns` table), so it survives restarts, re-parsing and source-file
+  pruning. Turn indices are preserved, so bookmarks and annotations keep
+  pointing at the right turns — the bookmark / note attached to the removed turn
+  itself is dropped.
+- Removed turns are excluded from full-text/semantic search results, the Prompt
+  Library, the Code Blocks panel, and the "User Requests" count.
+
+**Opening the original conversation:**
+Click **original full conversation** in the conversation header. Chat Wizard
+rebuilds the complete chat — including every removed turn — from the chat
+database, writes it to
+`<ChatWizard cache folder>/original-conversations/<title>-<id>.md` and opens it
+in a text editor. The link is only shown when at least one turn was removed.
+
+> Removing turns requires the persistent cache (`chatwizard.enablePersistentCache`,
+> on by default in VS Code). In hosts where the native SQLite module cannot be
+> loaded the affordance is hidden, because the removal could not be persisted.
 
 ### Session Linking
 
@@ -1170,11 +1206,12 @@ A second background job extracts structured entities from session content and st
 | Function / class names | `handleLogin`, `AuthService` |
 | Error codes | `SQLITE_BUSY`, `ENOENT`, `TypeError: Cannot read` |
 | Decision phrases | `"I decided to use"`, `"we chose"`, `"the approach is"` |
+| URIs | `http://www.google.com`, `https://example.com/docs`, `www.…` |
 | Semantic entities (LLM) | Frameworks, APIs, Concepts, Tools, Languages — stored as `[type] value` |
 
 **In the session reader:** an always-visible one-line **Entities** row shows two dropdowns — `Entities [type] [entity]`:
 
-- **Type** — the entity types that were actually extracted (`Files`, `Functions`, `Errors`, `Decisions`, plus the LLM sub-types `Frameworks`, `APIs`, `Concepts`, `Tools`, `Languages`), sorted alphabetically. Only types with at least one value are listed. Each `[type] value` semantic entity is grouped under its own sub-type (`[tool] Docker` → **Tools**, `[language] TypeScript` → **Languages**); unknown prefixes become their own pluralized type.
+- **Type** — the entity types that were actually extracted (`Files`, `Functions`, `Errors`, `Decisions`, `Uris`, plus the LLM sub-types `Frameworks`, `APIs`, `Concepts`, `Tools`, `Languages`), sorted alphabetically. Only types with at least one value are listed. Each `[type] value` semantic entity is grouped under its own sub-type (`[tool] Docker` → **Tools**, `[language] TypeScript` → **Languages**); unknown prefixes become their own pluralized type.
 - **Entity** — the values of the selected type, sorted alphabetically (duplicates removed). The `[type]` marker is stripped, so the dropdown only shows the entity itself (e.g. `Docker`, not `[tool] Docker`). Picking a value fills the reader's search box with it and runs the search, so the webview scrolls to the first occurrence in the conversation.
 
 When a session has no extracted entities the row stays visible with a disabled **No entities** state.
