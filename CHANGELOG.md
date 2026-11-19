@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Session reader — entity dropdowns
+
+- **Fixed: plain uppercase words were classified as errors.** The error extractor used a catch-all `E[A-Z_]{2,}` pattern, so any all-caps token starting with `E` — e.g. `ENTITIES`, `ERROR` — landed in the **Errors** dropdown. Errors are now derived from precise patterns only: named exceptions (`TypeError: …`, `JsonWebTokenError`), structured codes (`SQLITE_*`, `ERR_*`, `EAI_*`, known Node/OS errno codes such as `ENOENT`), and HTTP 4xx/5xx statuses with their canonical reason phrase (`403 Forbidden` — but not `503 employees`). The extractor version was bumped so cached false positives are re-extracted.
+- **Entities row is always visible.** The collapsible *Entities* section became a single always-visible row — `Entities [type] [entity]` — with compact, VS Code-themed dropdowns sized to match the surrounding text.
+- **Entities are filterable.** The reader shows two dropdowns: **Type** (Files, Functions, Errors, Decisions, plus the LLM sub-types Frameworks, APIs, Concepts, Tools, Languages — sorted alphabetically, only types that have values) and **Entity** (the values of the selected type, sorted alphabetically and de-duplicated).
+- **Semantic entities are split by sub-type and cleaned.** LLM output such as `[tool] Docker` or `[language] TypeScript` used to be lumped under *Concepts* and displayed (and searched) with its `[type]` marker. Each sub-type is now its own entity type (unknown prefixes become their own pluralized type) and the marker is stripped from the values, so the search matches the conversation text.
+- **Selecting an entity searches for it.** Picking a value in the second dropdown fills the search box with that value and runs the search, scrolling the reader to the first occurrence of the file / function / error / decision / concept / tool / language / framework / API.
+- Grouping and sorting moved into `src/views/sessionEntities.ts` (pure, unit-tested); the pre-sorted groups are shipped to the webview as `entityGroups` instead of the raw `entities` object.
+
 ### Semantic search — blocked-network downloads and graceful degradation
 
 - **Fixed: "Downloading AI model…" could hang forever.** When the model failed to load, the inference worker reported the error without an id, so the parent never settled its init promise and the progress notification stayed on screen indefinitely (log: `Worker error: TypeError: fetch failed`). Init failures now reject through a dedicated `init_error` message, with a parent-side timeout as a backstop.

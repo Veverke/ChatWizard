@@ -74,6 +74,63 @@ suite('entityExtractor', () => {
             assert.ok(result.errors.length > 0);
         });
 
+        test('does not treat plain uppercase words as error codes', () => {
+            const session = makeSession({
+                id: 's1',
+                messages: [
+                    msg('user', 'The ENTITIES functionality lists README files, API docs and TODO items.'),
+                ],
+            });
+            const result = extractEntities(session);
+            assert.deepStrictEqual(
+                result.errors,
+                [],
+                `Uppercase words must not be errors, got: ${result.errors.join('; ')}`,
+            );
+        });
+
+        test('extracts known errno and structured error codes', () => {
+            const session = makeSession({
+                id: 's1',
+                messages: [
+                    msg('user', 'ENOENT: no such file, SQLITE_BUSY and ERR_MODULE_NOT_FOUND keep appearing.'),
+                ],
+            });
+            const result = extractEntities(session);
+            const joined = result.errors.join('; ');
+            assert.ok(result.errors.some(e => e.includes('ENOENT')), joined);
+            assert.ok(result.errors.some(e => e.includes('SQLITE_BUSY')), joined);
+            assert.ok(result.errors.some(e => e.includes('ERR_MODULE_NOT_FOUND')), joined);
+        });
+
+        test('extracts HTTP statuses only with a canonical reason phrase', () => {
+            const session = makeSession({
+                id: 's1',
+                messages: [
+                    msg('user', 'Getting 403 Forbidden and 500 Internal Server Error; the team has 503 employees.'),
+                ],
+            });
+            const result = extractEntities(session);
+            const joined = result.errors.join('; ');
+            assert.ok(result.errors.some(e => e.includes('403 Forbidden')), joined);
+            assert.ok(result.errors.some(e => e.includes('500 Internal Server Error')), joined);
+            assert.ok(!result.errors.some(e => e.includes('employees')), joined);
+        });
+
+        test('extracts named exceptions with their message', () => {
+            const session = makeSession({
+                id: 's1',
+                messages: [
+                    msg('user', 'It failed with JsonWebTokenError: invalid signature when logging in.'),
+                ],
+            });
+            const result = extractEntities(session);
+            assert.ok(
+                result.errors.some(e => e.includes('JsonWebTokenError: invalid signature')),
+                `Expected the named exception, got: ${result.errors.join('; ')}`,
+            );
+        });
+
         test('extracts decision phrases from content', () => {
             const session = makeSession({
                 id: 's1',

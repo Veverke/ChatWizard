@@ -3,6 +3,7 @@ import { SessionIndex } from './index/sessionIndex';
 import { Session, ScopedWorkspace, SessionSource, ChronicleData } from './types/index';
 import { ChatWizardWatcher, startWatcher } from './watcher/fileWatcher';
 import { WorkspaceScopeManager, workspacePathsForIds } from './watcher/workspaceScope';
+import { isSessionInScope } from './watcher/sessionScopeFilter';
 import { discoverCopilotWorkspacesAsync } from './readers/copilotWorkspace';
 import { discoverClaudeWorkspacesAsync } from './readers/claudeWorkspace';
 import { discoverCursorWorkspacesAsync } from './readers/cursorWorkspace';
@@ -1018,7 +1019,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         } else if (event.type === 'upsert') {
             void archiveSession(event.session);
         } else if (event.type === 'remove') {
-            // Source file was deleted — re-surface the archived copy in the live index
+            // Source file was deleted — re-surface the archived copy in the live index.
+            // The archive outlives the source file and can hold sessions of *other*
+            // workspaces, so the same scope rule as the batch restore applies here:
+            // otherwise a file deletion (or a removed out-of-scope live session) would
+            // resurrect a chat that does not belong to this window.
             void (async () => {
                 const entry = await archive.findAnySource(event.sessionId);
                 if (!entry) { return; }
@@ -1026,6 +1031,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 if (!raw) { return; }
                 try {
                     const restored = { ...JSON.parse(raw) as import('./types').Session, archived: true as const };
+                    const scopeRef = _scopeManagerRef;
+                    if (!isSessionInScope(
+                        restored,
+                        scopeRef?.getSelectedIds() ?? [],
+                        scopeRef?.getOpenFolderPaths() ?? []
+                    )) {
+                        channel.appendLine(`[Archive] not restoring ${restored.id} — out of workspace scope`);
+                        return;
+                    }
                     index.upsert(restored);
                 } catch { /* ignore corrupt archive entry */ }
             })();

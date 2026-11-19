@@ -1163,8 +1163,14 @@ A second background job extracts structured entities from session content and st
 | Function / class names | `handleLogin`, `AuthService` |
 | Error codes | `SQLITE_BUSY`, `ENOENT`, `TypeError: Cannot read` |
 | Decision phrases | `"I decided to use"`, `"we chose"`, `"the approach is"` |
+| Semantic entities (LLM) | Frameworks, APIs, Concepts, Tools, Languages — stored as `[type] value` |
 
-**In the session reader:** a collapsible **Entities** section shows chips for extracted entries. File path chips open the file in the editor when clicked. Entity chips use a distinct visual style (🔮 prefix) to distinguish them from user-applied tags.
+**In the session reader:** an always-visible one-line **Entities** row shows two dropdowns — `Entities [type] [entity]`:
+
+- **Type** — the entity types that were actually extracted (`Files`, `Functions`, `Errors`, `Decisions`, plus the LLM sub-types `Frameworks`, `APIs`, `Concepts`, `Tools`, `Languages`), sorted alphabetically. Only types with at least one value are listed. Each `[type] value` semantic entity is grouped under its own sub-type (`[tool] Docker` → **Tools**, `[language] TypeScript` → **Languages**); unknown prefixes become their own pluralized type.
+- **Entity** — the values of the selected type, sorted alphabetically (duplicates removed). The `[type]` marker is stripped, so the dropdown only shows the entity itself (e.g. `Docker`, not `[tool] Docker`). Picking a value fills the reader's search box with it and runs the search, so the webview scrolls to the first occurrence in the conversation.
+
+When a session has no extracted entities the row stays visible with a disabled **No entities** state.
 
 **In MCP search:** `chatwizard_search` accepts optional `entityType` and `entityValue` parameters to pre-filter sessions by extracted entity before full-text scoring.
 

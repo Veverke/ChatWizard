@@ -17,6 +17,7 @@ import {
 import { Session, SessionSource } from '../types/index';
 import { resolveClaudeProjectsPath, resolveClineStoragePath, resolveRooCodeStoragePath, resolveCursorStoragePath, resolveWindsurfStoragePath, resolveAntigravityBrainPath } from './configPaths';
 import { WorkspaceScopeManager } from './workspaceScope';
+import { filterSessionsByWorkspaceScope, isSessionInScope } from './sessionScopeFilter';
 import { getSharedChannel } from '../utils/logger';
 import {
     discoverClineTasksAsync,
@@ -1517,6 +1518,36 @@ this.index.remove(taskId);
         void this.indexFile(session.filePath, session.source, session.workspaceId, session.workspacePath);
     }
 
+    /**
+     * Live-path workspace scoping.
+     *
+     * The batch collector (`buildInitialIndex`) and the cache restore
+     * (`CacheManager.loadAll`) filter by workspace scope, but the incremental
+     * handlers below write straight into the index. Cline 4.x (and Claude,
+     * Cursor, Windsurf) keep their sessions in machine-global stores, so without
+     * this check a chat being written in another window/repository would appear
+     * in *this* window's Sessions view. See `isSessionInScope` for the rules.
+     */
+    private _isInScope(session: Session): boolean {
+        return isSessionInScope(
+            session,
+            this.scopeManager.getSelectedIds(),
+            this.scopeManager.getOpenFolderPaths()
+        );
+    }
+
+    /**
+     * Drops an out-of-scope session from the index (it may have been indexed
+     * before a scope change or by an older build) and records the reason.
+     */
+    private _skipOutOfScope(session: Session, label: string): void {
+        this.index.remove(session.id);
+        this.channel.appendLine(
+            `[live] skipped out-of-scope ${label} session ${session.id} ` +
+            `(workspace: ${session.workspacePath ?? session.workspaceId})`
+        );
+    }
+
     /** Parse and immediately upsert a single file into the index (used for live file-change events). */
     private async indexFile(
         filePath: string,
@@ -1526,6 +1557,10 @@ this.index.remove(taskId);
     ): Promise<Session | undefined> {
         const session = this.parseFile(filePath, source, workspaceId, workspacePath);
         if (session) {
+            if (!this._isInScope(session)) {
+                this._skipOutOfScope(session, source);
+                return undefined;
+            }
             // Feature 25: Attach git context (branch + commit) at index time.
             // Try the session's own workspacePath first, then fall back to the configured workspace.
             const wsPath = session.workspacePath ?? workspacePath;
@@ -1552,6 +1587,10 @@ this.index.remove(taskId);
         if (result.session.messages.length === 0 ||
             result.session.createdAt === new Date(0).toISOString()) {
             this.channel.appendLine(`[skip] empty/epoch cline session ${taskId}`);
+            return;
+        }
+        if (!this._isInScope(result.session)) {
+            this._skipOutOfScope(result.session, 'cline');
             return;
         }
         const before = this.index.size;
@@ -1623,6 +1662,10 @@ this.index.remove(taskId);
             this.channel.appendLine(`[skip] empty/epoch cline 4.x session ${sessionId}`);
             return;
         }
+        if (!this._isInScope(result.session)) {
+            this._skipOutOfScope(result.session, 'cline 4.x');
+            return;
+        }
         const before = this.index.size;
         this.index.upsert(result.session);
         this._liveTracker?.record(result.session.source, result.session.id);
@@ -1640,6 +1683,10 @@ this.index.remove(taskId);
         if (result.session.messages.length === 0 ||
             result.session.createdAt === new Date(0).toISOString()) {
             this.channel.appendLine(`[skip] empty/epoch roocode session ${taskId}`);
+            return;
+        }
+        if (!this._isInScope(result.session)) {
+            this._skipOutOfScope(result.session, 'roocode');
             return;
         }
         const before = this.index.size;
@@ -1711,6 +1758,10 @@ if (composerIdToWsInfo.has(result.session.id)) {
 
         // Global DB sessions take precedence
         for (const session of globalById.values()) {
+            if (!this._isInScope(session)) {
+                this._skipOutOfScope(session, 'cursor');
+                continue;
+            }
             keepIds.add(session.id);
             this.index.upsert(session);
             this._liveTracker?.record(session.source, session.id);
@@ -1722,6 +1773,10 @@ if (composerIdToWsInfo.has(result.session.id)) {
             if (!globalById.has(session.id)) {
                 if (session.messages.length === 0 ||
                     session.createdAt === new Date(0).toISOString()) { continue; }
+                if (!this._isInScope(session)) {
+                    this._skipOutOfScope(session, 'cursor');
+                    continue;
+                }
                 keepIds.add(session.id);
                 this.index.upsert(session);
                 this._liveTracker?.record(session.source, session.id);
@@ -1767,6 +1822,10 @@ if (composerIdToWsInfo.has(result.session.id)) {
                 result.session.createdAt === new Date(0).toISOString()) {
                 continue;
             }
+            if (!this._isInScope(result.session)) {
+                this._skipOutOfScope(result.session, 'windsurf');
+                continue;
+            }
             keepIds.add(result.session.id);
             this.index.upsert(result.session);
             this._liveTracker?.record(result.session.source, result.session.id);
@@ -1790,6 +1849,10 @@ if (composerIdToWsInfo.has(result.session.id)) {
         if (result.session.messages.length === 0 ||
             result.session.createdAt === new Date(0).toISOString()) {
             this.channel.appendLine(`[skip] empty/epoch aider session ${historyFile}`);
+            return;
+        }
+        if (!this._isInScope(result.session)) {
+            this._skipOutOfScope(result.session, 'aider');
             return;
         }
         const before = this.index.size;
@@ -1872,7 +1935,10 @@ if (composerIdToWsInfo.has(result.session.id)) {
     ): Promise<void> {
         const before = this.index.size;
         const session = await this.indexFile(uri.fsPath, source, workspaceId, workspacePath);
-        if (session) { this._liveTracker?.record(session.source, session.id); }
+        // `undefined` means skipped (out of workspace scope, or empty/epoch) —
+        // `indexFile` already logged the reason, so don't claim an update.
+        if (!session) { return; }
+        this._liveTracker?.record(session.source, session.id);
         const sessionId = path.basename(uri.fsPath, '.jsonl');
         const verb = this.index.size > before ? 'added' : 'updated';
         this.channel.appendLine(`[live] ${verb} session ${sessionId} (${source})`);
@@ -1941,62 +2007,12 @@ export async function startWatcher(
 }
 
 // ---------------------------------------------------------------------------
-// Workspace-scope path filtering (pure, unit-testable)
+// Workspace-scope filtering — re-exported for backwards compatibility
 // ---------------------------------------------------------------------------
+//
+// The rule itself lives in `./sessionScopeFilter` so that the batch collector,
+// the incremental live watchers, the archive restore and `CacheManager.loadAll`
+// share a single implementation (this module used to keep its own copy, and
+// `extension.ts` a third).
 
-/**
- * Sources that are scoped by the persisted selected workspace IDs upstream
- * (in the collector methods). They are NOT re-filtered by path here.
- */
-const ID_SCOPED_SOURCES = new Set<SessionSource>(['copilot', 'claude', 'cursor', 'windsurf']);
-
-/**
- * Sources whose sessions carry a real `workspacePath` (extracted during parse)
- * and therefore can be scoped by the VS Code open-folder paths.
- */
-const PATH_SCOPED_SOURCES = new Set<SessionSource>(['cline', 'roocode', 'aider']);
-
-/**
- * Apply workspace-scope filtering to a batch of freshly collected sessions.
- *
- * - ID-scoped sources (Copilot/Claude/Cursor/Windsurf) are already filtered in
- *   their collectors via `selectedIds`, so they pass through unchanged here.
- * - Path-scoped sources (Cline/Roo Code/Aider) are filtered to sessions whose
- *   `workspacePath` falls under one of the open VS Code folders.
- * - Sources that surface no workspace path (Antigravity, Continue, Amazon Q,
- *   Gemini, Tabnine) cannot be scoped by path and are kept as-is.
- *
- * When both `selectedIds` and `openFolderPaths` are empty, no filtering is
- * applied and `all` is returned unchanged.
- */
-export function filterSessionsByWorkspaceScope(
-    all: Session[],
-    selectedIds: string[],
-    openFolderPaths: string[],
-): Session[] {
-    if (selectedIds.length === 0 && openFolderPaths.length === 0) {
-        return all;
-    }
-
-    if (openFolderPaths.length === 0) {
-        return all;
-    }
-
-    const normalizedOpen = openFolderPaths.map(p => path.normalize(p).toLowerCase());
-    // NOTE: this rule is mirrored in `src/watcher/sessionScopeFilter.ts`, which
-    // `CacheManager.loadAll` uses when restoring sessions from the SQLite cache
-    // (importing this module from the cache layer would invert the dependency).
-
-    return all.filter(s => {
-        if (!PATH_SCOPED_SOURCES.has(s.source)) {
-            // ID-scoped sources are already filtered upstream; non-scoped sources
-            // (no workspace path available) pass through.
-            return true;
-        }
-        if (!s.workspacePath) {
-            return false;
-        }
-        const norm = path.normalize(s.workspacePath).toLowerCase();
-        return normalizedOpen.some(p => norm === p || norm.startsWith(p + path.sep));
-    });
-}
+export { filterSessionsByWorkspaceScope };

@@ -24,7 +24,7 @@ import * as fs from 'fs';
 import { Session, Message, SessionSource } from '../types/index';
 import type { SessionIndex } from '../index/sessionIndex';
 import { CACHE_SCHEMA_VERSION } from './schemaVersion';
-import { PATH_SCOPED_SOURCES, filterSessionsByWorkspaceScope } from '../watcher/sessionScopeFilter';
+import { GLOBAL_WORKSPACE_IDS, PATH_SCOPED_SOURCES, filterSessionsByWorkspaceScope } from '../watcher/sessionScopeFilter';
 
 // ── Public Types ─────────────────────────────────────────────────────────────
 
@@ -133,14 +133,6 @@ export interface ICacheManager {
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const DB_FILENAME = 'chatwizard-cache.db';
-
-/**
- * Workspace ids that are not VS Code workspace hashes and must always be
- * restored from cache regardless of the persisted workspace scope:
- *   - `cursor-global` / `windsurf-global` — AI-tool global storage DBs;
- *   - `copilot-agent` — Copilot chats kept in `~/.copilot/session-state`.
- */
-const GLOBAL_WORKSPACE_IDS: readonly string[] = ['cursor-global', 'windsurf-global', 'copilot-agent'];
 
 // ── CacheManager Implementation ──────────────────────────────────────────────
 

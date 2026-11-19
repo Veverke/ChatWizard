@@ -11,6 +11,7 @@ import {
     escapeHtml,
     markdownToHtml,
 } from './sessionRenderer';
+import { buildEntityTypeGroups } from './sessionEntities';
 
 // ── Streaming constants ───────────────────────────────────────────────────────
 const INITIAL_WINDOW = 50;   // messages shown in initial render
@@ -292,7 +293,7 @@ export class SessionWebviewPanel {
             filePath:         session.filePath,
             branch:           session.gitContext?.branch ?? session.chronicleData?.branch ?? null,
             tags:             state.tags ?? [],
-            entities:         state.entities ?? null,
+            entityGroups:     buildEntityTypeGroups(state.entities),
             summary:          state.summary ?? null,
             status:           state.status ?? null,
             bookmarks:        state.bookmarks?.map(b => ({
@@ -457,23 +458,44 @@ export class SessionWebviewPanel {
       font-size: 0.75em; font-weight: 500;
       margin: 0 4px 0 0; border: 1px solid currentColor; opacity: 0.88;
     }
-    details#session-entities {
+    /* Always-visible one-line row: Entities [type] [entity] */
+    #session-entities {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: nowrap;
       font-size: 0.82em;
       margin-bottom: 8px;
       padding-bottom: 8px;
       border-bottom: 1px solid var(--vscode-textBlockQuote-background, #444);
+      min-width: 0;
     }
-    .cw-entities-summary { cursor: pointer; opacity: 0.65; user-select: none; }
-    .cw-entities-summary:hover { opacity: 1; }
-    #session-entities-body { padding-top: 5px; display: flex; flex-direction: column; gap: 4px; }
-    .cw-entity-row { display: flex; flex-wrap: wrap; gap: 3px; align-items: baseline; }
-    .cw-entity-row-label { font-weight: 600; opacity: 0.65; margin-right: 3px; white-space: nowrap; }
-    .cw-entity-chip {
-      display: inline-block; border-radius: 3px; padding: 0 5px;
-      font-size: 0.92em; font-family: var(--vscode-editor-font-family, monospace);
-      background: var(--vscode-textBlockQuote-background, rgba(128,128,128,0.15));
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 28em;
+    .cw-entity-label {
+      flex: 0 0 auto;
+      font-weight: 600;
+      opacity: 0.7;
+      white-space: nowrap;
     }
+    .cw-entity-select {
+      flex: 0 1 auto;
+      min-width: 6em;
+      height: 20px;
+      margin: 0;
+      padding: 0 4px;
+      font-family: var(--vscode-font-family, sans-serif);
+      font-size: 1em;
+      line-height: 1.2;
+      text-overflow: ellipsis;
+      background-color: var(--vscode-dropdown-background, var(--vscode-input-background, #3c3c3c));
+      color: var(--vscode-dropdown-foreground, var(--vscode-input-foreground, #cccccc));
+      border: 1px solid var(--vscode-dropdown-border, var(--vscode-input-border, #555));
+      border-radius: 2px;
+      outline: none;
+    }
+    #entity-type-select { max-width: 13em; }
+    #entity-value-select { flex: 1 1 auto; min-width: 9em; max-width: 34em; }
+    .cw-entity-select:focus { border-color: var(--vscode-focusBorder, #007fd4); }
+    .cw-entity-select:disabled { opacity: 0.55; }
     .toolbar {
       position: sticky;
       top: 0;
@@ -855,10 +877,11 @@ export class SessionWebviewPanel {
     <span class="meta-sep" style="display:none" id="session-branch-sep"> &nbsp;·&nbsp; </span>
     <span id="session-branch-field" class="cw-meta-branch" style="display:none"><span id="session-branch-icon" style="opacity:0.6">⎇</span> <span class="cw-meta-label">Branch:</span> <span id="session-branch"></span></span>
   </div>
-  <details id="session-entities" style="display:none">
-    <summary class="cw-entities-summary">&#128269; Entities</summary>
-    <div id="session-entities-body"></div>
-  </details>
+  <div id="session-entities" role="group" aria-label="Entities">
+    <span class="cw-entity-label">Entities</span>
+    <select id="entity-type-select" class="cw-entity-select" aria-label="Entity type" title="Filter entities by type" disabled></select>
+    <select id="entity-value-select" class="cw-entity-select" aria-label="Entity value" title="Select an entity to search for it in this session" disabled></select>
+  </div>
   <div id="bookmarks-section">
     <summary style="cursor:pointer;opacity:0.65;user-select:none;font-size:0.82em;">&#9733; Bookmarks</summary>
     <div id="bookmarks-list"></div>
@@ -1400,6 +1423,79 @@ ${cwInteractiveJs()}
     }
   });
 
+  // ── Entity dropdowns ───────────────────────────────────────────────────────
+  // Always-visible one-line row: Entities [type] [entity].
+  // 1st dropdown: entity type (already sorted alphabetically by the host).
+  // 2nd dropdown: the values of the selected type (also pre-sorted by the host).
+  // Choosing a value reuses the search bar: the term is typed in and searched,
+  // which scrolls the reader to the first occurrence.
+  var entTypeSel   = document.getElementById('entity-type-select');
+  var entValueSel  = document.getElementById('entity-value-select');
+  var _entityGroups = [];
+  function addPlaceholderOption(sel, text) {
+    var opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = text;
+    sel.appendChild(opt);
+  }
+  function populateEntityValues() {
+    if (!entTypeSel || !entValueSel) { return; }
+    var group = _entityGroups[parseInt(entTypeSel.value, 10)];
+    var items = group ? group.items : [];
+    entValueSel.innerHTML = '';
+    entValueSel.disabled = items.length === 0;
+    if (items.length === 0) {
+      addPlaceholderOption(entValueSel, '\\u2014');
+      return;
+    }
+    addPlaceholderOption(entValueSel, 'Select an entity\\u2026');
+    items.forEach(function(item, i) {
+      var opt = document.createElement('option');
+      opt.value = String(i);
+      opt.textContent = item;
+      opt.title = item;
+      entValueSel.appendChild(opt);
+    });
+  }
+  function renderEntityDropdowns(groups) {
+    _entityGroups = (groups || []).filter(function(g) {
+      return !!g && !!g.items && g.items.length > 0;
+    });
+    if (!entTypeSel) { return; }
+    entTypeSel.innerHTML = '';
+    if (_entityGroups.length === 0) {
+      addPlaceholderOption(entTypeSel, 'No entities');
+      entTypeSel.disabled = true;
+      populateEntityValues();
+      return;
+    }
+    entTypeSel.disabled = false;
+    _entityGroups.forEach(function(g, i) {
+      var opt = document.createElement('option');
+      opt.value = String(i);
+      opt.textContent = g.label;
+      entTypeSel.appendChild(opt);
+    });
+    entTypeSel.value = '0';
+    populateEntityValues();
+  }
+  function searchForEntity(value) {
+    if (!value) { return; }
+    srchInput.value = value;
+    srchCounter.textContent = '';
+    runSearch(value);
+  }
+  if (entTypeSel) { entTypeSel.addEventListener('change', populateEntityValues); }
+  if (entValueSel) {
+    entValueSel.addEventListener('change', function() {
+      if (!entTypeSel) { return; }
+      var group = _entityGroups[parseInt(entTypeSel.value, 10)];
+      var idx   = parseInt(entValueSel.value, 10);
+      if (!group || isNaN(idx) || group.items[idx] === undefined) { return; }
+      searchForEntity(group.items[idx]);
+    });
+  }
+
   // ── Scroll helpers ─────────────────────────────────────────────────────────
   var _toolbar = document.querySelector('.toolbar');
   function cwScrollTo(el) {
@@ -1556,42 +1652,8 @@ ${cwInteractiveJs()}
           tagsEl.style.display = 'none';
         }
       }
-      // Entities collapsible section
-      var entitiesEl = document.getElementById('session-entities');
-      var entitiesBody = document.getElementById('session-entities-body');
-      if (entitiesEl && entitiesBody) {
-        var ent = data.entities || {};
-        var entGroups = [
-          { label: '\uD83D\uDCC4 Files',        items: ent.filePaths },
-          { label: '\u2699\uFE0F Functions',     items: ent.functionNames },
-          { label: '\u26A0\uFE0F Errors',        items: ent.errors },
-          { label: '\uD83D\uDCA1 Decisions',     items: ent.decisions },
-          { label: '\uD83E\uDDE0 Concepts',      items: ent.semantic }
-        ];
-        var nonEmpty = entGroups.filter(function(g) { return g.items && g.items.length > 0; });
-        if (nonEmpty.length > 0) {
-          entitiesBody.innerHTML = '';
-          nonEmpty.forEach(function(g) {
-            var row = document.createElement('div');
-            row.className = 'cw-entity-row';
-            var lbl = document.createElement('span');
-            lbl.className = 'cw-entity-row-label';
-            lbl.textContent = g.label + ': ';
-            row.appendChild(lbl);
-            g.items.forEach(function(item) {
-              var chip = document.createElement('span');
-              chip.className = 'cw-entity-chip';
-              chip.textContent = item;
-              chip.title = item;
-              row.appendChild(chip);
-            });
-            entitiesBody.appendChild(row);
-          });
-          entitiesEl.style.display = 'block';
-        } else {
-          entitiesEl.style.display = 'none';
-        }
-      }
+      // Entities row — always visible: Entities [type] [entity]
+      renderEntityDropdowns(data.entityGroups || []);
       // Status chip
       var statusEl = document.getElementById('session-status');
       if (data.status) {

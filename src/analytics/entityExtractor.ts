@@ -15,7 +15,7 @@ import { SidecarMetadataStore } from '../index/sidecarMetadataStore';
 import { extractEntitiesWithLlm } from './entityLlmExtractor';
 
 /** Current version of the extractor — bump when extraction logic changes to invalidate caches. */
-export const ENTITIES_VERSION = 2;
+export const ENTITIES_VERSION = 3;
 
 // ─── Regex patterns ───────────────────────────────────────────────────────────
 
@@ -25,7 +25,44 @@ const FUNCTION_CLASS_RE = /\b(?:function|class|const|let|var|def|fn|func|method|
 
 const BACKTICK_FUNC_RE = /`([A-Za-z_]\w+)\(\)`/g;
 
-const ERROR_RE = /\b((?:Error|Exception|TypeError|ReferenceError|SyntaxError|RangeError|URIError|EvalError|NetworkError|TimeoutError|AbortError|NotFoundError|PermissionError|IOError|ValueError|KeyError|IndexError|AttributeError|RuntimeError|OverflowError|MemoryError|RecursionError)\b[^.;\n]*|[A-Za-z]\w+(?:Error|Exception)\b[^.;\n]*|SQLITE_\w+|ENOENT|EACCES|EPERM|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EHOSTUNREACH|EADDRINUSE|ENOMEM|E[A-Z_]{2,}|4\d\d\s+\w[\w\s]{0,30}|5\d\d\s+\w[\w\s]{0,30})/g;
+/**
+ * Named exceptions — `TypeError: Cannot read …`, `JsonWebTokenError`,
+ * `MyCustomException`. Bare `Error` / `Exception` are only matched when they
+ * introduce a message (`Error: …`), so prose like "error handling" is ignored.
+ */
+const NAMED_ERROR_RE = /\b(?:[A-Za-z]\w*(?:Error|Exception)\b(?::\s*[^.;\n]{0,120})?|(?:Error|Exception):\s*[^.;\n]{0,120})/g;
+
+/**
+ * Well-known errno codes emitted by Node.js / the OS. This is deliberately an
+ * allowlist: the old `E[A-Z_]{2,}` catch-all treated any uppercase word
+ * starting with E (e.g. `ENTITIES`) as an error code.
+ */
+const ERRNO_CODES: readonly string[] = [
+    'EACCES', 'EADDRINUSE', 'EADDRNOTAVAIL', 'EAFNOSUPPORT', 'EAGAIN', 'EBADF',
+    'EBUSY', 'ECHILD', 'ECONNABORTED', 'ECONNREFUSED', 'ECONNRESET', 'EDEADLK',
+    'EDOM', 'EDQUOT', 'EEXIST', 'EFAULT', 'EFBIG', 'EHOSTUNREACH', 'EINTR',
+    'EINVAL', 'EIO', 'EISDIR', 'ELOOP', 'EMFILE', 'EMLINK', 'EMSGSIZE',
+    'ENAMETOOLONG', 'ENETDOWN', 'ENETUNREACH', 'ENFILE', 'ENOBUFS', 'ENODATA',
+    'ENODEV', 'ENOENT', 'ENOEXEC', 'ENOLCK', 'ENOLINK', 'ENOMEM', 'ENOMSG',
+    'ENOPROTOOPT', 'ENOSPC', 'ENOSR', 'ENOSTR', 'ENOSYS', 'ENOTCONN',
+    'ENOTDIR', 'ENOTEMPTY', 'ENOTFOUND', 'ENOTRECOVERABLE', 'ENOTSOCK',
+    'ENOTSUP', 'ENOTTY', 'ENXIO', 'EOPNOTSUPP', 'EOVERFLOW', 'EOWNERDEAD',
+    'EPERM', 'EPIPE', 'EPROTO', 'EPROTONOSUPPORT', 'ERANGE', 'EREMOTE',
+    'EROFS', 'ESPIPE', 'ESRCH', 'ESTALE', 'ETIME', 'ETIMEDOUT', 'ETXTBSY',
+    'EWOULDBLOCK', 'EXDEV',
+];
+
+/** Structured error codes: SQLite extended results, Node `ERR_*`, DNS `EAI_*`, errno. */
+const ERROR_CODE_RE = new RegExp(
+    String.raw`\b(?:SQLITE_[A-Z0-9_]+|ERR_[A-Z0-9_]+|EAI_[A-Z0-9_]+|(?:${ERRNO_CODES.join('|')}))\b`,
+    'g',
+);
+
+/**
+ * HTTP 4xx/5xx statuses. Requires the canonical reason phrase (or the word
+ * "error"), so an arbitrary number such as "503 employees" is not an error.
+ */
+const HTTP_STATUS_RE = /\b(?:4\d\d|5\d\d)\s+(?:bad request|unauthorized|payment required|forbidden|not found|method not allowed|not acceptable|proxy authentication required|request timeout|conflict|gone|length required|precondition failed|payload too large|uri too long|unsupported media type|range not satisfiable|expectation failed|i'?m a teapot|unprocessable entity|too early|too many requests|request header fields too large|unavailable for legal reasons|internal server error|not implemented|bad gateway|service unavailable|gateway timeout|http version not supported|variant also negotiates|insufficient storage|loop detected|not extended|network authentication required|errors?)\b/gi;
 
 const DECISION_RE = /\b(?:I\s+(?:decided|chose|will use|am going to|have decided|went with)|we\s+(?:chose|decided|will use|went with|are going to)|the\s+(?:approach|decision|plan|strategy|solution)\s+is|decided\s+to\s+use|going\s+with|sticking\s+with|opted\s+for)\s+.{0,80}/gi;
 
@@ -40,7 +77,7 @@ export function extractEntities(session: Session): ExtractedEntities {
 
     const filePaths = extractUnique(allContent, FILE_PATH_RE, 50);
     const functionNames = extractFunctionNames(allContent);
-    const errors = extractUnique(allContent, ERROR_RE, 30);
+    const errors = extractErrors(allContent);
     const decisions = extractDecisions(allContent);
 
     return { filePaths, functionNames, errors, decisions };
@@ -58,6 +95,30 @@ function extractUnique(text: string, re: RegExp, maxItems: number): string[] {
         if (val && !seen.has(key)) {
             seen.add(key);
             results.push(val);
+        }
+    }
+
+    return results;
+}
+
+/**
+ * Collects errors from three precise sources — named exceptions, structured
+ * error codes and HTTP statuses — de-duplicating across them.
+ *
+ * Deliberately does NOT match arbitrary ALL-CAPS words: `ENTITIES`, `README`
+ * or `TODO` are not error codes.
+ */
+function extractErrors(text: string): string[] {
+    const seen = new Set<string>();
+    const results: string[] = [];
+
+    for (const re of [NAMED_ERROR_RE, ERROR_CODE_RE, HTTP_STATUS_RE]) {
+        for (const value of extractUnique(text, re, 30)) {
+            const key = value.toLowerCase();
+            if (seen.has(key)) { continue; }
+            seen.add(key);
+            results.push(value);
+            if (results.length >= 30) { return results; }
         }
     }
 
