@@ -138,7 +138,11 @@ export class FileHistoryPanel implements vscode.Disposable {
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
+<!-- script-src must stay 'unsafe-inline': VS Code re-serialises webview markup
+     through DOMParser + outerHTML, which strips nonce attribute values, so a
+     nonce-based policy would block this page's script (row clicks + sorting).
+     See docs/troubleshooting/search-issue-analysis.md. -->
 <style>
   body { font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); color: var(--vscode-foreground); padding: 16px; }
   h2 { font-size: 1.1em; margin-bottom: 4px; }

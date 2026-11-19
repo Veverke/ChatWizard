@@ -48,6 +48,8 @@ export * from './diffExplorerProvider';
 export * from './commandsViewProvider';
 export * from './diffViewer';
 export * from './logEventSummary';
+export * from './commandStatements';
+export * from './commandPurpose';
 export * from './logEventWebview';
 export * from './runInTerminal';
 export * from './logsCommands';

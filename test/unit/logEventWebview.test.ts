@@ -12,16 +12,19 @@
 import * as assert from 'assert';
 import {
     buildEventDetailSections,
+    DESCRIPTION_LOADING_TEXT,
     escapeHtml,
     eventDetailText,
     eventMetaRows,
+    initialEventDescription,
     renderEventHtml,
     renderCodeBlockAction,
     renderSections,
     shortEventLabel,
     EventDetailSection,
 } from '../../src/logs/logEventWebview';
-import { LogEvent } from '../../src/logs/types';
+import { clearCommandPurposeCache, deriveCommandPurpose } from '../../src/logs/commandPurpose';
+import { CommandEvent, LogEvent } from '../../src/logs/types';
 
 function makeEvent(overrides: Partial<LogEvent> & { id: string; timestamp: string }): LogEvent {
     return {
@@ -180,6 +183,47 @@ suite('logEventWebview — HTML rendering', () => {
         assert.ok(html.includes('<span class="cw-kind">Executed Command</span>'));
         assert.ok(html.includes('Open Session'));
         assert.ok(html.includes("raw.split('\\n')"), 'embedded JS keeps its newline escape');
+    });
+});
+
+suite('logEventWebview — inline script', () => {
+    type EventInput = Partial<LogEvent> & { id: string; timestamp: string };
+
+    /**
+     * Extract every inline `<script>` body from the rendered page.
+     * Drops the tags themselves — only the executable text is validated.
+     */
+    function inlineScripts(html: string): string[] {
+        return [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)].map((m) => m[1]);
+    }
+
+    test('the page scripts parse as valid JavaScript', () => {
+        const event = makeEvent({
+            id: 'c1',
+            timestamp: '2026-01-01T10:00:00.000Z',
+            commandText: 'git diff --stat && echo "a; b"',
+            cwd: '/repo',
+            exitCode: 0,
+            shell: 'bash',
+            stdoutSummary: 'ok',
+        } as EventInput) as LogEvent;
+
+        const scripts = inlineScripts(renderEventHtml(event, 'nonce123'));
+        assert.ok(scripts.length > 0, 'expected at least one inline script');
+        for (const script of scripts) {
+            // A TypeScript cast (or any other non-JS syntax) inside a template
+            // literal produces a SyntaxError in the webview, which aborts the
+            // *whole* script block — the `ready` handshake then never fires and
+            // the Description patch below never runs.
+            try {
+                // eslint-disable-next-line no-new-func
+                new Function(script);
+            } catch (err) {
+                assert.fail(
+                    `inline script must parse as JavaScript — V8 says: ${(err as Error).message}`
+                );
+            }
+        }
     });
 });
 
@@ -415,4 +459,127 @@ suite('logEventWebview — file-op, planner and page edge cases', () => {
         assert.ok(html.includes('id="copyBtn"'));
     });
 });
+
+suite('logEventWebview — model-derived description and multi-line commands', () => {
+    type EventInput = Partial<LogEvent> & { id: string; timestamp: string };
+
+    // The Description placeholder depends on the shared free-model cache state.
+    setup(() => clearCommandPurposeCache());
+    teardown(() => clearCommandPurposeCache());
+
+    /** A command row whose Description is derived by the free model. */
+    function commandEvent(): CommandEvent {
+        return makeEvent({ id: 'c1', timestamp: 'T', commandText: 'rg TOKEN src' } as EventInput) as CommandEvent;
+    }
+
+    test('a command sequence renders one statement per line', () => {
+        const event = makeEvent({
+            id: 'c1',
+            timestamp: 'T',
+            commandText: 'cd repo && npm install; rg "TOKEN" src',
+            cwd: '/repo',
+        } as EventInput) as LogEvent;
+
+        const input = sectionNamed(event, 'Input');
+        const commandBlock = input.code.find((b) => b.language === 'bash');
+        assert.ok(commandBlock, 'expected the command block');
+        assert.strictEqual(commandBlock?.text, 'cd repo &&\nnpm install;\nrg "TOKEN" src');
+
+        // The Run button still runs the original, untouched command text.
+        assert.strictEqual(commandBlock?.action, 'runInTerminal');
+    });
+
+    test('buildEventDetailSections accepts a description override', () => {
+        const event = makeEvent({ id: 'c1', timestamp: 'T', commandText: 'rg TOKEN src' } as EventInput) as LogEvent;
+
+        const heuristic = buildEventDetailSections(event)[0];
+        assert.match(heuristic.rows[0][1], /^Searches the file system: rg TOKEN src$/);
+
+        const overridden = buildEventDetailSections(event, 'Searches src for the TOKEN string.')[0];
+        assert.deepStrictEqual(overridden.rows, [['What happened', 'Searches src for the TOKEN string.']]);
+
+        // An empty override is ignored, so the heuristic sentence survives.
+        const blank = buildEventDetailSections(event, '   ')[0];
+        assert.strictEqual(blank.rows[0][1], heuristic.rows[0][1]);
+    });
+
+    test('the rendered page tags the Description value and accepts live updates', () => {
+        const event = makeEvent({ id: 'c1', timestamp: 'T', commandText: 'rg TOKEN src' } as EventInput) as LogEvent;
+
+        const heuristicHtml = renderSections(event);
+        assert.ok(heuristicHtml.includes('id="cwDescriptionValue"'), 'Description value carries an id');
+
+        const html = renderEventHtml(event, 'nonce', 'Searches src for the TOKEN string.');
+        assert.ok(html.includes('Searches src for the TOKEN string.'));
+        assert.ok(html.includes("msg.command !== 'updateDescription'"));
+        assert.ok(html.includes("getElementById('cwDescriptionValue')"));
+    });
+
+    test('eventDetailText mirrors the description it was given', () => {
+        const event = makeEvent({ id: 'c1', timestamp: 'T', commandText: 'rg TOKEN src' } as EventInput) as LogEvent;
+        const text = eventDetailText(event, 'Searches src for the TOKEN string.');
+        assert.ok(text.includes('What happened: Searches src for the TOKEN string.'));
+    });
+
+    test('the Description starts as a loading placeholder, then takes the purpose', async () => {
+        // No answer cached yet → the row paints the placeholder with its styling.
+        assert.strictEqual(initialEventDescription(commandEvent()), DESCRIPTION_LOADING_TEXT);
+
+        const html = renderEventHtml(commandEvent(), 'nonce123', DESCRIPTION_LOADING_TEXT);
+        assert.ok(html.includes('Loading…'), 'the placeholder text is rendered');
+        assert.ok(
+            html.includes('class="cw-v cw-loading" id="cwDescriptionValue"'),
+            'the Description value carries the loading class'
+        );
+        assert.ok(html.includes('.cw-loading'), 'the placeholder styling ships with the page');
+        assert.ok(
+            html.includes("target.classList.remove('cw-loading')"),
+            'the patch drops the loading styling once the answer lands'
+        );
+
+        // A cached purpose wins over the placeholder.
+        await deriveCommandPurpose(commandEvent(), {
+            complete: async () => 'Searches src for the TOKEN string.',
+        });
+        assert.strictEqual(initialEventDescription(commandEvent()), 'Searches src for the TOKEN string.');
+    });
+
+    test('no model answering restores the heuristic description (placeholder never sticks)', async () => {
+        const event = commandEvent();
+        // Resolve the free-model question with "no answer".
+        assert.strictEqual(await deriveCommandPurpose(event, { complete: async () => null }), null);
+
+        // The answer is settled, so the page renders the heuristic sentence — not
+        // a placeholder — and `describeLogEvent` is what the host patches back in.
+        assert.strictEqual(initialEventDescription(event), undefined);
+        assert.strictEqual(
+            eventDetailText(event, initialEventDescription(event)),
+            eventDetailText(event),
+            'the fallback text is exactly the heuristic rendering'
+        );
+        assert.ok(eventDetailText(event).includes('What happened: Searches the file system: rg TOKEN src'));
+    });
+
+    test('the page CSP allows inline scripts and the page reports itself ready', () => {
+        const html = renderEventHtml(makeEvent({ id: 'c1', timestamp: 'T' } as EventInput) as LogEvent, 'nonce123');
+
+        // Regression: a nonce-based script-src never matches in a VS Code
+        // webview — the host re-serialises the markup via DOMParser + outerHTML
+        // and Chromium hides nonce attribute values there. That silently killed
+        // the Description patch and every button in this panel.
+        assert.ok(
+            /script-src 'unsafe-inline'/.test(html),
+            'script-src must allow inline scripts'
+        );
+        assert.ok(
+            !/script-src[^;]*nonce-/.test(html),
+            'script-src must not rely on a nonce'
+        );
+        assert.ok(
+            html.includes("vscode.postMessage({ command: 'ready' })"),
+            'the page signals that its script actually ran'
+        );
+    });
+});
+
 

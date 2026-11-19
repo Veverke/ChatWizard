@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🧙 Chat Wizard
+# 🐿️ Chat Wizard
 
 **Every AI chat you have ever had — searchable, reusable, and finally in one place.**
 
