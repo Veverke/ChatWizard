@@ -169,15 +169,29 @@ export function parseClineV4LogEvents(
     /** tool_use id → the event ids it created (for tool_result correlation). */
     const toolUseIndex = new Map<string, { kind: string; ids: string[]; name?: string }>();
 
+    /**
+     * 0-based user-prompt turn for the events of the current message.
+     *
+     * In this transcript a `user` message can be either a real prompt (its
+     * content carries `text` parts) or the wrapper around `tool_result` parts;
+     * only the former opens a new turn.
+     */
+    let turnIndex = -1;
+
     for (const message of messages) {
         const timestamp = isoOf(message?.ts);
         const parts = Array.isArray(message?.content) ? message.content : [];
 
+        if (message?.role === 'user' && parts.some((part) => part?.type === 'text')) {
+            turnIndex += 1;
+        }
+        const messageIndex = Math.max(turnIndex, 0);
+
         for (const part of parts) {
             if (part?.type === 'tool_use') {
-                handleToolUse(meta, part, timestamp, events, toolUseIndex);
+                handleToolUse(meta, part, timestamp, events, toolUseIndex, messageIndex);
             } else if (part?.type === 'tool_result') {
-                handleToolResult(meta, part, timestamp, events, toolUseIndex);
+                handleToolResult(meta, part, timestamp, events, toolUseIndex, messageIndex);
             }
         }
     }
@@ -191,7 +205,8 @@ function handleToolUse(
     part: ToolUsePart,
     timestamp: string,
     events: LogEvent[],
-    index: Map<string, { kind: string; ids: string[]; name?: string }>
+    index: Map<string, { kind: string; ids: string[]; name?: string }>,
+    messageIndex: number
 ): void {
     const toolName = part.name ?? '';
     // A `tool_use` without a name cannot be classified (and would render as an
@@ -203,7 +218,7 @@ function handleToolUse(
     if (kind === 'command') {
         const ids: string[] = [];
         for (const commandText of extractCommands(part.input)) {
-            const event = makeCommand(meta, timestamp, commandText, raw);
+            const event = makeCommand(meta, timestamp, commandText, raw, messageIndex);
             events.push(event);
             ids.push(event.id);
         }
@@ -214,7 +229,7 @@ function handleToolUse(
     if (kind === 'diff') {
         const filePath = extractFilePath(part.input) ?? '(unknown)';
         const diffText = extractPatch(part.input) ?? '';
-        const event = makeDiff(meta, timestamp, filePath, diffText, raw);
+        const event = makeDiff(meta, timestamp, filePath, diffText, raw, messageIndex);
         events.push(event);
         if (part.id) { index.set(part.id, { kind, ids: [event.id], name: toolName }); }
         return;
@@ -223,7 +238,7 @@ function handleToolUse(
     if (kind === 'fileOp') {
         const filePath = extractFilePath(part.input) ?? '(unknown)';
         const operationType = fileOperationOf(toolName);
-        const fileEvent = makeFileOperation(meta, timestamp, operationType, filePath, raw);
+        const fileEvent = makeFileOperation(meta, timestamp, operationType, filePath, raw, messageIndex);
         events.push(fileEvent);
         const ids = [fileEvent.id];
 
@@ -232,7 +247,9 @@ function handleToolUse(
         if (searchReplace && (searchReplace.search.length > 0 || searchReplace.replace.length > 0)) {
             const diffText = buildSearchReplaceDiff(filePath, searchReplace.search, searchReplace.replace);
             const counts = countSearchReplaceLines(searchReplace.search, searchReplace.replace);
-            const diffEvent = makeDiff(meta, timestamp, filePath, diffText, raw, counts.added, counts.removed);
+            const diffEvent = makeDiff(
+                meta, timestamp, filePath, diffText, raw, messageIndex, counts.added, counts.removed
+            );
             events.push(diffEvent);
             ids.push(diffEvent.id);
         }
@@ -241,7 +258,7 @@ function handleToolUse(
         return;
     }
 
-    const event = makeToolCall(meta, timestamp, toolName, part.input, raw);
+    const event = makeToolCall(meta, timestamp, toolName, part.input, raw, messageIndex);
     events.push(event);
     if (part.id) { index.set(part.id, { kind, ids: [event.id], name: toolName }); }
 }
@@ -251,7 +268,8 @@ function handleToolResult(
     part: ToolResultPart,
     timestamp: string,
     events: LogEvent[],
-    index: Map<string, { kind: string; ids: string[]; name?: string }>
+    index: Map<string, { kind: string; ids: string[]; name?: string }>,
+    messageIndex: number
 ): void {
     const target = part.tool_use_id ? index.get(part.tool_use_id) : undefined;
     const text = resultToText(part.content);
@@ -273,7 +291,9 @@ function handleToolResult(
 
     const failed = part.is_error === true || part.success === false;
     if (failed) {
-        events.push(makeError(meta, timestamp, capOutput(text, MAX_OUTPUT_CHARS) ?? 'Tool call failed', 'error'));
+        events.push(makeError(
+            meta, timestamp, capOutput(text, MAX_OUTPUT_CHARS) ?? 'Tool call failed', 'error', messageIndex
+        ));
     }
 }
 
@@ -282,9 +302,10 @@ function handleToolResult(
 // Event builders
 // ---------------------------------------------------------------------------
 
-function makeCommand(meta: ParseMeta, timestamp: string, commandText: string, raw: string | undefined): CommandEvent {
+function makeCommand(meta: ParseMeta, timestamp: string, commandText: string, raw: string | undefined, messageIndex: number): CommandEvent {
     return {
         ...base(meta, nextId(meta, 'cmd'), timestamp),
+        messageIndex,
         type: 'command',
         commandText,
         cwd: meta.workspacePath,
@@ -297,13 +318,15 @@ function makeToolCall(
     timestamp: string,
     toolName: string,
     input: unknown,
-    raw: string | undefined
+    raw: string | undefined,
+    messageIndex: number
 ): ToolCallEvent {
     const args = input !== null && typeof input === 'object' && !Array.isArray(input)
         ? input as Record<string, unknown>
         : undefined;
     return {
         ...base(meta, nextId(meta, 'tool'), timestamp),
+        messageIndex,
         type: 'toolCall',
         toolName,
         arguments: args,
@@ -317,11 +340,13 @@ function makeFileOperation(
     operationType: FileOperationEvent['operationType'],
     filePath: string,
     raw: string | undefined,
+    messageIndex: number,
     detail?: string,
     oldPath?: string
 ): FileOperationEvent {
     return {
         ...base(meta, nextId(meta, 'file'), timestamp),
+        messageIndex,
         type: 'fileOperation',
         operationType,
         filePath,
@@ -337,11 +362,13 @@ function makeDiff(
     filePath: string,
     diffText: string,
     raw: string | undefined,
+    messageIndex: number,
     addedLines?: number,
     removedLines?: number
 ): DiffEvent {
     return {
         ...base(meta, nextId(meta, 'diff'), timestamp),
+        messageIndex,
         type: 'diff',
         filePath,
         diffText,
@@ -355,10 +382,12 @@ function makeError(
     meta: ParseMeta,
     timestamp: string,
     message: string,
-    severity: ErrorEvent['severity']
+    severity: ErrorEvent['severity'],
+    messageIndex: number
 ): ErrorEvent {
     return {
         ...base(meta, nextId(meta, 'err'), timestamp),
+        messageIndex,
         type: 'error',
         message,
         severity,

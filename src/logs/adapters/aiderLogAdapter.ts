@@ -251,11 +251,26 @@ export function parseAiderLogHistoryText(
     let editSeq = 0;
     let diffSeq = 0;
 
+    /**
+     * 0-based user-prompt turn for subsequent events (Aider timestamps every
+     * event with the transcript's start time, so the turn is the only way to
+     * attach an action to the response it followed).
+     */
+    let turnIndex = -1;
+
     for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
         const trimmed = line.trim();
 
         if (RE_SESSION_START.test(trimmed)) { continue; }
+
+        // `#### user text` opens a new turn — no event of its own.
+        if (line.startsWith(USER_PREFIX)) {
+            turnIndex += 1;
+            continue;
+        }
+
+        const messageIndex = Math.max(turnIndex, 0);
 
         // ── Fenced block ────────────────────────────────────────────────────
         const fence = FENCE_OPEN_RE.exec(trimmed);
@@ -278,6 +293,7 @@ export function parseAiderLogHistoryText(
                         ...base,
                         id: `${ctx.sessionId}:l${openedAt}:diff${diffSeq++}`,
                         type: 'diff',
+                        messageIndex,
                         timestamp,
                         filePath,
                         diffText,
@@ -298,6 +314,7 @@ export function parseAiderLogHistoryText(
                 ...base,
                 id: `${ctx.sessionId}:l${i}:file${editSeq++}`,
                 type: 'fileOperation',
+                messageIndex,
                 timestamp,
                 operationType: 'patch',
                 filePath: appliedEdit,
@@ -315,6 +332,7 @@ export function parseAiderLogHistoryText(
                 ...base,
                 id: `${ctx.sessionId}:l${i}:cmd${commandSeq++}`,
                 type: 'command',
+                messageIndex,
                 timestamp,
                 commandText: command.commandText,
                 cwd: ctx.workspacePath,

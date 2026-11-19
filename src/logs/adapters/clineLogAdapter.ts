@@ -718,10 +718,37 @@ export function parseClineLogEvents(taskDir: string, source: 'cline' | 'roocode'
     // command message, so this is unambiguous in practice).
     let pendingCommand: { event: CommandEvent } | undefined;
 
+    /**
+     * 0-based user-prompt turn that the following events belong to.
+     *
+     * Cline marks each real prompt (`task` for the first one, `user_feedback`
+     * — and, in newer versions, `task` again — for follow-ups). The reader
+     * groups command events per turn so it can show a chip after the response
+     * that triggered them; `-1` means "before any prompt".
+     */
+    let currentTurn = -1;
+
     for (let i = 0; i < entries.length; i++) {
         const msg = entries[i];
         if (!msg || typeof msg !== 'object') { continue; }
+
+        if (msg.say === 'task' || msg.say === 'user_feedback') {
+            currentTurn += 1;
+        }
+
+        const firstNewEvent = events.length;
         handleMessage(events, errors, ctx, i, msg, pendingCommand);
+
+        // Stamp the turn on the events this message produced. Output chunks
+        // (`command_output`) only mutate the pending command, so they add no
+        // rows here.
+        const turnIndex = Math.max(currentTurn, 0);
+        for (let e = firstNewEvent; e < events.length; e++) {
+            if (events[e].messageIndex === undefined) {
+                events[e].messageIndex = turnIndex;
+            }
+        }
+
         const last = events[events.length - 1];
         if (last && last.type === 'command') {
             pendingCommand = { event: last as CommandEvent };

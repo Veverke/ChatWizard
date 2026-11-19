@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Session reader — per-response Commands chip
+
+- **Every response that triggered agent actions now says so.** A collapsed **Commands** chip follows the reply whose turn ran shell / Git commands, invoked LLM tools or changed files; its summary reads like *2 git cmds · 4 terminal cmds · 3 tool calls*, plus *N failed* when something broke. Clicking the chip expands a tree that mirrors the Commands view sections — **Git Commands**, **Terminal Commands**, **LLM Tool Calls**, **File Changes** and **Errors** — with one row per action (command text + exit badge, `tool [target]` + outcome, file path + `+A −R`, error message).
+- **The Commands data now lives inside the conversation.** No sidebar trip is needed to answer "what did this reply actually run?": the chip is built from the same watch-logs store (`LogService`), so it stays in sync with the Commands view and updates live while an agent is still working.
+- **Rows open the full details.** Clicking (or pressing Enter on) a chip row opens the same detail webview / visual diff editor the Commands view opens for that event.
+- **Correlation without guesswork.** Events are attached to a response by timestamp when the source records message times, by the user-prompt turn (`messageIndex`) added to the Cline / Roo Code and Aider adapters, or by the raw transcript index for Windsurf; events that cannot be correlated are dropped instead of being shown under the wrong reply. Paired patch + diff events render once (the diff), like the Diff Explorer.
+
 ### Session reader — clickable links
 
 - **Bare URLs become links.** `http://…`, `https://…` and scheme-less `www.…` addresses written in a prompt or a response are rendered as anchors instead of plain text, so they open in the default browser like any Markdown link. `www.…` links get an explicit `https://` scheme, and `<https://…>` angle-bracket autolinks lose their brackets.

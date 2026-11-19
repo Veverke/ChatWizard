@@ -432,6 +432,7 @@ Click any session to open it in the **session reader** — a syntax-highlighted,
 - **Header** — source badge, title, workspace, date, model, message count, token estimate, status chip, tag chips, AI summary, and — when something was removed — `Removed: N turns` plus an **original full conversation** link.
 - **Entities row** — always-visible `Entities [type] [entity]` dropdowns (see [Entities Row](#entities-row)).
 - **Transcript** — prompts and responses with role labels (`You` / `Copilot`, `Claude`, …), timestamps and syntax-highlighted code blocks.
+- **Per-response Commands chip** — after every response whose turn executed something, a collapsed **Commands** chip (*2 git cmds · 4 terminal cmds · 3 tool calls · 1 failed*) expands into the executed Git / terminal commands, LLM tool calls, file changes and errors (see [Commands Chip](#commands-chip)).
 - **Links are live** — Markdown links and bare `http://`, `https://` and `www.` addresses open in your default browser. Trailing sentence punctuation stays outside the link, balanced parentheses are preserved, and URLs inside inline/fenced code stay verbatim.
 - **Turn actions** — hover a turn for **★** (bookmark), **📝** (note), **⧉** (copy-as-reference) and, when the persistent cache is available, **⊗** (remove).
 
@@ -457,6 +458,17 @@ Every turn carries a stable label — `P1`, `P2`, … for prompts and `R1`, `R2`
 - The sticky toolbar carries a **Load all messages** button that streams the full transcript in 20-message batches, with a spinner and a *Loading all messages…* label.
 - The per-batch **Load more messages…** button stays for incremental reading; it is hidden while a full load runs (it would only append the same ranges).
 - The button disappears once everything is loaded.
+
+### Commands Chip
+
+Every response whose turn ran agent actions carries a collapsed **Commands** chip right below it — the conversation-level equivalent of the sidebar **Commands** view.
+
+- **The summary counts what ran** — e.g. `2 git cmds · 4 terminal cmds · 3 tool calls · 1 file change`, plus `N failed` when one of them failed. Git invocations are separated from the other terminal commands so a repository-touching turn is recognisable at a glance.
+- **Click the chip to expand a tree** of the executed actions, grouped exactly like the Commands view sections: **Git Commands**, **Terminal Commands**, **LLM Tool Calls**, **File Changes** and **Errors**. Command rows show the command text and its exit badge, tool-call rows show `tool [target]` with its outcome, change rows show the file path with `+A −R`, and error rows show the message and severity.
+- **Rows open the full details.** Click a row (or focus it and press `Enter`) to open the same detail window — or the visual diff editor for a change — that the Commands view uses.
+- **It stays live.** Chips are rebuilt from the shared watch-logs store, so a command that runs while the reader is open appears under its response without reopening the session.
+- **Long turns are capped.** A section renders at most 50 rows and ends with an *… N more* line; the counts always describe the whole turn.
+- Only responses whose turn executed something get a chip; prompts and action-less replies stay plain. Sources without agent logs (no Command / Tool Call events) simply show no chip.
 
 ### Message Bookmarks
 

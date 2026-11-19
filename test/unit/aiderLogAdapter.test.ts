@@ -144,6 +144,19 @@ suite('aiderLogAdapter — parseAiderLogHistoryText', () => {
         }
     });
 
+    test('stamps the user-prompt turn on every event', () => {
+        const raw = [
+            '# aider chat started at 2024-11-15 09:23:45',
+            '#### first request',
+            '> !npm test',
+            '#### second request',
+            '> !git status',
+        ].join('\n');
+
+        const { events } = parseAiderLogHistoryText(raw, CTX);
+        assert.deepStrictEqual(events.map((event) => event.messageIndex), [0, 1]);
+    });
+
     test('falls back to the supplied timestamp when the header is missing', () => {
         const fallback = '2026-01-02T03:04:05.000Z';
         const { events } = parseAiderLogHistoryText('> !ls\n', { ...CTX, fallbackTimestamp: fallback });

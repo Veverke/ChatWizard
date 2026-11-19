@@ -99,6 +99,7 @@ Plus: a rich **session reader**, **file-centric history** (which sessions touche
 
 - Syntax-highlighted transcripts, clickable links (bare URLs included), and `P1`/`R1` turn labels with **copy-as-reference** for quoting a turn in a new chat.
 - **In-transcript search** that automatically loads the *entire* conversation (not just the first 50 messages) before reporting matches, plus a **Load all messages** button.
+- **Per-response Commands chip** — every reply that triggered agent actions carries a collapsed chip summarising what ran (*2 git cmds · 3 tool calls · 1 failed*); expand it to inspect the commands, tool calls, file changes and errors, and click any row to open its details.
 - **Remove a turn** you do not want to keep: the conversation and every index update accordingly, while an **original full conversation** link can always rebuild the untouched chat from the local database.
 - **Entities** row: auto-extracted files, functions, errors, decisions, URIs and LLM-detected tools/frameworks/languages — pick one and the reader jumps to it.
 
@@ -122,6 +123,7 @@ The **Commands** panel captures the *actions*, not just the conversation — fro
 - **Unified Timeline** — commands, file operations, diffs, tool calls, errors and planner steps interleaved as they happened.
 - **Diff Explorer** — every changed file, expandable into its edits, opening in VS Code's **native side-by-side diff**.
 - One shared filter bar (free text, by agent, failures only, event kind) and **Show Agent Log Stats** for per-agent / per-session totals and command success rates.
+- The same data appears *inside* the conversation as a per-response **Commands** chip: the reader answers "what did this reply actually run?" without a sidebar trip.
 
 ### 🧠 Turn history into knowledge
 

@@ -16,6 +16,8 @@ import {
     markdownToHtml,
 } from './sessionRenderer';
 import { buildEntityTypeGroups } from './sessionEntities';
+import { buildCommandChipHtml } from './sessionCommandChips';
+import type { LogEvent, LogEventFilter } from '../logs/types';
 
 // ── Streaming constants ───────────────────────────────────────────────────────
 const INITIAL_WINDOW = 50;   // messages shown in initial render
@@ -47,7 +49,20 @@ interface PanelMsgState {
     status?:          string;
     bookmarks?:       SessionBookmark[];
     annotations?:     import('../types/index').MessageAnnotation[];
+    /**
+     * Per-response **Commands** chips: assistant `origIdx` → rendered HTML.
+     * Rebuilt from the watch-logs store on every render and on
+     * `refreshCommandChips()` (harvesters ingest while a panel is open).
+     */
+    commandChips:     Map<number, string>;
+    /** Events behind `commandChips`, kept so a chip row can open its details. */
+    logEvents:        LogEvent[];
     panel:            vscode.WebviewPanel;
+}
+
+/** Narrow view of `LogService` used by the reader (keeps tests host-free). */
+interface SessionLogEventSource {
+    getEvents(filter?: LogEventFilter): LogEvent[];
 }
 
 export class SessionWebviewPanel {
@@ -97,6 +112,22 @@ export class SessionWebviewPanel {
      * dependent views refresh and the chat DB is re-persisted.
      */
     static _onSessionMutated: ((session: Session) => void) | undefined;
+
+    /**
+     * Normalized agent-execution log store, set from `extension.ts`.
+     *
+     * When present, every response whose turn ran commands / tool calls gets a
+     * collapsed **Commands** chip built by `sessionCommandChips.ts`. When
+     * absent (no persistent store, tests) the reader simply renders no chips.
+     */
+    static _logService: SessionLogEventSource | undefined;
+
+    /**
+     * Opens the clicked chip row's event in the Commands detail webview (or
+     * the visual diff editor). Wired from `extension.ts` to the same handler
+     * the Commands tree uses.
+     */
+    static _onOpenLogEvent: ((event: LogEvent) => void) | undefined;
 
     // ── Public entry point ────────────────────────────────────────────────────
 
@@ -171,6 +202,11 @@ export class SessionWebviewPanel {
 
         const initialWindowEnd = Math.min(windowStart + initialSz, total);
 
+        // Per-response Commands chips — built from the watch-logs store. Chips
+        // are attached outside the rendered-message cache so live harvesting
+        // can refresh them without re-rendering the transcript.
+        const { commandChips, logEvents } = SessionWebviewPanel._buildCommandChips(session);
+
         // ── Re-use existing panel ─────────────────────────────────────────────
         const existing = SessionWebviewPanel._panels.get(session.id);
         if (existing) {
@@ -182,6 +218,7 @@ export class SessionWebviewPanel {
                 windowStart, windowEnd: initialWindowEnd,
                 streamVersion: newVersion,
                 assistantLabel, tags, entities, summary, status, bookmarks, annotations, panel: existing,
+                commandChips, logEvents,
             });
             void SessionWebviewPanel._startStream(
                 session.id, newVersion, userColor, searchTerm, scrollInit, highlightContainer
@@ -204,6 +241,7 @@ export class SessionWebviewPanel {
             streamVersion: 0,
                 assistantLabel, tags, entities, summary, panel,
             status, bookmarks, annotations,
+            commandChips, logEvents,
         });
         SessionWebviewPanel._panels.set(session.id, panel);
 
@@ -246,6 +284,13 @@ export class SessionWebviewPanel {
                 } else if ((msg as any).type === 'removeTurn') {
                     const m = msg as any;
                     void SessionWebviewPanel._removeTurn(session.id, m.messageIndex as number);
+                } else if ((msg as any).type === 'openLogEvent') {
+                    // A row inside a response's Commands chip — open the same
+                    // detail surface the Commands view uses for that event.
+                    const m = msg as any;
+                    const state = SessionWebviewPanel._panelState.get(session.id);
+                    const event = state?.logEvents.find((entry) => entry.id === m.eventId);
+                    if (event) { SessionWebviewPanel._onOpenLogEvent?.(event); }
                 } else if ((msg as any).type === 'openOriginalConversation') {
                     void SessionWebviewPanel._openOriginalConversation(session.id);
                 }
@@ -306,13 +351,14 @@ export class SessionWebviewPanel {
         if (!state || state.streamVersion !== myVersion) { return; }
 
         const { visibleMessages, renderedMessages, windowStart, assistantLabel, panel, session } = state;
+        const commandChips = state.commandChips;
         const total      = visibleMessages.length;
         const windowEnd  = state.windowEnd;   // already capped at windowStart + initialSz
 
         // ── First chunk: rendered synchronously so first content appears immediately ──
         const firstEnd = Math.min(windowStart + CHUNK_SIZE, windowEnd);
         const firstHtml = SessionWebviewPanel._renderChunk(
-            visibleMessages, renderedMessages, windowStart, firstEnd, assistantLabel, true
+            visibleMessages, renderedMessages, windowStart, firstEnd, assistantLabel, true, commandChips
         );
         state.windowStart = windowStart;
         state.windowEnd   = firstEnd;
@@ -367,7 +413,7 @@ export class SessionWebviewPanel {
 
             const chunkEnd  = Math.min(cursor + CHUNK_SIZE, windowEnd);
             const chunkHtml = SessionWebviewPanel._renderChunk(
-                visibleMessages, renderedMessages, cursor, chunkEnd, assistantLabel, false
+                visibleMessages, renderedMessages, cursor, chunkEnd, assistantLabel, false, commandChips
             );
             state.windowEnd = chunkEnd;
             void panel.webview.postMessage({
@@ -430,7 +476,8 @@ export class SessionWebviewPanel {
         if (state.windowEnd < total) {
             const newEnd    = Math.min(total, state.windowEnd + CHUNK_SIZE);
             const chunkHtml = SessionWebviewPanel._renderChunk(
-                visibleMessages, renderedMessages, state.windowEnd, newEnd, assistantLabel, false
+                visibleMessages, renderedMessages, state.windowEnd, newEnd, assistantLabel, false,
+                state.commandChips
             );
             state.windowEnd = newEnd;
             void panel.webview.postMessage({
@@ -475,7 +522,8 @@ export class SessionWebviewPanel {
 
             const newEnd    = Math.min(total, st.windowEnd + CHUNK_SIZE);
             const chunkHtml = SessionWebviewPanel._renderChunk(
-                visibleMessages, renderedMessages, st.windowEnd, newEnd, assistantLabel, false
+                visibleMessages, renderedMessages, st.windowEnd, newEnd, assistantLabel, false,
+                st.commandChips
             );
             st.windowEnd = newEnd;
             const hasMore = newEnd < total;
@@ -505,15 +553,76 @@ export class SessionWebviewPanel {
         }
     }
 
+    // ── Per-response Commands chips ───────────────────────────────────────────
+
+    /**
+     * Query the watch-logs store for this session's events and build the
+     * rendered chip HTML keyed by the owning message's `origIdx`.
+     *
+     * A broken/degraded store must never break the reader, so failures yield
+     * no chips rather than throwing.
+     */
+    private static _buildCommandChips(
+        session: Session
+    ): { commandChips: Map<number, string>; logEvents: LogEvent[] } {
+        const commandChips = new Map<number, string>();
+        const service = SessionWebviewPanel._logService;
+        if (!service) { return { commandChips, logEvents: [] }; }
+
+        let logEvents: LogEvent[] = [];
+        try {
+            logEvents = service.getEvents({
+                sessionId: session.id,
+                order: 'asc',
+                limit: 5000,
+            });
+        } catch (err) {
+            const text = `[ChatWizard] Commands chip query failed for session ${session.id}: ${err}`;
+            SessionWebviewPanel._channel?.appendLine(text);
+            console.error(text);
+            return { commandChips, logEvents: [] };
+        }
+
+        for (const [messageIndex, html] of buildCommandChipHtml(logEvents, session.messages)) {
+            commandChips.set(messageIndex, html);
+        }
+        return { commandChips, logEvents };
+    }
+
+    /**
+     * Rebuild every open reader's chips from the current store contents and
+     * push them to the webview.
+     *
+     * Called (debounced) after the log harvesters ingest new events, so a
+     * panel that is already open gains the chip of a command that just ran
+     * without having to be reopened.
+     */
+    static refreshCommandChips(): void {
+        for (const [sessionId, panel] of SessionWebviewPanel._panels) {
+            const state = SessionWebviewPanel._panelState.get(sessionId);
+            if (!state) { continue; }
+            const { commandChips, logEvents } = SessionWebviewPanel._buildCommandChips(state.session);
+            state.commandChips = commandChips;
+            state.logEvents = logEvents;
+            void panel.webview.postMessage({
+                type: 'commandsUpdated',
+                chips: [...commandChips].map(([messageIndex, html]) => ({ messageIndex, html })),
+            });
+        }
+    }
+
     // ── Render helpers (delegate to sessionRenderer.ts) ─────────────────────
 
     static _renderChunk(
         visibleMessages:  VisibleMessage[],
         renderedMessages: (string | null)[],
         start: number, end: number,
-        assistantLabel: string, withFade: boolean
+        assistantLabel: string, withFade: boolean,
+        commandChips?: ReadonlyMap<number, string>
     ): string {
-        return renderChunk(visibleMessages, renderedMessages, start, end, assistantLabel, withFade);
+        return renderChunk(
+            visibleMessages, renderedMessages, start, end, assistantLabel, withFade, commandChips
+        );
     }
 
     static _renderMessage(
@@ -757,6 +866,118 @@ export class SessionWebviewPanel {
       opacity: 0.7;
     }
     .aborted-notice { font-style: italic; color: var(--vscode-errorForeground, #f48771); }
+    /* ── Per-response Commands chip ───────────────────────────────────────── */
+    .cw-cmd-chip-slot { margin: -8px 0 14px 18px; }
+    .cw-cmd-chip { display: inline-block; max-width: 100%; }
+    .cw-cmd-chip[open] { display: block; }
+    .cw-cmd-chip > summary { list-style: none; }
+    .cw-cmd-chip > summary::-webkit-details-marker { display: none; }
+    .cw-cmd-chip-summary {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      max-width: 100%;
+      padding: 2px 10px;
+      border: 1px solid var(--cw-border-strong, rgba(128,128,128,0.35));
+      border-radius: 2em;
+      background: var(--cw-surface-subtle);
+      font-size: 0.76em;
+      line-height: 1.7;
+      cursor: pointer;
+      user-select: none;
+    }
+    .cw-cmd-chip-summary:hover { border-color: var(--cw-accent, #5B8AF5); }
+    .cw-cmd-chip-summary::before {
+      content: '\u25B8';
+      font-size: 0.85em;
+      opacity: 0.7;
+    }
+    .cw-cmd-chip[open] > .cw-cmd-chip-summary {
+      border-radius: var(--cw-radius-sm) var(--cw-radius-sm) 0 0;
+      background: var(--cw-surface-raised);
+    }
+    .cw-cmd-chip[open] > .cw-cmd-chip-summary::before { content: '\u25BE'; }
+    .cw-cmd-chip-title { font-weight: 600; }
+    .cw-cmd-chip-total {
+      min-width: 1.4em;
+      padding: 0 5px;
+      border-radius: 1em;
+      background: var(--cw-accent, #5B8AF5);
+      color: var(--cw-accent-text, #fff);
+      font-weight: 600;
+      text-align: center;
+    }
+    .cw-cmd-chip-stats {
+      opacity: 0.75;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .cw-cmd-chip-failed {
+      color: var(--vscode-errorForeground, #f14c4c);
+      font-weight: 600;
+    }
+    .cw-cmd-chip-body {
+      margin-top: 4px;
+      padding: 4px 10px 6px;
+      border: 1px solid var(--cw-border);
+      border-radius: 0 var(--cw-radius-sm) var(--cw-radius-sm) var(--cw-radius-sm);
+      background: var(--cw-surface);
+      font-size: 0.8em;
+    }
+    .cw-cmd-section { margin: 2px 0; }
+    .cw-cmd-section > summary {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      list-style: none;
+      padding: 2px 0;
+      cursor: pointer;
+      user-select: none;
+      opacity: 0.85;
+    }
+    .cw-cmd-section > summary::-webkit-details-marker { display: none; }
+    .cw-cmd-section > summary::before { content: '\u25BE'; font-size: 0.8em; opacity: 0.6; }
+    .cw-cmd-section:not([open]) > summary::before { content: '\u25B8'; }
+    .cw-cmd-section-summary:hover { opacity: 1; }
+    .cw-cmd-section-icon { width: 1.2em; text-align: center; opacity: 0.8; }
+    .cw-cmd-section-title { font-weight: 600; }
+    .cw-cmd-section-count {
+      margin-left: auto;
+      padding: 0 6px;
+      border-radius: 1em;
+      background: var(--cw-surface-subtle);
+      opacity: 0.7;
+      font-size: 0.9em;
+    }
+    .cw-cmd-rows {
+      list-style: none;
+      margin: 1px 0 5px;
+      padding: 0 0 0 16px;
+      border-left: 1px solid var(--cw-border-strong, rgba(128,128,128,0.35));
+    }
+    .cw-cmd-row {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      padding: 1px 6px;
+      border-radius: var(--cw-radius-xs);
+      cursor: pointer;
+    }
+    .cw-cmd-row:hover,
+    .cw-cmd-row:focus { background: var(--cw-surface-subtle); outline: none; }
+    .cw-cmd-row-icon { flex: 0 0 auto; width: 1em; text-align: center; opacity: 0.8; }
+    .cw-cmd-row-label {
+      flex: 0 1 auto;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-family: var(--vscode-editor-font-family, monospace);
+    }
+    .cw-cmd-row-badge { margin-left: auto; opacity: 0.6; white-space: nowrap; }
+    .cw-cmd-row.cw-failed .cw-cmd-row-icon,
+    .cw-cmd-row.cw-failed .cw-cmd-row-badge { color: var(--vscode-errorForeground, #f14c4c); opacity: 1; }
+    .cw-cmd-row.cw-cmd-more { cursor: default; opacity: 0.6; font-style: italic; }
     .parse-errors-banner {
       background: rgba(200, 160, 0, 0.08);
       border: 1px solid rgba(200, 160, 0, 0.35);
@@ -1297,12 +1518,22 @@ ${cwInteractiveJs()}
   // ── Role filter checkboxes ──────────────────────────────────────────────────
   var filterPromptsEl   = document.getElementById('filter-prompts');
   var filterResponsesEl = document.getElementById('filter-responses');
+  // A chip lives in a sibling slot after its message, so it must be hidden
+  // together with that message when a role filter hides the response.
+  function syncCommandChipSlots(root) {
+    root.querySelectorAll('.cw-cmd-chip-slot').forEach(function(slot) {
+      var prev = slot.previousElementSibling;
+      while (prev && !prev.classList.contains('message')) { prev = prev.previousElementSibling; }
+      slot.style.display = (prev && prev.style.display === 'none') ? 'none' : '';
+    });
+  }
   function applyRoleFilterTo(root) {
     var showPromptsOnly   = filterPromptsEl.checked;
     var showResponsesOnly = filterResponsesEl.checked;
     // If both or neither checked, show everything
     if (showPromptsOnly === showResponsesOnly) {
       root.querySelectorAll('.message').forEach(function(el) { el.style.display = ''; });
+      syncCommandChipSlots(root);
       return;
     }
     root.querySelectorAll('.message').forEach(function(el) {
@@ -1310,6 +1541,7 @@ ${cwInteractiveJs()}
       if (showPromptsOnly)   { el.style.display = isUser ? '' : 'none'; }
       if (showResponsesOnly) { el.style.display = isUser ? 'none' : ''; }
     });
+    syncCommandChipSlots(root);
   }
   function applyRoleFilter() { applyRoleFilterTo(container); }
   filterPromptsEl.addEventListener('change', function() {
@@ -2162,12 +2394,75 @@ ${cwInteractiveJs()}
       }
     }
 
+    if (data.type === 'commandsUpdated') {
+      applyCommandChips(data.chips || []);
+    }
+
     if (data.type === 'cwScroll') {
       // Double rAF: first frame lets the browser apply any pending layout from
       // appended chunks, second frame ensures paint is complete before measuring.
       requestAnimationFrame(function() {
         requestAnimationFrame(function() { cwDoScroll(data); });
       });
+    }
+  });
+
+  // ── Per-response Commands chips ────────────────────────────────────────────
+  // Replace / insert / remove the chip slots of the rendered messages. Slots
+  // live outside the cached message HTML so a refresh never re-renders the
+  // transcript.
+  function applyCommandChips(chips) {
+    var seen = {};
+    chips.forEach(function(chip) {
+      var msgIndex = String(chip.messageIndex);
+      seen[msgIndex] = true;
+      var msgEl = document.querySelector('.message[data-msg-idx="' + msgIndex + '"]');
+      if (!msgEl || !msgEl.parentNode) { return; }
+      var slot = document.querySelector('.cw-cmd-chip-slot[data-for-msg="' + msgIndex + '"]');
+      if (!slot) {
+        slot = document.createElement('div');
+        slot.className = 'cw-cmd-chip-slot';
+        slot.setAttribute('data-for-msg', msgIndex);
+        msgEl.parentNode.insertBefore(slot, msgEl.nextSibling);
+      }
+      // Live harvesting pushes chips every ~250 ms. Replacing identical HTML
+      // would collapse a chip the user just expanded, so keep the existing DOM
+      // when nothing changed, and restore the expanded state when it did.
+      var unchanged = slot.__cwChipHtml === chip.html;
+      // Follow the owning response's visibility (role filter).
+      slot.style.display = msgEl.style.display === 'none' ? 'none' : '';
+      if (unchanged) { return; }
+      var wasOpen = !!(slot.firstElementChild
+        && slot.firstElementChild.tagName === 'DETAILS'
+        && slot.firstElementChild.open);
+      slot.innerHTML = chip.html;
+      slot.__cwChipHtml = chip.html;
+      if (wasOpen && slot.firstElementChild) { slot.firstElementChild.open = true; }
+    });
+    document.querySelectorAll('.cw-cmd-chip-slot').forEach(function(slot) {
+      if (!seen[slot.getAttribute('data-for-msg')]) { slot.remove(); }
+    });
+  }
+
+  // A row inside a chip opens the same detail surface the Commands view uses.
+  function openCommandRow(row) {
+    var eventId = row.getAttribute('data-event-id') || '';
+    if (eventId) { vscode.postMessage({ type: 'openLogEvent', eventId: eventId }); }
+  }
+  document.addEventListener('click', function(e) {
+    var row = e.target && e.target.closest ? e.target.closest('.cw-cmd-row[data-event-id]') : null;
+    if (row) {
+      e.stopPropagation();
+      openCommandRow(row);
+    }
+  });
+  document.addEventListener('keydown', function(e) {
+    if (e.key !== 'Enter' && e.key !== ' ') { return; }
+    var row = e.target && e.target.closest ? e.target.closest('.cw-cmd-row[data-event-id]') : null;
+    if (row) {
+      e.preventDefault();
+      e.stopPropagation();
+      openCommandRow(row);
     }
   });
 
