@@ -10,8 +10,13 @@
  * does, plus structured metadata and per-kind code blocks:
  *
  *   - every kind   → **Description** (`Runs a Git command: git status`,
- *                    `Reads a file from the workspace: src/extension.ts`)
- *   - command      → **Input** (full command text + **▶ Run in Terminal**
+ *                    `Reads a file from the workspace: src/extension.ts`).
+ *                    For commands it is upgraded asynchronously: as soon as the
+ *                    panel opens, a **free** model (when one is available,
+ *                    loaded lazily by `commandPurpose`) is asked what the
+ *                    sequence is *for*, and the Description row is patched in
+ *                    place. Without a model the heuristic sentence stays.
+ *   - command      → **Input** (one statement per line + **▶ Run in Terminal**
  *                    directly under it, cwd/shell) and **Output** (exit code,
  *                    stdout, stderr)
  *   - toolCall     → **Input** (tool name + pretty-printed JSON arguments) and
@@ -53,6 +58,13 @@ import {
     toolCallLabel,
     toolCallOutputText,
 } from './logEventSummary';
+import { formatCommandStatements } from './commandStatements';
+import {
+    deriveCommandPurpose,
+    isCommandPurposeResolved,
+    peekCommandPurpose,
+} from './commandPurpose';
+import { createLogger } from '../utils/logger';
 
 /** Minimal subscription bag (matches the shape used by `logsCommands.ts`). */
 export interface LogEventWebviewSubscriptions {
@@ -141,12 +153,55 @@ export function eventMetaRows(event: LogEvent): [string, string][] {
  * explaining what the command / tool does — followed by the kind-specific
  * payload. Rows that describe what the agent *asked for* live under **Input**,
  * what came back (exit code, captured output, tool result) under **Output**.
+ *
+ * `description` overrides the heuristic sentence — it is how the lazily
+ * derived model purpose reaches the rendered page.
  */
-export function buildEventDetailSections(event: LogEvent): EventDetailSection[] {
+export function buildEventDetailSections(event: LogEvent, description?: string): EventDetailSection[] {
+    const what = (description ?? '').trim().length > 0 ? (description as string) : describeLogEvent(event);
     return [
-        { heading: 'Description', rows: [['What happened', describeLogEvent(event)]], code: [] },
+        { heading: 'Description', rows: [['What happened', what]], code: [] },
         ...eventPayloadSections(event),
     ];
+}
+
+/**
+ * Placeholder painted in the Description row while the free model is answering.
+ * Command details start with this instead of the heuristic sentence, so the row
+ * visibly fills in when the answer lands — or falls back to the heuristic text
+ * when no model is available.
+ */
+export const DESCRIPTION_LOADING_TEXT = 'Loading…';
+
+/**
+ * Whether this event's Description is waiting on the free model right now, so
+ * the page is showing {@link DESCRIPTION_LOADING_TEXT}.
+ */
+function awaitsModelDescription(event: LogEvent): boolean {
+    if (event.type !== 'command') { return false; }
+    const command = event as CommandEvent;
+    if ((command.commandText ?? '').trim().length === 0) { return false; }
+    return !isCommandPurposeResolved(command);
+}
+
+/**
+ * The Description to paint on the **first** render of a detail page:
+ *
+ *   - the cached model purpose, when one was already derived,
+ *   - {@link DESCRIPTION_LOADING_TEXT} while the free-model answer is still
+ *     outstanding (the host patches the row when it lands),
+ *   - `undefined` for everything else, which shows the heuristic sentence.
+ *
+ * A previously asked command whose model call returned nothing is *settled* —
+ * it renders the heuristic text immediately instead of a stuck placeholder.
+ */
+export function initialEventDescription(event: LogEvent): string | undefined {
+    if (event.type !== 'command') { return undefined; }
+    const command = event as CommandEvent;
+    if ((command.commandText ?? '').trim().length === 0) { return undefined; }
+    const cached = peekCommandPurpose(command);
+    if (cached !== undefined) { return cached; }
+    return awaitsModelDescription(event) ? DESCRIPTION_LOADING_TEXT : undefined;
 }
 
 /** The kind-specific sections that follow the shared Description. */
@@ -160,7 +215,10 @@ function eventPayloadSections(event: LogEvent): EventDetailSection[] {
             const input: EventDetailSection = {
                 heading: 'Input',
                 rows: inputRows,
-                code: [{ language: 'bash', text: c.commandText, action: 'runInTerminal' }],
+                // One statement per line — a long `a && b; c` chain is
+                // unreadable as a single line. Separators are kept so the text
+                // stays copy-pasteable (the Run button still uses the original).
+                code: [{ language: 'bash', text: formatCommandStatements(c.commandText), action: 'runInTerminal' }],
             };
             const outputRows: [string, string][] = [
                 ['Exit code', c.exitCode === undefined ? 'unknown' : String(c.exitCode)],
@@ -255,11 +313,11 @@ function eventPayloadSections(event: LogEvent): EventDetailSection[] {
  * Plain-text representation of the event's full contents — used by the
  * webview's Copy button so the clipboard mirrors exactly what was displayed.
  */
-export function eventDetailText(event: LogEvent): string {
+export function eventDetailText(event: LogEvent, description?: string): string {
     const lines: string[] = [shortEventLabel(event)];
     lines.push('');
     for (const [key, value] of eventMetaRows(event)) { lines.push(`${key}: ${value}`); }
-    for (const section of buildEventDetailSections(event)) {
+    for (const section of buildEventDetailSections(event, description)) {
         lines.push('');
         lines.push(`── ${section.heading} ──`);
         for (const [key, value] of section.rows) { lines.push(`${key}: ${value}`); }
@@ -277,11 +335,18 @@ export function eventDetailText(event: LogEvent): string {
 // HTML rendering
 // ---------------------------------------------------------------------------
 
-/** Render a "key: value" table as escaped HTML rows. */
-function renderRows(rows: [string, string][]): string {
+/**
+ * Render a "key: value" table as escaped HTML rows.
+ *
+ * `valueId` is set on every value cell — the Description section uses it so the
+ * asynchronously derived purpose can be patched without re-rendering the page.
+ */
+function renderRows(rows: [string, string][], valueId?: string, valueClass?: string): string {
     if (rows.length === 0) { return ''; }
+    const idAttr = valueId ? ` id="${valueId}"` : '';
+    const clsAttr = valueClass ? ` ${valueClass}` : '';
     const body = rows.map(([k, v]) =>
-        `<tr><td class="cw-k">${escapeHtml(k)}</td><td class="cw-v">${escapeHtml(v)}</td></tr>`).join('\n');
+        `<tr><td class="cw-k">${escapeHtml(k)}</td><td class="cw-v${clsAttr}"${idAttr}>${escapeHtml(v)}</td></tr>`).join('\n');
     return `<table class="cw-rows"><tbody>${body}</tbody></table>`;
 }
 
@@ -305,12 +370,21 @@ export function renderCodeBlockAction(action: EventCodeBlockAction): string {
 }
 
 /** Render every detail section described by the event. */
-export function renderSections(event: LogEvent): string {
+export function renderSections(event: LogEvent, description?: string): string {
     const parts: string[] = [];
-    for (const section of buildEventDetailSections(event)) {
+    for (const section of buildEventDetailSections(event, description)) {
         parts.push(`<section class="cw-section">`);
         parts.push(`<h3>${escapeHtml(section.heading)}</h3>`);
-        parts.push(renderRows(section.rows));
+        // The Description value gets an id so the model-derived purpose can be
+        // swapped in without re-rendering (and losing the reader's scroll).
+        // While the free model is answering it is styled as a placeholder.
+        const isDescription = section.heading === 'Description';
+        const loading = isDescription && description === DESCRIPTION_LOADING_TEXT;
+        parts.push(renderRows(
+            section.rows,
+            isDescription ? 'cwDescriptionValue' : undefined,
+            loading ? 'cw-loading' : undefined,
+        ));
         for (const block of section.code) {
             parts.push(renderCode(block));
             if (block.action) { parts.push(renderCodeBlockAction(block.action)); }
@@ -325,7 +399,7 @@ export function renderSections(event: LogEvent): string {
 }
 
 /** Full standalone HTML document for the event's webview panel. */
-export function renderEventHtml(event: LogEvent, nonce: string): string {
+export function renderEventHtml(event: LogEvent, nonce: string, description?: string): string {
     const kind = logEventTypeLabel(event.type);
     const time = event.timestamp ? new Date(event.timestamp).toLocaleString() : 'unknown time';
     const hasSession = typeof event.sessionId === 'string' && event.sessionId.length > 0;
@@ -336,12 +410,26 @@ export function renderEventHtml(event: LogEvent, nonce: string): string {
         <button class="cw-btn" id="copyBtn" title="Copy the full contents">Copy</button>
         ${hasDiff ? `<button class="cw-btn" id="visualDiffBtn" title="Open in the side-by-side diff editor">Visual Diff</button>` : ''}
         ${hasSession ? `<button class="cw-btn" id="sessionBtn" title="Open the chat session">Open Session</button>` : ''}`;
+    // CSP: `script-src` MUST be 'unsafe-inline' — never a nonce.
+    //
+    // VS Code's webview host parses this markup with `DOMParser` and re-serialises
+    // it through `outerHTML` before writing it into the iframe
+    // (`contrib/webview/browser/pre/index.html` → `toContentHtml`). Chromium hides
+    // `nonce` content-attribute values during serialization, so the script tag
+    // arrives with `nonce=""`, `script-src 'nonce-…'` matches nothing, and **every
+    // inline script in this page is blocked** — which silently killed the
+    // Description update below *and* the Copy / Run in Terminal / Open Session
+    // buttons. Same rule (and rationale) as the other panels in this extension; see
+    // docs/troubleshooting/search-issue-analysis.md.
+    //
+    // The `nonce` attribute stays on the tags for API compatibility only — it is
+    // deliberately not referenced by the policy.
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
 <meta http-equiv="Content-Security-Policy"
-      content="default-src 'none'; img-src 'self'; style-src 'unsafe-inline' 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
+      content="default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
 <title>${escapeHtml(shortEventLabel(event))}</title>
 <style nonce="${nonce}">
 ${cwThemeCss()}
@@ -362,6 +450,14 @@ body { padding: 14px 18px; font-size: 13px; }
 .cw-rows td { padding: 3px 10px; border-bottom: 1px solid var(--cw-border); vertical-align: top; }
 .cw-rows .cw-k { color: var(--cw-text-muted); white-space: nowrap; width: 1%; padding-right: 14px; }
 .cw-rows .cw-v { word-break: break-all; }
+/* Placeholder shown while the free model derives the Description. */
+.cw-rows .cw-loading { color: var(--cw-text-muted); font-style: italic; }
+.cw-rows .cw-loading::after {
+  content: ''; display: inline-block; width: 6px; height: 6px; margin-left: 6px;
+  border-radius: 50%; background: var(--cw-accent); vertical-align: middle;
+  animation: cw-pulse 1s ease-in-out infinite;
+}
+@keyframes cw-pulse { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }
 .cw-meta { opacity: 0.92; }
 pre { max-width: 100%; overflow-x: auto; }
 code.language-text { white-space: pre-wrap; }
@@ -382,12 +478,30 @@ code.language-text { white-space: pre-wrap; }
     <span class="cw-time">${escapeHtml(time)}</span>
     ${actionButtons}
   </header>
-  <main>${renderSections(event)}</main>
+  <main>${renderSections(event, description)}</main>
   <script nonce="${nonce}">
   ${cwInteractiveJs()}
   ${syntaxHighlighterJs()}
   (function() {
     var vscode = acquireVsCodeApi();
+
+    // Handshake: proves this script really ran. With a nonce-based CSP it did
+    // not (VS Code strips the nonce before writing the page), so the host never
+    // saw this and the Description patch below never fired.
+    vscode.postMessage({ command: 'ready' });
+
+    // The host derives a model-written purpose *after* the panel opens (free
+    // model, when available) and patches the Description row in place.
+    window.addEventListener('message', function(event) {
+      var msg = event.data;
+      if (!msg || msg.command !== 'updateDescription' || typeof msg.text !== 'string') { return; }
+      var target = document.getElementById('cwDescriptionValue');
+      if (target) {
+        target.textContent = msg.text;
+        // Drop the "loading" styling once the real sentence is in place.
+        target.classList.remove('cw-loading');
+      }
+    });
 
     // Diff-line tinting for pre code.language-diff blocks.
     function escT(s) {
@@ -449,10 +563,87 @@ interface EventDetailPanelState {
     panel: vscode.WebviewPanel;
     /** The event currently rendered in the panel (updated on every open). */
     current: LogEvent;
+    /** Model-derived purpose currently shown (command events only). */
+    description?: string;
+    /**
+     * True while the Description row shows {@link DESCRIPTION_LOADING_TEXT}
+     * because the free-model answer is still outstanding. The only moment the
+     * host may replace the row with the heuristic sentence.
+     */
+    descriptionLoading: boolean;
+    /**
+     * True once the page posted its `ready` handshake — i.e. its inline script
+     * ran and the `message` listener that patches the Description row exists.
+     * Reset on every re-render; a purpose derived before it flips is kept and
+     * flushed when the handshake arrives.
+     */
+    scriptReady: boolean;
     disposables: vscode.Disposable[];
 }
 
 let _detail: EventDetailPanelState | undefined;
+
+/** Lazily created so importing this module never touches a VS Code API. */
+function detailLog() {
+    return createLogger().withContext('EventDetail');
+}
+
+/**
+ * Show a Description in the live page.
+ *
+ * `postMessage` resolves `false` (and the message is dropped) when the page is
+ * not listening yet — every retarget reloads the document. So text that arrives
+ * early stays in `state.description` and is flushed on `ready`, which also
+ * makes a script-blocking CSP visible in the log instead of silent.
+ *
+ * `text` defaults to the model-derived purpose; the fallback path passes the
+ * heuristic sentence explicitly to replace the loading placeholder.
+ */
+async function pushDescription(state: EventDetailPanelState, text?: string): Promise<void> {
+    const description = text ?? state.description;
+    if (!description || !state.scriptReady) { return; }
+    const delivered = await state.panel.webview.postMessage({ command: 'updateDescription', text: description });
+    if (delivered) {
+        detailLog().info('description updated: %s', description);
+    } else {
+        detailLog().warn('model-derived description was not delivered (webview not listening)');
+    }
+}
+
+/**
+ * Ask the lazily loaded **free** model what the command is for and patch the
+ * Description row when the answer arrives.
+ *
+ * Only called when a command detail panel is opened — never at activation, and
+ * never for non-command rows. The row starts at {@link DESCRIPTION_LOADING_TEXT}
+ * (see `initialEventDescription`); a derivation that yields `null` restores the
+ * heuristic description, so the placeholder never sticks.
+ */
+function requestCommandPurpose(event: LogEvent, state: EventDetailPanelState): void {
+    if (event.type !== 'command') { return; }
+    const command = event as CommandEvent;
+    if ((command.commandText ?? '').trim().length === 0) { return; }
+    // Already answered (with a purpose *or* with "no model") — nothing to wait for.
+    if (isCommandPurposeResolved(command)) { return; }
+
+    void (async () => {
+        const purpose = await deriveCommandPurpose(command);
+        // The panel may have been retargeted/closed while the model answered.
+        if (_detail !== state || state.current !== event) { return; }
+        if (!purpose) {
+            detailLog().info('no free model answered — restoring the heuristic description');
+            if (state.descriptionLoading) {
+                state.descriptionLoading = false;
+                // The row is showing the placeholder; put the original sentence back.
+                await pushDescription(state, describeLogEvent(event));
+            }
+            return;
+        }
+        state.descriptionLoading = false;
+        state.description = purpose;
+        await pushDescription(state);
+    })();
+}
 
 /**
  * Open — or retarget — the shared detail panel for `event`.
@@ -465,11 +656,22 @@ let _detail: EventDetailPanelState | undefined;
  * extension's lifetime).
  */
 export function showEventWebview(event: LogEvent, subscriptions?: LogEventWebviewSubscriptions): vscode.WebviewPanel | undefined {
+    // First paint: a cached purpose, the "Loading…" placeholder while the free
+    // model is answering, or nothing (→ the heuristic description).
+    const initialDescription = initialEventDescription(event);
+    const descriptionLoading = awaitsModelDescription(event);
+    const cachedPurpose = descriptionLoading ? undefined : initialDescription;
+
     if (_detail) {
         _detail.current = event;
+        _detail.description = cachedPurpose;
+        _detail.descriptionLoading = descriptionLoading;
+        // The document reloads below, so its script must report ready again.
+        _detail.scriptReady = false;
         _detail.panel.title = shortEventLabel(event);
-        _detail.panel.webview.html = renderEventHtml(event, generateNonce());
+        _detail.panel.webview.html = renderEventHtml(event, generateNonce(), initialDescription);
         _detail.panel.reveal(vscode.ViewColumn.Two);
+        requestCommandPurpose(event, _detail);
         return _detail.panel;
     }
 
@@ -479,9 +681,15 @@ export function showEventWebview(event: LogEvent, subscriptions?: LogEventWebvie
         vscode.ViewColumn.Two,
         { enableScripts: true, retainContextWhenHidden: true }
     );
-    const state: EventDetailPanelState = { panel, current: event, disposables: [] };
+    const state: EventDetailPanelState = {
+        panel,
+        current: event,
+        description: cachedPurpose,
+        descriptionLoading,
+        scriptReady: false,
+        disposables: [],
+    };
     _detail = state;
-    panel.webview.html = renderEventHtml(event, generateNonce());
 
     panel.onDidDispose(() => {
         if (_detail === state) { _detail = undefined; }
@@ -489,10 +697,18 @@ export function showEventWebview(event: LogEvent, subscriptions?: LogEventWebvie
     });
 
     // Handlers read `state.current` — the panel outlives any single event.
+    // Registered *before* `webview.html` so the page's early `ready` handshake
+    // can never be missed.
     const msgListener = panel.webview.onDidReceiveMessage((message: { command?: string }) => {
         const current = state.current;
-        if (message.command === 'copy') {
-            void vscode.env.clipboard.writeText(eventDetailText(current));
+        if (message.command === 'ready') {
+            // The page's inline script ran — the Description row can take the
+            // model-derived purpose now (flushes one that arrived first).
+            state.scriptReady = true;
+            detailLog().info('detail webview script is live');
+            void pushDescription(state);
+        } else if (message.command === 'copy') {
+            void vscode.env.clipboard.writeText(eventDetailText(current, state.description));
         } else if (message.command === 'openSession' && current.sessionId) {
             void vscode.commands.executeCommand('chatwizard.openSession', { id: current.sessionId });
         } else if (message.command === 'openVisualDiff') {
@@ -510,6 +726,11 @@ export function showEventWebview(event: LogEvent, subscriptions?: LogEventWebvie
             dispose: () => { for (const d of state.disposables) { d.dispose(); } },
         });
     }
+
+    panel.webview.html = renderEventHtml(event, generateNonce(), initialDescription);
+
+    // Lazy free-model pass, only now that the panel is actually open.
+    requestCommandPurpose(event, state);
 
     return panel;
 }

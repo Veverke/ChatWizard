@@ -100,8 +100,6 @@ export interface SemanticIndexerVsCodeApi {
      * `report(completed, total)` is called after each session finishes.
      */
     runIndexingProgress(task: (report: (completed: number, total: number) => void) => Promise<void>): Promise<void>;
-    /** Notify the user that background indexing finished. */
-    showIndexingComplete(count: number): void;
     /**
      * Called after the model has been successfully downloaded for the first time.
      * Implementations should persist a marker so `isFirstUse` returns `false` on
@@ -179,11 +177,6 @@ export function defaultVsCodeApi(globalState?: SemanticGlobalState): SemanticInd
                         progress.report({ increment, message: `${completed} / ${total} sessions` });
                     });
                 },
-            );
-        },
-        showIndexingComplete(count: number): void {
-            void vscode.window.showInformationMessage(
-                `Chat Wizard: Semantic search ready — ${count} session${count === 1 ? '' : 's'} have vector embeddings.`
             );
         },
         markModelDownloaded(storagePath: string): void {
@@ -321,9 +314,9 @@ export class SemanticIndexer implements ISemanticIndexer {
     // Retry timer for global bulk-lock acquisition — fires when another instance
     // is holding the lock, giving it another chance after a backoff.
     private _lockRetryTimer: ReturnType<typeof setTimeout> | undefined;
-    // Debounced "indexing complete" notification timer.
-    // Prevents a double notification when the archive-restore batch arrives shortly
-    // after the first file-watcher batch (two _runQueue() runs → one notification).
+    // Debounced "indexing complete" log timer.
+    // Prevents a duplicate log entry when the archive-restore batch arrives shortly
+    // after the first file-watcher batch (two _runQueue() runs → one entry).
     private _indexingCompleteTimer: ReturnType<typeof setTimeout> | undefined;
 
     /** Timestamp of the last progress report — used by the stall watchdog. */
@@ -692,8 +685,8 @@ export class SemanticIndexer implements ISemanticIndexer {
         this._pendingFingerprints.set(session.id, fingerprint);
 
         if (!this._queueRunning) {
-            // Cancel any pending "indexing complete" notification — more sessions are
-            // arriving, so the current run's completion toast must be suppressed.
+            // Cancel any pending "indexing complete" log entry — more sessions are
+            // arriving, so the current run's completion entry must be suppressed.
             if (this._indexingCompleteTimer !== undefined) {
                 clearTimeout(this._indexingCompleteTimer);
                 this._indexingCompleteTimer = undefined;
@@ -1085,7 +1078,12 @@ export class SemanticIndexer implements ISemanticIndexer {
             this._indexingCompleteTimer = setTimeout(() => {
                 this._indexingCompleteTimer = undefined;
                 if (!this._disposed) {
-                    this.vsCodeApi.showIndexingComplete(this._totalSessionsCompleted);
+                    // Silent by design: indexing completion is logged, never notified.
+                    this.log.info(
+                        'Semantic search ready — %d session%s have vector embeddings',
+                        this._totalSessionsCompleted,
+                        this._totalSessionsCompleted === 1 ? '' : 's',
+                    );
                 }
             }, 5_000);
         }

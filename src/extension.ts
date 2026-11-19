@@ -309,6 +309,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     } catch (err) {
         channel.appendLine(`[Chat Wizard] Watch-logs store init failed (continuing without it): ${err}`);
     }
+    // The session reader shows a "Commands" chip after every response that
+    // triggered agent actions; it reads the same store the Commands view does.
+    if (logService) {
+        SessionWebviewPanel._logService = logService;
+    }
 
     // ── Watch-logs Phase 2/3: Copilot + Cline adapters + panels ───────────
     // The Copilot adapter replays each session's JSONL (the file the watcher
@@ -379,6 +384,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 refreshTimer = setTimeout(() => {
                     refreshTimer = undefined;
                     commandsViewProvider.refresh();
+                    // Keep the per-response chips of every open reader in sync.
+                    SessionWebviewPanel.refreshCommandChips();
                 }, 250);
             };
             context.subscriptions.push({
@@ -443,6 +450,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 }
                 showEventWebview(event, context.subscriptions);
             };
+            // The reader's per-response Commands chip rows open the exact same
+            // detail surface (visual diff for diff events, webview otherwise).
+            SessionWebviewPanel._onOpenLogEvent = openLogEvent;
 
             // Single-click / selection activation: guarantees the detail webview
             // opens on a plain click too — belt-and-braces on top of each tree

@@ -351,6 +351,12 @@ pre code {
  * Returns the inline JavaScript for syntax highlighting.
  * Does not include <script> tags — wrap as needed.
  *
+ * ⚠ The returned code is built from a **template literal**, so every escape
+ * that must survive into the emitted script has to be doubled: write `'\\n'`
+ * (not `'\n'`), otherwise the template turns it into a real newline and the
+ * whole inline `<script>` block fails to parse (the page then loses its
+ * highlighting *and* its message listeners).
+ *
  * For sessionWebviewPanel.ts: embed inside the nonce script block.
  * For other panels: wrap in <script>...</script>.
  */
@@ -399,7 +405,7 @@ export function syntaxHighlighterJs(): string {
 
       // Line comment //
       if (ch === '/' && code[i+1] === '/') {
-        var nl = code.indexOf('\n', i);
+        var nl = code.indexOf('\\n', i);
         if (nl === -1) { nl = len; }
         out += sp('tok-comment', code.slice(i, nl));
         i = nl;
@@ -408,7 +414,7 @@ export function syntaxHighlighterJs(): string {
 
       // Hash comment #
       if (ch === '#') {
-        var nh = code.indexOf('\n', i);
+        var nh = code.indexOf('\\n', i);
         if (nh === -1) { nh = len; }
         out += sp('tok-comment', code.slice(i, nh));
         i = nh;
@@ -420,7 +426,7 @@ export function syntaxHighlighterJs(): string {
         var q = ch;
         var j = i + 1;
         while (j < len) {
-          if (code[j] === '\\') { j += 2; continue; }
+          if (code.charCodeAt(j) === 92) { j += 2; continue; } // backslash
           if (code[j] === q)    { j++; break; }
           j++;
         }

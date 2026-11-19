@@ -64,7 +64,6 @@ function makeVsCodeApiStub(opts: {
             counts.indexingProgressCallCount++;
             await task(() => { /* no-op */ });
         },
-        showIndexingComplete(_count: number): void { /* no-op in tests */ },
         markModelDownloaded(_storagePath: string): void { /* no-op in tests */ },
         showModelReady(): void { counts.modelReadyCount++; },
         showModelUnavailable(details: ModelUnavailableDetails): void {
@@ -264,7 +263,6 @@ suite('SemanticIndexer.initialize', () => {
             async showConsentDialog() { dialogShown = true; return true; },
             async loadModelWithProgress(task) { await task(() => {}); },
             async runIndexingProgress(task) { await task(() => {}); },
-            showIndexingComplete(_count: number): void { /* no-op */ },
             markModelDownloaded(_storagePath: string): void { /* no-op */ },
             showModelReady(): void { /* no-op */ },
             showModelUnavailable(_details: ModelUnavailableDetails): void { /* no-op */ },
@@ -284,7 +282,6 @@ suite('SemanticIndexer.initialize', () => {
             async showConsentDialog() { dialogShown = true; return true; },
             async loadModelWithProgress(task) { await task(() => {}); },
             async runIndexingProgress(task) { await task(() => {}); },
-            showIndexingComplete(_count: number): void { /* no-op */ },
             markModelDownloaded(_storagePath: string): void { /* no-op */ },
             showModelReady(): void { /* no-op */ },
             showModelUnavailable(_details: ModelUnavailableDetails): void { /* no-op */ },

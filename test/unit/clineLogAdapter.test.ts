@@ -204,6 +204,7 @@ suite('parseClineLogEvents — modern ui_messages.json', () => {
         // The command was emitted at ts = TS + 1000.
         assert.strictEqual(commands[0].timestamp, new Date(TS + 1000).toISOString());
         assert.strictEqual(commands[0].tool, 'cline');
+        assert.strictEqual(commands[0].messageIndex, 0, 'first user prompt is turn 0');
 
         const tools = result.events.filter((e) => e.type === 'toolCall') as ToolCallEvent[];
         assert.strictEqual(tools.length, 1);
@@ -211,6 +212,20 @@ suite('parseClineLogEvents — modern ui_messages.json', () => {
 
         // text / task messages never produce events.
         assert.strictEqual(result.events.filter((e) => e.type === 'plannerStep').length, 0);
+    });
+
+    test('stamps the user-prompt turn on events across follow-ups', () => {
+        const dir = tmpTaskDir([
+            { ts: TS, type: 'say', say: 'task', text: 'First request' },
+            { ts: TS + 1000, type: 'say', say: 'command', text: 'npm test' },
+            { ts: TS + 2000, type: 'say', say: 'user_feedback', text: 'Follow-up request' },
+            { ts: TS + 3000, type: 'say', say: 'command', text: 'git status' },
+        ]);
+
+        const commands = parseClineLogEvents(dir).events
+            .filter((event): event is CommandEvent => event.type === 'command');
+        assert.deepStrictEqual(commands.map((command) => command.commandText), ['npm test', 'git status']);
+        assert.deepStrictEqual(commands.map((command) => command.messageIndex), [0, 1]);
     });
 
     test('emits file op + diff for editedExistingFile and skips noise', () => {

@@ -70,6 +70,17 @@ suite('syntaxHighlighterJs', () => {
     test('is idempotent', () => {
         assert.strictEqual(syntaxHighlighterJs(), syntaxHighlighterJs());
     });
+
+    test('emits parseable JavaScript', () => {
+        // Regression: an escape written with a single backslash inside the
+        // template literal (`'\n'`) becomes a *real* newline in the emitted
+        // script — a syntax error that silently kills the whole inline
+        // <script> block. Escapes must be doubled (`'\\n'`).
+        const result = syntaxHighlighterJs();
+        // eslint-disable-next-line no-new-func
+        assert.doesNotThrow(() => new Function(result), 'syntaxHighlighterJs must parse as JavaScript');
+        assert.ok(result.includes("indexOf('\\n', i)"), 'the newline escape must survive into the script');
+    });
 });
 
 suite('cwInteractiveJs', () => {
@@ -88,5 +99,12 @@ suite('cwInteractiveJs', () => {
 
     test('is idempotent', () => {
         assert.strictEqual(cwInteractiveJs(), cwInteractiveJs());
+    });
+
+    test('emits parseable JavaScript', () => {
+        // Every panel that embeds this script would silently lose its buttons
+        // if a stray escape broke the block, so parse it here as well.
+        // eslint-disable-next-line no-new-func
+        assert.doesNotThrow(() => new Function(cwInteractiveJs()), 'cwInteractiveJs must parse as JavaScript');
     });
 });

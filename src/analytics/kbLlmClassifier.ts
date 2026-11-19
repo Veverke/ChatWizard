@@ -6,9 +6,15 @@
 import type { Session } from '../types/index';
 import type { KbEntry } from '../types/kb';
 import { createLogger } from '../utils/logger';
-import { promptLlm } from './llmClient';
+import { askFreeModel } from './freeModel';
 
 const log = createLogger().withContext('KB-LLM');
+
+// Re-exported: tests and callers classify provider errors with this helper.
+export { isRateLimitedError } from './freeModel';
+
+/** Per-request budget for a classification/refinement prompt. */
+const KB_LLM_TIMEOUT_MS = 30_000;
 
 // ── Prompt building ─────────────────────────────────────────────────────────
 
@@ -289,35 +295,22 @@ export async function refineCategories(
     const unique = [...new Set(labels)];
     if (unique.length < 2) { return null; }
 
-    const content = buildRefinePrompt(unique);
+    const parsed = await askFreeModel({
+        userContent: buildRefinePrompt(unique),
+        timeoutMs: KB_LLM_TIMEOUT_MS,
+        transform: parseRefineResponse,
+        // An unparseable answer is worth another ask — this is the same retry
+        // budget rate-limited calls get, owned by the shared component.
+        retryRejectedAnswers: true,
+    });
 
-    for (let attempt = 0; attempt <= MAX_RATE_LIMIT_RETRIES; attempt++) {
-        if (attempt > 0) {
-            const backoff = RATE_LIMIT_BASE_DELAY_MS * Math.pow(2, attempt - 1);
-            await delay(backoff);
-        }
-
-        try {
-            const raw = await promptLlm(undefined, content, { timeoutMs: 30_000 });
-            if (raw === null) { return null; }
-
-            const parsed = parseRefineResponse(raw);
-            if (parsed && parsed.size > 0) {
-                log.info(`Refined ${unique.length} unique labels → ${new Set(parsed.values()).size} canonical labels`);
-                return parsed;
-            }
-
-            log.debug(`Refine response unparseable, attempt ${attempt + 1}`);
-        } catch (err) {
-            if (isRateLimitedError(err) && attempt < MAX_RATE_LIMIT_RETRIES) {
-                continue;
-            }
-            log.warn(`Category refinement failed: ${err}`);
-            return null;
-        }
+    if (!parsed) {
+        log.debug(`Category refinement unavailable — keeping ${unique.length} labels as-is`);
+        return null;
     }
 
-    return null;
+    log.info(`Refined ${unique.length} unique labels → ${new Set(parsed.values()).size} canonical labels`);
+    return parsed;
 }
 
 // ── Subtype refinement (3rd pass) ─────────────────────────────────────────
@@ -417,75 +410,35 @@ export async function refineSubtypes(
         // Skip parents with too few entries — no consolidation needed
         if (parentEntries.length < 2) { continue; }
 
-        const content = buildSubtypeRefinePrompt(parentType, parentEntries);
+        const parsed = await askFreeModel({
+            userContent: buildSubtypeRefinePrompt(parentType, parentEntries),
+            timeoutMs: KB_LLM_TIMEOUT_MS,
+            transform: parseSubtypeRefineResponse,
+            retryRejectedAnswers: true,
+        });
 
-        let success = false;
-        for (let attempt = 0; attempt <= MAX_RATE_LIMIT_RETRIES; attempt++) {
-            if (attempt > 0) {
-                const backoff = RATE_LIMIT_BASE_DELAY_MS * Math.pow(2, attempt - 1);
-                await delay(backoff);
-            }
-
-            try {
-                const raw = await promptLlm(undefined, content, { timeoutMs: 30_000 });
-                if (raw === null) { break; }
-
-                const parsed = parseSubtypeRefineResponse(raw);
-                if (parsed && parsed.size > 0) {
-                    // Merge per-parent mappings into the global map
-                    for (const [current, refined] of parsed) {
-                        allMappings.set(current, refined);
-                    }
-                    log.info(
-                        `Refined ${parentEntries.length} subtypes under "${parentType}" → ` +
-                        `${new Set(parsed.values()).size} distinct labels`,
-                    );
-                    success = true;
-                    break;
-                }
-
-                log.debug(`Subtype refine unparseable for "${parentType}", attempt ${attempt + 1}`);
-            } catch (err) {
-                if (isRateLimitedError(err) && attempt < MAX_RATE_LIMIT_RETRIES) {
-                    continue;
-                }
-                log.warn(`Subtype refinement failed for "${parentType}": ${err}`);
-                break;
-            }
-        }
-
-        if (!success) {
+        if (!parsed) {
             log.debug(`Skipped subtype refinement for "${parentType}" — LLM unavailable`);
+            continue;
         }
+
+        // Merge per-parent mappings into the global map
+        for (const [current, refined] of parsed) {
+            allMappings.set(current, refined);
+        }
+        log.info(
+            `Refined ${parentEntries.length} subtypes under "${parentType}" → ` +
+            `${new Set(parsed.values()).size} distinct labels`,
+        );
     }
 
     return allMappings.size > 0 ? allMappings : null;
 }
 
-// ── Shared utilities for LLM retry logic ──────────────────────────────────
+// ── Session classification (1st pass) ─────────────────────────────────────
 
 /**
- * Maximum number of retries for rate-limited requests.
- */
-const MAX_RATE_LIMIT_RETRIES = 3;
-
-/**
- * Base delay (ms) for exponential backoff on rate-limited requests.
- */
-const RATE_LIMIT_BASE_DELAY_MS = 2_000;
-
-/** @internal exported for unit testing */
-export function isRateLimitedError(err: unknown): boolean {
-    const msg = String(err);
-    return msg.includes('ChatRateLimited') || msg.includes('rate limit') || msg.includes('RateLimited');
-}
-
-async function delay(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-/**
- * Classify a session into a 2-level folder structure using the Copilot LM API.
+ * Classify a session into a 2-level folder structure using a free model.
  *
  * The LLM generates both the TOP-LEVEL folder (general topic) and the
  * SECOND-LEVEL folder (particular subject) from the conversation content.
@@ -496,51 +449,34 @@ async function delay(ms: number): Promise<void> {
 export async function classifySessionWithLlm(
     session: Session,
 ): Promise<{ folder: string; subtype: string | null } | null> {
-    const content = buildClassificationPrompt(session);
+    const raw = await askFreeModel({
+        userContent: buildClassificationPrompt(session),
+        timeoutMs: KB_LLM_TIMEOUT_MS,
+    });
 
-    for (let attempt = 0; attempt <= MAX_RATE_LIMIT_RETRIES; attempt++) {
-        if (attempt > 0) {
-            const backoff = RATE_LIMIT_BASE_DELAY_MS * Math.pow(2, attempt - 1);
-            log.debug(`Rate limit retry ${attempt}/${MAX_RATE_LIMIT_RETRIES} for ${session.id} — waiting ${backoff}ms`);
-            await delay(backoff);
-        }
-
-        try {
-            const raw = await promptLlm(undefined, content, { timeoutMs: 30_000 });
-
-            if (raw === null) {
-                log.debug(`No response from any LLM provider for ${session.id} — falling back to embedding`);
-                return null;
-            }
-
-            const parsed = parseClassification(raw);
-            if (parsed === null) {
-                // Distinguish expected refusals/empty responses from genuine misbehavior
-                const trimmed = raw.trim().toLowerCase();
-                const isExpectedRefusal =
-                    !trimmed ||
-                    trimmed === '(none)' ||
-                    trimmed === 'other' ||
-                    /^sorry/i.test(trimmed) ||
-                    /^i can'?t/i.test(trimmed);
-                if (isExpectedRefusal) {
-                    log.debug(`LLM returned expected refusal/empty for ${session.id} — falling back to embedding`);
-                } else {
-                    log.warn(`LLM returned unparseable output for ${session.id}: "${raw.slice(0, 100)}" — falling back to embedding`);
-                }
-            } else {
-                log.info(`Classified ${session.id} as "${parsed.folder}|${parsed.subtype}"`);
-            }
-            return parsed;
-        } catch (err) {
-            if (isRateLimitedError(err) && attempt < MAX_RATE_LIMIT_RETRIES) {
-                continue;
-            }
-
-            log.warn(`LLM request failed for ${session.id}: ${err} — falling back to embedding`);
-            return null;
-        }
+    if (raw === null) {
+        log.debug(`No response from any LLM provider for ${session.id} — falling back to embedding`);
+        return null;
     }
 
-    return null;
+    const parsed = parseClassification(raw);
+    if (parsed === null) {
+        // Distinguish expected refusals/empty responses from genuine misbehavior
+        const trimmed = raw.trim().toLowerCase();
+        const isExpectedRefusal =
+            !trimmed ||
+            trimmed === '(none)' ||
+            trimmed === 'other' ||
+            /^sorry/i.test(trimmed) ||
+            /^i can'?t/i.test(trimmed);
+        if (isExpectedRefusal) {
+            log.debug(`LLM returned expected refusal/empty for ${session.id} — falling back to embedding`);
+        } else {
+            log.warn(`LLM returned unparseable output for ${session.id}: "${raw.slice(0, 100)}" — falling back to embedding`);
+        }
+        return null;
+    }
+
+    log.info(`Classified ${session.id} as "${parsed.folder}|${parsed.subtype}"`);
+    return parsed;
 }

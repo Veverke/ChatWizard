@@ -89,9 +89,12 @@ export class MessageRenderer {
         start: number,
         end: number,
         assistantLabel: string,
-        withFade: boolean
+        withFade: boolean,
+        commandChips?: ReadonlyMap<number, string>
     ): string {
-        return renderChunk(visibleMessages, renderedMessages, start, end, assistantLabel, withFade);
+        return renderChunk(
+            visibleMessages, renderedMessages, start, end, assistantLabel, withFade, commandChips
+        );
     }
 }
 
@@ -102,6 +105,12 @@ export class MessageRenderer {
  * When `withFade` is true the first 16 messages in the chunk receive
  * CSS fade-in styles (`--cw-i`) rendered fresh (without affecting the cache
  * entries which always store the style-free version).
+ *
+ * `commandChips` maps a message's `origIdx` to the rendered **Commands** chip
+ * HTML (see `sessionCommandChips.ts`). Chips are appended *outside* the
+ * per-message cache — inside a `.cw-cmd-chip-slot` wrapper — so a later
+ * `commandsUpdated` refresh can replace them without invalidating the cached
+ * message HTML.
  */
 export function renderChunk(
     visibleMessages:  VisibleMessage[],
@@ -109,7 +118,8 @@ export function renderChunk(
     start:     number,
     end:       number,
     assistantLabel: string,
-    withFade:  boolean
+    withFade:  boolean,
+    commandChips?: ReadonlyMap<number, string>
 ): string {
     const parts: string[] = [];
 
@@ -145,6 +155,13 @@ export function renderChunk(
                 );
             }
             parts.push(renderedMessages[i]!);
+        }
+
+        const chip = commandChips?.get(origIdx);
+        if (chip) {
+            parts.push(
+                `\n<div class="cw-cmd-chip-slot" data-for-msg="${origIdx}">${chip}</div>`
+            );
         }
     }
     return parts.join('\n');

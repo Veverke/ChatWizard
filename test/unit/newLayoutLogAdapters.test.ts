@@ -191,6 +191,7 @@ suite('Cline 4.x log adapter', () => {
         assert.strictEqual(commands[0].sessionId, SESSION_ID);
         assert.strictEqual(commands[0].exitCode, 0, 'successful command gets exit code 0');
         assert.strictEqual(commands[1].exitCode, 1, 'failed command gets a non-zero exit code');
+        assert.strictEqual(commands[0].messageIndex, 0, 'tool_use precedes any prompt → turn 0');
         assert.ok((commands[0].stdoutSummary ?? '').includes('On branch master'));
         assert.ok((commands[1].stderrSummary ?? '').includes('2 failing'));
         assert.strictEqual(commands[0].timestamp, new Date(1794437518000).toISOString());

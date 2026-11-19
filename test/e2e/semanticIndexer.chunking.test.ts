@@ -110,7 +110,6 @@ class ProgressCapturingApi implements SemanticIndexerVsCodeApi {
         await this._promise;
     }
 
-    showIndexingComplete(_count: number): void { /* no-op */ }
     markModelDownloaded(_storagePath: string): void { /* no-op */ }
     showModelReady(): void { /* no-op */ }
     showModelUnavailable(_details: ModelUnavailableDetails): void { /* no-op */ }
