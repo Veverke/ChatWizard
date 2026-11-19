@@ -89,12 +89,16 @@ const EVENTS = [
     },
 ];
 
-/** Creates `<root>/<id>/{events.jsonl,workspace.yaml}`. */
+/**
+ * Creates `<root>/<id>/{events.jsonl,workspace.yaml}`.
+ * Pass `null` as `workspaceYaml` to omit `workspace.yaml` entirely — an
+ * explicit `undefined` would fall back to the default template.
+ */
 function writeSession(
     root: string,
     id: string,
     events: unknown[] | string,
-    workspaceYaml: string | undefined = WORKSPACE_YAML
+    workspaceYaml: string | null = WORKSPACE_YAML
 ): string {
     const dir = path.join(root, id);
     fs.mkdirSync(dir, { recursive: true });
@@ -102,10 +106,11 @@ function writeSession(
         ? events
         : events.map(e => JSON.stringify(e)).join('\n') + '\n';
     fs.writeFileSync(path.join(dir, 'events.jsonl'), body, 'utf8');
-    if (workspaceYaml !== undefined) {
+    if (workspaceYaml !== null) {
         fs.writeFileSync(path.join(dir, 'workspace.yaml'), workspaceYaml, 'utf8');
     }
     return dir;
+}
 
 suite('Copilot agent-host — paths', () => {
     test('getCopilotAgentHome honours COPILOT_HOME and defaults to ~/.copilot', () => {
@@ -147,8 +152,8 @@ suite('Copilot agent-host — discoverCopilotAgentSessionsAsync', () => {
         fs.mkdirSync(path.join(root, '.session-operation-locks'), { recursive: true });
         // Directory without a transcript — skipped.
         fs.mkdirSync(path.join(root, 'no-transcript'), { recursive: true });
-        // Empty transcript — skipped.
-        writeSession(root, 'empty-transcript', []);
+        // Empty transcript (0 bytes) — skipped.
+        writeSession(root, 'empty-transcript', '');
         // Stray file — skipped.
         fs.writeFileSync(path.join(root, 'stray.json'), '{}', 'utf8');
 
@@ -335,7 +340,7 @@ suite('Copilot agent-host — parseCopilotAgentSession', () => {
     });
 
     test('a session without workspace.yaml still parses (cwd from session.start)', () => {
-        const dir = writeSession(root, SESSION_ID, EVENTS, undefined);
+        const dir = writeSession(root, SESSION_ID, EVENTS, null);
 
         const { session, errors } = parseCopilotAgentSession(dir);
         assert.deepStrictEqual(errors, []);
@@ -389,5 +394,3 @@ suite('Copilot agent-host — parseCopilotAgentSession', () => {
         assert.strictEqual(session.workspaceId, 'workspace-hash-123');
     });
 });
-
-}
