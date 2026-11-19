@@ -3,6 +3,7 @@ import { SessionIndex } from './index/sessionIndex';
 import { Session, ScopedWorkspace, SessionSource, ChronicleData } from './types/index';
 import { ChatWizardWatcher, startWatcher } from './watcher/fileWatcher';
 import { WorkspaceScopeManager, workspacePathsForIds } from './watcher/workspaceScope';
+import { isSessionInScope } from './watcher/sessionScopeFilter';
 import { discoverCopilotWorkspacesAsync } from './readers/copilotWorkspace';
 import { discoverClaudeWorkspacesAsync } from './readers/claudeWorkspace';
 import { discoverCursorWorkspacesAsync } from './readers/cursorWorkspace';
@@ -222,6 +223,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     } else if (enableCache && !isVSCode) {
         channel.appendLine(`[Chat Wizard] Skipping SQLite cache — running in ${appName} (better-sqlite3 NODE_MODULE_VERSION mismatch).`);
     }
+
+    // Feature 51 — turn removal is persisted in the chat DB, so the reader only
+    // offers it when the cache is available.
+    SessionWebviewPanel._cacheStore = cacheIntegration?.cacheManager;
 
     // ── Commands view workspace scope (structural) ──────────────────────────
     // The agent-log store is shared by every workspace on the machine (it lives
@@ -541,6 +546,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // Refresh the index sidecar cache after bookmark/annotation changes so re-opened sessions see the latest data.
     SessionWebviewPanel._onSidecarChanged = async (sessionId: string) => {
         await index.refreshSidecarMeta(sessionId);
+    };
+    // Feature 51 — the reader can remove turns from a conversation; re-publish the
+    // mutated session so the index caches, views and chat DB stay in sync.
+    SessionWebviewPanel._onSessionMutated = (session: import('./types/index').Session) => {
+        index.upsert(session);
     };
 
     // Migrate legacy pin state from globalState → sidecarStore (run once, version-gated).
@@ -960,17 +970,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                     const pruned = await archive.prune({ maxAgeDays, maxSizeMB });
 
                     // 12-D: restore sessions that exist in the archive but not in the live index
-                    // Workspace-scope filter: only restore sessions belonging to the currently
-                    // selected workspace(s). Sources whose workspaceId matches the scope IDs
-                    // (Copilot, Claude, Cursor, Windsurf) are filtered by ID. Sources with a
-                    // real workspacePath (Cline, Roo Code, Aider) are filtered by path against
-                    // the open VS Code workspace folders. Sources without a scoped workspaceId
-                    // or path (Antigravity, Continue, Amazon Q, Gemini, Tabnine) pass through
-                    // since they cannot be scoped.
+                    // Workspace-scope filter: `isSessionInScope` is the single source of truth
+                    // shared with the live watchers, the batch collector and the cache restore.
+                    // It handles ID-scoped sources (Copilot/Claude/Cursor/Windsurf), path-scoped
+                    // sources (Cline/Roo/Aider) and the machine-global Copilot agent chats (path
+                    // scoped by their cwd). Sources that cannot be scoped pass through.
                     const scopeRef = _scopeManagerRef;
                     const selectedIds = scopeRef?.getSelectedIds() ?? [];
                     const openFolderPaths = scopeRef?.getOpenFolderPaths() ?? [];
-                    const idScopedSources = new Set<SessionSource>(['copilot', 'claude', 'cursor', 'windsurf']);
                     const allArchived = await archive.loadAllSources();
                     const archivedOnly: import('./types').Session[] = [];
                     let scopedOut = 0;
@@ -981,17 +988,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                                 try {
                                     const session = { ...JSON.parse(raw) as import('./types').Session, archived: true as const };
                                     // Apply workspace scope
-                                    let inScope = true;
-                                    if (selectedIds.length > 0 && idScopedSources.has(session.source as SessionSource)) {
-                                        inScope = session.workspaceId ? selectedIds.includes(session.workspaceId) : false;
-                                    }
-                                    if (inScope && openFolderPaths.length > 0 && session.workspacePath) {
-                                        const norm = path.normalize(session.workspacePath).toLowerCase();
-                                        inScope = openFolderPaths.some(p =>
-                                            norm === p || norm.startsWith(p + path.sep)
-                                        );
-                                    }
-                                    if (inScope) {
+                                    if (isSessionInScope(session, selectedIds, openFolderPaths)) {
                                         archivedOnly.push(session);
                                     } else {
                                         scopedOut++;
@@ -1018,7 +1015,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         } else if (event.type === 'upsert') {
             void archiveSession(event.session);
         } else if (event.type === 'remove') {
-            // Source file was deleted — re-surface the archived copy in the live index
+            // Source file was deleted — re-surface the archived copy in the live index.
+            // The archive outlives the source file and can hold sessions of *other*
+            // workspaces, so the same scope rule as the batch restore applies here:
+            // otherwise a file deletion (or a removed out-of-scope live session) would
+            // resurrect a chat that does not belong to this window.
             void (async () => {
                 const entry = await archive.findAnySource(event.sessionId);
                 if (!entry) { return; }
@@ -1026,6 +1027,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 if (!raw) { return; }
                 try {
                     const restored = { ...JSON.parse(raw) as import('./types').Session, archived: true as const };
+                    const scopeRef = _scopeManagerRef;
+                    if (!isSessionInScope(
+                        restored,
+                        scopeRef?.getSelectedIds() ?? [],
+                        scopeRef?.getOpenFolderPaths() ?? []
+                    )) {
+                        channel.appendLine(`[Archive] not restoring ${restored.id} — out of workspace scope`);
+                        return;
+                    }
                     index.upsert(restored);
                 } catch { /* ignore corrupt archive entry */ }
             })();

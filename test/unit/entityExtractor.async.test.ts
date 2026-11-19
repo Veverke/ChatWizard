@@ -92,10 +92,10 @@ suite('entityExtractor (async)', () => {
             mock = setupMockLmApi({
                 responseText: JSON.stringify({ frameworks: ['React'], apis: [], concepts: [], tools: [], languages: [] }),
             });
-            const { runEntityExtractionJob } = await import('../../src/analytics/entityExtractor.js');
+            const { runEntityExtractionJob, ENTITIES_VERSION } = await import('../../src/analytics/entityExtractor.js');
             const calls: string[] = [];
             const store = {
-                get: async (id: string) => id === 's2' ? { entitiesVersion: 2 } : undefined,
+                get: async (id: string) => id === 's2' ? { entitiesVersion: ENTITIES_VERSION } : undefined,
                 patch: async (id: string, data: any) => { calls.push(`patch:${id}`); },
             };
             const sessions = new Map([
@@ -108,8 +108,9 @@ suite('entityExtractor (async)', () => {
                 store as any,
                 { appendLine: () => {} },
             );
-            // s2 should be skipped (already has entitiesVersion), s1 should be processed
+            // s2 should be skipped (already has the current entitiesVersion), s1 should be processed
             assert.ok(calls.some(c => c.includes('s1')));
+            assert.ok(!calls.some(c => c.includes('s2')));
         });
     });
 });

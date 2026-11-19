@@ -21,10 +21,10 @@
 import BetterSqlite3 from 'better-sqlite3';
 import * as path from 'path';
 import * as fs from 'fs';
-import { Session, Message, SessionSource } from '../types/index';
+import { Session, Message, SessionSource, RemovedTurn } from '../types/index';
 import type { SessionIndex } from '../index/sessionIndex';
 import { CACHE_SCHEMA_VERSION } from './schemaVersion';
-import { PATH_SCOPED_SOURCES, filterSessionsByWorkspaceScope } from '../watcher/sessionScopeFilter';
+import { GLOBAL_WORKSPACE_IDS, PATH_SCOPED_SOURCES, filterSessionsByWorkspaceScope } from '../watcher/sessionScopeFilter';
 
 // ── Public Types ─────────────────────────────────────────────────────────────
 
@@ -107,12 +107,35 @@ export interface DbSessionNoteRow {
     created_at: string;
 }
 
+/** Row shape of the `removed_turns` table (Feature 51). */
+export interface DbRemovedTurnRow {
+    session_id: string;
+    message_id: string;
+    message_index: number;
+    role: string;
+    content: string;
+    timestamp: string | null;
+    removed_at: string;
+}
+
 export interface ICacheManager {
     open(): void;
     loadAll(index: SessionIndex, workspaceIds?: string[], openFolderPaths?: string[]): Promise<void>;
     upsertSession(session: Session): void;
     upsertSessions(sessions: Session[]): void;
     removeSession(sessionId: string): void;
+    /**
+     * Persistently remove a single turn from a conversation (Feature 51).
+     * The message payload is archived in `removed_turns` so the original
+     * conversation can always be reopened. Returns the archived record.
+     */
+    removeTurn(sessionId: string, messageIndex: number, message: Message): RemovedTurn;
+    /** All turns the user removed from a session, ordered by message index. */
+    getRemovedTurns(sessionId: string): RemovedTurn[];
+    /** Number of turns the user removed from a session. */
+    getRemovedTurnCount(sessionId: string): number;
+    /** Reconstructs a session with every removed turn put back (original view). */
+    getOriginalSession(sessionId: string): Session | undefined;
     getParseState(filePath: string): ParseState | undefined;
     /** Cached chat title for a session id (works without the session being indexed). */
     getSessionTitle(sessionId: string): string | undefined;
@@ -133,14 +156,6 @@ export interface ICacheManager {
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const DB_FILENAME = 'chatwizard-cache.db';
-
-/**
- * Workspace ids that are not VS Code workspace hashes and must always be
- * restored from cache regardless of the persisted workspace scope:
- *   - `cursor-global` / `windsurf-global` — AI-tool global storage DBs;
- *   - `copilot-agent` — Copilot chats kept in `~/.copilot/session-state`.
- */
-const GLOBAL_WORKSPACE_IDS: readonly string[] = ['cursor-global', 'windsurf-global', 'copilot-agent'];
 
 // ── CacheManager Implementation ──────────────────────────────────────────────
 
@@ -173,6 +188,15 @@ export class CacheManager implements ICacheManager {
         getAllSessions: BetterSqlite3.Statement;
         getAllMessages: BetterSqlite3.Statement;
         getAllCodeBlocksBySession: BetterSqlite3.Statement;
+        // Feature 51 — removed turns
+        insertRemovedTurn: BetterSqlite3.Statement;
+        getRemovedTurns: BetterSqlite3.Statement;
+        getRemovedTurnIds: BetterSqlite3.Statement;
+        getAllRemovedTurnIds: BetterSqlite3.Statement;
+        countRemovedTurns: BetterSqlite3.Statement;
+        deleteRemovedTurnsForSession: BetterSqlite3.Statement;
+        deleteCodeBlocksForMessage: BetterSqlite3.Statement;
+        deleteFtsForMessage: BetterSqlite3.Statement;
     } | null = null;
 
     constructor(storageDir: string) {
@@ -331,6 +355,27 @@ export class CacheManager implements ICacheManager {
             getAllSessions: this.db.prepare('SELECT * FROM sessions ORDER BY updated_at DESC'),
             getAllMessages: this.db.prepare('SELECT * FROM messages ORDER BY session_id, message_index ASC'),
             getAllCodeBlocksBySession: this.db.prepare('SELECT * FROM code_blocks WHERE session_id = ? ORDER BY message_index, block_index_in_message ASC'),
+
+            // ── Feature 51 — removed turns ────────────────────────────────────
+            insertRemovedTurn: this.db.prepare(`
+                INSERT INTO removed_turns (session_id, message_id, message_index, role, content, timestamp, removed_at)
+                VALUES (@sessionId, @messageId, @messageIndex, @role, @content, @timestamp, @removedAt)
+                ON CONFLICT(session_id, message_id) DO UPDATE SET
+                    message_index = excluded.message_index,
+                    role = excluded.role,
+                    content = excluded.content,
+                    timestamp = excluded.timestamp,
+                    removed_at = excluded.removed_at
+            `),
+            getRemovedTurns: this.db.prepare(
+                'SELECT * FROM removed_turns WHERE session_id = ? ORDER BY message_index ASC'
+            ),
+            getRemovedTurnIds: this.db.prepare('SELECT message_id FROM removed_turns WHERE session_id = ?'),
+            getAllRemovedTurnIds: this.db.prepare('SELECT session_id, message_id FROM removed_turns'),
+            countRemovedTurns: this.db.prepare('SELECT COUNT(*) AS cnt FROM removed_turns WHERE session_id = ?'),
+            deleteRemovedTurnsForSession: this.db.prepare('DELETE FROM removed_turns WHERE session_id = ?'),
+            deleteCodeBlocksForMessage: this.db.prepare('DELETE FROM code_blocks WHERE session_id = ? AND message_id = ?'),
+            deleteFtsForMessage: this.db.prepare('DELETE FROM messages_fts WHERE session_id = ? AND message_id = ?'),
         };
     }
 
@@ -358,6 +403,12 @@ export class CacheManager implements ICacheManager {
             // dropped on startup, and because the index is already populated,
             // buildInitialIndex() would be skipped — meaning they'd never be
             // re-parsed.
+            //
+            // Being *loaded* is not the same as being *in scope*: the filter
+            // below drops what does not belong to this window. Copilot agent-host
+            // chats share the global `copilot-agent` id, so they are scoped by
+            // their `cwd` (`workspacePath`) — otherwise the chats of every other
+            // repository would be restored on each start.
             //
             // Path-scoped sources (Cline / Roo Code / Aider) are NOT filtered by
             // workspace id at all: they are collected regardless of `selectedIds`
@@ -400,11 +451,23 @@ export class CacheManager implements ICacheManager {
             }
         }
 
+        // Feature 51 — turns the user removed. Loaded in one query so the
+        // in-memory session carries the flags (and therefore renders without them).
+        const removedBySession = new Map<string, Set<string>>();
+        for (const row of this.stmt.getAllRemovedTurnIds.all() as { session_id: string; message_id: string }[]) {
+            const set = removedBySession.get(row.session_id);
+            if (set) {
+                set.add(row.message_id);
+            } else {
+                removedBySession.set(row.session_id, new Set([row.message_id]));
+            }
+        }
+
         // Reconstruct Session objects
         const sessions: Session[] = [];
         for (const row of sessionRows) {
             const msgs = messagesBySession.get(row.id) ?? [];
-            const session = this._rowToSession(row, msgs);
+            const session = this._rowToSession(row, msgs, removedBySession.get(row.id));
             sessions.push(session);
         }
 
@@ -431,49 +494,7 @@ export class CacheManager implements ICacheManager {
         }
 
         const transaction = this.db.transaction((s: Session) => {
-            // Delete existing data for this session
-            this.stmt!.deleteCodeBlocks.run(s.id);
-            this.stmt!.deleteMessages.run(s.id);
-
-            // Upsert session row
-            this.stmt!.upsertSession.run(this._sessionToRow(s));
-
-            // Insert messages
-            for (let i = 0; i < s.messages.length; i++) {
-                const msg = s.messages[i];
-                this.stmt!.upsertMessage.run({
-                    id: msg.id,
-                    sessionId: s.id,
-                    role: msg.role,
-                    content: msg.content,
-                    timestamp: msg.timestamp ?? null,
-                    messageIndex: i,
-                    skipped: msg.skipped ? 1 : 0,
-                    interrupted: msg.interrupted ? 1 : 0,
-                });
-
-                // Insert code blocks for this message
-                for (const block of msg.codeBlocks) {
-                    this.stmt!.upsertCodeBlock.run({
-                        sessionId: s.id,
-                        messageId: msg.id,
-                        messageIndex: i,
-                        blockIndexInMessage: block.blockIndexInMessage,
-                        language: block.language,
-                        content: block.content,
-                    });
-                }
-            }
-
-            // Rebuild FTS for this session (delete + re-insert)
-            this.db!.exec(`DELETE FROM messages_fts WHERE session_id = '${s.id.replace(/'/g, "''")}'`);
-            for (let i = 0; i < s.messages.length; i++) {
-                const msg = s.messages[i];
-                this.db!.exec(`
-                    INSERT INTO messages_fts (content, session_id, message_id, role)
-                    VALUES ('${msg.content.replace(/'/g, "''")}', '${s.id.replace(/'/g, "''")}', '${msg.id.replace(/'/g, "''")}', '${msg.role}')
-                `);
-            }
+            this._upsertSessionRaw(s);
         });
 
         transaction(session);
@@ -508,12 +529,128 @@ export class CacheManager implements ICacheManager {
 
         const transaction = this.db.transaction((id: string) => {
             this.db!.exec(`DELETE FROM messages_fts WHERE session_id = '${id.replace(/'/g, "''")}'`);
+            this.stmt!.deleteRemovedTurnsForSession.run(id);
             this.stmt!.deleteCodeBlocks.run(id);
             this.stmt!.deleteMessages.run(id);
             this.stmt!.deleteSession.run(id);
         });
 
         transaction(sessionId);
+    }
+
+    // ── Feature 51 — removed turns ───────────────────────────────────────────
+
+    /**
+     * Persistently remove a single turn from a conversation.
+     *
+     * The turn's full payload is archived in `removed_turns` (so the original
+     * conversation can always be rebuilt) and it is dropped from the FTS index
+     * and from the code-block listing. The `messages` row itself is kept — the
+     * conversation keeps its message indices, which is what bookmarks,
+     * annotations and action items point at.
+     */
+    removeTurn(sessionId: string, messageIndex: number, message: Message): RemovedTurn {
+        if (!this.db || !this.stmt) { this.open(); }
+        if (!this.db || !this.stmt) {
+            throw new Error('CacheManager failed to open database');
+        }
+
+        const removedAt = new Date().toISOString();
+        const transaction = this.db.transaction(() => {
+            this.stmt!.insertRemovedTurn.run({
+                sessionId,
+                messageId: message.id,
+                messageIndex,
+                role: message.role,
+                content: message.content,
+                timestamp: message.timestamp ?? null,
+                removedAt,
+            });
+            this.stmt!.deleteFtsForMessage.run(sessionId, message.id);
+            this.stmt!.deleteCodeBlocksForMessage.run(sessionId, message.id);
+        });
+        transaction();
+
+        return {
+            messageId: message.id,
+            messageIndex,
+            role: message.role,
+            content: message.content,
+            timestamp: message.timestamp,
+            removedAt,
+        };
+    }
+
+    /** All turns the user removed from a session, ordered by message index. */
+    getRemovedTurns(sessionId: string): RemovedTurn[] {
+        if (!this.db || !this.stmt) { this.open(); }
+        if (!this.db || !this.stmt) { return []; }
+
+        const rows = this.stmt.getRemovedTurns.all(sessionId) as DbRemovedTurnRow[];
+        return rows.map(row => ({
+            messageId: row.message_id,
+            messageIndex: row.message_index,
+            role: row.role as 'user' | 'assistant',
+            content: row.content,
+            timestamp: row.timestamp ?? undefined,
+            removedAt: row.removed_at,
+        }));
+    }
+
+    /** Number of turns the user removed from a session. */
+    getRemovedTurnCount(sessionId: string): number {
+        if (!this.db || !this.stmt) { this.open(); }
+        if (!this.db || !this.stmt) { return 0; }
+
+        const row = this.stmt.countRemovedTurns.get(sessionId) as { cnt: number } | undefined;
+        return row?.cnt ?? 0;
+    }
+
+    /**
+     * Reconstructs a session exactly as it was before any turn was removed.
+     *
+     * Used by the reader's "Original full conversation" link: the result is
+     * serialized to Markdown and opened in a text editor. Rows still present in
+     * `messages` (the normal case) are merged with any archived payload from
+     * `removed_turns` that the source file no longer provides, ordered by the
+     * original message index.
+     */
+    getOriginalSession(sessionId: string): Session | undefined {
+        if (!this.db || !this.stmt) { this.open(); }
+        if (!this.db || !this.stmt) { return undefined; }
+
+        const row = this.stmt.getSession.get(sessionId) as DbSessionRow | undefined;
+        if (!row) { return undefined; }
+
+        const msgRows = this.stmt.getMessages.all(sessionId) as DbMessageRow[];
+        const session = this._rowToSession(row, msgRows);
+
+        const present = new Set(session.messages.map(m => m.id));
+        const archived = this.getRemovedTurns(sessionId).filter(t => !present.has(t.messageId));
+        if (archived.length === 0) {
+            // Everything is still in `messages` — just clear the removal flags.
+            for (const msg of session.messages) { delete msg.removed; }
+            return session;
+        }
+
+        type Entry = { index: number; msg: Message };
+        const entries: Entry[] = msgRows.map((m, i) => ({ index: m.message_index, msg: session.messages[i] }));
+        for (const turn of archived) {
+            entries.push({
+                index: turn.messageIndex,
+                msg: {
+                    id: turn.messageId,
+                    role: turn.role,
+                    content: turn.content,
+                    codeBlocks: [],
+                    timestamp: turn.timestamp,
+                },
+            });
+        }
+        entries.sort((a, b) => a.index - b.index);
+        session.messages = entries.map(e => e.msg);
+        for (const msg of session.messages) { delete msg.removed; }
+        return session;
     }
 
     /**
@@ -718,6 +855,19 @@ export class CacheManager implements ICacheManager {
         this.stmt.deleteCodeBlocks.run(session.id);
         this.stmt.deleteMessages.run(session.id);
 
+        // Feature 51 — turns the user removed from this conversation. The
+        // registry survives re-parses, so a removed turn never comes back: its
+        // message row is re-written with `removed: true` (payload retained for
+        // the original view) but it is kept out of the FTS index and of the
+        // code-block listing.
+        const removedIds = new Set<string>(
+            (this.stmt.getRemovedTurnIds.all(session.id) as { message_id: string }[])
+                .map(r => r.message_id)
+        );
+        for (const msg of session.messages) {
+            if (removedIds.has(msg.id)) { msg.removed = true; }
+        }
+
         // Upsert session
         this.stmt.upsertSession.run(this._sessionToRow(session));
 
@@ -735,6 +885,11 @@ export class CacheManager implements ICacheManager {
                 interrupted: msg.interrupted ? 1 : 0,
             });
 
+            // Code blocks of a removed turn must not resurface in the
+            // Code Blocks view — skip them (any stale rows were deleted by
+            // removeTurn()).
+            if (msg.removed) { continue; }
+
             for (const block of msg.codeBlocks) {
                 this.stmt.upsertCodeBlock.run({
                     sessionId: session.id,
@@ -747,9 +902,10 @@ export class CacheManager implements ICacheManager {
             }
         }
 
-        // Rebuild FTS entries
+        // Rebuild FTS entries (removed turns excluded)
         this.db!.exec(`DELETE FROM messages_fts WHERE session_id = '${session.id.replace(/'/g, "''")}'`);
         for (const msg of session.messages) {
+            if (msg.removed) { continue; }
             this.db!.exec(`
                 INSERT INTO messages_fts (content, session_id, message_id, role)
                 VALUES ('${msg.content.replace(/'/g, "''")}', '${session.id.replace(/'/g, "''")}', '${msg.id.replace(/'/g, "''")}', '${msg.role}')
@@ -779,7 +935,7 @@ export class CacheManager implements ICacheManager {
         };
     }
 
-    private _rowToSession(row: DbSessionRow, msgRows: DbMessageRow[]): Session {
+    private _rowToSession(row: DbSessionRow, msgRows: DbMessageRow[], removedIds?: Set<string>): Session {
         const messages: Message[] = msgRows.map((m, idx) => ({
             id: m.id,
             role: m.role as 'user' | 'assistant',
@@ -788,6 +944,7 @@ export class CacheManager implements ICacheManager {
             codeBlocks: [], // Code blocks are loaded separately
             skipped: m.skipped === 1,
             interrupted: m.interrupted === 1,
+            removed: removedIds?.has(m.id) || undefined,
         }));
 
         // Load code blocks for this session
@@ -915,6 +1072,20 @@ CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
     tokenize='porter unicode61'
 );
 
+-- Feature 51 — turns the user removed from a conversation.
+-- The full payload is archived so the original conversation can always be
+-- reopened; the messages table keeps the row (and therefore all message indices).
+CREATE TABLE IF NOT EXISTS removed_turns (
+    session_id    TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    message_id    TEXT NOT NULL,
+    message_index INTEGER NOT NULL,
+    role          TEXT NOT NULL CHECK(role IN ('user','assistant')),
+    content       TEXT NOT NULL,
+    timestamp     TEXT,
+    removed_at    TEXT NOT NULL,
+    PRIMARY KEY (session_id, message_id)
+);
+
 -- Indices
 CREATE INDEX IF NOT EXISTS idx_sessions_source       ON sessions(source);
 CREATE INDEX IF NOT EXISTS idx_sessions_workspace    ON sessions(workspace_id);
@@ -922,4 +1093,5 @@ CREATE INDEX IF NOT EXISTS idx_sessions_updated_at   ON sessions(updated_at DESC
 CREATE INDEX IF NOT EXISTS idx_messages_session_id   ON messages(session_id, message_index);
 CREATE INDEX IF NOT EXISTS idx_code_blocks_session   ON code_blocks(session_id);
 CREATE INDEX IF NOT EXISTS idx_tags_session          ON tags(session_id);
+CREATE INDEX IF NOT EXISTS idx_removed_turns_session ON removed_turns(session_id);
 `;

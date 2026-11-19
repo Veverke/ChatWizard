@@ -4,6 +4,7 @@ import * as assert from 'assert';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
+import { removeTempDir } from '../helpers/fsCleanup';
 import {
     parseClaudeSession,
     extractTextContent,
@@ -165,7 +166,7 @@ suite('Claude Parser — branch coverage edge cases', () => {
     });
 
     teardown(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        removeTempDir(tmpDir);
     });
 
     function writeJsonl(filename: string, lines: object[]): string {

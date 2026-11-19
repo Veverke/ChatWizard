@@ -80,7 +80,7 @@ export function showSurveyPromptManually(context: vscode.ExtensionContext): void
     // Bypass the daily check so the user can always trigger it manually
     if (context.globalState.get<boolean>(KEY_PERM_DISMISSED, false)) {
         void vscode.window.showInformationMessage(
-            'You have already marked the survey as completed. Use "Chat Wizard: Reset Survey" if you want to reset this.',
+            'You have already marked the survey as completed, so the prompt will not be shown again.',
         );
         return;
     }

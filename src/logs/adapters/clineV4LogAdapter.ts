@@ -194,6 +194,9 @@ function handleToolUse(
     index: Map<string, { kind: string; ids: string[]; name?: string }>
 ): void {
     const toolName = part.name ?? '';
+    // A `tool_use` without a name cannot be classified (and would render as an
+    // empty row in every Commands section), so it is ignored.
+    if (!toolName) { return; }
     const kind = classifyAgentTool(toolName);
     const raw = trimRaw(typeof part.input === 'string' ? part.input : JSON.stringify(part.input ?? {}));
 

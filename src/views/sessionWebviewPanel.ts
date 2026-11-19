@@ -1,9 +1,13 @@
 import * as vscode from 'vscode';
-import { Session, ExtractedEntities, SessionBookmark } from '../types/index';
+import * as fs from 'fs';
+import * as path from 'path';
+import { Session, Message, ExtractedEntities, SessionBookmark } from '../types/index';
 import type { SidecarMetadataStore } from '../index/sidecarMetadataStore';
+import type { ICacheManager } from '../cache/cacheManager';
 import { cwThemeCss, syntaxHighlighterCss, cwInteractiveJs } from '../webview/cwTheme';
 import { friendlyModelName } from '../analytics/modelNames';
 import { friendlySourceName } from '../ui/sourceUi';
+import { serializeSession } from '../export/markdownSerializer';
 import {
     VisibleMessage,
     renderChunk,
@@ -11,10 +15,14 @@ import {
     escapeHtml,
     markdownToHtml,
 } from './sessionRenderer';
+import { buildEntityTypeGroups } from './sessionEntities';
 
 // ── Streaming constants ───────────────────────────────────────────────────────
 const INITIAL_WINDOW = 50;   // messages shown in initial render
 const CHUNK_SIZE      = 20;  // messages per setImmediate batch
+
+/** Folder (inside the shared cache dir) holding generated "original conversation" files. */
+const ORIGINAL_CONVERSATIONS_DIR = 'original-conversations';
 
 // ── Internal types ────────────────────────────────────────────────────────────
 interface ScrollInit {
@@ -31,6 +39,7 @@ interface PanelMsgState {
     windowStart:      number;            // first index currently in webview
     windowEnd:        number;            // exclusive end currently in webview
     streamVersion:    number;            // bumped to abort stale streams
+    streamInFlight?:  boolean;           // initial-window stream currently appending
     assistantLabel:   string;
     tags?:            string[];
     entities?:        ExtractedEntities;
@@ -74,8 +83,20 @@ export class SessionWebviewPanel {
 
     /** Sidecar metadata store — set from extension.ts for bookmark/annotation persistence */
     static _sidecarStore: SidecarMetadataStore | undefined;
+    /**
+     * Feature 51 — SQLite cache (the "chat DB"). Set from extension.ts; when
+     * absent (persistent cache disabled / non-VS Code host) turn removal is not
+     * offered because it could not be persisted.
+     */
+    static _cacheStore: ICacheManager | undefined;
     /** Callback invoked after bookmark/annotation/rating changes to refresh the index sidecar cache. */
     static _onSidecarChanged: ((sessionId: string) => void) | undefined;
+    /**
+     * Feature 51 — invoked after the reader mutates a session in place (turn
+     * removal) so the in-memory index re-publishes it: caches are invalidated,
+     * dependent views refresh and the chat DB is re-persisted.
+     */
+    static _onSessionMutated: ((session: Session) => void) | undefined;
 
     // ── Public entry point ────────────────────────────────────────────────────
 
@@ -106,10 +127,16 @@ export class SessionWebviewPanel {
 
         const assistantLabel = friendlySourceName(session.source);
 
-        // Compute visible messages (non-empty content)
+        // Compute visible messages (non-empty content, minus turns the user
+        // removed — Feature 51). `origIdx` keeps pointing at the original index
+        // so bookmarks / annotations / code blocks stay aligned.
         const visibleMessages: VisibleMessage[] = session.messages
-            .map((msg, origIdx) => ({ msg, origIdx }))
-            .filter(({ msg }) => msg.content.trim() !== '' || !!msg.skipped);
+            .map((msg, origIdx) => ({
+                msg,
+                origIdx,
+                nextRemoved: session.messages[origIdx + 1]?.removed === true,
+            }))
+            .filter(({ msg }) => !msg.removed && (msg.content.trim() !== '' || !!msg.skipped));
 
         const total     = visibleMessages.length;
         const initialSz = INITIAL_WINDOW;
@@ -189,6 +216,8 @@ export class SessionWebviewPanel {
                     );
                 } else if (msg.type === 'loadMoreMessages') {
                     void SessionWebviewPanel._loadMoreMessages(session.id);
+                } else if (msg.type === 'loadAllMessages') {
+                    void SessionWebviewPanel._loadAllMessages(session.id);
                 } else if (msg.command === 'exportExcerpt') {
                     void vscode.commands.executeCommand('chatwizard.exportExcerpt', session.id);
                 } else if (msg.command === 'exportSelection' && msg.text) {
@@ -214,6 +243,11 @@ export class SessionWebviewPanel {
                 } else if ((msg as any).type === 'deleteAnnotation') {
                     const m = msg as any;
                     void SessionWebviewPanel._deleteAnnotation(session.id, m.messageIndex as number);
+                } else if ((msg as any).type === 'removeTurn') {
+                    const m = msg as any;
+                    void SessionWebviewPanel._removeTurn(session.id, m.messageIndex as number);
+                } else if ((msg as any).type === 'openOriginalConversation') {
+                    void SessionWebviewPanel._openOriginalConversation(session.id);
                 }
             },
             undefined,
@@ -236,6 +270,8 @@ export class SessionWebviewPanel {
         scrollInit:       ScrollInit,
         highlightContainer?: boolean
     ): Promise<void> {
+        const st = SessionWebviewPanel._panelState.get(panelId);
+        if (st && st.streamVersion === myVersion) { st.streamInFlight = true; }
         try {
         return await SessionWebviewPanel.__startStreamInner(
             panelId, myVersion, userColor, searchTerm, scrollInit, highlightContainer
@@ -244,6 +280,17 @@ export class SessionWebviewPanel {
             const msg = `[ChatWizard] _startStream error for panel ${panelId}: ${err instanceof Error ? err.stack ?? err.message : String(err)}`;
             SessionWebviewPanel._channel?.appendLine(msg);
             console.error(msg);
+        } finally {
+            const cur = SessionWebviewPanel._panelState.get(panelId);
+            // Only the stream that owns the current version may clear the flag.
+            if (cur && cur.streamVersion === myVersion) { cur.streamInFlight = false; }
+        }
+    }
+
+    /** Waits until no initial-window stream is appending to this panel. */
+    private static async _waitForStreamIdle(panelId: string): Promise<void> {
+        while (SessionWebviewPanel._panelState.get(panelId)?.streamInFlight) {
+            await new Promise<void>(resolve => setImmediate(resolve));
         }
     }
 
@@ -284,7 +331,11 @@ export class SessionWebviewPanel {
             windowEnd:        firstEnd,
             total,
             hasMore:          windowEnd < total,
-            userRequestCount: session.messages.filter(m => m.role === 'user').length,
+            userRequestCount: session.messages.filter(m => m.role === 'user' && !m.removed).length,
+            // Feature 51 — how many turns the user removed + whether removal is
+            // available at all (it needs the SQLite chat DB to persist).
+            removedTurnCount: session.messages.filter(m => m.removed === true).length,
+            canRemove:        !!SessionWebviewPanel._cacheStore,
             createdAt:        session.createdAt,
             model:            friendlyModelName(session.model),
             parseErrors:      session.parseErrors ?? [],
@@ -292,7 +343,7 @@ export class SessionWebviewPanel {
             filePath:         session.filePath,
             branch:           session.gitContext?.branch ?? session.chronicleData?.branch ?? null,
             tags:             state.tags ?? [],
-            entities:         state.entities ?? null,
+            entityGroups:     buildEntityTypeGroups(state.entities),
             summary:          state.summary ?? null,
             status:           state.status ?? null,
             bookmarks:        state.bookmarks?.map(b => ({
@@ -362,8 +413,16 @@ export class SessionWebviewPanel {
     }
 
     static async _loadMoreMessages(panelId: string): Promise<void> {
+        const initial = SessionWebviewPanel._panelState.get(panelId);
+        if (!initial) { return; }
+        const myVersion = initial.streamVersion;
+
+        // Appending while the initial window is still streaming would render the
+        // same messages twice — wait for it to land instead.
+        await SessionWebviewPanel._waitForStreamIdle(panelId);
+
         const state = SessionWebviewPanel._panelState.get(panelId);
-        if (!state) { return; }
+        if (!state || state.streamVersion !== myVersion) { return; } // panel re-rendered meanwhile
 
         const { visibleMessages, renderedMessages, assistantLabel, panel } = state;
         const total = visibleMessages.length;
@@ -380,6 +439,68 @@ export class SessionWebviewPanel {
                 position:       'end',
                 newWindowEnd:   newEnd,
                 hasMore:        newEnd < total,
+            });
+        }
+    }
+
+    /**
+     * Streams every remaining message into the webview, in `CHUNK_SIZE` batches.
+     *
+     * Used by the "Load all messages" button and, implicitly, by search: a search
+     * that only covers the initially loaded excerpt of a long session is useless,
+     * so the reader loads the whole transcript first and re-runs the query.
+     *
+     * Chunks are sent with `loadAll: true` so the webview keeps its progress
+     * indicator running until the final batch arrives. The operation aborts
+     * silently when a newer render starts (streamVersion bump — panel re-show).
+     */
+    static async _loadAllMessages(panelId: string): Promise<void> {
+        const initial = SessionWebviewPanel._panelState.get(panelId);
+        if (!initial) { return; }
+        const myVersion = initial.streamVersion;
+
+        // Same overlap rule as _loadMoreMessages: wait for the initial window.
+        await SessionWebviewPanel._waitForStreamIdle(panelId);
+
+        const state = SessionWebviewPanel._panelState.get(panelId);
+        if (!state || state.streamVersion !== myVersion) { return; } // panel re-rendered meanwhile
+
+        const { visibleMessages, renderedMessages, assistantLabel, panel } = state;
+        const total = visibleMessages.length;
+
+        while (true) {
+            const st = SessionWebviewPanel._panelState.get(panelId);
+            if (!st || st.streamVersion !== myVersion) { return; } // superseded by a newer render
+            if (st.windowEnd >= total) { break; }
+
+            const newEnd    = Math.min(total, st.windowEnd + CHUNK_SIZE);
+            const chunkHtml = SessionWebviewPanel._renderChunk(
+                visibleMessages, renderedMessages, st.windowEnd, newEnd, assistantLabel, false
+            );
+            st.windowEnd = newEnd;
+            const hasMore = newEnd < total;
+            void panel.webview.postMessage({
+                type:           'appendChunk',
+                messagesHtml:   chunkHtml,
+                position:       'end',
+                newWindowEnd:   newEnd,
+                hasMore,
+                loadAll:        true,
+            });
+            if (!hasMore) { break; }
+
+            // Yield between batches so the extension host stays responsive and the
+            // webview can paint / keep its spinner alive while the rest streams in.
+            await new Promise<void>(resolve => setImmediate(resolve));
+        }
+
+        const finalState = SessionWebviewPanel._panelState.get(panelId);
+        if (finalState && finalState.streamVersion === myVersion) {
+            void panel.webview.postMessage({
+                type:    'loadAllDone',
+                hasMore: finalState.windowEnd < total,
+                loaded:  finalState.windowEnd,
+                total,
             });
         }
     }
@@ -457,23 +578,44 @@ export class SessionWebviewPanel {
       font-size: 0.75em; font-weight: 500;
       margin: 0 4px 0 0; border: 1px solid currentColor; opacity: 0.88;
     }
-    details#session-entities {
+    /* Always-visible one-line row: Entities [type] [entity] */
+    #session-entities {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: nowrap;
       font-size: 0.82em;
       margin-bottom: 8px;
       padding-bottom: 8px;
       border-bottom: 1px solid var(--vscode-textBlockQuote-background, #444);
+      min-width: 0;
     }
-    .cw-entities-summary { cursor: pointer; opacity: 0.65; user-select: none; }
-    .cw-entities-summary:hover { opacity: 1; }
-    #session-entities-body { padding-top: 5px; display: flex; flex-direction: column; gap: 4px; }
-    .cw-entity-row { display: flex; flex-wrap: wrap; gap: 3px; align-items: baseline; }
-    .cw-entity-row-label { font-weight: 600; opacity: 0.65; margin-right: 3px; white-space: nowrap; }
-    .cw-entity-chip {
-      display: inline-block; border-radius: 3px; padding: 0 5px;
-      font-size: 0.92em; font-family: var(--vscode-editor-font-family, monospace);
-      background: var(--vscode-textBlockQuote-background, rgba(128,128,128,0.15));
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 28em;
+    .cw-entity-label {
+      flex: 0 0 auto;
+      font-weight: 600;
+      opacity: 0.7;
+      white-space: nowrap;
     }
+    .cw-entity-select {
+      flex: 0 1 auto;
+      min-width: 6em;
+      height: 20px;
+      margin: 0;
+      padding: 0 4px;
+      font-family: var(--vscode-font-family, sans-serif);
+      font-size: 1em;
+      line-height: 1.2;
+      text-overflow: ellipsis;
+      background-color: var(--vscode-dropdown-background, var(--vscode-input-background, #3c3c3c));
+      color: var(--vscode-dropdown-foreground, var(--vscode-input-foreground, #cccccc));
+      border: 1px solid var(--vscode-dropdown-border, var(--vscode-input-border, #555));
+      border-radius: 2px;
+      outline: none;
+    }
+    #entity-type-select { max-width: 13em; }
+    #entity-value-select { flex: 1 1 auto; min-width: 9em; max-width: 34em; }
+    .cw-entity-select:focus { border-color: var(--vscode-focusBorder, #007fd4); }
+    .cw-entity-select:disabled { opacity: 0.55; }
     .toolbar {
       position: sticky;
       top: 0;
@@ -585,6 +727,14 @@ export class SessionWebviewPanel {
     .message-body strong { font-weight: bold; }
     .message-body em { font-style: italic; }
     .message-body del { text-decoration: line-through; opacity: 0.75; }
+    /* Auto-linked URIs and markdown links — visually distinct and clickable
+       (VS Code opens http/https anchors in the user's default browser). */
+    .message-body a {
+      color: var(--vscode-textLink-foreground, #3794ff);
+      text-decoration: none;
+      cursor: pointer;
+    }
+    .message-body a:hover { text-decoration: underline; }
     .table-wrap { overflow-x: auto; margin: 0.5em 0; max-width: 100%; }
     .message-body table { border-collapse: collapse; font-size: 0.92em; white-space: nowrap; }
     .message-body th, .message-body td {
@@ -696,6 +846,31 @@ export class SessionWebviewPanel {
       color: var(--cw-accent-text);
       border-color: var(--cw-accent);
     }
+    /* "Load all messages" — the full-transcript button in the sticky toolbar */
+    #load-all-btn {
+      white-space: nowrap;
+    }
+    #load-all-btn .cw-spinner {
+      display: none;
+      width: 8px;
+      height: 8px;
+      margin-right: 6px;
+      border: 2px solid currentColor;
+      border-top-color: transparent;
+      border-radius: 50%;
+      vertical-align: -1px;
+      animation: cw-spin 0.7s linear infinite;
+    }
+    #load-all-btn.cw-loading .cw-spinner { display: inline-block; }
+    #load-all-btn.cw-loading,
+    #load-all-btn:disabled { cursor: progress; opacity: 0.8; }
+    #load-all-btn.cw-loading:hover,
+    #load-all-btn:disabled:hover {
+      background: var(--cw-surface-subtle);
+      color: inherit;
+      border-color: var(--cw-border-strong);
+    }
+    @keyframes cw-spin { to { transform: rotate(360deg); } }
     .cw-filter-label {
       display: flex;
       align-items: center;
@@ -838,6 +1013,37 @@ export class SessionWebviewPanel {
     .bookmark-item .bm-marker { color: var(--cw-accent, #f0c040); font-size: 0.85em; }
     .bookmark-item .bm-note { opacity: 0.7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .bookmark-item .bm-date { opacity: 0.45; font-size: 0.85em; margin-left: auto; white-space: nowrap; }
+    /* ── Feature 51 — turn selection & removal ──────────────────────────────── */
+    .message { cursor: default; transition: box-shadow 0.12s, border-color 0.12s; }
+    .message.cw-selected {
+      box-shadow: 0 0 0 2px var(--vscode-focusBorder, #007fd4), var(--cw-shadow);
+      border-color: var(--vscode-focusBorder, #007fd4);
+    }
+    .cw-remove-btn {
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 1px 4px;
+      font-size: 0.9em;
+      color: inherit;
+      opacity: 0;
+      transition: opacity 0.15s, color 0.15s;
+      border-radius: 3px;
+      line-height: 1;
+    }
+    .message:hover .cw-remove-btn { opacity: 0.4; }
+    .message.cw-selected .cw-remove-btn { opacity: 1; }
+    .cw-remove-btn:hover {
+      opacity: 1 !important;
+      background: var(--cw-surface-subtle);
+      color: var(--vscode-errorForeground, #f14c4c);
+    }
+    /* Removal is only offered when the chat DB is available to persist it. */
+    body.cw-no-remove .cw-remove-btn { display: none !important; }
+    .cw-ctx-danger { color: var(--vscode-errorForeground, #f14c4c); }
+    .session-meta .cw-meta-removed { color: var(--vscode-gitDecoration-deletedResourceForeground, #f14c4c); }
+    .session-meta .cw-meta-removed a { color: var(--vscode-textLink-foreground, #3794ff); text-decoration: underline; }
+    .session-meta .cw-meta-removed a:hover { color: var(--vscode-textLink-activeForeground, #3794ff); }
   </style>
 </head>
 <body>
@@ -854,11 +1060,14 @@ export class SessionWebviewPanel {
     <span id="session-status" style="display:none"></span>
     <span class="meta-sep" style="display:none" id="session-branch-sep"> &nbsp;·&nbsp; </span>
     <span id="session-branch-field" class="cw-meta-branch" style="display:none"><span id="session-branch-icon" style="opacity:0.6">⎇</span> <span class="cw-meta-label">Branch:</span> <span id="session-branch"></span></span>
+    <span class="meta-sep" style="display:none" id="session-removed-sep"> &nbsp;·&nbsp; </span>
+    <span id="session-removed-field" class="cw-meta-removed" style="display:none"><span class="cw-meta-label">Removed:</span> <span id="session-removed-count"></span> &nbsp;<a href="#" id="session-original-link" title="Open the complete conversation as it was before any turn was removed">original full conversation</a></span>
   </div>
-  <details id="session-entities" style="display:none">
-    <summary class="cw-entities-summary">&#128269; Entities</summary>
-    <div id="session-entities-body"></div>
-  </details>
+  <div id="session-entities" role="group" aria-label="Entities">
+    <span class="cw-entity-label">Entities</span>
+    <select id="entity-type-select" class="cw-entity-select" aria-label="Entity type" title="Filter entities by type" disabled></select>
+    <select id="entity-value-select" class="cw-entity-select" aria-label="Entity value" title="Select an entity to search for it in this session" disabled></select>
+  </div>
   <div id="bookmarks-section">
     <summary style="cursor:pointer;opacity:0.65;user-select:none;font-size:0.82em;">&#9733; Bookmarks</summary>
     <div id="bookmarks-list"></div>
@@ -872,6 +1081,7 @@ export class SessionWebviewPanel {
       <button id="search-prev" title="Previous (Shift+Enter)" aria-label="Previous match">&#9650;</button>
       <button id="search-next" title="Next (Enter)" aria-label="Next match">&#9660;</button>
     </div>
+    <button id="load-all-btn" style="display:none;" title="Load every message in this session, so search covers the whole chat"><span class="cw-spinner" aria-hidden="true"></span><span id="load-all-btn-label">Load all messages</span></button>
     <button id="export-excerpt-btn" style="opacity:0.7;" title="Export an excerpt of this session as Markdown">Export Excerpt&#8230;</button>
     <label class="cw-filter-label" title="Show only your messages"><input type="checkbox" id="filter-prompts" /> You</label>
     <label class="cw-filter-label" title="Show only assistant responses"><input type="checkbox" id="filter-responses" /> <span id="filter-responses-label">Responses</span></label>
@@ -902,6 +1112,7 @@ export class SessionWebviewPanel {
   <button class="cw-back-top" id="backToTop" title="Back to top">&#8593;</button>
   <div id="sel-ctx-menu">
     <div class="ctx-item" id="ctx-export-sel">Export selection as Markdown&#8230;</div>
+    <div class="ctx-item cw-ctx-danger" id="ctx-remove-turn">Remove turn from conversation</div>
   </div>
 <script>
 ${cwInteractiveJs()}
@@ -912,8 +1123,42 @@ ${cwInteractiveJs()}
   // ── State ──────────────────────────────────────────────────────────────────
   var _hasMore     = false;
   var _loadingMore = false;
+  // "Load all messages" in flight — keeps the spinner running and blocks the
+  // per-batch "Load more" path from interleaving with it.
+  var _loadingAll  = false;
+  // Search term waiting for the full transcript to arrive; re-run on completion.
+  var _pendingSearchQuery = null;
   var _bookmarks   = [];  // Array<{ messageIndex: number, note: string|null, createdAt: string }>
   var _annotations = [];  // Array<{ messageIndex: number, text: string, createdAt: string, updatedAt: string|null }>
+  // Feature 51 — the turn currently selected for removal, and the turn the
+  // context menu was opened on.
+  var _selectedMsgEl = null;
+  var _ctxMsgEl = null;
+
+  // ── Turn selection (Feature 51) ────────────────────────────────────────────
+  function isTurnEl(el) {
+    return !!el && el.classList && el.classList.contains('message') &&
+      !el.classList.contains('cw-role-response');
+  }
+  function clearTurnSelection() {
+    if (_selectedMsgEl) { _selectedMsgEl.classList.remove('cw-selected'); }
+    _selectedMsgEl = null;
+  }
+  function selectTurn(el) {
+    if (!isTurnEl(el)) { return; }
+    if (_selectedMsgEl === el) { el.classList.add('cw-selected'); return; }
+    clearTurnSelection();
+    _selectedMsgEl = el;
+    el.classList.add('cw-selected');
+  }
+  function toggleTurn(el) {
+    if (!isTurnEl(el)) { return; }
+    if (_selectedMsgEl === el) { clearTurnSelection(); } else { selectTurn(el); }
+  }
+  function msgIndexFromTurn(el) {
+    if (!el) { return -1; }
+    return parseInt(el.getAttribute('data-msg-idx') || '-1', 10);
+  }
 
   // ── Annotation helpers ─────────────────────────────────────────────────────
   function renderAnnotationBlock(a) {
@@ -1001,35 +1246,72 @@ ${cwInteractiveJs()}
     vscode.postMessage({ command: 'exportExcerpt' });
   });
 
-  // ── Load more button ────────────────────────────────────────────────────────
+  // ── Load more / Load all buttons ────────────────────────────────────────────
   var loadMoreBtn = document.getElementById('load-more-btn');
+  var loadAllBtn  = document.getElementById('load-all-btn');
+  var loadAllLbl  = document.getElementById('load-all-btn-label');
   loadMoreBtn.addEventListener('click', function() {
-    if (_loadingMore || !_hasMore) { return; }
+    if (_loadingMore || _loadingAll || !_hasMore) { return; }
     _loadingMore = true;
     vscode.postMessage({ type: 'loadMoreMessages' });
   });
+  loadAllBtn.addEventListener('click', function() { startLoadAll(); });
 
   function updateLoadMoreButton() {
-    loadMoreBtn.style.display = _hasMore ? 'block' : 'none';
+    // Redundant while the whole transcript is being loaded.
+    loadMoreBtn.style.display = (_hasMore && !_loadingAll) ? 'block' : 'none';
+  }
+
+  function updateLoadAllButton() {
+    loadAllBtn.style.display = _hasMore ? 'inline-block' : 'none';
+    loadAllBtn.disabled = _loadingAll;
+    loadAllBtn.classList.toggle('cw-loading', _loadingAll);
+    if (loadAllLbl) { loadAllLbl.textContent = _loadingAll ? 'Loading all messages\\u2026' : 'Load all messages'; }
+  }
+
+  // Ask the host to stream every remaining message into the DOM.
+  function startLoadAll() {
+    if (_loadingAll || !_hasMore) { return; }
+    _loadingAll = true;
+    updateLoadAllButton();
+    updateLoadMoreButton();
+    vscode.postMessage({ type: 'loadAllMessages' });
+  }
+
+  // Everything is in the DOM: drop the spinner and re-run the search that was
+  // waiting for it (so the counter / results cover the full conversation).
+  function finishLoadAll() {
+    if (!_loadingAll) { return; }
+    _loadingAll = false;
+    updateLoadAllButton();
+    updateLoadMoreButton();
+    applyRoleFilter();
+    updateBookmarksUI();
+    var query = _pendingSearchQuery;
+    _pendingSearchQuery = null;
+    if (query === null) { query = srchInput.value || null; }
+    if (query) { srchInput.value = query; runSearch(query); }
+    else       { srchCounter.textContent = ''; }
   }
 
   // ── Role filter checkboxes ──────────────────────────────────────────────────
   var filterPromptsEl   = document.getElementById('filter-prompts');
   var filterResponsesEl = document.getElementById('filter-responses');
-  function applyRoleFilter() {
+  function applyRoleFilterTo(root) {
     var showPromptsOnly   = filterPromptsEl.checked;
     var showResponsesOnly = filterResponsesEl.checked;
     // If both or neither checked, show everything
     if (showPromptsOnly === showResponsesOnly) {
-      container.querySelectorAll('.message').forEach(function(el) { el.style.display = ''; });
+      root.querySelectorAll('.message').forEach(function(el) { el.style.display = ''; });
       return;
     }
-    container.querySelectorAll('.message').forEach(function(el) {
+    root.querySelectorAll('.message').forEach(function(el) {
       var isUser = el.classList.contains('user');
       if (showPromptsOnly)   { el.style.display = isUser ? '' : 'none'; }
       if (showResponsesOnly) { el.style.display = isUser ? 'none' : ''; }
     });
   }
+  function applyRoleFilter() { applyRoleFilterTo(container); }
   filterPromptsEl.addEventListener('change', function() {
     if (filterPromptsEl.checked && filterResponsesEl.checked) { filterResponsesEl.checked = false; }
     applyRoleFilter();
@@ -1061,13 +1343,22 @@ ${cwInteractiveJs()}
 
   // ── Context menu ───────────────────────────────────────────────────────────
   var ctxMenu = document.getElementById('sel-ctx-menu');
+  var ctxExportItem = document.getElementById('ctx-export-sel');
+  var ctxRemoveItem = document.getElementById('ctx-remove-turn');
   var savedSelText = '';
   function hideMenu() { ctxMenu.style.display = 'none'; }
   document.addEventListener('contextmenu', function(e) {
     var sel = window.getSelection();
     var text = sel ? sel.toString().trim() : '';
-    if (!text) { hideMenu(); return; }
+    var msgEl = e.target && e.target.closest ? e.target.closest('.message') : null;
+    var showRemove = isTurnEl(msgEl) && !document.body.classList.contains('cw-no-remove');
+    if (!text && !showRemove) { hideMenu(); return; }
     savedSelText = text;
+    _ctxMsgEl = showRemove ? msgEl : null;
+    ctxExportItem.style.display = text ? 'block' : 'none';
+    ctxRemoveItem.style.display = showRemove ? 'block' : 'none';
+    // Feature 51 — right-clicking a turn both selects it and offers its removal.
+    if (showRemove) { selectTurn(msgEl); }
     e.preventDefault();
     ctxMenu.style.left = e.clientX + 'px';
     ctxMenu.style.top  = e.clientY + 'px';
@@ -1077,13 +1368,54 @@ ${cwInteractiveJs()}
     if (rect.bottom > window.innerHeight) { ctxMenu.style.top  = (e.clientY - rect.height) + 'px'; }
   });
   document.addEventListener('click', hideMenu);
-  document.addEventListener('keydown', function(e) { if (e.key === 'Escape') { hideMenu(); } });
-  document.getElementById('ctx-export-sel').addEventListener('click', function() {
+  document.addEventListener('keydown', function(e) { if (e.key === 'Escape') { hideMenu(); clearTurnSelection(); } });
+  ctxExportItem.addEventListener('click', function() {
     if (!savedSelText) { return; }
     vscode.postMessage({ command: 'exportSelection', text: savedSelText });
     savedSelText = '';
     hideMenu();
   });
+  ctxRemoveItem.addEventListener('click', function() {
+    var idx = msgIndexFromTurn(_ctxMsgEl);
+    hideMenu();
+    if (idx < 0) { return; }
+    vscode.postMessage({ type: 'removeTurn', messageIndex: idx });
+  });
+
+  // ── Turn selection & removal (Feature 51) ──────────────────────────────────
+  document.addEventListener('click', function(e) {
+    var t = e.target;
+    if (!t || !t.closest) { return; }
+    // The remove button acts on the turn it belongs to.
+    var removeBtn = t.closest('.cw-remove-btn');
+    if (removeBtn) {
+      e.stopPropagation();
+      var ownerEl = removeBtn.closest('.message');
+      var ownerIdx = msgIndexFromTurn(ownerEl);
+      if (ownerIdx >= 0) { vscode.postMessage({ type: 'removeTurn', messageIndex: ownerIdx }); }
+      return;
+    }
+    // Clicks on controls / annotation UI must not change the selection.
+    if (t.closest('button, a, select, input, textarea, summary, label, .cw-annotation-block, .cw-annotation-editor, .bookmark-item')) {
+      return;
+    }
+    // A text selection (drag) is not a turn click.
+    var sel = window.getSelection();
+    if (sel && sel.toString().trim()) { return; }
+    var msgEl = t.closest('.message');
+    if (!msgEl) { clearTurnSelection(); return; }
+    toggleTurn(msgEl);
+  });
+
+  // ── "Original full conversation" (Feature 51) ──────────────────────────────
+  var originalLink = document.getElementById('session-original-link');
+  if (originalLink) {
+    originalLink.addEventListener('click', function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      vscode.postMessage({ type: 'openOriginalConversation' });
+    });
+  }
 
   // ── Update bookmarks UI ─────────────────────────────────────────────────
   function updateBookmarksUI() {
@@ -1311,9 +1643,20 @@ ${cwInteractiveJs()}
     cwMarks = []; cwIdx = -1;
     clearMsgMarks();
     if (!query) {
+      _pendingSearchQuery = null;
       if (_deHighlighted) { _deHighlighted = false; highlightAll(); }
       srchCounter.textContent = '';
       return;
+    }
+    // A search restricted to the initially loaded excerpt of a long chat is
+    // useless: pull in every message first, then re-run this query on the
+    // complete transcript (finishLoadAll does that when the last batch lands).
+    if (_hasMore) {
+      _pendingSearchQuery = query;
+      srchCounter.textContent = 'Loading all messages\\u2026';
+      startLoadAll();
+      if (_loadingAll) { return; }
+      _pendingSearchQuery = null;
     }
     dehighlightCode(); // flatten spans so multi-word searches work across tokens
 
@@ -1387,6 +1730,12 @@ ${cwInteractiveJs()}
   document.addEventListener('keydown', function(e) {
     if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
       e.preventDefault();
+      // Ctrl+F means "find in this chat" — make sure the whole transcript is
+      // loaded, otherwise the search would only cover the initial excerpt.
+      if (_hasMore && !_loadingAll) {
+        srchCounter.textContent = 'Loading all messages\\u2026';
+        startLoadAll();
+      }
       srchInput.focus();
       srchInput.select();
     }
@@ -1399,6 +1748,79 @@ ${cwInteractiveJs()}
       srchRegex.click();
     }
   });
+
+  // ── Entity dropdowns ───────────────────────────────────────────────────────
+  // Always-visible one-line row: Entities [type] [entity].
+  // 1st dropdown: entity type (already sorted alphabetically by the host).
+  // 2nd dropdown: the values of the selected type (also pre-sorted by the host).
+  // Choosing a value reuses the search bar: the term is typed in and searched,
+  // which scrolls the reader to the first occurrence.
+  var entTypeSel   = document.getElementById('entity-type-select');
+  var entValueSel  = document.getElementById('entity-value-select');
+  var _entityGroups = [];
+  function addPlaceholderOption(sel, text) {
+    var opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = text;
+    sel.appendChild(opt);
+  }
+  function populateEntityValues() {
+    if (!entTypeSel || !entValueSel) { return; }
+    var group = _entityGroups[parseInt(entTypeSel.value, 10)];
+    var items = group ? group.items : [];
+    entValueSel.innerHTML = '';
+    entValueSel.disabled = items.length === 0;
+    if (items.length === 0) {
+      addPlaceholderOption(entValueSel, '\\u2014');
+      return;
+    }
+    addPlaceholderOption(entValueSel, 'Select an entity\\u2026');
+    items.forEach(function(item, i) {
+      var opt = document.createElement('option');
+      opt.value = String(i);
+      opt.textContent = item;
+      opt.title = item;
+      entValueSel.appendChild(opt);
+    });
+  }
+  function renderEntityDropdowns(groups) {
+    _entityGroups = (groups || []).filter(function(g) {
+      return !!g && !!g.items && g.items.length > 0;
+    });
+    if (!entTypeSel) { return; }
+    entTypeSel.innerHTML = '';
+    if (_entityGroups.length === 0) {
+      addPlaceholderOption(entTypeSel, 'No entities');
+      entTypeSel.disabled = true;
+      populateEntityValues();
+      return;
+    }
+    entTypeSel.disabled = false;
+    _entityGroups.forEach(function(g, i) {
+      var opt = document.createElement('option');
+      opt.value = String(i);
+      opt.textContent = g.label;
+      entTypeSel.appendChild(opt);
+    });
+    entTypeSel.value = '0';
+    populateEntityValues();
+  }
+  function searchForEntity(value) {
+    if (!value) { return; }
+    srchInput.value = value;
+    srchCounter.textContent = '';
+    runSearch(value);
+  }
+  if (entTypeSel) { entTypeSel.addEventListener('change', populateEntityValues); }
+  if (entValueSel) {
+    entValueSel.addEventListener('change', function() {
+      if (!entTypeSel) { return; }
+      var group = _entityGroups[parseInt(entTypeSel.value, 10)];
+      var idx   = parseInt(entValueSel.value, 10);
+      if (!group || isNaN(idx) || group.items[idx] === undefined) { return; }
+      searchForEntity(group.items[idx]);
+    });
+  }
 
   // ── Scroll helpers ─────────────────────────────────────────────────────────
   var _toolbar = document.querySelector('.toolbar');
@@ -1436,13 +1858,18 @@ ${cwInteractiveJs()}
   // ── DOM helpers for appending/prepending message chunks ───────────────────
   var container = document.getElementById('messages-container');
 
-  function appendHtml(html) {
+  function appendHtml(html, bulk) {
     var tmp = document.createElement('div');
     tmp.innerHTML = html;
+    // Bulk (load-all) appends filter only the incoming nodes and skip the
+    // whole-document bookmark pass — finishLoadAll applies both once at the end.
+    if (bulk) { applyRoleFilterTo(tmp); }
     while (tmp.firstChild) { container.appendChild(tmp.firstChild); }
     highlightAll();
-    applyRoleFilter();
-    updateBookmarksUI();
+    if (!bulk) {
+      applyRoleFilter();
+      updateBookmarksUI();
+    }
   }
 
   // Try to find and highlight the pending prompt in the DOM.
@@ -1467,6 +1894,10 @@ ${cwInteractiveJs()}
       cwMsgMarks.push(matchEl);
       cwMsgIdx = 0;
       cwScrollTo(matchEl);
+    } else if (_hasMore && _loadingAll) {
+      // A full load-all is already streaming every message in — just wait for the
+      // next appendChunk instead of requesting (and interleaving) another batch.
+      return;
     } else if (_hasMore) {
       // Target not yet loaded — request next batch
       _loadingMore = true;
@@ -1513,11 +1944,17 @@ ${cwInteractiveJs()}
       var branchField = document.getElementById('session-branch-field');
       var branchEl    = document.getElementById('session-branch');
       var branchSep   = document.getElementById('session-branch-sep');
+      var removedField = document.getElementById('session-removed-field');
+      var removedCount = document.getElementById('session-removed-count');
+      var removedSep   = document.getElementById('session-removed-sep');
       var showModel   = data.model && data.model !== 'Unknown';
       var showReq     = data.userRequestCount !== undefined;
       var showBranch  = !!data.branch;
       var showDate    = !!data.createdAt;
-      if (metaEl && (showModel || showReq || showBranch || showDate)) {
+      // Feature 51 — "Removed: N turns · original full conversation"
+      var removedN    = data.removedTurnCount || 0;
+      var showRemoved = removedN > 0;
+      if (metaEl && (showModel || showReq || showBranch || showDate || showRemoved)) {
         if (showDate && dateField && dateEl) {
           var d = new Date(data.createdAt);
           dateEl.textContent = isNaN(d.getTime()) ? data.createdAt : d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
@@ -1534,6 +1971,16 @@ ${cwInteractiveJs()}
         if (showBranch && branchField && branchEl) {
           branchEl.textContent = data.branch;
           branchField.style.display = 'inline';
+        }
+        if (showRemoved && removedField && removedCount) {
+          removedCount.textContent = removedN + (removedN === 1 ? ' turn' : ' turns');
+          removedField.style.display = 'inline';
+        } else if (removedField) {
+          removedField.style.display = 'none';
+        }
+        if (removedSep) {
+          var beforeRemoved = (showModel ? 1 : 0) + (showReq ? 1 : 0) + (showBranch ? 1 : 0) + (showDate ? 1 : 0);
+          removedSep.style.display = (showRemoved && beforeRemoved >= 1) ? 'inline' : 'none';
         }
         if (dateSep) { dateSep.style.display = (showDate && ((showModel ? 1 : 0) + (showReq ? 1 : 0) + (showBranch ? 1 : 0) >= 1)) ? 'inline' : 'none'; }
         if (sepEl) {
@@ -1556,42 +2003,8 @@ ${cwInteractiveJs()}
           tagsEl.style.display = 'none';
         }
       }
-      // Entities collapsible section
-      var entitiesEl = document.getElementById('session-entities');
-      var entitiesBody = document.getElementById('session-entities-body');
-      if (entitiesEl && entitiesBody) {
-        var ent = data.entities || {};
-        var entGroups = [
-          { label: '\uD83D\uDCC4 Files',        items: ent.filePaths },
-          { label: '\u2699\uFE0F Functions',     items: ent.functionNames },
-          { label: '\u26A0\uFE0F Errors',        items: ent.errors },
-          { label: '\uD83D\uDCA1 Decisions',     items: ent.decisions },
-          { label: '\uD83E\uDDE0 Concepts',      items: ent.semantic }
-        ];
-        var nonEmpty = entGroups.filter(function(g) { return g.items && g.items.length > 0; });
-        if (nonEmpty.length > 0) {
-          entitiesBody.innerHTML = '';
-          nonEmpty.forEach(function(g) {
-            var row = document.createElement('div');
-            row.className = 'cw-entity-row';
-            var lbl = document.createElement('span');
-            lbl.className = 'cw-entity-row-label';
-            lbl.textContent = g.label + ': ';
-            row.appendChild(lbl);
-            g.items.forEach(function(item) {
-              var chip = document.createElement('span');
-              chip.className = 'cw-entity-chip';
-              chip.textContent = item;
-              chip.title = item;
-              row.appendChild(chip);
-            });
-            entitiesBody.appendChild(row);
-          });
-          entitiesEl.style.display = 'block';
-        } else {
-          entitiesEl.style.display = 'none';
-        }
-      }
+      // Entities row — always visible: Entities [type] [entity]
+      renderEntityDropdowns(data.entityGroups || []);
       // Status chip
       var statusEl = document.getElementById('session-status');
       if (data.status) {
@@ -1603,6 +2016,11 @@ ${cwInteractiveJs()}
       // Initialize bookmarks and annotations
       if (data.bookmarks) { _bookmarks = data.bookmarks; }
       if (data.annotations) { _annotations = data.annotations; }
+      // Feature 51 — removal needs the chat DB; the previous selection is gone
+      // with the old DOM.
+      _selectedMsgEl = null;
+      _ctxMsgEl = null;
+      document.body.classList.toggle('cw-no-remove', !data.canRemove);
       container.innerHTML = data.messagesHtml;
       updateBookmarksUI();
       // Render annotations for bookmarked messages
@@ -1647,7 +2065,10 @@ ${cwInteractiveJs()}
 
       _hasMore     = !!data.hasMore;
       _loadingMore = false;
+      _loadingAll  = false;
+      _pendingSearchQuery = null;
       updateLoadMoreButton();
+      updateLoadAllButton();
 
       clearMarks();
       // Pre-fill the input now so the user sees the pending term immediately;
@@ -1678,12 +2099,22 @@ ${cwInteractiveJs()}
     }
 
     if (data.type === 'appendChunk') {
-      appendHtml(data.messagesHtml);
-      _hasMore     = !!data.hasMore;
-      _loadingMore = false;
+      appendHtml(data.messagesHtml, !!data.loadAll);
+      _hasMore = !!data.hasMore;
+      if (!_loadingAll) { _loadingMore = false; }
       updateLoadMoreButton();
+      updateLoadAllButton();
       // Re-try pending highlight after new messages are in DOM
       if (_pendingHighlight) { tryHighlightMsg(); }
+      // Final batch of a load-all: release the spinner and re-run the search
+      if (_loadingAll && !_hasMore) { finishLoadAll(); }
+    }
+
+    if (data.type === 'loadAllDone') {
+      // Host-side terminator: also covers the "nothing left to load" case and
+      // guarantees the spinner is cleared even if the last chunk was dropped.
+      _hasMore = !!data.hasMore;
+      finishLoadAll();
     }
 
     if (data.type === 'annotationUpdated') {
@@ -1870,6 +2301,183 @@ ${cwInteractiveJs()}
                 })),
             });
         }
+    }
+
+    // ── Feature 51 — turn removal & original conversation ────────────────────
+
+    /**
+     * Removes a single turn from the conversation, persists the decision in the
+     * chat DB and re-renders the reader.
+     *
+     * The message stays in `session.messages` (flagged `removed`) so every
+     * index-based reference — bookmarks, annotations, code blocks, action items —
+     * keeps pointing at the right turn. Its bookmark / annotation are dropped
+     * because they no longer describe anything visible.
+     */
+    static async _removeTurn(sessionId: string, messageIndex: number): Promise<void> {
+        const st = SessionWebviewPanel._panelState.get(sessionId);
+        if (!st) { return; }
+
+        const message = st.session.messages[messageIndex];
+        if (!message || message.removed) { return; }
+
+        const store = SessionWebviewPanel._cacheStore;
+        if (!store) {
+            void vscode.window.showWarningMessage(
+                'Chat Wizard: removing a turn needs the persistent cache ' +
+                '(chatwizard.enablePersistentCache), because the removal is stored in the chat database.'
+            );
+            return;
+        }
+
+        try {
+            store.removeTurn(sessionId, messageIndex, message);
+        } catch (err) {
+            const text = `[ChatWizard] Could not remove turn ${messageIndex} of session ${sessionId}: ${err}`;
+            SessionWebviewPanel._channel?.appendLine(text);
+            console.error(text);
+            void vscode.window.showErrorMessage('Chat Wizard: the turn could not be removed (chat DB error).');
+            return;
+        }
+
+        message.removed = true;
+
+        // The turn's bookmark / annotation described a turn that is gone.
+        const sidecar = SessionWebviewPanel._sidecarStore;
+        if (sidecar) {
+            try {
+                await sidecar.removeBookmark(sessionId, messageIndex);
+                await sidecar.removeAnnotation(sessionId, messageIndex);
+                SessionWebviewPanel._onSidecarChanged?.(sessionId);
+            } catch (err) {
+                SessionWebviewPanel._channel?.appendLine(
+                    `[ChatWizard] Could not drop sidecar refs for turn ${messageIndex}: ${err}`
+                );
+            }
+        }
+
+        // Refresh the index (invalidates its prompt/code-block caches and
+        // re-persists the session without the removed turn's indexed content).
+        SessionWebviewPanel._onSessionMutated?.(st.session);
+
+        await SessionWebviewPanel._rerender(sessionId);
+    }
+
+    /**
+     * Rebuilds the whole reader window from the current session state.
+     *
+     * Used after a turn is removed: the render cache is keyed on
+     * `updatedAt` (unchanged by a removal), so the per-message HTML must be
+     * rebuilt against the new visible-message list.
+     */
+    private static async _rerender(sessionId: string): Promise<void> {
+        const st = SessionWebviewPanel._panelState.get(sessionId);
+        if (!st) { return; }
+
+        const { session, panel } = st;
+        const visibleMessages: VisibleMessage[] = session.messages
+            .map((msg, origIdx) => ({
+                msg,
+                origIdx,
+                nextRemoved: session.messages[origIdx + 1]?.removed === true,
+            }))
+            .filter(({ msg }) => !msg.removed && (msg.content.trim() !== '' || !!msg.skipped));
+
+        const total = visibleMessages.length;
+        const renderedMessages = new Array<string | null>(total).fill(null);
+        SessionWebviewPanel._renderCacheSet(`${session.id}::${session.updatedAt}`, renderedMessages);
+
+        const config = vscode.workspace.getConfiguration('chatwizard');
+        const userColor = config.get<string>('userMessageColor', '#007acc') || '#007acc';
+
+        const version = st.streamVersion + 1;
+        SessionWebviewPanel._panelState.set(sessionId, {
+            ...st,
+            visibleMessages,
+            renderedMessages,
+            windowStart: 0,
+            windowEnd: Math.min(INITIAL_WINDOW, total),
+            streamVersion: version,
+            panel,
+            // A bookmark / note attached to the turn we just removed must not
+            // linger in the jump list or as an inline block.
+            bookmarks: st.bookmarks?.filter(b => !session.messages[b.messageIndex]?.removed),
+            annotations: st.annotations?.filter(a => !session.messages[a.messageIndex]?.removed),
+        });
+
+        await SessionWebviewPanel._startStream(
+            sessionId,
+            version,
+            userColor,
+            undefined,
+            { targetMsgIdx: null, targetBlockIdx: null, highlightColor: null, shouldScroll: false }
+        );
+    }
+
+    /**
+     * Opens the complete conversation — including every turn the user removed —
+     * in a text editor.
+     *
+     * The file is rebuilt from the chat DB (`messages` + `removed_turns`) and
+     * written into the cache storage folder, so it survives restarts and source
+     * files being pruned. The link is only offered when at least one turn was
+     * removed.
+     */
+    static async _openOriginalConversation(sessionId: string): Promise<void> {
+        const store = SessionWebviewPanel._cacheStore;
+        const st = SessionWebviewPanel._panelState.get(sessionId);
+        const stored = st?.session;
+
+        let full: Session | undefined;
+        try {
+            full = store?.getOriginalSession(sessionId) ?? stored;
+        } catch (err) {
+            SessionWebviewPanel._channel?.appendLine(
+                `[ChatWizard] Could not rebuild the original conversation for ${sessionId}: ${err}`
+            );
+        }
+        if (!full) {
+            void vscode.window.showErrorMessage('Chat Wizard: the original conversation is not available.');
+            return;
+        }
+
+        const removedCount = store?.getRemovedTurnCount(sessionId)
+            ?? full.messages.filter(m => m.removed).length;
+        const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
+        const header =
+            `<!-- Chat Wizard — original conversation. ${removedCount} turn(s) removed on ${stamp}. -->\n\n` +
+            `> **Original conversation.** This is the complete chat as it was before any turn was removed.\n` +
+            `> ${removedCount} turn${removedCount === 1 ? '' : 's'} removed in Chat Wizard on ${stamp}.\n\n`;
+        const markdown = header + serializeSession(full);
+
+        try {
+            const baseDir = store
+                ? path.dirname(store.dbPath)
+                : (stored ? path.dirname(stored.filePath) : undefined);
+            if (!baseDir) { throw new Error('no storage folder available'); }
+            const dir = path.join(baseDir, ORIGINAL_CONVERSATIONS_DIR);
+            await fs.promises.mkdir(dir, { recursive: true });
+            const file = path.join(
+                dir,
+                `${SessionWebviewPanel._safeFilePart(full.title)}-${SessionWebviewPanel._safeFilePart(full.id)}.md`
+            );
+            await fs.promises.writeFile(file, markdown, 'utf-8');
+            await vscode.window.showTextDocument(vscode.Uri.file(file), { preview: false });
+        } catch (err) {
+            const text = `[ChatWizard] Could not open the original conversation for ${sessionId}: ${err}`;
+            SessionWebviewPanel._channel?.appendLine(text);
+            console.error(text);
+            void vscode.window.showErrorMessage('Chat Wizard: the original conversation could not be written.');
+        }
+    }
+
+    /** Minimal filename-safe slug for the generated original-conversation file. */
+    private static _safeFilePart(text: string): string {
+        return (text || 'session')
+            .toLowerCase()
+            .replace(/[^a-z0-9_-]+/g, '-')
+            .replace(/^-+|-+$/g, '')
+            .slice(0, 60) || 'session';
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

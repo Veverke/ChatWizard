@@ -4,6 +4,7 @@ import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
 import { parseWindsurfWorkspace, extractWindsurfCodeBlocks } from '../../src/parsers/windsurf';
+import { removeTempDir } from '../helpers/fsCleanup';
 
 // ---------------------------------------------------------------------------
 // Helpers to create minimal SQLite fixtures in a temp directory
@@ -66,7 +67,7 @@ suite('Windsurf Parser', () => {
     });
 
     teardown(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        removeTempDir(tmpDir);
     });
 
     // ── Happy path ────────────────────────────────────────────────────────────
@@ -286,7 +287,7 @@ suite('parseWindsurfWorkspace — branch coverage edge cases', () => {
     });
 
     teardown(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        removeTempDir(tmpDir);
     });
 
     function createDb(dbPath: string, rows: Array<{ key: string; value: string }>): void {

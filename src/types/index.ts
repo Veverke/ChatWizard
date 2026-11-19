@@ -40,6 +40,16 @@ export interface Message {
     skippedLineLimit?: number;
     /** True when this user message arrived while AI was still processing tool calls for a prior response */
     interrupted?: boolean;
+    /**
+     * Feature 51 — True when the user removed this turn from the conversation.
+     * The message stays in `session.messages` so that every message index
+     * (bookmarks, annotations, code blocks, action items) remains stable, but it
+     * is not rendered in the reader, not indexed for full-text search and not
+     * returned by the prompt / code-block listings. The removal itself is
+     * persisted in the SQLite cache (`removed_turns`), which also keeps the full
+     * payload so the original conversation can always be reopened.
+     */
+    removed?: boolean;
 }
 
 /** A complete chat session (one conversation thread) */
@@ -420,6 +430,27 @@ export interface SessionBookmark {
     createdAt: string;
 }
 
+/**
+ * Feature 51 — A turn the user removed from a conversation.
+ *
+ * Persisted in the SQLite cache (`removed_turns`) together with its full payload
+ * so the conversation can always be reopened exactly as it was before any turn
+ * was removed — even when the source file was re-parsed or pruned.
+ */
+export interface RemovedTurn {
+    /** Id of the removed message (matches `Message.id`) */
+    messageId: string;
+    /** 0-based index the message had in the original conversation */
+    messageIndex: number;
+    role: MessageRole;
+    /** Full text of the removed turn */
+    content: string;
+    /** ISO timestamp of the original message, when recorded */
+    timestamp?: string;
+    /** ISO-8601 — when the user removed the turn */
+    removedAt: string;
+}
+
 /** Feature 34 — Action item extracted from or manually added to a session */
 export interface ActionItem {
     id: string;
@@ -453,6 +484,14 @@ export interface ExtractedEntities {
     errors: string[];
     /** Decision phrases ("I decided to...", "we chose...", etc.) */
     decisions: string[];
+    /**
+     * Feature 53 — absolute URIs mentioned in the session — `http(s)://…` links and
+     * scheme-less `www.…` URLs (e.g. `http://www.google.com`).
+     *
+     * Optional so metadata persisted by extractors older than
+     * `ENTITIES_VERSION` 4 (which had no URI pass) stays readable.
+     */
+    uris?: string[];
     /** Semantic entities from the LLM pass (frameworks, APIs, concepts, tools, languages) */
     semantic?: string[];
 }

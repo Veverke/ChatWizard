@@ -17,6 +17,7 @@ import * as os from 'os';
 import * as path from 'path';
 import BetterSqlite3 from 'better-sqlite3';
 import { resolveSqlJsDistDir, openReadonlyDb, openReadonlyDbSync } from '../../src/utils/sqliteDb';
+import { removeTempDir } from '../helpers/fsCleanup';
 
 interface SqlJsDatabase {
     run(sql: string): void;
@@ -78,7 +79,7 @@ suite('sqliteDb — sql.js WASM resolution', () => {
                 db.close();
             }
         } finally {
-            fs.rmSync(tmp, { recursive: true, force: true });
+            removeTempDir(tmp);
         }
     });
 });

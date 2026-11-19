@@ -35,6 +35,7 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { removeTempDir } from '../helpers/fsCleanup';
 import * as vscode from 'vscode';
 
 import { SessionIndex } from '../../src/index/sessionIndex';
@@ -153,7 +154,7 @@ async function waitFor(predicate: () => boolean, message: string, timeoutMs = 5_
 
 /**
  * Every directory a platform could write to. All of them live under one
- * `mkdtemp` root so the suite can clean up with a single `rmSync`.
+ * `mkdtemp` root so the suite can clean up with a single `removeTempDir` call.
  */
 interface Harness {
     root: string;
@@ -539,7 +540,7 @@ async function disposeTestContext(context: TestContext): Promise<void> {
     for (const snapshot of context.configSnapshots) {
         await restoreChatwizardSetting(snapshot);
     }
-    fs.rmSync(context.harness.root, { recursive: true, force: true });
+    removeTempDir(context.harness.root);
 }
 
 // ---------------------------------------------------------------------------

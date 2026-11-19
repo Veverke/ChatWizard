@@ -14,6 +14,7 @@ import * as path from 'path';
 
 // We import the function under test directly.
 import { getWorkspaceStorageRoots, discoverCopilotWorkspaces, listSessionFiles, listSessionFilesAsync, readWorkspaceJson, getWorkspaceStorageRoot } from '../../src/readers/copilotWorkspace';
+import { removeTempDir } from '../helpers/fsCleanup';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -441,7 +442,7 @@ suite('discoverCopilotWorkspacesAsync', () => {
                 }
             }
         } finally {
-            fs.rmSync(tmpDir, { recursive: true, force: true });
+            removeTempDir(tmpDir);
         }
     });
 

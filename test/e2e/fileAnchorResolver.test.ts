@@ -13,6 +13,7 @@ import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
 import { resolveAnchorPath, resolveAnchorPaths } from '../../src/utils/fileAnchorResolver';
+import { removeTempDir } from '../helpers/fsCleanup';
 
 suite('fileAnchorResolver — resolveAnchorPath', () => {
 
@@ -64,7 +65,7 @@ suite('fileAnchorResolver — resolveAnchorPath', () => {
             const result = await resolveAnchorPath(fileName, tmpDir);
             assert.strictEqual(result, filePath);
         } finally {
-            fs.rmSync(tmpDir, { recursive: true, force: true });
+            removeTempDir(tmpDir);
         }
     });
 
@@ -74,7 +75,7 @@ suite('fileAnchorResolver — resolveAnchorPath', () => {
             const result = await resolveAnchorPath('nonexistent-file.ts', tmpDir);
             assert.strictEqual(result, undefined);
         } finally {
-            fs.rmSync(tmpDir, { recursive: true, force: true });
+            removeTempDir(tmpDir);
         }
     });
 
@@ -110,7 +111,7 @@ suite('fileAnchorResolver — resolveAnchorPaths', () => {
             assert.strictEqual(result[0].ref, existingFile);
             assert.strictEqual(result[0].absPath, existingFile);
         } finally {
-            fs.rmSync(tmpDir, { recursive: true, force: true });
+            removeTempDir(tmpDir);
         }
     });
 
@@ -128,7 +129,7 @@ suite('fileAnchorResolver — resolveAnchorPaths', () => {
                 assert.strictEqual(r.absPath, files[i]);
             });
         } finally {
-            fs.rmSync(tmpDir, { recursive: true, force: true });
+            removeTempDir(tmpDir);
         }
     });
 

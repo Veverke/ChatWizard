@@ -7,6 +7,7 @@ import * as http from 'http';
 import { AddressInfo } from 'net';
 import * as os from 'os';
 import * as path from 'path';
+import { removeTempDir } from '../helpers/fsCleanup';
 import {
     SemanticModelInstaller,
     buildBaseUrls,
@@ -132,7 +133,7 @@ suite('semanticModelInstaller.ensureModel', () => {
                 process.env[key] = value;
             }
         }
-        fs.rmSync(storageDir, { recursive: true, force: true });
+        removeTempDir(storageDir);
     });
 
     test('uses an explicit local folder without any network access', async () => {

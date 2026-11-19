@@ -5,6 +5,7 @@ import * as os from 'os';
 import * as fs from 'fs';
 import { parseAiderHistory, extractAiderCodeBlocks } from '../../src/parsers/aider';
 import { AiderHistoryInfo } from '../../src/types/index';
+import { removeTempDir } from '../helpers/fsCleanup';
 
 const FIXTURES_DIR = path.resolve(__dirname, '../../..', 'test', 'fixtures', 'aider');
 
@@ -32,7 +33,7 @@ suite('Aider Parser', () => {
     });
 
     teardown(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        removeTempDir(tmpDir);
     });
 
     // ── Happy path ────────────────────────────────────────────────────────────
@@ -241,7 +242,7 @@ suite('aiderParser — branch coverage edge cases', () => {
     });
 
     teardown(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        removeTempDir(tmpDir);
     });
 
     function makeInfo(historyFile: string, configFile?: string): AiderHistoryInfo {
@@ -316,7 +317,7 @@ suite('Aider Parser — branch coverage', () => {
     });
 
     teardown(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        removeTempDir(tmpDir);
     });
 
     function makeInfo2(historyFile: string, configFile?: string): AiderHistoryInfo {

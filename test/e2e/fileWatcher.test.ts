@@ -10,6 +10,7 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { removeTempDir } from '../helpers/fsCleanup';
 import { ChatWizardWatcher } from '../../src/watcher/fileWatcher';
 import { WorkspaceScopeManager, ExtensionContextLike } from '../../src/watcher/workspaceScope';
 import { SessionIndex } from '../../src/index/sessionIndex';
@@ -121,7 +122,7 @@ suite('ChatWizardWatcher — Claude scope filtering', () => {
     });
 
     teardown(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        removeTempDir(tmpDir);
     });
 
     function makeWatcher(selectedIds: string[]): ChatWizardWatcher {
@@ -292,7 +293,7 @@ suite('ChatWizardWatcher — collectClineTasksAsync', () => {
     });
 
     teardown(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        removeTempDir(tmpDir);
     });
 
     test('returns empty array for non-existent root', async () => {
@@ -356,7 +357,7 @@ suite('ChatWizardWatcher — collectRooCodeTasksAsync', () => {
     });
 
     teardown(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        removeTempDir(tmpDir);
     });
 
     test('returns empty array for non-existent root', async () => {
@@ -400,7 +401,7 @@ suite('ChatWizardWatcher — collectCursorSessionsAsync', () => {
     });
 
     teardown(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        removeTempDir(tmpDir);
     });
 
     test('returns empty array for non-existent root', async () => {
@@ -430,7 +431,7 @@ suite('ChatWizardWatcher — collectWindsurfSessionsAsync', () => {
     });
 
     teardown(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        removeTempDir(tmpDir);
     });
 
     test('returns empty array for non-existent root', async () => {
@@ -460,7 +461,7 @@ suite('ChatWizardWatcher — collectAiderSessionsAsync', () => {
     });
 
     teardown(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        removeTempDir(tmpDir);
     });
 
     test('returns empty array for empty roots array', async () => {
@@ -499,7 +500,7 @@ suite('ChatWizardWatcher — collectAiderSessionsAsync', () => {
             const sessions = await watcher.collectAiderSessionsAsync(undefined, [tmpDir, dir2]);
             assert.strictEqual(sessions.length, 2);
         } finally {
-            fs.rmSync(dir2, { recursive: true, force: true });
+            removeTempDir(dir2);
         }
     });
 });
@@ -518,7 +519,7 @@ suite('ChatWizardWatcher — collectAntigravitySessionsAsync', () => {
     });
 
     teardown(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        removeTempDir(tmpDir);
     });
 
     test('returns empty array for non-existent brain root', async () => {

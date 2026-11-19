@@ -5,6 +5,7 @@ import * as os from 'os';
 import * as fs from 'fs';
 import { parseAntigravityConversation, parseAntigravityJsonConversation } from '../../src/parsers/antigravity';
 import { AntigravityConversationInfo } from '../../src/types/index';
+import { removeTempDir } from '../helpers/fsCleanup';
 
 const FIXTURES_DIR = path.resolve(__dirname, '../../..', 'test', 'fixtures', 'antigravity');
 
@@ -39,7 +40,7 @@ suite('Antigravity Parser', () => {
     });
 
     teardown(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        removeTempDir(tmpDir);
     });
 
     // ── Happy path (fixture file) ─────────────────────────────────────────────
@@ -224,7 +225,7 @@ suite('parseAntigravityJsonConversation', () => {
     });
 
     teardown(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        removeTempDir(tmpDir);
     });
 
     function writeConv(name: string, data: object): { conversationId: string; jsonFile: string } {
@@ -389,7 +390,7 @@ suite('Antigravity Parser — branch coverage', () => {
     });
 
     teardown(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        removeTempDir(tmpDir);
     });
 
     function writeOverviewLines(convId: string, lines: object[]): string {

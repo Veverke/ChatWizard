@@ -11,6 +11,7 @@ import * as os from 'os';
 import * as path from 'path';
 
 import { SessionIndex } from '../../../src/index/sessionIndex';
+import { removeTempDir } from '../../helpers/fsCleanup';
 import {
     CodeBlockTreeProvider,
     CodeBlockGroupItem,
@@ -54,7 +55,7 @@ suite('Code Blocks View', function () {
     });
 
     teardown(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        removeTempDir(tmpDir);
     });
 
     // ── Test 27: Population ───────────────────────────────────────────────

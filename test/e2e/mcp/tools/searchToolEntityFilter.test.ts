@@ -96,6 +96,7 @@ suite('SearchTool — entityType / entityValue filter', () => {
         assert.ok(enums.includes('functionNames'), 'enum must include functionNames');
         assert.ok(enums.includes('errors'), 'enum must include errors');
         assert.ok(enums.includes('decisions'), 'enum must include decisions');
+        assert.ok(enums.includes('uris'), 'enum must include uris');
     });
 
     test('inputSchema exposes entityValue property', () => {

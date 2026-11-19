@@ -159,7 +159,10 @@ export class FullTextSearchEngine {
             for (let i = 0; i < m.content.length; i++) { h = (Math.imul(h, 33) ^ m.content.charCodeAt(i)) >>> 0; }
             return h;
         }, 0);
-        const fingerprint = `${session.updatedAt}:${session.messages.length}:${contentHash}`;
+        // Feature 51 — removals change the searchable content without changing
+        // `updatedAt`, so the removed count is part of the fingerprint.
+        const removedCount = session.messages.filter(m => m.removed).length;
+        const fingerprint = `${session.updatedAt}:${session.messages.length}:${removedCount}:${contentHash}`;
         if (this.sessions.has(session.id) && this._contentVersions.get(session.id) === fingerprint) {
             // Content identical — just update the stored session reference (title may have changed)
             this.sessions.set(session.id, session);
@@ -186,6 +189,8 @@ export class FullTextSearchEngine {
 
         for (let msgIdx = 0; msgIdx < session.messages.length; msgIdx++) {
             const message = session.messages[msgIdx];
+            // Feature 51 — turns removed from the conversation are not searchable.
+            if (message.removed) { continue; }
             const tokens = tokenize(message.content);
             const entry = `${session.id}:${msgIdx}`;
 
@@ -290,6 +295,8 @@ export class FullTextSearchEngine {
 
                 for (let msgIdx = 0; msgIdx < session.messages.length; msgIdx++) {
                     const message = session.messages[msgIdx];
+                    // Feature 51 — removed turns are not searchable.
+                    if (message.removed) { continue; }
                     if (!this._roleAllowed(message.role, searchPrompts, searchResponses)) {
                         continue;
                     }
@@ -393,6 +400,10 @@ export class FullTextSearchEngine {
 
                 const message = session.messages[msgIdx];
                 if (message === undefined) {
+                    continue;
+                }
+                // Feature 51 — removed turns are not searchable.
+                if (message.removed) {
                     continue;
                 }
 
@@ -602,6 +613,8 @@ export class FullTextSearchEngine {
             // Find the first message that contains any query token for a snippet.
             let snippet = '';
             outer: for (const msg of session.messages) {
+                // Feature 51 — a removed turn must not surface in a snippet.
+                if (msg.removed) { continue; }
                 for (const token of tokens) {
                     const match = findFirstMatch(msg.content, token);
                     if (match !== undefined) {

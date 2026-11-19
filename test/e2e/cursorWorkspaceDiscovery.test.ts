@@ -4,6 +4,7 @@ import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
 import { getCursorStorageRoot, discoverCursorWorkspacesAsync } from '../../src/readers/cursorWorkspace';
+import { removeTempDir } from '../helpers/fsCleanup';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -40,8 +41,8 @@ suite('Cursor Workspace Discovery', () => {
     });
 
     teardown(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
-        fs.rmSync(realWorkspacePath, { recursive: true, force: true });
+        removeTempDir(tmpDir);
+        removeTempDir(realWorkspacePath);
     });
 
     // ── getCursorStorageRoot ──────────────────────────────────────────────────

@@ -2,6 +2,77 @@
 
 ## [Unreleased]
 
+### Session reader — clickable links
+
+- **Bare URLs become links.** `http://…`, `https://…` and scheme-less `www.…` addresses written in a prompt or a response are rendered as anchors instead of plain text, so they open in the default browser like any Markdown link. `www.…` links get an explicit `https://` scheme, and `<https://…>` angle-bracket autolinks lose their brackets.
+- **The address stays intact.** Sentence punctuation that follows a URL stays outside the link (`see http://example.com.`), balanced parentheses are kept (`…/wiki/Foo_(bar)`) while an unbalanced closing paren is dropped, and query strings keep their `&` separators.
+- **No double-linking.** `[label](url)` Markdown links keep their label formatting and their URL is not auto-linked a second time; URLs inside inline code and fenced code blocks stay verbatim.
+
+### Entities — URIs
+
+- **New `Uris` entity type.** The regex entity pass now collects absolute URIs (`http://…`, `https://…`, `www.…`) from the conversation, de-duplicated case-insensitively and capped at 30, with trailing sentence punctuation / Markdown emphasis trimmed off. They show up in the reader's **Entities → Uris** dropdown (picking one searches the transcript, like any other entity) and in `chatwizard_search` via `entityType: "uris"`.
+- The extraction cache invalidates itself (`ENTITIES_VERSION` 4), so existing sessions gain the new entity type on the next background pass.
+
+### Session reader — remove turns from a conversation
+
+- **Select a turn, delete it.** Clicking a prompt or a response in the reader now selects it (focus outline) and reveals a **⊗ remove** button in the turn header; right-clicking a turn opens a context menu whose **Remove turn from conversation** item does the same thing. `Esc` or a click outside the turns clears the selection.
+- **Persisted in the chat database.** Removals are written to a new `removed_turns` table in `chatwizard-cache.db` (cache schema v2 — the upgrade is additive, no re-parse needed) together with the turn's full payload. The `messages` row is kept and flagged, so message indices stay stable: bookmarks, annotations and code blocks keep pointing at the right turns. The bookmark / note attached to the removed turn itself is dropped.
+- **The conversation notes what was removed.** The reader header shows *Removed: N turns* and, only when something was removed, an **original full conversation** link.
+- **Original full conversation.** That link rebuilds the complete chat — every removed turn included — from the chat DB, writes it to `<shared cache folder>/original-conversations/<title>-<id>.md` and opens it in a text editor. Because the payload is archived, the original survives re-parsing, restarts, source-file pruning and even a turn vanishing from the source file.
+- **Removed turns stop leaking everywhere else.** They are excluded from the reader, the FTS index and search results (plain, regex and snippet paths), the semantic index, the Prompt Library, the Code Blocks panel, `SessionIndex.search()`, and the *User Requests* count; the "Response not available" placeholder is suppressed when the reply was removed rather than lost.
+- Only offered when the persistent cache is available (`chatwizard.enablePersistentCache`, VS Code) — otherwise the remove affordances are hidden because the removal could not be persisted.
+
+### Session reader — load the whole transcript
+
+- **New "Load all messages" button at the top of the reader.** Long sessions still open with the first 50 messages only, but the sticky toolbar now carries a *Load all messages* button that streams the entire transcript in 20-message batches. It shows a spinner and a *Loading all messages…* label while running, hides the per-batch *Load more messages…* button (which would only append the same ranges), and disappears once nothing is left to load.
+- **Search now covers the whole conversation.** Pressing `Ctrl+F`, typing in the search box, picking an entity from the Entities row, or opening a session from search results before the transcript is fully loaded now triggers the full load automatically and re-runs the query as soon as the last batch lands — previously the match counter and the ▲/▼ navigation silently only saw the initially rendered excerpt. The counter shows *Loading all messages…* until the final result set is known.
+- **No duplicated messages.** Batch appends wait for the initial window stream to finish (`streamInFlight`, cleared only by the stream that owns the current `streamVersion`), and stale load requests are dropped when the panel is re-rendered mid-load.
+- **Bulk batches stay cheap.** Load-all batches skip the per-batch whole-document role-filter / bookmark passes (applied once at the end) and filter only the incoming nodes, so a 1000-message load does not rescan the whole DOM 50 times.
+
+### Copilot agent-host — chat titles
+
+- **Fixed: a chat whose title is stored as a YAML block scalar showed `|-` instead of its title.** Copilot writes `name: |-` (or `|`, `|+`, `>`, `>-`, `>+`) followed by an indented multi-line prompt for auto-titled chats — which is how child chats created from a parent session are stored — and `workspace.yaml` was parsed with a flat `key: value` regex, so the title became the block-scalar header. Block scalars are now parsed (indentation, literal/folded style, chomping) and the title resolves to the chat's first line, falling back to the first user turn when the block is empty.
+- **Fixed: double-quoted titles showed raw `\r\n` escapes.** Newer Copilot builds write `name: "line one\r\nline two"`; quoted scalars are now unescaped per YAML (`\n`, `\r`, `\t`, `\"`, `\\`, `\xNN`, `\uNNNN`), so the tree shows the real first line instead of the escape text.
+
+### Session scope — Copilot agent-host chats no longer leak across workspaces
+
+- **Fixed: chats opened in another workspace still appeared in the Sessions view.** VS Code 1.146+/Copilot Chat 1.0+ keeps every chat in the machine-global `~/.copilot/session-state`, and every chat shares the synthetic `copilot-agent` workspace id. That id was treated as "always in scope", so chats whose `workspace.yaml` `cwd` was a different repository (e.g. `C:\src\selling` while working in `C:\src\_\ChatWizard`) were listed by this window. Agent-host chats are now **path-scoped** by their `cwd` — the same open-folder rule Cline 4.x / Roo Code / Aider already used — in all four ingestion paths: the batch collector, the SQLite cache restore, the live file watcher and the archive restore.
+- **Fixed: archive restore used a third, diverging copy of the scope rule.** It compared `workspaceId` against the selected ids for Claude (whose `workspaceId` is the *session* id, not the project directory) and never applied the path rule to Copilot agent chats, so archived sessions could be either wrongly restored or wrongly dropped. The archive path now calls the shared `isSessionInScope` helper.
+- Copilot *legacy* per-workspace chats (`workspaceStorage/<hash>/chatSessions/*.jsonl`) stay id-scoped; only the global agent-host chats are path-scoped.
+
+### Session reader — entity dropdowns
+
+- **Fixed: plain uppercase words were classified as errors.** The error extractor used a catch-all `E[A-Z_]{2,}` pattern, so any all-caps token starting with `E` — e.g. `ENTITIES`, `ERROR` — landed in the **Errors** dropdown. Errors are now derived from precise patterns only: named exceptions (`TypeError: …`, `JsonWebTokenError`), structured codes (`SQLITE_*`, `ERR_*`, `EAI_*`, known Node/OS errno codes such as `ENOENT`), and HTTP 4xx/5xx statuses with their canonical reason phrase (`403 Forbidden` — but not `503 employees`). The extractor version was bumped so cached false positives are re-extracted.
+- **Entities row is always visible.** The collapsible *Entities* section became a single always-visible row — `Entities [type] [entity]` — with compact, VS Code-themed dropdowns sized to match the surrounding text.
+- **Entities are filterable.** The reader shows two dropdowns: **Type** (Files, Functions, Errors, Decisions, plus the LLM sub-types Frameworks, APIs, Concepts, Tools, Languages — sorted alphabetically, only types that have values) and **Entity** (the values of the selected type, sorted alphabetically and de-duplicated).
+- **Semantic entities are split by sub-type and cleaned.** LLM output such as `[tool] Docker` or `[language] TypeScript` used to be lumped under *Concepts* and displayed (and searched) with its `[type]` marker. Each sub-type is now its own entity type (unknown prefixes become their own pluralized type) and the marker is stripped from the values, so the search matches the conversation text.
+- **Selecting an entity searches for it.** Picking a value in the second dropdown fills the search box with that value and runs the search, scrolling the reader to the first occurrence of the file / function / error / decision / concept / tool / language / framework / API.
+- Grouping and sorting moved into `src/views/sessionEntities.ts` (pure, unit-tested); the pre-sorted groups are shipped to the webview as `entityGroups` instead of the raw `entities` object.
+---
+
+## [1.7.2] - 2026-11-18
+
+### Commands panel — LLM Tool Calls
+
+- **New `LLM Tool Calls` section inside the Commands panel.** Where *Terminal Commands* shows what the agent ran in a shell, this section shows what it *invoked*: reading a file (`view` / `read_file`), searching the codebase, asking a question, editing an image — each structured tool call captured from GitHub Copilot agent-host logs and Cline / Roo Code task logs.
+- **Readable rows.** The label is `toolName [identifying argument]` (`view [src/extension.ts]`, `powershell [npm test]`), so a list of identical tool names stays navigable. Rows are grouped per session like the other sections and share the same filter bar (free text, agent, failures only) and workspace scope.
+- **Details and actions.** Clicking a row opens the shared details window with a plain-English description, the JSON arguments as *Input* and the captured result as *Output*; context-menu actions copy the call, open the owning session, or show full details. New commands: `Chat Wizard: Show LLM Tool Calls`, `Refresh LLM Tool Calls`, `Copy Tool Call`, `Open Tool Call Session`, `Show Tool Call Details`.
+- **Tool-call events also appear in the Unified Timeline**, labelled the same way, so a command → file read → patch sequence reads in true chronological order.
+
+### Tests & tooling
+
+- Adds unit coverage for the Commands sub-views (`commandsViewProvider`, `diffExplorerProvider`, `executedCommandsProvider`, `logEventWebview`, `logFilters`, `logStats`, `unifiedTimelineProvider`) and a coverage gate in the build.
+
+---
+
+## [1.7.1] - 2026-11-18
+
+### Did You Know nudge — interval default
+
+- The squirrel nudge now defaults to a calm **600 seconds (10 minutes)** between tips and is configurable with `chatwizard.didYouKnowInterval` (`0` disables it). Tips are read from the user-guide headings and clicking one opens the matching section.
+
+
+
 ### Semantic search — blocked-network downloads and graceful degradation
 
 - **Fixed: "Downloading AI model…" could hang forever.** When the model failed to load, the inference worker reported the error without an id, so the parent never settled its init promise and the progress notification stayed on screen indefinitely (log: `Worker error: TypeError: fetch failed`). Init failures now reject through a dedicated `init_error` message, with a parent-side timeout as a backstop.
@@ -17,7 +88,45 @@
 - **Docs corrected:** the Semantic Search settings tables now state the shipped default (`chatwizard.enableSemanticSearch` = `true`); earlier tables said `false`. The troubleshooting guide's sample log output matches the real `[Semantic …]` prefixes.
 - **Diagnostic logging:** the output channel now shows the full model lifecycle with a stable `[Semantic …]` prefix — source options, which source was tried (and why one failed), per-file verification results, download size/duration, the effective transformers.js configuration (`allowRemoteModels=false`, model folder, ONNX file), worker start-up time, and two unambiguous markers: `AI model loaded successfully.` and `Semantic search is ACTIVE — N vector(s) indexed`. Failures log the classification (`blocked`/`proxy`/`not-found`/`corrupt`/`timeout`/`local-incomplete`) plus copy-pasteable guidance.
 
-## [1.6.0] - 2026-08-05
+---
+
+## [1.7.0] - 2026-11-15
+
+### Commands panel — watch agent logs (Phases 1–3)
+
+- **New `Commands` panel** in the sidebar, dedicated to what the agent *did* rather than what it said. It nests three sections and reuses the session cache folder for its event store:
+  - **Terminal Commands** — every shell / git / build / test command, newest first, grouped per session, with exit badges, copy, open-session and **Run in Terminal** actions.
+  - **Unified Timeline** — commands, file operations, diffs, errors and planner steps interleaved as they actually happened, with a kind filter (failures, diffs, commands…).
+  - **Diff Explorer** — every changed file listed alphabetically, expanding newest-first into `create` / `diff` / `move` / `rename` / delete operations; each change opens in VS Code's **native diff editor** (`Open Visual Diff`), plus `Open Patch`, `Copy Change` and `Open File`.
+- **Sources:** GitHub Copilot `chatSessions/*.jsonl` (`toolInvocationSerialized`, `textEditGroup`, terminal notifications with exit codes) and Copilot agent-host `events.jsonl`; Cline / Roo Code `ui_messages.json` (`say:'command'`, `command_output`, `editedExistingFile` SEARCH/REPLACE diffs, errors, plan steps); Aider `.aider.chat.history.md` (`> !cmd`, `/run`, `/test`, `/lint`, `Applied edit to …`); Windsurf `cascade.sessionData` (structured tool calls, or shell blocks marked *derived*).
+- **One filter bar for every section** — free-text search (command text, cwd, output, paths, diff text, tool names/arguments, errors, descriptions, agent, workspace), filter by agent, *Show Failures Only*, timeline kind filter and *Clear All Filters*. Active filters are reflected in the row summaries (`12 commands · 2 failed · filtered`).
+- **Shared details window** — one reused webview with a plain-English description, input and output, instead of a new tab per click.
+- **`Chat Wizard: Show Agent Log Stats`** — totals (events, commands, failed commands, failures, errors, diffs, ± lines), command success rate, and per-agent / per-session breakdowns.
+- **Workspace-scoped** — the event store is machine-wide, but the panel only shows events for the folder(s) open in the current window, and follows `Add Folder to Workspace` immediately. Sub-views start collapsed and are nested under **Commands**.
+
+### New storage layouts — Copilot agent-host and Cline 4.x
+
+- **GitHub Copilot agent-host chats.** VS Code 1.146+ / Copilot Chat 1.0+ keeps chats in `<COPILOT_HOME || ~/.copilot>/session-state/<id>/` (`workspace.yaml` + `events.jsonl`) instead of per-workspace `chatSessions/*.jsonl`. Both layouts are indexed, including live updates while a chat runs, and `tool.execution_start` / `tool.execution_complete` are replayed into command, diff and error rows.
+- **Machine-global chats are path-scoped.** Because `session-state` is shared by every workspace, agent-host chats are scoped by the `cwd` recorded in `workspace.yaml`; chats from another repository no longer appear in the current window. Legacy `workspaceStorage/<hash>/chatSessions` chats stay scoped by workspace id.
+- **Cline 4.x sessions.** Cline moved its history to `~/.cline/data/sessions/<id>/` (`<id>.json` + `<id>.messages.json`), overridable with `CLINE_DATA_DIR` / `CLINE_DIR`. Those sessions are indexed alongside the legacy `tasks/<id>/` folders, with live updates, and their `tool_use` / `tool_result` parts are normalized into commands, file operations and diffs.
+
+### Indexing & performance
+
+- **Incremental embeddings** (community fix, #66) — only new and changed chats are embedded instead of rebuilding the whole semantic index.
+- **Changed chats are re-indexed after a window reload** instead of being served stale from the cache.
+- **Workspace filtering fixes** — newly created chats are no longer missed, and per-workspace scoping is applied consistently across cache restore, watchers and archive restore.
+- **SQLite access hardened** — the native `better-sqlite3` path is used when its ABI matches the host Electron, with an automatic **sql.js (WASM)** fallback; the WASM asset is resolved from any extension layout and validated before use.
+- **Shared cache directory** (`chatwizard.sharedCacheDir`) lets VS Code, Cursor and Windsurf instances converge on one cache, sidecar metadata, log-event store and archive.
+
+### Build & quality
+
+- Standardized build pipeline (native-module rebuild script with Electron ABI detection), coverage reporting in CI, and a new [installation troubleshooting guide](docs/troubleshooting/installation-issues.md) for native-module / SQLite issues.
+- Command palette categories were extended so the growing command list stays browsable.
+
+---
+
+
+## [1.6.0] - 2026-08-13
 
 ### Knowledge Base (Feature 23)
 

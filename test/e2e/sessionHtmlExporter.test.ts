@@ -7,6 +7,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { exportSessionAsHtml } from '../../src/export/sessionHtmlExporter';
 import type { Session, MessageAnnotation } from '../../src/types/index';
+import { removeTempDir } from '../helpers/fsCleanup';
 
 function makeSession(overrides: Partial<Session> = {}): Session {
     return {
@@ -43,7 +44,7 @@ suite('Feature 36 — Session HTML Exporter', () => {
     });
 
     suiteTeardown(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        removeTempDir(tmpDir);
     });
 
     test('exports a valid HTML file', async () => {

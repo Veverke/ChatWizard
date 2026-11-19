@@ -6,6 +6,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { scanProtobufStrings, parseAntigravityPbFile } from '../../src/parsers/antigravityProtobuf';
+import { removeTempDir } from '../helpers/fsCleanup';
 
 /**
  * Build a minimal protobuf buffer with one wire-type 2 field containing the given text.
@@ -64,7 +65,7 @@ suite('Feature 40 — Antigravity .pb File Parser', () => {
     });
 
     suiteTeardown(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        removeTempDir(tmpDir);
     });
 
     test('parseAntigravityPbFile returns a session with messages for a valid .pb file', () => {

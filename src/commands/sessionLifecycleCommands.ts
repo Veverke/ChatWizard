@@ -26,6 +26,9 @@ export function registerSessionLifecycleCommands(
     provider: SessionTreeProvider,
     treeView: vscode.TreeView<SessionTreeItem>,
 ): void {
+    // Palette invocations receive no tree item; remember the view so commands
+    // can act on the session currently selected in the Sessions panel.
+    activeTreeView = treeView;
 
     // ── Feature 28: Session status lifecycle ──────────────────────────────
 
@@ -320,17 +323,22 @@ export function registerSessionLifecycleCommands(
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Resolve a session ID from a tree item or the active editor. */
+/** The Sessions tree view, used as a fallback when a command runs from the palette. */
+let activeTreeView: vscode.TreeView<SessionTreeItem> | undefined;
+
+/** Resolve a session ID from a tree item, or from the current tree selection. */
 function resolveSessionId(item?: SessionTreeItem): string | undefined {
     if (item?.summary?.id) { return item.summary.id; }
 
-    // Fallback: try to get the active session from the tree view selection
-    const editor = vscode.window.activeTextEditor;
-    if (editor) {
-        // Could try to extract from document URI, but for now just return undefined
+    // Palette commands receive no tree item — fall back to the row the user has
+    // selected in the Sessions panel so "Add Tag…" / "Set Session Status…" work
+    // without hunting for the context menu.
+    try {
+        const selected = activeTreeView?.selection?.[0] as SessionTreeItem | undefined;
+        return selected?.summary?.id;
+    } catch {
         return undefined;
     }
-    return undefined;
 }
 
 /** Simulate up/down arrow navigation in a tree view by revealing adjacent items. */

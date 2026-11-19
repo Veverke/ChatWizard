@@ -7,6 +7,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { exportKbAsync } from '../../src/export/kbExporter';
 import type { KbEntry } from '../../src/types/kb';
+import { removeTempDir } from '../helpers/fsCleanup';
 
 function makeEntry(id: string, type: KbEntry['type'], tags: string[] = []): KbEntry {
     return {
@@ -27,7 +28,7 @@ suite('Feature 23 — KB Exporter', () => {
     });
 
     suiteTeardown(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        removeTempDir(tmpDir);
     });
 
     test('creates expected directory structure for two entries', async () => {

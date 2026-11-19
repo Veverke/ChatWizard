@@ -6,6 +6,7 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { removeTempDir } from '../helpers/fsCleanup';
 
 suite('getClineCompatStorageRoot — VS Code Insiders preference', () => {
     let tmpDir: string;
@@ -15,7 +16,7 @@ suite('getClineCompatStorageRoot — VS Code Insiders preference', () => {
     });
 
     teardown(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        removeTempDir(tmpDir);
     });
 
     test('returns Insiders path when Insiders tasks dir exists', () => {

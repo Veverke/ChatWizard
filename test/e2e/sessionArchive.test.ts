@@ -14,6 +14,7 @@ import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
 import { SessionArchive } from '../../src/archive/sessionArchive';
+import { removeTempDir } from '../helpers/fsCleanup';
 
 /** Simulate raw session content as it would come from a Copilot JSONL file. */
 function makeCopilotSessionJson(sessionId: string, title: string): string {
@@ -40,7 +41,7 @@ suite('SessionArchive — basic read/write', () => {
     });
 
     teardown(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        removeTempDir(tmpDir);
     });
 
     test('has() returns false for a session that has never been saved', async () => {
@@ -123,7 +124,7 @@ suite('SessionArchive — stats()', () => {
     });
 
     teardown(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        removeTempDir(tmpDir);
     });
 
     test('empty archive returns zero stats', async () => {
@@ -171,7 +172,7 @@ suite('SessionArchive — prune()', () => {
     });
 
     teardown(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        removeTempDir(tmpDir);
     });
 
     test('prune with no options does not remove anything', async () => {
@@ -238,7 +239,7 @@ suite('SessionArchive — findAnySource()', () => {
     });
 
     teardown(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        removeTempDir(tmpDir);
     });
 
     test('returns undefined for a sessionId that has never been saved', async () => {
@@ -315,7 +316,7 @@ suite('SessionArchive — delete()', () => {
     });
 
     teardown(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        removeTempDir(tmpDir);
     });
 
     test('returns false when session does not exist', async () => {
