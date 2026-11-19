@@ -9,6 +9,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 import { discoverTabnineConversationsAsync } from '../../src/readers/tabnineWorkspace';
+import { removeTempDir } from '../helpers/fsCleanup';
 
 function tmpDir(): string {
     const d = path.join(os.tmpdir(), `cw-tabnine-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
@@ -29,7 +30,7 @@ suite('tabnineWorkspace', () => {
                 const files = await discoverTabnineConversationsAsync(dir);
                 assert.deepStrictEqual(files, []);
             } finally {
-                fs.rmSync(dir, { recursive: true, force: true });
+                removeTempDir(dir);
             }
         });
 
@@ -43,7 +44,7 @@ suite('tabnineWorkspace', () => {
                 assert.strictEqual(files.length, 2);
                 assert.ok(files.every(f => f.endsWith('.json')));
             } finally {
-                fs.rmSync(dir, { recursive: true, force: true });
+                removeTempDir(dir);
             }
         });
 
@@ -54,7 +55,7 @@ suite('tabnineWorkspace', () => {
                 const files = await discoverTabnineConversationsAsync(dir);
                 assert.ok(path.isAbsolute(files[0]));
             } finally {
-                fs.rmSync(dir, { recursive: true, force: true });
+                removeTempDir(dir);
             }
         });
     });

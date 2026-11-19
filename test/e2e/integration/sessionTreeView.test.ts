@@ -18,6 +18,7 @@ import { parseCopilotSession } from '../../../src/parsers/copilot';
 import { parseClaudeSession } from '../../../src/parsers/claude';
 import { writeCopilotSessions } from '../../helpers/fixtureFactory';
 import { Session } from '../../../src/types/index';
+import { removeTempDir } from '../../helpers/fsCleanup';
 
 // ---------------------------------------------------------------------------
 // Paths
@@ -89,7 +90,7 @@ suite('Sessions Tree View', function () {
     });
 
     teardown(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        removeTempDir(tmpDir);
     });
 
     // ── Test 11: Population ───────────────────────────────────────────────

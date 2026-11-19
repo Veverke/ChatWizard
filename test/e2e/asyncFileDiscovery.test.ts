@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { discoverCopilotWorkspacesAsync, listSessionFilesAsync } from '../../src/readers/copilotWorkspace';
+import { removeTempDir } from '../helpers/fsCleanup';
 
 // ---------------------------------------------------------------------------
 // S9 — Async File Discovery
@@ -20,7 +21,7 @@ suite('S9 Async File Discovery', () => {
     });
 
     teardown(() => {
-        fs.rmSync(tmpRoot, { recursive: true, force: true });
+        removeTempDir(tmpRoot);
     });
 
     // ------------------------------------------------------------------

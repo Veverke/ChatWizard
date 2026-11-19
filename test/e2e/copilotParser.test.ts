@@ -4,6 +4,7 @@ import * as assert from 'assert';
 import * as path from 'path';
 import { parseCopilotSession, extractCodeBlocks } from '../../src/parsers/copilot';
 import { Message } from '../../src/types/index';
+import { removeTempDir } from '../helpers/fsCleanup';
 
 // Resolve fixture path relative to this test file
 const FIXTURE_DIR = path.resolve(__dirname, '../../..', 'test', 'fixtures', 'copilot');
@@ -278,7 +279,7 @@ suite('parseCopilotSession — branch coverage edge cases', () => {
     });
 
     teardown(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        removeTempDir(tmpDir);
     });
 
     function writeJsonl(filename: string, lines: object[]): string {
@@ -713,7 +714,7 @@ suite('parseCopilotSession — interrupted flag', () => {
             assert.strictEqual(session.messages.length, 1, 'Only the user message should be present');
             assert.strictEqual((session.messages[0] as Message & { interrupted?: boolean }).interrupted, true);
         } finally {
-            fs.rmSync(tmpDir2, { recursive: true, force: true });
+            removeTempDir(tmpDir2);
         }
     });
 

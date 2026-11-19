@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { getClineStorageRoot, discoverClineTasksAsync } from '../../src/readers/clineWorkspace';
+import { removeTempDir } from '../helpers/fsCleanup';
 
 suite('clineWorkspaceDiscovery', () => {
 
@@ -35,7 +36,7 @@ suite('clineWorkspaceDiscovery', () => {
             const result = await discoverClineTasksAsync(tmpDir);
             assert.deepStrictEqual(result, []);
         } finally {
-            fs.rmSync(tmpDir, { recursive: true, force: true });
+            removeTempDir(tmpDir);
         }
     });
 
@@ -53,7 +54,7 @@ suite('clineWorkspaceDiscovery', () => {
             assert.strictEqual(result[0].storageDir, taskDir);
             assert.ok(result[0].conversationFile.endsWith('api_conversation_history.json'));
         } finally {
-            fs.rmSync(tmpDir, { recursive: true, force: true });
+            removeTempDir(tmpDir);
         }
     });
 
@@ -68,7 +69,7 @@ suite('clineWorkspaceDiscovery', () => {
             const result = await discoverClineTasksAsync(tmpDir);
             assert.strictEqual(result.length, 0);
         } finally {
-            fs.rmSync(tmpDir, { recursive: true, force: true });
+            removeTempDir(tmpDir);
         }
     });
 
@@ -81,7 +82,7 @@ suite('clineWorkspaceDiscovery', () => {
             const result = await discoverClineTasksAsync(tmpDir);
             assert.strictEqual(result.length, 0);
         } finally {
-            fs.rmSync(tmpDir, { recursive: true, force: true });
+            removeTempDir(tmpDir);
         }
     });
 
@@ -99,7 +100,7 @@ suite('clineWorkspaceDiscovery', () => {
             const ids = result.map(r => r.taskId).sort();
             assert.deepStrictEqual(ids, ['task-1', 'task-2', 'task-3']);
         } finally {
-            fs.rmSync(tmpDir, { recursive: true, force: true });
+            removeTempDir(tmpDir);
         }
     });
 
@@ -128,7 +129,7 @@ suite('clineWorkspaceDiscovery', () => {
             assert.strictEqual(result.length, 1);
             assert.strictEqual(result[0].taskId, 'valid-task');
         } finally {
-            fs.rmSync(tmpDir, { recursive: true, force: true });
+            removeTempDir(tmpDir);
         }
     });
 });

@@ -11,6 +11,9 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { removeTempDir } from '../helpers/fsCleanup';
+import * as sinon from 'sinon';
+import * as vscode from 'vscode';
 import { SessionWebviewPanel } from '../../src/views/sessionWebviewPanel';
 import { renderMessage, VisibleMessage } from '../../src/views/sessionRenderer';
 import type { Message, RemovedTurn, Session } from '../../src/types/index';
@@ -146,7 +149,7 @@ suite('SessionWebviewPanel – turn removal (Feature 51)', () => {
         try {
             await SessionWebviewPanel._removeTurn(PANEL_ID, 1);
         } finally {
-            fs.rmSync(dir, { recursive: true, force: true });
+            removeTempDir(dir);
         }
 
         assert.strictEqual(session.messages[1].removed, true, 'the turn is flagged as removed');
@@ -176,6 +179,13 @@ suite('SessionWebviewPanel – turn removal (Feature 51)', () => {
         const { session } = makeHarness();
         SessionWebviewPanel._cacheStore = makeFakeStore(session, dir);
 
+        // The production code opens the generated file in an editor. Opening a
+        // real document locks the file on Windows and would make the temp-folder
+        // cleanup fail with ENOTEMPTY, so the editor is stubbed out here.
+        const sandbox = sinon.createSandbox();
+        const showTextDocument = sandbox.stub(vscode.window, 'showTextDocument').resolves(undefined as never);
+        sandbox.stub(vscode.window, 'showErrorMessage').resolves(undefined as never);
+
         try {
             await SessionWebviewPanel._openOriginalConversation(PANEL_ID);
 
@@ -187,8 +197,10 @@ suite('SessionWebviewPanel – turn removal (Feature 51)', () => {
             assert.ok(content.includes('first answer haystack'));
             assert.ok(content.includes('second answer'));
             assert.ok(/Original conversation/i.test(content));
+            assert.ok(showTextDocument.calledOnce, 'the generated file is opened for the user');
         } finally {
-            fs.rmSync(dir, { recursive: true, force: true });
+            sandbox.restore();
+            removeTempDir(dir);
         }
     });
 });

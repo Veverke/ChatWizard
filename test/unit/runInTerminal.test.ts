@@ -15,6 +15,7 @@ import * as path from 'path';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import { runCommandInTerminal, terminalNameFor } from '../../src/logs/runInTerminal';
+import { removeTempDir } from '../helpers/fsCleanup';
 
 interface FakeTerminal {
     name: string;
@@ -103,7 +104,7 @@ suite('runInTerminal — runCommandInTerminal', () => {
             assert.strictEqual(created[0].shown, 1, 'the terminal is revealed');
             assert.strictEqual(warning.callCount, 0);
         } finally {
-            fs.rmSync(cwd, { recursive: true, force: true });
+            removeTempDir(cwd);
         }
     });
 
@@ -126,7 +127,7 @@ suite('runInTerminal — runCommandInTerminal', () => {
             assert.strictEqual(created.length, 1);
             assert.strictEqual(created[0].cwd, undefined);
         } finally {
-            fs.rmSync(dir, { recursive: true, force: true });
+            removeTempDir(dir);
         }
     });
 

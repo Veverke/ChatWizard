@@ -12,6 +12,7 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { removeTempDir } from '../helpers/fsCleanup';
 import {
     parseClineLogEvents,
     cleanTerminalText,
@@ -347,7 +348,7 @@ suite('parseClineLogEvents — source & robustness', () => {
             assert.strictEqual(result.events.length, 0);
             assert.strictEqual(result.errors.length, 1);
         } finally {
-            fs.rmSync(dir, { recursive: true, force: true });
+            removeTempDir(dir);
         }
     });
 
@@ -360,7 +361,7 @@ suite('parseClineLogEvents — source & robustness', () => {
             assert.strictEqual(result.events.length, 0);
             assert.strictEqual(result.errors.length, 1);
         } finally {
-            fs.rmSync(dir, { recursive: true, force: true });
+            removeTempDir(dir);
         }
     });
 });

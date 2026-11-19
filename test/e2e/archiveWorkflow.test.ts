@@ -14,6 +14,7 @@ import * as path from 'path';
 
 import { SessionArchive } from '../../src/archive/sessionArchive';
 import { Session, Message, SessionSource } from '../../src/types/index';
+import { removeTempDir } from '../helpers/fsCleanup';
 
 // ---------------------------------------------------------------------------
 // Helper factories
@@ -62,7 +63,7 @@ suite('Archive workflow — round-trip fidelity', () => {
     });
 
     teardown(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        removeTempDir(tmpDir);
     });
 
     test('save(JSON.stringify(session)) then loadRaw+JSON.parse restores session intact', async () => {
@@ -150,7 +151,7 @@ suite('Archive workflow — multi-session manifest', () => {
     });
 
     teardown(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        removeTempDir(tmpDir);
     });
 
     test('save 3 sessions; new instance loadAllSources() returns all 3', async () => {
@@ -218,7 +219,7 @@ suite('Archive workflow — delete lifecycle', () => {
     });
 
     teardown(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        removeTempDir(tmpDir);
     });
 
     test('full delete lifecycle: save → findAnySource → delete → findAnySource returns undefined', async () => {

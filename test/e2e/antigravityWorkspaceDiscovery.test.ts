@@ -4,6 +4,7 @@ import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
 import { discoverAntigravityConversationsAsync, discoverAntigravityJsonConversationsAsync, getAntigravityConversationsRoot, getAntigravityBrainRoot } from '../../src/readers/antigravityWorkspace';
+import { removeTempDir } from '../helpers/fsCleanup';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -27,7 +28,7 @@ suite('Antigravity Workspace Discovery', () => {
     });
 
     teardown(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        removeTempDir(tmpDir);
     });
 
     test('returns empty array when brain directory does not exist', async () => {
@@ -107,7 +108,7 @@ suite('Antigravity JSON Conversations Discovery', () => {
     });
 
     teardown(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        removeTempDir(tmpDir);
     });
 
     test('returns empty array when conversations directory does not exist', async () => {

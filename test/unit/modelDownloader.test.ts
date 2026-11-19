@@ -9,6 +9,7 @@ import * as http from 'http';
 import { AddressInfo } from 'net';
 import * as os from 'os';
 import * as path from 'path';
+import { removeTempDir } from '../helpers/fsCleanup';
 import {
     downloadModelFiles,
     encodeRelativePath,
@@ -94,7 +95,7 @@ suite('modelDownloader.downloadModelFiles', () => {
                 process.env[key] = value;
             }
         }
-        fs.rmSync(destDir, { recursive: true, force: true });
+        removeTempDir(destDir);
     });
 
     test('downloads the requested files and leaves no partial files behind', async () => {

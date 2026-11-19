@@ -4,6 +4,7 @@ import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
 import { parseCursorWorkspace, parseCursorGlobalDb, extractCursorCodeBlocks, stripCursorSystemContext } from '../../src/parsers/cursor';
+import { removeTempDir } from '../helpers/fsCleanup';
 
 // ---------------------------------------------------------------------------
 // Helpers to create minimal SQLite fixtures in a temp directory
@@ -68,7 +69,7 @@ suite('Cursor Parser', () => {
     });
 
     teardown(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        removeTempDir(tmpDir);
     });
 
     // ── Happy path ────────────────────────────────────────────────────────────
@@ -445,7 +446,7 @@ suite('parseCursorGlobalDb', () => {
     });
 
     teardown(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        removeTempDir(tmpDir);
     });
 
     test('non-existent file returns empty array', async () => {
@@ -966,7 +967,7 @@ suite('Cursor Parser — extractItemRole and extractItemText branch coverage', (
     });
 
     teardown(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        removeTempDir(tmpDir);
     });
 
     test('isUser:true is treated as user role', async () => {

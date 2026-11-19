@@ -4,6 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { getRooCodeStorageRoot, discoverRooCodeTasksAsync } from '../../src/readers/clineWorkspace';
 import { parseClineTask } from '../../src/parsers/cline';
+import { removeTempDir } from '../helpers/fsCleanup';
 
 suite('rooCodeWorkspaceDiscovery', () => {
 
@@ -36,7 +37,7 @@ suite('rooCodeWorkspaceDiscovery', () => {
             const result = await discoverRooCodeTasksAsync(tmpDir);
             assert.deepStrictEqual(result, []);
         } finally {
-            fs.rmSync(tmpDir, { recursive: true, force: true });
+            removeTempDir(tmpDir);
         }
     });
 
@@ -54,7 +55,7 @@ suite('rooCodeWorkspaceDiscovery', () => {
             assert.strictEqual(result[0].storageDir, taskDir);
             assert.ok(result[0].conversationFile.endsWith('api_conversation_history.json'));
         } finally {
-            fs.rmSync(tmpDir, { recursive: true, force: true });
+            removeTempDir(tmpDir);
         }
     });
 
@@ -68,7 +69,7 @@ suite('rooCodeWorkspaceDiscovery', () => {
             const result = await discoverRooCodeTasksAsync(tmpDir);
             assert.strictEqual(result.length, 0);
         } finally {
-            fs.rmSync(tmpDir, { recursive: true, force: true });
+            removeTempDir(tmpDir);
         }
     });
 
@@ -80,7 +81,7 @@ suite('rooCodeWorkspaceDiscovery', () => {
             const result = await discoverRooCodeTasksAsync(tmpDir);
             assert.strictEqual(result.length, 0);
         } finally {
-            fs.rmSync(tmpDir, { recursive: true, force: true });
+            removeTempDir(tmpDir);
         }
     });
 
@@ -98,7 +99,7 @@ suite('rooCodeWorkspaceDiscovery', () => {
             const ids = result.map(r => r.taskId).sort();
             assert.deepStrictEqual(ids, ['task-1', 'task-2', 'task-3']);
         } finally {
-            fs.rmSync(tmpDir, { recursive: true, force: true });
+            removeTempDir(tmpDir);
         }
     });
 

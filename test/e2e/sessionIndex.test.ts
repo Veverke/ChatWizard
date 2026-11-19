@@ -7,6 +7,7 @@ import * as fs from 'fs';
 import { SessionIndex, toSummary, SessionIndexEvent } from '../../src/index/sessionIndex';
 import { SidecarMetadataStore } from '../../src/index/sidecarMetadataStore';
 import { Session, Message, SessionSource } from '../../src/types/index';
+import { removeTempDir } from '../helpers/fsCleanup';
 
 // ---------------------------------------------------------------------------
 // Helper factories
@@ -720,7 +721,7 @@ suite('SessionIndex — setSidecarStore and customTitle override', () => {
     });
 
     teardown(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        removeTempDir(tmpDir);
     });
 
     test('getTitleFor returns customTitle when sidecar cache has override', async () => {

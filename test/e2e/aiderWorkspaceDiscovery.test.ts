@@ -3,6 +3,7 @@ import * as assert from 'assert';
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
+import { removeTempDir } from '../helpers/fsCleanup';
 import {
     discoverAiderHistoryFilesAsync,
     AIDER_HISTORY_FILENAME,
@@ -22,7 +23,7 @@ suite('Aider Workspace Discovery', () => {
     });
 
     teardown(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        removeTempDir(tmpDir);
     });
 
     // ── Empty directory ───────────────────────────────────────────────────────

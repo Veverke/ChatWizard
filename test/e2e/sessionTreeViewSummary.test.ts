@@ -17,6 +17,7 @@ import { SessionIndex } from '../../src/index/sessionIndex';
 import { SessionTreeProvider, SessionTreeItem, DateGroupTreeItem } from '../../src/views/sessionTreeProvider';
 import { SidecarMetadataStore } from '../../src/index/sidecarMetadataStore';
 import { Session } from '../../src/types/index';
+import { removeTempDir } from '../helpers/fsCleanup';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -79,7 +80,7 @@ suite('SessionTreeItem — summary in tooltip (Feature 18-C)', function () {
     });
 
     teardown(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        removeTempDir(tmpDir);
     });
 
     // ── No summary → tooltip DOES NOT contain "**Summary:**" ────────────────

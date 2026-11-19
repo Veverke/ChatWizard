@@ -4,6 +4,7 @@ import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
 import { SidecarMetadataStore } from '../../src/index/sidecarMetadataStore';
+import { removeTempDir } from '../helpers/fsCleanup';
 
 suite('SidecarMetadataStore', () => {
     let tmpDir: string;
@@ -15,7 +16,7 @@ suite('SidecarMetadataStore', () => {
     });
 
     teardown(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        removeTempDir(tmpDir);
     });
 
     test('load returns empty map when file does not exist', async () => {

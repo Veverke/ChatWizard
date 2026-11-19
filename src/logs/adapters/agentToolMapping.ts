@@ -135,6 +135,9 @@ export function extractFilePath(input: unknown): string | undefined {
 
 /** Extract a unified diff / patch payload from a tool invocation's arguments. */
 export function extractPatch(input: unknown): string | undefined {
+    // Some tools (e.g. Copilot's `apply_patch`) pass the patch itself as the
+    // raw argument string rather than as a `{ patch }` object.
+    if (typeof input === 'string') { return firstString(input); }
     const args = asRecord(input);
     if (!args) { return undefined; }
     return firstString(args['diff'], args['patch'], args['input'], args['contents'], args['content']);
@@ -176,7 +179,7 @@ export function resultToText(result: unknown): string | undefined {
                 if (!rec) { return typeof entry === 'string' ? entry : ''; }
                 return firstString(rec['result'], rec['output'], rec['content'], rec['text'], rec['stdout']) ?? '';
             })
-            .filter((part) => part.length > 0);
+            .filter((part) => part.trim().length > 0);
         return parts.length > 0 ? parts.join('\n') : undefined;
     }
     const rec = asRecord(result);

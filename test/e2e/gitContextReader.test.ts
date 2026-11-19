@@ -8,6 +8,7 @@ import * as path from 'path';
 import * as childProcess from 'child_process';
 import { execFileSync } from 'child_process';
 import { readGitContextAsync, GitContextCache } from '../../src/utils/gitContextReader';
+import { removeTempDir } from '../helpers/fsCleanup';
 
 /**
  * Remove a temp repo directory.
@@ -23,7 +24,7 @@ import { readGitContextAsync, GitContextCache } from '../../src/utils/gitContext
 function removeTempRepo(dir: string): void {
     if (!dir || !fs.existsSync(dir)) { return; }
     try {
-        fs.rmSync(dir, { recursive: true, force: true });
+        removeTempDir(dir);
         return;
     } catch { /* EPERM on Windows — fall through to rmdir */ }
     try {

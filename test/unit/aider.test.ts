@@ -11,6 +11,7 @@ import * as os from 'os';
 import * as fs from 'fs';
 import { parseAiderHistory, extractAiderCodeBlocks } from '../../src/parsers/aider';
 import { AiderHistoryInfo } from '../../src/types/index';
+import { removeTempDir } from '../helpers/fsCleanup';
 
 function makeInfo(historyFile: string, configFile?: string): AiderHistoryInfo {
     return {
@@ -28,7 +29,7 @@ suite('aider (unit)', () => {
     });
 
     teardown(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        removeTempDir(tmpDir);
     });
 
     suite('extractAiderCodeBlocks', () => {

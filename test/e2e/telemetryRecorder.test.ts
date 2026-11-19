@@ -3,6 +3,7 @@ import * as os from 'os';
 import * as fs from 'fs';
 import * as path from 'path';
 import { TelemetryRecorder, TelemetryEvent } from '../../src/telemetry/telemetryRecorder';
+import { removeTempDir } from '../helpers/fsCleanup';
 
 function makeTmpDir(): string {
     return path.join(os.tmpdir(), `chatwizard-telemetry-test-${Math.random().toString(36).slice(2)}`);
@@ -10,7 +11,7 @@ function makeTmpDir(): string {
 
 function removeTmpDir(dir: string): void {
     try {
-        fs.rmSync(dir, { recursive: true, force: true });
+        removeTempDir(dir);
     } catch {
         // ignore
     }

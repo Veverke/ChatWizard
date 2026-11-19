@@ -5,6 +5,7 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { removeTempDir } from '../helpers/fsCleanup';
 import {
     SEMANTIC_MODEL_ID,
     SEMANTIC_MODEL_ORG,
@@ -33,7 +34,7 @@ suite('localModelPath.resolveLocalModel', () => {
     });
 
     teardown(() => {
-        fs.rmSync(root, { recursive: true, force: true });
+        removeTempDir(root);
     });
 
     test('empty path is reported as missing everything', () => {
@@ -109,7 +110,7 @@ suite('localModelPath.findExistingModelFolder', () => {
     });
 
     teardown(() => {
-        fs.rmSync(root, { recursive: true, force: true });
+        removeTempDir(root);
     });
 
     test('finds a model nested in a legacy cache layout', () => {

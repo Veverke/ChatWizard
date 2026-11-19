@@ -15,6 +15,7 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { removeTempDir } from '../helpers/fsCleanup';
 import { parseClineV4LogEvents } from '../../src/logs/adapters/clineV4LogAdapter';
 import { parseCopilotAgentLogEvents } from '../../src/logs/adapters/copilotAgentLogAdapter';
 import {
@@ -54,7 +55,7 @@ suite('Cline 4.x adapter — defensive branches', () => {
     let root: string;
 
     setup(() => { root = tmpDir(); });
-    teardown(() => { fs.rmSync(root, { recursive: true, force: true }); });
+    teardown(() => removeTempDir(root));
 
     test('a transcript without a messages array yields no events', () => {
         const dir = writeClineSession(root, { version: 1 });
@@ -195,7 +196,7 @@ suite('Copilot agent-host adapter — defensive branches', () => {
     let root: string;
 
     setup(() => { root = tmpDir(); });
-    teardown(() => { fs.rmSync(root, { recursive: true, force: true }); });
+    teardown(() => removeTempDir(root));
 
     test('malformed JSON is reported and non-object events are skipped', () => {
         const dir = writeAgentSession(root, ['{ not json', 'null', '42', '']);

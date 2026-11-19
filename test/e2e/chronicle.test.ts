@@ -7,6 +7,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { readChronicleCheckpoints } from '../../src/parsers/chronicle';
 import { discoverChronicleDbsAsync } from '../../src/readers/chronicleWorkspace';
+import { removeTempDir } from '../helpers/fsCleanup';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -62,7 +63,7 @@ suite('readChronicleCheckpoints', () => {
     });
 
     teardown(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        removeTempDir(tmpDir);
     });
 
     test('non-existent file returns empty array', async () => {
@@ -176,7 +177,7 @@ suite('discoverChronicleDbsAsync', () => {
     });
 
     teardown(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        removeTempDir(tmpDir);
     });
 
     test('non-existent root returns empty array', async () => {

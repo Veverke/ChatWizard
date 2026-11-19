@@ -6,6 +6,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { WorkspaceScopeManager, calcWorkspaceSizeMb, calcWorkspaceSizeBytes, countWorkspaceSessions, ExtensionContextLike } from '../../src/watcher/workspaceScope';
 import { ScopedWorkspace } from '../../src/types/index';
+import { removeTempDir } from '../helpers/fsCleanup';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -240,7 +241,7 @@ suite('countWorkspaceSessions', () => {
     });
 
     teardown(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        removeTempDir(tmpDir);
     });
 
     test('copilot — counts .jsonl files in chatSessions/', async () => {
@@ -347,7 +348,7 @@ suite('calcWorkspaceSizeBytes — additional sources', () => {
     });
 
     teardown(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        removeTempDir(tmpDir);
     });
 
     test('cline — sums bytes in api_conversation_history.json files across task subdirs', async () => {

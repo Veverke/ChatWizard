@@ -22,6 +22,7 @@ import { parseWindsurfWorkspace } from '../../../src/parsers/windsurf';
 import { parseAiderHistory } from '../../../src/parsers/aider';
 import { AiderHistoryInfo } from '../../../src/types/index';
 import { createCursorDb, createWindsurfDb } from '../../helpers/fixtureFactory';
+import { removeTempDir } from '../../helpers/fsCleanup';
 
 // ---------------------------------------------------------------------------
 // Paths
@@ -55,7 +56,7 @@ suite('Session Discovery', function () {
     });
 
     teardown(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        removeTempDir(tmpDir);
     });
 
     // ── Test 4: Copilot ───────────────────────────────────────────────────

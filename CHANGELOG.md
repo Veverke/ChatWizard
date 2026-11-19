@@ -48,6 +48,30 @@
 - **Semantic entities are split by sub-type and cleaned.** LLM output such as `[tool] Docker` or `[language] TypeScript` used to be lumped under *Concepts* and displayed (and searched) with its `[type]` marker. Each sub-type is now its own entity type (unknown prefixes become their own pluralized type) and the marker is stripped from the values, so the search matches the conversation text.
 - **Selecting an entity searches for it.** Picking a value in the second dropdown fills the search box with that value and runs the search, scrolling the reader to the first occurrence of the file / function / error / decision / concept / tool / language / framework / API.
 - Grouping and sorting moved into `src/views/sessionEntities.ts` (pure, unit-tested); the pre-sorted groups are shipped to the webview as `entityGroups` instead of the raw `entities` object.
+---
+
+## [1.7.2] - 2026-11-18
+
+### Commands panel — LLM Tool Calls
+
+- **New `LLM Tool Calls` section inside the Commands panel.** Where *Terminal Commands* shows what the agent ran in a shell, this section shows what it *invoked*: reading a file (`view` / `read_file`), searching the codebase, asking a question, editing an image — each structured tool call captured from GitHub Copilot agent-host logs and Cline / Roo Code task logs.
+- **Readable rows.** The label is `toolName [identifying argument]` (`view [src/extension.ts]`, `powershell [npm test]`), so a list of identical tool names stays navigable. Rows are grouped per session like the other sections and share the same filter bar (free text, agent, failures only) and workspace scope.
+- **Details and actions.** Clicking a row opens the shared details window with a plain-English description, the JSON arguments as *Input* and the captured result as *Output*; context-menu actions copy the call, open the owning session, or show full details. New commands: `Chat Wizard: Show LLM Tool Calls`, `Refresh LLM Tool Calls`, `Copy Tool Call`, `Open Tool Call Session`, `Show Tool Call Details`.
+- **Tool-call events also appear in the Unified Timeline**, labelled the same way, so a command → file read → patch sequence reads in true chronological order.
+
+### Tests & tooling
+
+- Adds unit coverage for the Commands sub-views (`commandsViewProvider`, `diffExplorerProvider`, `executedCommandsProvider`, `logEventWebview`, `logFilters`, `logStats`, `unifiedTimelineProvider`) and a coverage gate in the build.
+
+---
+
+## [1.7.1] - 2026-11-18
+
+### Did You Know nudge — interval default
+
+- The squirrel nudge now defaults to a calm **600 seconds (10 minutes)** between tips and is configurable with `chatwizard.didYouKnowInterval` (`0` disables it). Tips are read from the user-guide headings and clicking one opens the matching section.
+
+
 
 ### Semantic search — blocked-network downloads and graceful degradation
 
@@ -64,7 +88,45 @@
 - **Docs corrected:** the Semantic Search settings tables now state the shipped default (`chatwizard.enableSemanticSearch` = `true`); earlier tables said `false`. The troubleshooting guide's sample log output matches the real `[Semantic …]` prefixes.
 - **Diagnostic logging:** the output channel now shows the full model lifecycle with a stable `[Semantic …]` prefix — source options, which source was tried (and why one failed), per-file verification results, download size/duration, the effective transformers.js configuration (`allowRemoteModels=false`, model folder, ONNX file), worker start-up time, and two unambiguous markers: `AI model loaded successfully.` and `Semantic search is ACTIVE — N vector(s) indexed`. Failures log the classification (`blocked`/`proxy`/`not-found`/`corrupt`/`timeout`/`local-incomplete`) plus copy-pasteable guidance.
 
-## [1.6.0] - 2026-08-05
+---
+
+## [1.7.0] - 2026-11-15
+
+### Commands panel — watch agent logs (Phases 1–3)
+
+- **New `Commands` panel** in the sidebar, dedicated to what the agent *did* rather than what it said. It nests three sections and reuses the session cache folder for its event store:
+  - **Terminal Commands** — every shell / git / build / test command, newest first, grouped per session, with exit badges, copy, open-session and **Run in Terminal** actions.
+  - **Unified Timeline** — commands, file operations, diffs, errors and planner steps interleaved as they actually happened, with a kind filter (failures, diffs, commands…).
+  - **Diff Explorer** — every changed file listed alphabetically, expanding newest-first into `create` / `diff` / `move` / `rename` / delete operations; each change opens in VS Code's **native diff editor** (`Open Visual Diff`), plus `Open Patch`, `Copy Change` and `Open File`.
+- **Sources:** GitHub Copilot `chatSessions/*.jsonl` (`toolInvocationSerialized`, `textEditGroup`, terminal notifications with exit codes) and Copilot agent-host `events.jsonl`; Cline / Roo Code `ui_messages.json` (`say:'command'`, `command_output`, `editedExistingFile` SEARCH/REPLACE diffs, errors, plan steps); Aider `.aider.chat.history.md` (`> !cmd`, `/run`, `/test`, `/lint`, `Applied edit to …`); Windsurf `cascade.sessionData` (structured tool calls, or shell blocks marked *derived*).
+- **One filter bar for every section** — free-text search (command text, cwd, output, paths, diff text, tool names/arguments, errors, descriptions, agent, workspace), filter by agent, *Show Failures Only*, timeline kind filter and *Clear All Filters*. Active filters are reflected in the row summaries (`12 commands · 2 failed · filtered`).
+- **Shared details window** — one reused webview with a plain-English description, input and output, instead of a new tab per click.
+- **`Chat Wizard: Show Agent Log Stats`** — totals (events, commands, failed commands, failures, errors, diffs, ± lines), command success rate, and per-agent / per-session breakdowns.
+- **Workspace-scoped** — the event store is machine-wide, but the panel only shows events for the folder(s) open in the current window, and follows `Add Folder to Workspace` immediately. Sub-views start collapsed and are nested under **Commands**.
+
+### New storage layouts — Copilot agent-host and Cline 4.x
+
+- **GitHub Copilot agent-host chats.** VS Code 1.146+ / Copilot Chat 1.0+ keeps chats in `<COPILOT_HOME || ~/.copilot>/session-state/<id>/` (`workspace.yaml` + `events.jsonl`) instead of per-workspace `chatSessions/*.jsonl`. Both layouts are indexed, including live updates while a chat runs, and `tool.execution_start` / `tool.execution_complete` are replayed into command, diff and error rows.
+- **Machine-global chats are path-scoped.** Because `session-state` is shared by every workspace, agent-host chats are scoped by the `cwd` recorded in `workspace.yaml`; chats from another repository no longer appear in the current window. Legacy `workspaceStorage/<hash>/chatSessions` chats stay scoped by workspace id.
+- **Cline 4.x sessions.** Cline moved its history to `~/.cline/data/sessions/<id>/` (`<id>.json` + `<id>.messages.json`), overridable with `CLINE_DATA_DIR` / `CLINE_DIR`. Those sessions are indexed alongside the legacy `tasks/<id>/` folders, with live updates, and their `tool_use` / `tool_result` parts are normalized into commands, file operations and diffs.
+
+### Indexing & performance
+
+- **Incremental embeddings** (community fix, #66) — only new and changed chats are embedded instead of rebuilding the whole semantic index.
+- **Changed chats are re-indexed after a window reload** instead of being served stale from the cache.
+- **Workspace filtering fixes** — newly created chats are no longer missed, and per-workspace scoping is applied consistently across cache restore, watchers and archive restore.
+- **SQLite access hardened** — the native `better-sqlite3` path is used when its ABI matches the host Electron, with an automatic **sql.js (WASM)** fallback; the WASM asset is resolved from any extension layout and validated before use.
+- **Shared cache directory** (`chatwizard.sharedCacheDir`) lets VS Code, Cursor and Windsurf instances converge on one cache, sidecar metadata, log-event store and archive.
+
+### Build & quality
+
+- Standardized build pipeline (native-module rebuild script with Electron ABI detection), coverage reporting in CI, and a new [installation troubleshooting guide](docs/troubleshooting/installation-issues.md) for native-module / SQLite issues.
+- Command palette categories were extended so the growing command list stays browsable.
+
+---
+
+
+## [1.6.0] - 2026-08-13
 
 ### Knowledge Base (Feature 23)
 

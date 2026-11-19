@@ -7,6 +7,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { parseZedConversation } from '../../src/parsers/zed';
 import { discoverZedConversationsAsync } from '../../src/readers/zedWorkspace';
+import { removeTempDir } from '../helpers/fsCleanup';
 
 const FIXTURE = path.resolve(__dirname, '../../..', 'test', 'fixtures', 'zed', 'sample-conversation.json');
 
@@ -90,7 +91,7 @@ suite('Feature 41 — Zed Workspace Discovery', () => {
             assert.strictEqual(files.length, 2, 'should discover 2 JSON files');
             assert.ok(files.every(f => f.endsWith('.json')), 'all discovered files should be JSON');
         } finally {
-            fs.rmSync(tmpDir, { recursive: true, force: true });
+            removeTempDir(tmpDir);
         }
     });
 

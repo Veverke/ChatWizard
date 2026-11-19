@@ -7,6 +7,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { parseTabnineConversation } from '../../src/parsers/tabnine';
 import { discoverTabnineConversationsAsync } from '../../src/readers/tabnineWorkspace';
+import { removeTempDir } from '../helpers/fsCleanup';
 
 const FIXTURE = path.resolve(__dirname, '../../..', 'test', 'fixtures', 'tabnine', 'sample-chat.json');
 
@@ -117,7 +118,7 @@ suite('Feature 42 — Tabnine Workspace Discovery', () => {
             const files = await discoverTabnineConversationsAsync(tmpDir);
             assert.strictEqual(files.length, 2, 'should discover 2 JSON files');
         } finally {
-            fs.rmSync(tmpDir, { recursive: true, force: true });
+            removeTempDir(tmpDir);
         }
     });
 

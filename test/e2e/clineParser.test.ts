@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 import { parseClineTask, extractClineCodeBlocks } from '../../src/parsers/cline';
+import { removeTempDir } from '../helpers/fsCleanup';
 
 const FIXTURES = path.resolve(__dirname, '../../..', 'test', 'fixtures', 'cline');
 
@@ -105,7 +106,7 @@ suite('clineParser', () => {
             assert.strictEqual(result.session.messages[0].role, 'user');
             assert.strictEqual(result.session.messages[1].role, 'user');
         } finally {
-            fs.rmSync(tmpDir, { recursive: true, force: true });
+            removeTempDir(tmpDir);
         }
     });
 
@@ -145,7 +146,7 @@ suite('clineParser', () => {
             assert.ok(result.errors.length > 0, 'Expected error for non-array root');
             assert.strictEqual(result.session.messages.length, 0);
         } finally {
-            fs.rmSync(tmpDir, { recursive: true, force: true });
+            removeTempDir(tmpDir);
         }
     });
 
@@ -175,7 +176,7 @@ suite('clineParser', () => {
                 'createdAt should not be epoch when mtime fallback is used'
             );
         } finally {
-            fs.rmSync(tmpDir, { recursive: true, force: true });
+            removeTempDir(tmpDir);
         }
     });
 
@@ -192,7 +193,7 @@ suite('clineParser', () => {
             assert.ok(result.session.title.endsWith('…'), 'Title should end with ellipsis');
             assert.ok(result.session.title.length <= 124, 'Title should be ≤120 chars + ellipsis');
         } finally {
-            fs.rmSync(tmpDir, { recursive: true, force: true });
+            removeTempDir(tmpDir);
         }
     });
 
@@ -245,7 +246,7 @@ suite('clineParser — branch coverage edge cases', () => {
     });
 
     teardown(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        removeTempDir(tmpDir);
     });
 
     function writeTask(conv: object[], uiMsgs?: object[]): void {

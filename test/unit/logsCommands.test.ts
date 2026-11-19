@@ -17,6 +17,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
+import { removeTempDir } from '../helpers/fsCleanup';
 import { registerLogCommands } from '../../src/logs/logsCommands';
 import { closeEventWebview } from '../../src/logs/logEventWebview';
 import { emptyLogFilters, LogViewFilters } from '../../src/logs/logFilters';
@@ -113,9 +114,72 @@ interface HarnessOptions {
     logService?: { getStats?: () => { tools: string[] }; getEvents?: () => unknown[] };
 }
 
+/**
+ * Stub the clipboard write used by the copy commands.
+ *
+ * Newer VS Code builds expose `vscode.env.clipboard` as a frozen object whose
+ * methods are non-configurable, so sinon cannot wrap `writeText` in place
+ * ("The descriptor for property `writeText` is non-configurable and
+ * non-writable"). In that case replace the clipboard object itself — `env` is a
+ * plain object, so the property can still be redefined.
+ */
+function stubClipboardWrite(sandbox: sinon.SinonSandbox): sinon.SinonStub {
+    try {
+        return sandbox.stub(vscode.env.clipboard, 'writeText').resolves();
+    } catch {
+        const writeText = sandbox.stub().resolves();
+        sandbox.stub(vscode.env, 'clipboard').value({ writeText } as unknown as vscode.Clipboard);
+        return writeText;
+    }
+}
+
+/**
+ * Disposer of the most recently created harness that still owns the `vscode`
+ * namespace stubs.
+ *
+ * Sinon can only wrap `vscode.commands.registerCommand` once, so two harnesses
+ * must never be alive at the same time. A handful of tests legitimately build a
+ * second harness (e.g. "without a log store") while the suite-level one exists;
+ * creating a harness therefore retires the previous one first.
+ */
+let liveHarnessDispose: (() => void) | undefined;
+
+/** Tear down whichever harness currently owns the `vscode` stubs. */
+function disposeLiveHarness(): void {
+    liveHarnessDispose?.();
+}
+
 function createHarness(options: HarnessOptions = {}) {
-    const handlers = new Map<string, (...args: never[]) => unknown>();
+    // Only one harness can own the `vscode` namespace at a time.
+    liveHarnessDispose?.();
+    liveHarnessDispose = undefined;
+
     const sandbox = sinon.createSandbox();
+    let disposed = false;
+    const dispose = (): void => {
+        if (disposed) { return; }
+        disposed = true;
+        if (liveHarnessDispose === dispose) { liveHarnessDispose = undefined; }
+        // Always restore the sinon stubs, even if closing the shared detail
+        // webview throws — a leaked `registerCommand` stub would otherwise
+        // break every later suite in this file.
+        try { closeEventWebview(); } finally { sandbox.restore(); }
+    };
+    liveHarnessDispose = dispose;
+
+    try {
+        return buildHarness(sandbox, options, dispose);
+    } catch (err) {
+        // A failed build leaves stubs behind on the shared `vscode` namespace.
+        // Restore them here so one broken hook does not cascade into every later
+        // suite ("Attempted to wrap registerCommand which is already wrapped").
+        dispose();
+        throw err;
+    }
+}
+
+function buildHarness(sandbox: sinon.SinonSandbox, options: HarnessOptions, dispose: () => void) {
+    const handlers = new Map<string, (...args: never[]) => unknown>();
 
     sandbox.stub(vscode.commands, 'registerCommand').callsFake(((id: string, handler: (...args: never[]) => unknown) => {
         handlers.set(id, handler);
@@ -135,7 +199,7 @@ function createHarness(options: HarnessOptions = {}) {
     sandbox.stub(vscode.window, 'showWarningMessage').resolves(undefined as never);
     const quickPick = sandbox.stub(vscode.window, 'showQuickPick');
     const inputBox = sandbox.stub(vscode.window, 'showInputBox');
-    const clipboard = sandbox.stub(vscode.env.clipboard, 'writeText').resolves();
+    const clipboard = stubClipboardWrite(sandbox);
     const showTextDocument = sandbox.stub(vscode.window, 'showTextDocument').resolves(undefined as never);
 
     const panels: Array<Record<string, unknown>> = [];
@@ -207,7 +271,7 @@ function createHarness(options: HarnessOptions = {}) {
             assert.ok(handler, `command "${id}" was not registered`);
             return handler(...(args as never[])) as T;
         },
-        dispose: () => { closeEventWebview(); sandbox.restore(); },
+        dispose,
     };
 }
 
@@ -216,6 +280,23 @@ type Harness = ReturnType<typeof createHarness>;
 /** Let the fire-and-forget async handlers settle. */
 function settle(): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, 20));
+}
+
+/**
+ * Poll `predicate` until it becomes true (or the timeout elapses).
+ *
+ * A fixed `settle()` sleep is not a reliable barrier for handlers that await
+ * real filesystem I/O (`vscode.workspace.fs.stat` in the `openFile` command):
+ * on a loaded machine the stat can take longer than the sleep, so the assertion
+ * runs before the command finished and the test flakes. Polling removes the
+ * timing assumption.
+ */
+async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        if (predicate()) { return; }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+    }
 }
 
 
@@ -227,7 +308,7 @@ suite('logsCommands — registration', () => {
     let h: Harness;
 
     setup(() => { h = createHarness(); });
-    teardown(() => h.dispose());
+    teardown(() => disposeLiveHarness());
 
     test('registers every command the view and its context menus contribute', () => {
         const expected = [
@@ -281,7 +362,7 @@ suite('logsCommands — view-wide filters', () => {
     let h: Harness;
 
     setup(() => { h = createHarness({ logService: { getStats: () => ({ tools: ['copilot'] }) } }); });
-    teardown(() => h.dispose());
+    teardown(() => disposeLiveHarness());
 
     test('toggleFailures flips the failures-only filter both ways', () => {
         h.run('chatwizard.logs.toggleFailures');
@@ -393,7 +474,7 @@ suite('logsCommands — filter menu and stats', () => {
     let h: Harness;
 
     setup(() => { h = createHarness({ logService: { getStats: () => ({ tools: ['copilot'] }) } }); });
-    teardown(() => h.dispose());
+    teardown(() => disposeLiveHarness());
 
     test('the menu offers every filter action and a stats entry', async () => {
         h.quickPick.resolves(undefined);
@@ -498,7 +579,7 @@ suite('logsCommands — section show commands', () => {
     let h: Harness;
 
     setup(() => { h = createHarness(); });
-    teardown(() => h.dispose());
+    teardown(() => disposeLiveHarness());
 
     test('every "Show …" command focuses the Commands view and reveals its section', async () => {
         const sections: Array<[string, string]> = [
@@ -553,7 +634,7 @@ suite('logsCommands — executed commands', () => {
     let h: Harness;
 
     setup(() => { h = createHarness(); });
-    teardown(() => h.dispose());
+    teardown(() => disposeLiveHarness());
 
     test('copy writes the command text (and ignores a missing item)', () => {
         h.run('chatwizard.execCommands.copy');
@@ -609,7 +690,7 @@ suite('logsCommands — executed commands', () => {
             assert.strictEqual(h.terminals[0].cwd, cwd);
             assert.deepStrictEqual(h.terminals[0].sent, ['npm run build']);
         } finally {
-            fs.rmSync(cwd, { recursive: true, force: true });
+            removeTempDir(cwd);
         }
     });
 
@@ -639,7 +720,7 @@ suite('logsCommands — tool calls', () => {
     let h: Harness;
 
     setup(() => { h = createHarness(); });
-    teardown(() => h.dispose());
+    teardown(() => disposeLiveHarness());
 
     test('refresh refreshes the tool-calls provider', () => {
         h.run('chatwizard.logs.toolCalls.refresh');
@@ -689,7 +770,7 @@ suite('logsCommands — unified timeline', () => {
     let h: Harness;
 
     setup(() => { h = createHarness(); });
-    teardown(() => h.dispose());
+    teardown(() => disposeLiveHarness());
 
     test('refresh refreshes the timeline provider', () => {
         h.run('chatwizard.logs.timeline.refresh');
@@ -705,7 +786,7 @@ suite('logsCommands — unified timeline', () => {
         h.quickPick.resolves({ label: 'Commands', description: 'only command events', value: 'command' } as never);
         await h.run('chatwizard.logs.timeline.filter');
         assert.deepStrictEqual(h.timeline.setFilter.secondCall.args, [['command']]);
-        assert.match(String(h.info.secondCall.args[0]), /showing command events only/i);
+        assert.match(String(h.info.secondCall.args[0]), /showing executed command events only/i);
     });
 
     test('a dismissed kind picker leaves the timeline filter alone', async () => {
@@ -751,6 +832,7 @@ suite('logsCommands — unified timeline', () => {
 
     test('openDiff falls back to the patch text when nothing is renderable', async () => {
         await h.run('chatwizard.logs.timeline.openDiff', { event: diffEvent({ diffText: '' }) });
+        await settle();
 
         assert.strictEqual(h.executed.some((e) => e.command === 'vscode.diff'), false);
         assert.ok(h.showTextDocument.called, 'the raw patch opens in a text editor');
@@ -783,7 +865,7 @@ suite('logsCommands — diffs', () => {
     let h: Harness;
 
     setup(() => { h = createHarness(); });
-    teardown(() => h.dispose());
+    teardown(() => disposeLiveHarness());
 
     test('refresh refreshes the diff explorer', () => {
         h.run('chatwizard.logs.diffs.refresh');
@@ -814,11 +896,12 @@ suite('logsCommands — diffs', () => {
         assert.match(String(h.info.firstCall.args[0]), /captured no diff text/i);
     });
 
-    test('openPatch opens the raw patch and ignores a missing item', () => {
+    test('openPatch opens the raw patch and ignores a missing item', async () => {
         h.run('chatwizard.logs.diff.openPatch');
         assert.strictEqual(h.showTextDocument.called, false);
 
         h.run('chatwizard.logs.diff.openPatch', { event: diffEvent() });
+        await settle();
         assert.ok(h.showTextDocument.calledOnce, 'the patch opens in an editor');
     });
 
@@ -847,7 +930,7 @@ suite('logsCommands — diffs', () => {
         const gone = path.join(os.tmpdir(), `cw-missing-file-${Date.now()}.ts`);
 
         h.run('chatwizard.logs.diff.openFile', { event: fileOperationEvent({ filePath: gone }) });
-        await settle();
+        await waitFor(() => h.error.called);
 
         assert.match(String(h.error.firstCall.args[0]), /File no longer exists/i);
         assert.strictEqual(h.showTextDocument.called, false);
@@ -859,12 +942,12 @@ suite('logsCommands — diffs', () => {
         fs.writeFileSync(file, 'export const a = 1;\n', 'utf8');
         try {
             h.run('chatwizard.logs.diff.openFile', { event: fileOperationEvent({ filePath: file }) });
-            await settle();
+            await waitFor(() => h.showTextDocument.called);
 
             assert.ok(h.showTextDocument.calledOnce, 'the file is opened');
             assert.strictEqual(h.error.called, false);
         } finally {
-            fs.rmSync(dir, { recursive: true, force: true });
+            removeTempDir(dir);
         }
     });
 
@@ -892,7 +975,7 @@ suite('logsCommands — shared view actions', () => {
     let h: Harness;
 
     setup(() => { h = createHarness(); });
-    teardown(() => h.dispose());
+    teardown(() => disposeLiveHarness());
 
     test('showSelectedDetails explains an empty selection', async () => {
         assert.strictEqual(await h.run('chatwizard.logs.showSelectedDetails'), undefined);
