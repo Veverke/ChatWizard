@@ -961,17 +961,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                     const pruned = await archive.prune({ maxAgeDays, maxSizeMB });
 
                     // 12-D: restore sessions that exist in the archive but not in the live index
-                    // Workspace-scope filter: only restore sessions belonging to the currently
-                    // selected workspace(s). Sources whose workspaceId matches the scope IDs
-                    // (Copilot, Claude, Cursor, Windsurf) are filtered by ID. Sources with a
-                    // real workspacePath (Cline, Roo Code, Aider) are filtered by path against
-                    // the open VS Code workspace folders. Sources without a scoped workspaceId
-                    // or path (Antigravity, Continue, Amazon Q, Gemini, Tabnine) pass through
-                    // since they cannot be scoped.
+                    // Workspace-scope filter: `isSessionInScope` is the single source of truth
+                    // shared with the live watchers, the batch collector and the cache restore.
+                    // It handles ID-scoped sources (Copilot/Claude/Cursor/Windsurf), path-scoped
+                    // sources (Cline/Roo/Aider) and the machine-global Copilot agent chats (path
+                    // scoped by their cwd). Sources that cannot be scoped pass through.
                     const scopeRef = _scopeManagerRef;
                     const selectedIds = scopeRef?.getSelectedIds() ?? [];
                     const openFolderPaths = scopeRef?.getOpenFolderPaths() ?? [];
-                    const idScopedSources = new Set<SessionSource>(['copilot', 'claude', 'cursor', 'windsurf']);
                     const allArchived = await archive.loadAllSources();
                     const archivedOnly: import('./types').Session[] = [];
                     let scopedOut = 0;
@@ -982,17 +979,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                                 try {
                                     const session = { ...JSON.parse(raw) as import('./types').Session, archived: true as const };
                                     // Apply workspace scope
-                                    let inScope = true;
-                                    if (selectedIds.length > 0 && idScopedSources.has(session.source as SessionSource)) {
-                                        inScope = session.workspaceId ? selectedIds.includes(session.workspaceId) : false;
-                                    }
-                                    if (inScope && openFolderPaths.length > 0 && session.workspacePath) {
-                                        const norm = path.normalize(session.workspacePath).toLowerCase();
-                                        inScope = openFolderPaths.some(p =>
-                                            norm === p || norm.startsWith(p + path.sep)
-                                        );
-                                    }
-                                    if (inScope) {
+                                    if (isSessionInScope(session, selectedIds, openFolderPaths)) {
                                         archivedOnly.push(session);
                                     } else {
                                         scopedOut++;

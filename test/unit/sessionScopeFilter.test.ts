@@ -16,6 +16,7 @@ import {
     claudeProjectDirId,
     filterSessionsByWorkspaceScope,
     isPathInScope,
+    isPathScopedSession,
     isSessionInScope,
 } from '../../src/watcher/sessionScopeFilter';
 import { Session, SessionSource } from '../../src/types/index';
@@ -135,6 +136,45 @@ suite('isSessionInScope — path-scoped sources', () => {
         assert.strictEqual(isSessionInScope(outside, [], [SELLING]), false);
     });
 
+    test('copilot agent-host chat inside the open folder is in scope', () => {
+        const s = makeSession('cp-agent-in', 'copilot', {
+            workspaceId: 'copilot-agent',
+            workspacePath: path.join(SELLING, 'src'),
+        });
+        assert.strictEqual(isSessionInScope(s, ['hash-selling'], [SELLING]), true);
+    });
+
+    test('copilot agent-host chat of another workspace is NOT in scope (the reported bug)', () => {
+        // Every agent-host chat shares the global `copilot-agent` id, so the id
+        // rule would keep them all. They must be scoped by their `cwd`.
+        const s = makeSession('cp-agent-out', 'copilot', {
+            workspaceId: 'copilot-agent',
+            workspacePath: CHATWIZARD,
+        });
+        assert.strictEqual(isSessionInScope(s, ['hash-selling'], [SELLING]), false);
+    });
+
+    test('copilot agent-host chat without a cwd is NOT in scope while a folder is open', () => {
+        const s = makeSession('cp-agent-nopath', 'copilot', { workspaceId: 'copilot-agent' });
+        assert.strictEqual(isSessionInScope(s, ['hash-selling'], [SELLING]), false);
+    });
+
+    test('isPathScopedSession: only path-scoped sources and copilot-agent chats', () => {
+        assert.strictEqual(isPathScopedSession(makeSession('p1', 'cline')), true);
+        assert.strictEqual(isPathScopedSession(makeSession('p2', 'roocode')), true);
+        assert.strictEqual(isPathScopedSession(makeSession('p3', 'aider')), true);
+        assert.strictEqual(
+            isPathScopedSession(makeSession('p4', 'copilot', { workspaceId: 'copilot-agent' })),
+            true
+        );
+        // Legacy per-workspace Copilot chats stay id-scoped.
+        assert.strictEqual(
+            isPathScopedSession(makeSession('p5', 'copilot', { workspaceId: 'hash-selling' })),
+            false
+        );
+        assert.strictEqual(isPathScopedSession(makeSession('p6', 'cursor')), false);
+    });
+
     test('path-scoped sources pass when no folder is open (cannot be path-filtered)', () => {
         const s = makeSession('c4', 'cline', { workspacePath: CHATWIZARD });
         assert.strictEqual(isSessionInScope(s, ['some-workspace-id'], []), true);
@@ -189,14 +229,21 @@ suite('isSessionInScope — id-scoped sources', () => {
         assert.strictEqual(isSessionInScope(outside, ['hash-selling'], [SELLING]), false);
     });
 
-    test('global workspace ids always pass', () => {
-        for (const globalId of GLOBAL_WORKSPACE_IDS) {
-            const source: SessionSource = globalId === 'copilot-agent'
-                ? 'copilot'
-                : (globalId.startsWith('cursor') ? 'cursor' : 'windsurf');
+    test('global workspace ids without a workspace path always pass', () => {
+        // cursor-global / windsurf-global are machine-wide DBs with no path, so
+        // they cannot be scoped at all.
+        for (const globalId of GLOBAL_WORKSPACE_IDS.filter(id => id !== 'copilot-agent')) {
+            const source: SessionSource = globalId.startsWith('cursor') ? 'cursor' : 'windsurf';
             const s = makeSession(`g-${globalId}`, source, { workspaceId: globalId, workspacePath: CHATWIZARD });
             assert.strictEqual(isSessionInScope(s, ['ws-selling'], [SELLING]), true, `${globalId} should pass`);
         }
+    });
+
+    test('copilot-agent is scoped by its workspace path, not by its global id', () => {
+        const inside = makeSession('g-agent-in', 'copilot', { workspaceId: 'copilot-agent', workspacePath: SELLING });
+        const outside = makeSession('g-agent-out', 'copilot', { workspaceId: 'copilot-agent', workspacePath: CHATWIZARD });
+        assert.strictEqual(isSessionInScope(inside, ['ws-selling'], [SELLING]), true);
+        assert.strictEqual(isSessionInScope(outside, ['ws-selling'], [SELLING]), false);
     });
 
     test('id-scoped sources are out of scope when nothing is selected', () => {
@@ -239,6 +286,8 @@ suite('scope rule consistency', () => {
             makeSession('aider-out', 'aider', { workspacePath: CHATWIZARD }),
             makeSession('copilot-in', 'copilot', { workspaceId: 'hash-selling' }),
             makeSession('copilot-out', 'copilot', { workspaceId: 'hash-other' }),
+            makeSession('copilot-agent-in', 'copilot', { workspaceId: 'copilot-agent', workspacePath: path.join(SELLING, 'src') }),
+            makeSession('copilot-agent-out', 'copilot', { workspaceId: 'copilot-agent', workspacePath: CHATWIZARD }),
             makeSession('claude-in', 'claude', { workspaceId: 'sid-1', filePath: claudeFilePath('c--repo-selling', 'sid-1') }),
             makeSession('claude-out', 'claude', { workspaceId: 'sid-2', filePath: claudeFilePath('c--repo-other', 'sid-2') }),
             makeSession('cursor-in', 'cursor', { workspaceId: 'hash-selling' }),
@@ -270,6 +319,7 @@ suite('scope rule consistency', () => {
             'aider-out',
             'claude-out',
             'cline-out',
+            'copilot-agent-out',
             'copilot-out',
             'cursor-out',
             'roo-out',

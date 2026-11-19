@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Session scope — Copilot agent-host chats no longer leak across workspaces
+
+- **Fixed: chats opened in another workspace still appeared in the Sessions view.** VS Code 1.146+/Copilot Chat 1.0+ keeps every chat in the machine-global `~/.copilot/session-state`, and every chat shares the synthetic `copilot-agent` workspace id. That id was treated as "always in scope", so chats whose `workspace.yaml` `cwd` was a different repository (e.g. `C:\src\selling` while working in `C:\src\_\ChatWizard`) were listed by this window. Agent-host chats are now **path-scoped** by their `cwd` — the same open-folder rule Cline 4.x / Roo Code / Aider already used — in all four ingestion paths: the batch collector, the SQLite cache restore, the live file watcher and the archive restore.
+- **Fixed: archive restore used a third, diverging copy of the scope rule.** It compared `workspaceId` against the selected ids for Claude (whose `workspaceId` is the *session* id, not the project directory) and never applied the path rule to Copilot agent chats, so archived sessions could be either wrongly restored or wrongly dropped. The archive path now calls the shared `isSessionInScope` helper.
+- Copilot *legacy* per-workspace chats (`workspaceStorage/<hash>/chatSessions/*.jsonl`) stay id-scoped; only the global agent-host chats are path-scoped.
+
 ### Session reader — entity dropdowns
 
 - **Fixed: plain uppercase words were classified as errors.** The error extractor used a catch-all `E[A-Z_]{2,}` pattern, so any all-caps token starting with `E` — e.g. `ENTITIES`, `ERROR` — landed in the **Errors** dropdown. Errors are now derived from precise patterns only: named exceptions (`TypeError: …`, `JsonWebTokenError`), structured codes (`SQLITE_*`, `ERR_*`, `EAI_*`, known Node/OS errno codes such as `ENOENT`), and HTTP 4xx/5xx statuses with their canonical reason phrase (`403 Forbidden` — but not `503 employees`). The extractor version was bumped so cached false positives are re-extracted.

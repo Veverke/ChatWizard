@@ -150,6 +150,13 @@ replacement text only (additions-only patches), while Cline and Aider patches ca
 > `COPILOT_HOME` environment variable. ChatWizard indexes both layouts, including
 > live updates while a chat runs, and replays `tool.execution_start` /
 > `tool.execution_complete` into command / diff / error rows.
+>
+> Because `session-state` is machine-global, agent-host chats are **scoped by
+> their `cwd`** (`workspace.yaml`): only chats opened under the VS Code folder(s)
+> you have open appear in the Sessions view. Chats from another repository
+> (e.g. `C:\src\selling` while working in `C:\src\_\ChatWizard`) stay hidden —
+> the legacy `workspaceStorage/<hash>/chatSessions` layout stays scoped by
+> workspace id.
 
 > **Workspace scoping.** The agent-log store is shared by every workspace on the
 > machine, so the Commands view is scoped to the VS Code folder(s) you have open

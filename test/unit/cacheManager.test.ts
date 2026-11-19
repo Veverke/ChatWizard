@@ -500,6 +500,51 @@ suite('CacheManager – loadAll scoping and write-path variants', () => {
         assert.ok(!index.get('other-ws'), 'a different workspace hash is still excluded');
     });
 
+    test('loadAll applies the open-folder scope to Copilot agent-host chats', async () => {
+        // Every agent-host chat shares the `copilot-agent` workspace id, so the
+        // id cannot scope them — only their cwd (`workspacePath`) can. Without
+        // this a chat opened in another repository reappears on every start.
+        cache.upsertSessions([
+            makeSession({
+                id: 'agent-in',
+                source: 'copilot',
+                workspaceId: 'copilot-agent',
+                workspacePath: path.join('/repos', 'mine', 'app'),
+            }),
+            makeSession({
+                id: 'agent-out',
+                source: 'copilot',
+                workspaceId: 'copilot-agent',
+                workspacePath: path.join('/repos', 'mine', 'selling'),
+            }),
+        ]);
+
+        const index = new SessionIndex();
+        await cache.loadAll(
+            index,
+            ['ws-hash-1'],
+            [path.join('/repos', 'mine', 'app')]
+        );
+
+        assert.ok(index.get('agent-in'), 'agent chat under the open folder is restored');
+        assert.ok(!index.get('agent-out'), 'agent chat of another workspace is dropped');
+    });
+
+    test('loadAll keeps Copilot agent-host chats when no folder is open', async () => {
+        // No open folder → the path rule cannot be applied, so nothing is dropped.
+        cache.upsertSession(makeSession({
+            id: 'agent-anywhere',
+            source: 'copilot',
+            workspaceId: 'copilot-agent',
+            workspacePath: '/somewhere/else',
+        }));
+
+        const index = new SessionIndex();
+        await cache.loadAll(index, ['ws-hash-1']);
+
+        assert.ok(index.get('agent-anywhere'));
+    });
+
     test('loadAll restores agent chats cached under their old cwd workspace id', async () => {
         // A previous build stored the agent session with `workspace_id = cwd`
         // instead of `copilot-agent`; it must still come back.

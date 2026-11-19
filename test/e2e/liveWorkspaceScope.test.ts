@@ -190,6 +190,52 @@ function writeAiderHistory(dir: string): string {
     return filePath;
 }
 
+/**
+ * Writes `<root>/<sessionId>/{workspace.yaml,events.jsonl}` — the Copilot
+ * agent-host layout used by `<COPILOT_HOME>/session-state` — and returns the
+ * session directory.
+ */
+function writeCopilotAgentSession(root: string, sessionId: string, cwd: string): string {
+    const sessionDir = path.join(root, sessionId);
+    fs.mkdirSync(sessionDir, { recursive: true });
+    fs.writeFileSync(path.join(sessionDir, 'workspace.yaml'), [
+        `id: ${sessionId}`,
+        `cwd: ${cwd}`,
+        `git_root: ${cwd}`,
+        'name: Agent chat',
+        'created_at: 2024-11-19T09:00:00.000Z',
+        'updated_at: 2024-11-19T09:05:00.000Z',
+        '',
+    ].join('\n'), 'utf8');
+
+    const events = [
+        {
+            type: 'session.start',
+            data: { selectedModel: 'gpt-6-luna', context: { cwd } },
+            id: 'ev-1',
+            timestamp: '2024-11-19T09:00:00.000Z',
+        },
+        {
+            type: 'user.message',
+            data: { content: 'Refactor this function' },
+            id: 'ev-2',
+            timestamp: '2024-11-19T09:00:10.000Z',
+        },
+        {
+            type: 'assistant.message',
+            data: { content: 'Sure, here is the refactored version.' },
+            id: 'ev-3',
+            timestamp: '2024-11-19T09:00:20.000Z',
+        },
+    ];
+    fs.writeFileSync(
+        path.join(sessionDir, 'events.jsonl'),
+        events.map(event => JSON.stringify(event)).join('\n') + '\n',
+        'utf8'
+    );
+    return sessionDir;
+}
+
 // ---------------------------------------------------------------------------
 // Cline 4.x — `~/.cline/data/sessions` is machine-global (all workspaces)
 // ---------------------------------------------------------------------------
@@ -359,6 +405,66 @@ suite('Live scope — Aider', () => {
         const h = makeHarness([selling]);
         await waitForHandler(callPrivate(h.watcher, 'onAiderFileChanged', vscode.Uri.file(file)));
         assert.strictEqual(h.index.size, 0, h.lines.join('\n'));
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Copilot agent-host — `<COPILOT_HOME>/session-state` is machine-global
+// ---------------------------------------------------------------------------
+//
+// Every agent-host chat shares the `copilot-agent` workspace id, so the id
+// cannot tell two repositories apart. The chats are scoped by their `cwd`
+// (`workspace.yaml`), which is what this suite pins down.
+
+suite('Live scope — Copilot agent-host', () => {
+
+    let root: string;
+    let selling: string;
+    let chatwizard: string;
+
+    setup(() => {
+        root = tmpRoot('copilot-agent');
+        selling = path.join(root, 'selling');
+        chatwizard = path.join(root, 'ChatWizard');
+        fs.mkdirSync(selling, { recursive: true });
+        fs.mkdirSync(chatwizard, { recursive: true });
+    });
+
+    teardown(() => { fs.rmSync(root, { recursive: true, force: true }); });
+
+    test('indexes an agent chat whose cwd is the open folder', () => {
+        const dir = writeCopilotAgentSession(path.join(root, 'session-state'), 'agent-in', selling);
+        const h = makeHarness([selling], ['hash-selling']);
+        callPrivate(h.watcher, 'onCopilotAgentSessionDirChanged', dir);
+        assert.strictEqual(h.index.size, 1, h.lines.join('\n'));
+    });
+
+    test('does NOT index an agent chat of another workspace (the reported leak)', () => {
+        const dir = writeCopilotAgentSession(path.join(root, 'session-state'), 'agent-out', chatwizard);
+        const h = makeHarness([selling], ['hash-selling']);
+        callPrivate(h.watcher, 'onCopilotAgentSessionDirChanged', dir);
+        assert.strictEqual(h.index.size, 0, h.lines.join('\n'));
+        assert.ok(
+            h.lines.some(l => l.includes('skipped out-of-scope') && l.includes('agent-out')),
+            `expected a skip log line, got:\n${h.lines.join('\n')}`
+        );
+    });
+
+    test('removes a stale out-of-scope agent chat that is already indexed', () => {
+        const id = 'agent-stale';
+        const dir = writeCopilotAgentSession(path.join(root, 'session-state'), id, chatwizard);
+        const h = makeHarness([selling], ['hash-selling']);
+        h.index.upsert({ ...makeSession(id, 'copilot', chatwizard), workspaceId: 'copilot-agent' });
+        assert.strictEqual(h.index.size, 1);
+        callPrivate(h.watcher, 'onCopilotAgentSessionDirChanged', dir);
+        assert.strictEqual(h.index.size, 0, h.lines.join('\n'));
+    });
+
+    test('a window with no open folder cannot be scoped — agent chat is indexed', () => {
+        const dir = writeCopilotAgentSession(path.join(root, 'session-state'), 'agent-nofolder', chatwizard);
+        const h = makeHarness([]);
+        callPrivate(h.watcher, 'onCopilotAgentSessionDirChanged', dir);
+        assert.strictEqual(h.index.size, 1, h.lines.join('\n'));
     });
 });
 

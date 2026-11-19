@@ -351,6 +351,12 @@ export class CacheManager implements ICacheManager {
             // buildInitialIndex() would be skipped — meaning they'd never be
             // re-parsed.
             //
+            // Being *loaded* is not the same as being *in scope*: the filter
+            // below drops what does not belong to this window. Copilot agent-host
+            // chats share the global `copilot-agent` id, so they are scoped by
+            // their `cwd` (`workspacePath`) — otherwise the chats of every other
+            // repository would be restored on each start.
+            //
             // Path-scoped sources (Cline / Roo Code / Aider) are NOT filtered by
             // workspace id at all: they are collected regardless of `selectedIds`
             // and scoped by `workspacePath` afterwards (see the filter below).

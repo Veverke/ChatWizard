@@ -1627,6 +1627,14 @@ this.index.remove(taskId);
             this.channel.appendLine(`[skip] empty/epoch copilot agent session ${sessionId}`);
             return;
         }
+        // `~/.copilot/session-state` is machine-global: without this check a
+        // chat opened in another workspace would be indexed live in *this*
+        // window (every agent-host chat shares the `copilot-agent` id, so the
+        // id rule alone cannot tell them apart — they are scoped by `cwd`).
+        if (!this._isInScope(result.session)) {
+            this._skipOutOfScope(result.session, 'copilot agent');
+            return;
+        }
         const before = this.index.size;
         this.index.upsert(result.session);
         this._liveTracker?.record(result.session.source, result.session.id);
