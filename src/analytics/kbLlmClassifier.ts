@@ -38,15 +38,20 @@ const MAX_CONVERSATION_CHARS = 24_000;
  *
  * Response format: "TopLevel|SecondLevel" on a single line.
  */
-export function buildClassificationPrompt(session: Session): string {
+export function buildClassificationPrompt(session: Session, levels: 2 | 3 = 2): string {
+    const depth = levels === 3 ? 3 : 2;
     const intro = [
         'You are a session categorizer for a software developer\'s chat history.',
-        'Read the conversation below and classify it into a 2-level folder structure.',
+        `Read the conversation below and classify it into a ${depth}-level folder structure.`,
         '',
-        'I use a 2-level folder structure:',
+        `I use a ${depth}-level folder structure:`,
         '  - Top-level folders capture the general topic (e.g. "Git", "Bugs", "Testing").',
         '  - Second-level folders capture the particular subject within that topic',
         '    (e.g. "Branch Management" under "Git", "UI Crash" under "Bugs").',
+        ...(depth === 3 ? [
+            '  - Third-level folders capture a narrower aspect of that subject',
+            '    (e.g. "Merge Conflicts" under "Git|Branch Management").',
+        ] : []),
         '',
         'Since all chats are about software development, think in terms of both:',
         '  - **Technology/tool** categories: "Git", "Docker", "React", "Python", "Vs Code", "CSS", "API", "Database", "Deployment"',
@@ -55,10 +60,18 @@ export function buildClassificationPrompt(session: Session): string {
         '    "Features" (planned features, intents, new capabilities), "Best Practices" (recommendations, patterns, conventions)',
         '',
         'Examples:',
-        '- Git branch management → "Git|Branch Management"',
-        '- Fixing a UI crash → "Bugs|UI Crash"',
-        '- Test fixture setup → "Testing|Fixture Setup"',
-        '- Restructuring a module → "Refactoring|Module Restructure"',
+        ...(depth === 3 ? [
+            '- Git branch management, resolving conflicts → "Git|Branch Management|Merge Conflicts"',
+            '- Git branch cleanup → "Git|Branch Management|Cleanup"',
+            '- Fixing a UI crash → "Bugs|UI Crash|Rendering"',
+            '- Test fixture setup → "Testing|Fixture Setup"',
+            '- Restructuring a module → "Refactoring|Module Restructure|Split Files"',
+        ] : [
+            '- Git branch management → "Git|Branch Management"',
+            '- Fixing a UI crash → "Bugs|UI Crash"',
+            '- Test fixture setup → "Testing|Fixture Setup"',
+            '- Restructuring a module → "Refactoring|Module Restructure"',
+        ]),
         '- Planning a new MCP server → "Features|MCP Server"',
         '- Coding conventions discussion → "Best Practices|Coding Conventions"',
         '- Database schema design → "Architecture|Schema Design"',
@@ -68,15 +81,25 @@ export function buildClassificationPrompt(session: Session): string {
         '',
         'Rules:',
         '- Return ONLY one line — no commentary, no markdown, no punctuation.',
-        '- Format: TopLevel|SecondLevel (separated by a pipe character).',
-        '- Use 1-2 words for TopLevel, 1-3 words for SecondLevel, Title Case.',
+        depth === 3
+            ? '- Format: TopLevel|SecondLevel|ThirdLevel (separated by pipe characters).'
+            : '- Format: TopLevel|SecondLevel (separated by a pipe character).',
+        depth === 3
+            ? '- Use 1-2 words for TopLevel, 1-3 words for SecondLevel and ThirdLevel, Title Case.'
+            : '- Use 1-2 words for TopLevel, 1-3 words for SecondLevel, Title Case.',
         '- Keep TopLevel BROAD — it should group multiple related chats together.',
         '- Make SecondLevel SPECIFIC — it distinguishes this chat from others in the same folder.',
+        ...(depth === 3 ? [
+            '- ThirdLevel is OPTIONAL: omit it when the chat has no narrower aspect',
+            '  (return "TopLevel|SecondLevel" in that case).',
+        ] : []),
         '- Use "Other" as TopLevel ONLY if the session truly does not fit any recognizable',
         '  software development topic.',
         '- Do NOT default to "Other" for sessions about bugs, testing, architecture,',
         '  refactoring, features, or best practices — those are valid top-level categories.',
-        '- If unsure about the second level, return just "TopLevel" without a pipe.',
+        depth === 3
+            ? '- If unsure about the lower levels, return fewer of them.'
+            : '- If unsure about the second level, return just "TopLevel" without a pipe.',
         '',
         '=== CONVERSATION ===',
         `Session title: ${session.title}`,
@@ -156,7 +179,20 @@ const REJECT_PATTERNS = [
     /^i can'?t/i,   // refusal
 ];
 
-export function parseClassification(raw: string): { folder: string; subtype: string | null } | null {
+export interface ParsedClassification {
+    folder: string;
+    subtype: string | null;
+    /** Third-level label — only populated when the caller asked for 3 levels. */
+    subSubtype: string | null;
+}
+
+/**
+ * Parse the model's one-line answer.
+ *
+ * @param levels How many labels the request asked for. With `levels === 2` the
+ *               third component is ignored and `subSubtype` is always `null`.
+ */
+export function parseClassification(raw: string, levels: 2 | 3 = 2): ParsedClassification | null {
     let cleaned = raw.trim();
 
     // Strip markdown code fences
@@ -176,15 +212,19 @@ export function parseClassification(raw: string): { folder: string; subtype: str
         return null;
     }
 
-    // Try pipe-delimited format: "TopLevel|SecondLevel"
+    // Try pipe-delimited format: "TopLevel|SecondLevel[|ThirdLevel]"
     const pipeIndex = firstLine.indexOf('|');
     if (pipeIndex > 0) {
-        const topLevel = firstLine.slice(0, pipeIndex).trim();
-        const secondLevel = firstLine.slice(pipeIndex + 1).trim();
+        const parts = firstLine.split('|').map(p => p.trim());
+        const topLevel = parts[0] ?? '';
+        const secondLevel = normalizeLevel(parts[1]);
+        const thirdLevel = levels === 3 ? normalizeLevel(parts[2]) : null;
         if (topLevel && topLevel !== 'Other' && topLevel !== 'other' && topLevel !== '(none)') {
             return {
                 folder: topLevel,
-                subtype: secondLevel && secondLevel !== 'General' ? secondLevel : null,
+                subtype: secondLevel,
+                // A third label identical to the second adds no structure.
+                subSubtype: thirdLevel && thirdLevel !== secondLevel ? thirdLevel : null,
             };
         }
         return null;
@@ -206,7 +246,15 @@ export function parseClassification(raw: string): { folder: string; subtype: str
         }
     }
 
-    return { folder: firstLine, subtype: null };
+    return { folder: firstLine, subtype: null, subSubtype: null };
+}
+
+/** Normalises a level label: blanks, "General" and placeholder markers mean "no label". */
+function normalizeLevel(raw: string | undefined): string | null {
+    const value = (raw ?? '').trim();
+    if (!value) { return null; }
+    if (/^(general|none|n\/a|other)$/i.test(value)) { return null; }
+    return value;
 }
 
 // ── Category refinement (2nd pass) ────────────────────────────────────────
@@ -259,7 +307,7 @@ export function parseRefineResponse(raw: string): Map<string, string> | null {
     // Reject if the output is too large (>50 entries) — likely an LLM artifact
     try {
         const parsed = JSON.parse(jsonStr);
-        if (typeof parsed !== 'object' || parsed === null) { return null; }
+        if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) { return null; }
 
         const keys = Object.keys(parsed);
         if (keys.length > 50) { return null; }
@@ -369,7 +417,7 @@ export function parseSubtypeRefineResponse(raw: string): Map<string, string> | n
 
     try {
         const parsed = JSON.parse(jsonStr);
-        if (typeof parsed !== 'object' || parsed === null) { return null; }
+        if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) { return null; }
 
         const result = new Map<string, string>();
         for (const [current, refined] of Object.entries(parsed)) {
@@ -438,19 +486,22 @@ export async function refineSubtypes(
 // ── Session classification (1st pass) ─────────────────────────────────────
 
 /**
- * Classify a session into a 2-level folder structure using a free model.
+ * Classify a session into a folder structure using a free model.
  *
- * The LLM generates both the TOP-LEVEL folder (general topic) and the
- * SECOND-LEVEL folder (particular subject) from the conversation content.
+ * The LLM generates the TOP-LEVEL folder (general topic) and the SECOND-LEVEL
+ * folder (particular subject) from the conversation content — plus a
+ * THIRD-LEVEL folder when `levels === 3` (used by the automatic history
+ * classifier; the knowledge base asks for two levels).
  *
- * Returns `{ folder, subtype }` on success, or `null` if no provider is available
- * or the response could not be parsed.
+ * Returns `{ folder, subtype, subSubtype }` on success, or `null` if no provider
+ * is available or the response could not be parsed.
  */
 export async function classifySessionWithLlm(
     session: Session,
-): Promise<{ folder: string; subtype: string | null } | null> {
+    levels: 2 | 3 = 2,
+): Promise<ParsedClassification | null> {
     const raw = await askFreeModel({
-        userContent: buildClassificationPrompt(session),
+        userContent: buildClassificationPrompt(session, levels),
         timeoutMs: KB_LLM_TIMEOUT_MS,
     });
 
@@ -459,7 +510,7 @@ export async function classifySessionWithLlm(
         return null;
     }
 
-    const parsed = parseClassification(raw);
+    const parsed = parseClassification(raw, levels);
     if (parsed === null) {
         // Distinguish expected refusals/empty responses from genuine misbehavior
         const trimmed = raw.trim().toLowerCase();
@@ -477,6 +528,9 @@ export async function classifySessionWithLlm(
         return null;
     }
 
-    log.info(`Classified ${session.id} as "${parsed.folder}|${parsed.subtype}"`);
+    const label = parsed.subSubtype
+        ? `${parsed.folder}|${parsed.subtype}|${parsed.subSubtype}`
+        : `${parsed.folder}|${parsed.subtype}`;
+    log.info(`Classified ${session.id} as "${label}"`);
     return parsed;
 }

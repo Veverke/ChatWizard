@@ -136,8 +136,8 @@ suite('FolderStore', () => {
     });
 
     test('getRootFolders returns only root-level folders sorted by name', async () => {
-        const f1: SessionFolder = { id: 'f1', name: 'B文件夹', parentId: null, sessionIds: [], childFolderIds: [], createdAt: '', updatedAt: '' };
-        const f2: SessionFolder = { id: 'f2', name: 'A文件夹', parentId: null, sessionIds: [], childFolderIds: [], createdAt: '', updatedAt: '' };
+        const f1: SessionFolder = { id: 'f1', name: 'Bæ–‡ä»¶å¤¹', parentId: null, sessionIds: [], childFolderIds: [], createdAt: '', updatedAt: '' };
+        const f2: SessionFolder = { id: 'f2', name: 'Aæ–‡ä»¶å¤¹', parentId: null, sessionIds: [], childFolderIds: [], createdAt: '', updatedAt: '' };
         const sub: SessionFolder = { id: 'sub', name: 'Sub', parentId: 'f1', sessionIds: [], childFolderIds: [], createdAt: '', updatedAt: '' };
         const map = new Map<string, SessionFolder>([['f1', f1], ['f2', f2], ['sub', sub]]);
         await store.save(map);
@@ -297,7 +297,7 @@ suite('FolderStore', () => {
         const f1: SessionFolder = { id: 'f1', name: 'Work', parentId: null, sessionIds: ['s1', 's2'], childFolderIds: [], createdAt: '', updatedAt: '' };
         await store.save(new Map([['f1', f1]]));
         await store.deleteFolder('f1');
-        // Sessions are not tracked in FolderStore itself — they just become unassigned
+        // Sessions are not tracked in FolderStore itself â€” they just become unassigned
         assert.strictEqual(await store.getSessionFolderId('s1'), undefined);
     });
 
@@ -495,5 +495,273 @@ suite('FolderStore', () => {
         const f3 = await store.createFolder('C');
         const ids = new Set([f1.id, f2.id, f3.id]);
         assert.strictEqual(ids.size, 3);
+    });
+});
+
+// --------------------------------------------------------------------------
+// Auto-classified tree support
+// --------------------------------------------------------------------------
+
+suite('FolderStore â€” replaceTree / custom filename', () => {
+    let dir: string;
+
+    setup(() => { dir = tmpDir(); });
+    teardown(() => {
+        try { fs.rmSync(dir, { recursive: true }); } catch { /* ignore */ }
+    });
+
+    test('a custom filename keeps two independent trees in the same directory', async () => {
+        const userStore = new FolderStore(dir);
+        const autoStore = new FolderStore(dir, 'chatwizard-auto-folders.json');
+
+        await userStore.load();
+        await userStore.createFolder('Mine');
+
+        await autoStore.replaceTree([{ name: 'Git', sessionIds: ['s1'] }]);
+
+        const userFolders = await new FolderStore(dir).load();
+        const autoFolders = await new FolderStore(dir, 'chatwizard-auto-folders.json').load();
+
+        assert.deepStrictEqual([...userFolders.values()].map(f => f.name), ['Mine']);
+        assert.deepStrictEqual([...autoFolders.values()].map(f => f.name), ['Git']);
+        assert.strictEqual([...userFolders.values()][0].origin, 'user');
+        assert.strictEqual([...autoFolders.values()][0].origin, 'auto');
+    });
+
+    test('builds nested folders and links parents', async () => {
+        const store = new FolderStore(dir);
+        const map = await store.replaceTree([
+            {
+                name: 'Git',
+                sessionIds: ['s1'],
+                children: [
+                    { name: 'Branching', sessionIds: ['s2'], children: [{ name: 'Merge Conflicts', sessionIds: ['s3'] }] },
+                ],
+            },
+        ]);
+
+        assert.strictEqual(map.size, 3);
+        const root = [...map.values()].find(f => f.name === 'Git')!;
+        assert.strictEqual(root.parentId, null);
+        assert.deepStrictEqual(root.sessionIds, ['s1']);
+
+        const child = map.get(root.childFolderIds[0])!;
+        assert.strictEqual(child.name, 'Branching');
+        assert.strictEqual(child.parentId, root.id);
+
+        const leaf = map.get(child.childFolderIds[0])!;
+        assert.strictEqual(leaf.name, 'Merge Conflicts');
+        assert.deepStrictEqual(leaf.sessionIds, ['s3']);
+    });
+
+    test('reuses folder IDs for unchanged name paths (expansion state survives)', async () => {
+        const store = new FolderStore(dir);
+        const first = await store.replaceTree([
+            { name: 'Git', children: [{ name: 'Branching', sessionIds: ['s1'] }] },
+        ]);
+        const firstRootId = [...first.values()].find(f => f.name === 'Git')!.id;
+        const firstChildId = [...first.values()].find(f => f.name === 'Branching')!.id;
+
+        const second = await store.replaceTree([
+            { name: 'Git', sessionIds: ['s9'], children: [{ name: 'Branching', sessionIds: ['s1', 's2'] }] },
+        ]);
+        const secondRoot = [...second.values()].find(f => f.name === 'Git')!;
+        const secondChild = [...second.values()].find(f => f.name === 'Branching')!;
+
+        assert.strictEqual(secondRoot.id, firstRootId);
+        assert.strictEqual(secondChild.id, firstChildId);
+        assert.deepStrictEqual(secondChild.sessionIds, ['s1', 's2']);
+    });
+
+    test('drops folders that disappeared from the spec', async () => {
+        const store = new FolderStore(dir);
+        await store.replaceTree([{ name: 'Git' }, { name: 'Bugs' }]);
+
+        const map = await store.replaceTree([{ name: 'Git' }]);
+        assert.deepStrictEqual([...map.values()].map(f => f.name), ['Git']);
+    });
+
+    test('caps nesting at three levels', async () => {
+        const store = new FolderStore(dir);
+        const map = await store.replaceTree([
+            {
+                name: 'L1',
+                children: [{
+                    name: 'L2',
+                    children: [{
+                        name: 'L3',
+                        children: [{ name: 'L4', sessionIds: ['s-deep'] }],
+                    }],
+                }],
+            },
+        ]);
+
+        assert.deepStrictEqual([...map.values()].map(f => f.name).sort(), ['L1', 'L2', 'L3']);
+    });
+
+    test('sanitises folder names and skips unusable ones', async () => {
+        const store = new FolderStore(dir);
+        const map = await store.replaceTree([
+            { name: '  Git / Branching  ' },
+            { name: '   ' },
+        ]);
+
+        assert.deepStrictEqual([...map.values()].map(f => f.name), ['Git Branching']);
+    });
+
+    test('an empty spec clears the tree', async () => {
+        const store = new FolderStore(dir);
+        await store.replaceTree([{ name: 'Git' }]);
+
+        const map = await store.replaceTree([]);
+        assert.strictEqual(map.size, 0);
+        assert.strictEqual((await new FolderStore(dir).load()).size, 0);
+    });
+});
+
+
+// --------------------------------------------------------------------------
+// Amendment helpers used by the auto-classified tree
+// --------------------------------------------------------------------------
+
+suite('FolderStore â€” amendment helpers', () => {
+    let dir: string;
+    let store: FolderStore;
+
+    setup(() => {
+        dir = tmpDir();
+        store = new FolderStore(dir, 'chatwizard-auto-folders.json');
+    });
+    teardown(() => {
+        try { fs.rmSync(dir, { recursive: true }); } catch { /* ignore */ }
+    });
+
+    test('markManual flags a folder and is idempotent', async () => {
+        await store.load();
+        const folder = await store.createFolder('Git', undefined, { origin: 'auto' });
+        assert.strictEqual(folder.manual, undefined);
+
+        await store.markManual(folder.id);
+        assert.strictEqual(store.getCached()!.get(folder.id)?.manual, true);
+
+        const revisionBefore = store.getCached()!.get(folder.id)!.updatedAt;
+        await store.markManual(folder.id);
+        assert.strictEqual(store.getCached()!.get(folder.id)!.updatedAt, revisionBefore, 'second call is a no-op');
+
+        // Unknown ids are ignored rather than throwing.
+        await store.markManual('nope');
+        await new FolderStore(dir, 'chatwizard-auto-folders.json').load();
+    });
+
+    test('getPath returns the full name path', async () => {
+        await store.load();
+        const root = await store.createFolder('Git', undefined, { origin: 'auto' });
+        const child = await store.createFolder('Branching', root.id, { origin: 'auto' });
+        const leaf = await store.createFolder('Cleanup', child.id, { origin: 'auto' });
+
+        assert.strictEqual(store.getPath(leaf.id), 'Git/Branching/Cleanup');
+        assert.strictEqual(store.getPath('missing'), '');
+    });
+
+    test('getPath and getDescendantFolderIds are safe before load', () => {
+        const fresh = new FolderStore(dir, 'chatwizard-auto-folders.json');
+        assert.strictEqual(fresh.getPath('anything'), '');
+        assert.deepStrictEqual(fresh.getDescendantFolderIds('anything'), []);
+    });
+
+    test('getDescendantFolderIds returns every nested folder', async () => {
+        await store.load();
+        const root = await store.createFolder('Git', undefined, { origin: 'auto' });
+        const child = await store.createFolder('Branching', root.id, { origin: 'auto' });
+        const leaf = await store.createFolder('Cleanup', child.id, { origin: 'auto' });
+        const other = await store.createFolder('Bugs', undefined, { origin: 'auto' });
+
+        const descendants = store.getDescendantFolderIds(root.id).sort();
+        assert.deepStrictEqual(descendants, [child.id, leaf.id].sort());
+        assert.ok(!descendants.includes(other.id));
+    });
+
+    test('names that normalise to nothing are rejected', async () => {
+        await store.load();
+        await assert.rejects(() => store.createFolder('  /*|  '));
+        const folder = await store.createFolder('Git', undefined, { origin: 'auto' });
+        await assert.rejects(() => store.renameFolder(folder.id, '  /*|  '));
+    });
+
+    test('deleting an unknown folder is a no-op', async () => {
+        await store.load();
+        const folder = await store.createFolder('Git', undefined, { origin: 'auto' });
+        await store.deleteFolder('missing');
+        assert.ok(store.getCached()!.has(folder.id));
+    });
+
+    test('moving a session that is in no folder only adds it to the target', async () => {
+        await store.load();
+        const folder = await store.createFolder('Git', undefined, { origin: 'auto' });
+
+        // Session not in any folder → the removal loop finds nothing.
+        await store.moveSessionToFolder('s1', folder.id);
+        assert.deepStrictEqual(store.getCached()!.get(folder.id)!.sessionIds, ['s1']);
+
+        // Unknown target → the session is removed from its current folder only.
+        await store.moveSessionToFolder('s1', 'missing');
+        assert.deepStrictEqual(store.getCached()!.get(folder.id)!.sessionIds, []);
+    });
+
+    // ------------------------------------------------------------------
+    // Change notifications (both views render the same tree)
+    // ------------------------------------------------------------------
+
+    test('onDidChange fires for every structural edit', async function () {
+        this.timeout(60_000); // the extension host can be slow to write files
+        await store.load();
+        let changes = 0;
+        const subscription = store.onDidChange(() => { changes++; });
+
+        const folder = await store.createFolder('Git', undefined, { origin: 'auto' });
+        assert.strictEqual(changes, 1, 'createFolder');
+
+        const child = await store.createFolder('Branching', folder.id);
+        assert.strictEqual(changes, 2, 'createFolder (subfolder)');
+
+        await store.renameFolder(child.id, 'Merging');
+        assert.strictEqual(changes, 3, 'renameFolder');
+
+        subscription.dispose();
+    });
+
+    test('onDidChange fires for moves and deletions', async function () {
+        this.timeout(60_000);
+        await store.load();
+        const folder = await store.createFolder('Git', undefined, { origin: 'auto' });
+        const child = await store.createFolder('Branching', folder.id);
+        let changes = 0;
+        store.onDidChange(() => { changes++; });
+
+        await store.moveFolder(child.id, undefined);
+        assert.strictEqual(changes, 1, 'moveFolder');
+
+        await store.moveSessionToFolder('s1', child.id);
+        assert.strictEqual(changes, 2, 'moveSessionToFolder');
+
+        await store.deleteFolder(folder.id);
+        assert.strictEqual(changes, 3, 'deleteFolder');
+    });
+
+    test('onDidChange stops after the subscription is disposed', async () => {
+        await store.load();
+        let changes = 0;
+        store.onDidChange(() => { changes++; }).dispose();
+
+        await store.createFolder('Git');
+        assert.strictEqual(changes, 0);
+    });
+
+    test('onDidChange handlers cannot break the store', async () => {
+        await store.load();
+        store.onDidChange(() => { throw new Error('boom'); });
+
+        const folder = await store.createFolder('Git');
+        assert.ok(store.getCached()!.has(folder.id));
     });
 });

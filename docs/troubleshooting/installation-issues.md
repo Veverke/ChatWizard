@@ -435,3 +435,72 @@ run `git checkout -- .vscodeignore` and delete
 (stub cleanup + `.vscodeignore` revert) does not execute when the process is
 killed.
 
+---
+
+## Clean reinstall: `build:install:*` uninstalls and purges local state
+
+`npm run build:install:vscode` (and `build:install:cursor`) is a *fresh-install*
+workflow, not just a rebuild. It runs four steps:
+
+1. `npm run package:vsix:<platform>` — `rebuild:native` → `bundle` → `package-vsix.mjs`.
+2. `code --uninstall-extension veverke.chatwizard` against the target IDE.
+3. `scripts/clean-local-data.ps1` — deletes every local ChatWizard artefact.
+4. `code --install-extension chatwizard-<platform>.vsix --force`.
+
+Step 3 exists because a `--force` reinstall keeps all state on disk, so a bug that
+only shows up on a first run (missing KB classification file, half-downloaded
+model, stale SQLite schema, archived sessions) can never be reproduced.
+
+### What gets deleted
+
+Per IDE (`%APPDATA%\Code` for VS Code, `%APPDATA%\Cursor` for Cursor):
+
+| Path | Contents |
+| --- | --- |
+| `User/globalStorage/veverke.chatwizard/` | `chatwizard-kb.json` (**knowledge-base classification data**), `chatwizard-classification.json`, `chatwizard-metadata.json` (pins, titles, tags, notes, ratings), `chatwizard-folders.json`, `chatwizard-auto-folders.json`, `chatwizard-auto-classify.json`, `telemetry.jsonl`, `mcp-token.txt`, `cloud-sync-key.bin`, `cloud-sync-state.json`, `archive/`, **`models/` (the downloaded `Xenova/all-MiniLM-L6-v2` weights, ready/failure markers and sentinel)** |
+| `User/workspaceStorage/<hash>/veverke.chatwizard/` | `semantic-embeddings.bin` for every workspace that ever ran the extension |
+| `CachedExtensionVSIXs/veverke.chatwizard-*.vsix` | the IDE's cached VSIX copy |
+| `~/.vscode/extensions/veverke.chatwizard-*` | a leftover install folder, only when the uninstall did not remove it and the IDE is not running |
+
+Shared by every IDE with ChatWizard (`%LOCALAPPDATA%\ChatWizard` by default, or
+`chatwizard.sharedCacheDir` when set — the script reads it out of the IDE's
+`User/settings.json`):
+
+| Path | Contents |
+| --- | --- |
+| `chatwizard-cache.db` + `-wal` / `-shm` | sessions, messages, bookmarks, notes, ratings, removed turns and their original transcripts |
+| `chatwizard-log-events.db` + `-wal` / `-shm` | normalised agent logs |
+| `vscode-host-runtime.json` | **kept** — the Electron / `NODE_MODULE_VERSION` record `rebuild:native` reads, so the next build still targets the installed IDE |
+| `original-conversations/` | exported full transcripts |
+
+### Opt-outs and standalone use
+
+| Command | Effect |
+| --- | --- |
+| `npm run clean:data:vscode` / `clean:data:cursor` | only the purge, no build |
+| `scripts/build-and-install.ps1 -KeepSharedCache` | keep the SQLite databases (bookmarks/tags survive, everything else is cleared) |
+| `scripts/build-and-install.ps1 -KeepData` | plain `--force` overwrite, purge skipped |
+| `scripts/build-and-install.ps1 -SkipUninstall` | never touch the current installation |
+| `scripts/clean-local-data.ps1 -DryRun` | print every path (and its size) without deleting |
+| `scripts/clean-local-data.ps1 -KeepExtensionData` | keep the per-IDE folders, clean only the shared cache |
+
+### Locked files
+
+Windows refuses to delete files a process holds open, and the running extension
+host keeps both SQLite databases open. Close every window of the target IDE for a
+complete purge; otherwise the script prints a warning, finishes the install, and
+tells you to run `npm run clean:data:<target>` afterwards (exit code `4`). It also
+deletes the leftover extension folder only when the IDE is not running, because
+the loaded `better_sqlite3.node` stays locked.
+
+VS Code's own `state.vscdb` (globalState: model-download consent, KB category
+cache, UI preferences) is deliberately **not** touched — it is shared with every
+other extension. Clearing the consent flag is what **Chat Wizard: Reset AI Model
+Cache** does.
+
+The uninstall/install CLI calls run in a background job with a timeout: the
+VS Code CLI talks to the running window over IPC and can block for minutes
+(`--list-extensions` was even observed to hang indefinitely), which used to wedge
+the terminal.
+
+

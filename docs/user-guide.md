@@ -17,6 +17,7 @@ This guide documents **every user-facing feature**, panel, setting and command i
    - [Filtering Sessions](#filtering-sessions)
    - [Pinning](#pinning)
    - [Session Folders](#session-folders)
+   - [Automatic Classification (Group by Context)](#automatic-classification-group-by-context)
    - [Session Status Lifecycle](#session-status-lifecycle)
    - [Session Tagging](#session-tagging)
    - [Regenerating Titles](#regenerating-titles)
@@ -268,6 +269,7 @@ Use the toolbar icons to toggle grouping and change sort order.
 - **Work Item** — Jira / Azure DevOps / GitHub issue IDs extracted with `chatwizard.workItemPattern`
 - **Tag** — one group per tag (untagged sessions fall into their own bucket)
 - **Folder** — your [session folders](#session-folders); unassigned sessions appear under `(uncategorized)`
+- **Context (auto-classified)** — the [automatic topic tree](#automatic-classification-group-by-context)
 - **None** — a flat list
 
 **Sort by** (each click toggles ascending/descending):
@@ -311,13 +313,25 @@ Pin important sessions so they float to the top. Use the **📌 pin icon** on th
 
 Organize sessions into folders for project-level grouping:
 
-- **Create a folder:** `Ctrl+Shift+P` → **Chat Wizard: Create Folder** or the **new-folder** icon in the Sessions view title
+- **Create a folder:** the **new-folder** icon in the Sessions view title — just left of the sort buttons — or `Ctrl+Shift+P` → **Chat Wizard: Create Folder**; both create a folder at the root
 - **Subfolders:** right-click a folder → **Create Subfolder**
 - **Rename / delete:** right-click a folder → **Rename Folder** / **Delete Folder** (sessions inside are unlinked, not deleted)
 - **Move a session:** right-click a session → **Move Session to Folder…**, or drag-and-drop it onto a folder
 - **Group by folder:** toolbar → **Group Sessions…** → **Folder**
 
 Folders are stored in `chatwizard-folders.json` in extension storage, so they survive reloads and are shared across IDEs that use the same storage.
+
+### Automatic Classification (Group by Context)
+
+ChatWizard can also organise the **whole chat history** into folders for you — main topic → sub-topic:
+
+- **Where:** toolbar → **Group Sessions…** → **Context (auto-classified)**
+- **One classification, shared by both views — no exceptions:** this tree **is** the classification. The Knowledge Base renders exactly the same structure: the tree's top-level folders are its chart slices, its sub-folders are the slices you get when you click one, and a chat sits in the same place in both. Whichever feature classifies a chat first (the KB's *Generate Knowledge Base* or the background worker) supplies the other one's starting state, and a chat is only re-classified when it is new or edited. A KB you generated earlier is picked up automatically.
+- **How it decides:** a free model reads each chat and labels its topic and sub-topic (the local embedding model is used when no free model is available), then the labels are consolidated across the history. The result is the *proposal* the tree is built from — you can always re-organise it by hand afterwards, and the next run keeps your structure.
+- **When it runs:** in the background on a relaxed interval (10 minutes by default) and only when chats are new/edited or the shared classification changed — a single new message rarely changes the topic structure. There is no "classify now" button: the tree *is* the classification. While a run is in progress the Knowledge Base shows a small **Classifying…** badge in its toolbar; the chart stays readable and only changes if the structure actually changed.
+- **Amend it — in both views:** in this view the folder actions edit the *auto* tree — **Create Folder**, **Create Subfolder**, **Rename**, **Delete**, **Move Session to Folder…** and drag-and-drop. A renamed folder keeps its name, a folder you add stays, a folder you delete is not recreated, and a chat you move stays where you put it on the next classification run. **Release to auto-classification** (the *Remove from folder* entry of the move dialog, or dropping the chat on **(unclassified)**) undoes a manual placement. Because there is one classification, these edits also change the **Knowledge Base**: a folder you create appears as a category (even while it is still empty), a rename renames the slice, moving a folder re-parents the sub-topics, deleting one moves its chats to **Unclassified**, and a chat you move changes category in both views.
+- **Separate from your folders:** the auto tree lives in `chatwizard-auto-folders.json` and is independent of the folders you create yourself, so it never moves, renames or deletes them.
+- **Settings:** `chatwizard.autoClassify.enabled`, `.intervalMinutes`, `.categoryCount` (`0` = the classifier's own granularity — the default; `1`–`10` folds the smallest topics into *Other*, which the KB shows too), `.maxDepth` (`1` = topics only, `2` = topic → sub-topic, the default). These shape the shared classification, exactly like a manual edit would; you can always re-organise by hand afterwards.
 
 ### Session Status Lifecycle
 
@@ -667,11 +681,13 @@ The Knowledge Base panel classifies your sessions into reusable knowledge — de
 ### Generating the Knowledge Base
 
 1. Open the **Knowledge Base** panel in the sidebar.
-2. Click **⚡ Generate Knowledge Base** — every session is classified with a progress notification (`N / M sessions classified`).
+2. Click **⚡ Generate Knowledge Base** — sessions that are new or changed are classified with a progress notification (`N / M sessions classified`). Sessions another feature already classified (see below) are reused instead of being sent to the model again.
 3. The dashboard shows a doughnut chart of category distribution; click a slice to drill into the sessions behind it.
 4. After the first run, **new and updated sessions are classified incrementally** (debounced per session), so you do not have to regenerate everything after each chat.
 
 The result is persisted in extension storage, so the dashboard survives reloads. When `chatwizard.kbRefineLabels` is enabled (default), a second LLM pass merges near-duplicate category labels and folds narrow ones into broader categories, which keeps the doughnut readable.
+
+> **One classification, two views — and no exceptions.** The Knowledge Base and **Group by Context** in the Sessions view render the *same* structure — the auto-classified folder tree. Whichever runs first supplies the other's starting state: generate the KB and the folder tree appears from it, or let the background worker classify and the KB dashboard shows those topics without a model call. Folders you create, rename, move or delete in that tree — and chats you move between them — change the Knowledge Base too, because it is the same classification, not a copy. Chats that are in no folder appear under **Unclassified**, matching the tree's **(unclassified)** bucket. With `chatwizard.autoClassify.enabled` off (and no tree built) the KB falls back to the model labels.
 
 ### Auto-Tagging & Export
 
@@ -1444,7 +1460,7 @@ These stay out of the palette because they act on the item you are pointing at:
 | Area | Actions |
 |------|---------|
 | Session context menu | Pin/Unpin · Export to Markdown · Export Selected… · Inject as Context… · Reveal in Explorer · Archive Session · Delete Archived Session · Add/Remove Tag · Regenerate Summary · Regenerate Title(s) · Set Session Status… · Add/Remove Bookmark… · Move Session to Folder… |
-| Session title bar | Filter Sessions · Group Sessions… · Configure Sort Order · per-field sort buttons · Export All · Export Selected · Create Folder · Filter by Status |
+| Session title bar | Filter Sessions · Group Sessions… · Configure Sort Order · Create Folder · per-field sort buttons · Export All · Export Selected · Filter by Status |
 | Code Blocks title bar | Filter Code Blocks · Group/Ungroup · sort by Date / Workspace / Length / Session Title / Language |
 | Commands title bar | Refresh Commands · Filter Agent Logs… · Show Details for Selection |
 | Logs row menus | Copy · Open Session · Show Details · Run in Terminal · Open Visual Diff · Open Patch · Copy Change · Open File |

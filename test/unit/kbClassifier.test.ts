@@ -68,7 +68,7 @@ suite('kbClassifier — routing between LLM, embedding and the default', () => {
 
         const result = await classifySessionWithCategories(makeSession({ id: 's-llm' }), ['decision']);
 
-        assert.deepStrictEqual(result, { type: 'Testing', subtype: 'Unit Tests', usedLlm: true });
+        assert.deepStrictEqual(result, { type: 'Testing', subtype: 'Unit Tests', subSubtype: null, usedLlm: true });
     });
 
     test('falls back to the embedding engine when no LLM provider answers', async () => {
@@ -104,7 +104,7 @@ suite('kbClassifier — routing between LLM, embedding and the default', () => {
 
         const result = await classifySessionWithCategories(makeSession({ id: 's-explicit-null' }), ['decision'], null);
 
-        assert.deepStrictEqual(result, { type: 'Other', subtype: null, usedLlm: false });
+        assert.deepStrictEqual(result, { type: 'Other', subtype: null, subSubtype: null, usedLlm: false });
     });
 
     test('returns "Other" when the embedding model is still loading', async () => {
@@ -116,7 +116,7 @@ suite('kbClassifier — routing between LLM, embedding and the default', () => {
             makeEngine({ ready: false })
         );
 
-        assert.deepStrictEqual(result, { type: 'Other', subtype: null, usedLlm: false });
+        assert.deepStrictEqual(result, { type: 'Other', subtype: null, subSubtype: null, usedLlm: false });
     });
 
     test('returns "Other" when the embedding engine throws', async () => {
@@ -128,7 +128,7 @@ suite('kbClassifier — routing between LLM, embedding and the default', () => {
             makeEngine({ fail: true })
         );
 
-        assert.deepStrictEqual(result, { type: 'Other', subtype: null, usedLlm: false });
+        assert.deepStrictEqual(result, { type: 'Other', subtype: null, subSubtype: null, usedLlm: false });
     });
 
     test('returns "Other" when neither an LLM nor an engine is available', async () => {
@@ -137,7 +137,7 @@ suite('kbClassifier — routing between LLM, embedding and the default', () => {
 
         const result = await classifySessionWithCategories(makeSession({ id: 's-none' }), ['decision']);
 
-        assert.deepStrictEqual(result, { type: 'Other', subtype: null, usedLlm: false });
+        assert.deepStrictEqual(result, { type: 'Other', subtype: null, subSubtype: null, usedLlm: false });
     });
 
     test('the LM API is consulted before the fallback runs', async () => {

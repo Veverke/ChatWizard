@@ -193,4 +193,51 @@ suite('Extension Lifecycle', function () {
             );
         }
     });
+
+    // ── Test 3e: Create Folder lives in the Sessions title bar, left of the sort ──
+    // Folders could only be created from the palette or a folder's context menu.
+    // The title-bar button creates a root folder, so it must render to the left
+    // of the per-field sort buttons (same "navigation" group, lower order → left).
+
+    test('Sessions view title bar offers Create Folder left of the sort buttons', () => {
+        const ext = vscode.extensions.getExtension(EXTENSION_ID);
+        assert.ok(ext, 'extension must be present');
+
+        const pkg = ext!.packageJSON as {
+            contributes?: {
+                commands?: Array<{ command: string; icon?: string }>;
+                menus?: Record<string, Array<{ command: string; when?: string; group?: string }>>;
+            };
+        };
+
+        const titleItems = (pkg.contributes?.menus?.['view/title'] ?? [])
+            .filter(item => (item.when ?? '').includes('view == chatwizardSessions'));
+
+        const createFolderIdx = titleItems.findIndex(i => i.command === 'chatwizard.createFolder');
+        assert.notStrictEqual(createFolderIdx, -1, 'Create Folder is not contributed to the Sessions view/title toolbar');
+
+        const firstSortIdx = titleItems.findIndex(i => i.command.startsWith('chatwizard.sortBy'));
+        assert.notStrictEqual(firstSortIdx, -1, 'No sort buttons declared in the Sessions view/title toolbar');
+
+        // "navigation@N" → { name: 'navigation', order: N } — VS Code renders the
+        // navigation group first and orders its items by N (ties: declaration order).
+        const groupOf = (item: { group?: string }) => {
+            const [name, order] = (item.group ?? '').split('@');
+            return { name, order: Number.parseInt(order ?? '0', 10) };
+        };
+        const createFolderGroup = groupOf(titleItems[createFolderIdx]);
+        const firstSortGroup = groupOf(titleItems[firstSortIdx]);
+
+        assert.strictEqual(createFolderGroup.name, 'navigation', 'Create Folder must sit in the toolbar\'s navigation group');
+        assert.strictEqual(firstSortGroup.name, 'navigation', 'Sort buttons must sit in the toolbar\'s navigation group');
+        assert.ok(
+            createFolderGroup.order < firstSortGroup.order
+            || (createFolderGroup.order === firstSortGroup.order && createFolderIdx < firstSortIdx),
+            'Create Folder must be ordered before the sort buttons so it renders to their left',
+        );
+
+        // A view/title item only renders as an icon button when the command declares one.
+        const command = (pkg.contributes?.commands ?? []).find(c => c.command === 'chatwizard.createFolder');
+        assert.strictEqual(command?.icon, '$(new-folder)', 'Create Folder needs an icon to render as a title-bar button');
+    });
 });

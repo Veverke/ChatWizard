@@ -1014,6 +1014,11 @@
           "group": "navigation@0"
         },
         {
+          "command": "chatwizard.createFolder",
+          "when": "view == chatwizardSessions",
+          "group": "navigation@1"
+        },
+        {
           "command": "chatwizard.sortByDate",
           "when": "view == chatwizardSessions && chatwizard.sortKey != 'date'",
           "group": "navigation@1"
@@ -1337,22 +1342,22 @@
         },
         {
           "command": "chatwizard.createSubfolder",
-          "when": "viewItem == sessionFolder",
+          "when": "viewItem == sessionFolder || viewItem == autoFolder",
           "group": "1_folder@1"
         },
         {
           "command": "chatwizard.renameFolder",
-          "when": "viewItem == sessionFolder",
+          "when": "viewItem == sessionFolder || viewItem == autoFolder",
           "group": "1_folder@2"
         },
         {
           "command": "chatwizard.deleteFolder",
-          "when": "viewItem == sessionFolder",
+          "when": "viewItem == sessionFolder || viewItem == autoFolder",
           "group": "1_folder@3"
         },
         {
           "command": "chatwizard.createFolder",
-          "when": "viewItem == sessionFolder || viewItem == folderUncategorized",
+          "when": "viewItem == sessionFolder || viewItem == folderUncategorized || viewItem == autoFolder || viewItem == autoFolderUnclassified",
           "group": "0_new@1"
         },
         {
@@ -2179,6 +2184,36 @@
         }
       },
       {
+        "title": "Chat Wizard: Auto Classification",
+        "properties": {
+          "chatwizard.autoClassify.enabled": {
+            "type": "boolean",
+            "default": true,
+            "markdownDescription": "Maintain an automatically classified folder tree (topic → sub-topic) for the whole chat history in the background.\n\nThe tree appears as **Group by Context (auto-classified)** in the Sessions view (Group Sessions…). It is stored separately from folders you create yourself, so it never moves or deletes them. This tree **is** the shared classification: the Knowledge Base renders the same folders as its chart slices, and only new or updated chats are ever re-classified. Because there is one classification and no view-specific variant, anything you change in **Group by Context** — create, rename, move or delete a folder, move a chat — is reflected in the Knowledge Base too, and the background worker never undoes it (a deleted folder is not recreated)."
+          },
+          "chatwizard.autoClassify.intervalMinutes": {
+            "type": "number",
+            "default": 10,
+            "minimum": 1,
+            "markdownDescription": "How often the background worker checks for new or updated chats to classify (minutes).\n\nA single new or edited chat rarely changes the overall topic structure, so a relaxed interval is intentional — re-classification only runs when a chat is new/edited, when the shared classification changed, or when one of these settings changed."
+          },
+          "chatwizard.autoClassify.categoryCount": {
+            "type": "number",
+            "default": 0,
+            "minimum": 0,
+            "maximum": 10,
+            "markdownDescription": "How many top-level folders to show in the auto-classified tree.\n\n- `0` (default) — keep the classifier's own granularity\n- `1`–`10` — fold the smallest topics into **Other**\n\nThis shapes the shared classification, so the Knowledge Base shows the same top-level folders. You can always re-organise them by hand in **Group by Context** — those edits apply to both views."
+          },
+          "chatwizard.autoClassify.maxDepth": {
+            "type": "number",
+            "default": 2,
+            "minimum": 1,
+            "maximum": 2,
+            "markdownDescription": "Folder nesting depth of the auto-classified tree:\n\n- `1` — topic folders only\n- `2` — topic → sub-topic (default)\n\nA classification provides two label levels, so this is the deepest the worker asks the model for. You can nest deeper by hand (**Create Subfolder**); the Knowledge Base then shows the deeper path as one sub-topic (*Sub / Sub-sub*), so both views keep the same structure."
+          }
+        }
+      },
+      {
         "title": "Chat Wizard: MCP Server",
         "properties": {
           "chatwizard.mcpServer.enabled": {
@@ -2337,6 +2372,8 @@
     "package:vsix:darwin-arm64": "npm run rebuild:native && npm run bundle && node scripts/package-vsix.mjs darwin-arm64",
     "build:install:vscode": "powershell -ExecutionPolicy Bypass -File scripts/build-and-install.ps1 -Target vscode",
     "build:install:cursor": "powershell -ExecutionPolicy Bypass -File scripts/build-and-install.ps1 -Target cursor",
+    "clean:data:vscode": "powershell -ExecutionPolicy Bypass -File scripts/clean-local-data.ps1 -Target vscode",
+    "clean:data:cursor": "powershell -ExecutionPolicy Bypass -File scripts/clean-local-data.ps1 -Target cursor",
     "install:stable": "code --install-extension chatwizard-win32-x64.vsix --force",
     "install:insiders": "code-insiders --install-extension chatwizard-win32-x64.vsix --force"
   },
