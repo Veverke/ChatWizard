@@ -665,6 +665,18 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
 
     getFilter(): SessionFilter { return { ...this._filter }; }
 
+    /**
+     * The sessions the view is currently showing — the active filter applied, in
+     * display order, **before** the 200-row pagination slice.
+     *
+     * Commands that act on "what the user sees" (Combine Chats) use this instead
+     * of re-implementing the filter: whatever `Filter Sessions…` left in the tree
+     * is exactly the set they operate on, and no filter means the whole history.
+     */
+    getVisibleSummaries(): SessionSummary[] {
+        return [...this._buildOrderedSummaries()];
+    }
+
     hasActiveFilter(): boolean {
         const f = this._filter;
         return !!(f.title || f.content || f.dateFrom || f.dateTo || f.model || f.source || f.status ||

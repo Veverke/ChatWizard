@@ -171,6 +171,12 @@
         "icon": "$(filter)"
       },
       {
+        "command": "chatwizard.combineChats",
+        "title": "Combine Chats…",
+        "category": "Chat Wizard",
+        "icon": "$(git-merge)"
+      },
+      {
         "command": "chatwizard.filterCodeBlocks",
         "title": "Filter Code Blocks…",
         "category": "Chat Wizard",
@@ -1019,6 +1025,11 @@
           "group": "navigation@1"
         },
         {
+          "command": "chatwizard.combineChats",
+          "when": "view == chatwizardSessions",
+          "group": "navigation@1"
+        },
+        {
           "command": "chatwizard.sortByDate",
           "when": "view == chatwizardSessions && chatwizard.sortKey != 'date'",
           "group": "navigation@1"
@@ -1451,6 +1462,10 @@
         },
         {
           "command": "chatwizard.filterSessions",
+          "when": "false"
+        },
+        {
+          "command": "chatwizard.combineChats",
           "when": "false"
         },
         {

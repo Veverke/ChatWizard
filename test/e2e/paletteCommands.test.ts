@@ -50,6 +50,7 @@ const EXPECTED_LEAF_COMMANDS: ReadonlySet<string> = new Set([
     'chatwizard.revealSessionInExplorer',
     'chatwizard.addAnnotation',
     'chatwizard.generateDigest',
+    'chatwizard.combineChats',
     // Export
     'chatwizard.exportAll',
     'chatwizard.exportSelected',

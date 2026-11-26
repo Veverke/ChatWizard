@@ -48,6 +48,7 @@ import { ClassificationStore } from './analytics/classificationStore';
 import { ChatSessionArranger, DEFAULT_AUTO_CLASSIFY_CONFIG } from './analytics/chatSessionArranger';
 import type { AutoClassifyConfig, AutoClassifyRunResult } from './analytics/chatSessionArranger';
 import { AutoClassifyStore } from './analytics/autoClassifyStore';
+import { combineChats, toCombineInput, MAX_COMBINE_SESSIONS } from './analytics/chatCombiner';
 import { isRunningInCursor } from './analytics/llmClient';
 import { TelemetryRecorder } from './telemetry/telemetryRecorder';
 import { registerManageWorkspacesCommand } from './commands/manageWorkspaces';
@@ -1740,6 +1741,105 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             treeView.description = provider.getDescription();
             provider.refresh();
             void vscode.commands.executeCommand('setContext', 'chatwizard.hasFilter', provider.hasActiveFilter());
+        })
+    );
+
+    // ------------------------------------------------------------------
+    // Combine Chats — merge the sessions currently in view into one chat
+    // ------------------------------------------------------------------
+    // The Sessions view title-bar button (and `Chat Wizard: Session…`) operates
+    // on exactly what the filter leaves in the tree: same chats, same order, no
+    // filter meaning the whole history. The merge itself (prompts, budget,
+    // per-chat condensing, fallback) lives in `analytics/chatCombiner`; the
+    // "ask a free model, best effort" policy comes from `analytics/freeModel`,
+    // so this handler only handles scope, confirmation and presentation.
+    context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.combineChats', async () => {
+            const visible = provider.getVisibleSummaries();
+
+            if (visible.length < 2) {
+                void vscode.window.showInformationMessage(
+                    visible.length === 1
+                        ? 'Chat Wizard: combining needs at least two chats — widen or clear the filter to include more.'
+                        : 'Chat Wizard: no chats are in view to combine.',
+                );
+                return;
+            }
+
+            // When the filter leaves more chats than one prompt can hold, the view
+            // order decides which ones are merged (newest first by default). Slicing
+            // the summaries first avoids hydrating thousands of sessions.
+            const selected = visible.slice(0, MAX_COMBINE_SESSIONS);
+            const sessions = selected
+                .map(summary => index.get(summary.id))
+                .filter((session): session is Session => session !== undefined);
+
+            if (sessions.length < 2) {
+                void vscode.window.showInformationMessage(
+                    'Chat Wizard: the chats in view could not be loaded — try Rescan Sessions.',
+                );
+                return;
+            }
+
+            const scope = provider.hasActiveFilter()
+                ? `the ${sessions.length} chats matching the current filter`
+                : `all ${sessions.length} chats`;
+            const capped = visible.length > sessions.length
+                ? ` Only the first ${sessions.length} of ${visible.length} matching chats are merged.`
+                : '';
+
+            const answer = await vscode.window.showWarningMessage(
+                `Combine ${scope} into one organised chat?`,
+                {
+                    modal: true,
+                    detail: 'A free AI model merges the conversations into one chat that flows naturally and '
+                        + 'covers every topic that was discussed. Nothing is deleted: the result opens as an '
+                        + `unsaved Markdown document you can save or read as a preview.${capped}`,
+                },
+                'Combine',
+            );
+            if (answer !== 'Combine') { return; }
+
+            const result = await vscode.window.withProgress(
+                {
+                    location: vscode.ProgressLocation.Notification,
+                    title: 'Chat Wizard: combining chats',
+                    cancellable: true,
+                },
+                (progress, token) => combineChats(
+                    sessions.map(toCombineInput),
+                    {
+                        onProgress: update => progress.report({ message: update.message }),
+                        isCancelled: () => token.isCancellationRequested,
+                    },
+                ),
+            );
+
+            if (!result) {
+                void vscode.window.showInformationMessage('Chat Wizard: combining chats was cancelled.');
+                return;
+            }
+
+            const document = await vscode.workspace.openTextDocument({
+                content: result.markdown,
+                language: 'markdown',
+            });
+            await vscode.window.showTextDocument(document, { preview: false });
+
+            const note = result.usedLlm
+                ? `Chat Wizard: combined ${result.included} chats into one — save it or open the preview.`
+                : `Chat Wizard: no free model answered, so the ${result.included} chats were kept as-is in one document.`;
+            void vscode.window.showInformationMessage(note, 'Open Preview', 'Save As…').then(async (action) => {
+                try {
+                    if (action === 'Open Preview') {
+                        await vscode.commands.executeCommand('markdown.showPreview', document.uri);
+                    } else if (action === 'Save As…') {
+                        await vscode.commands.executeCommand('workbench.action.files.saveAs');
+                    }
+                } catch (err) {
+                    channel.appendLine(`[CombineChats] follow-up action failed: ${err}`);
+                }
+            });
         })
     );
 

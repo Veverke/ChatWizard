@@ -16,6 +16,7 @@ This guide documents **every user-facing feature**, panel, setting and command i
    - [Sorting & Grouping](#sorting--grouping)
    - [Filtering Sessions](#filtering-sessions)
      - [Session contains…](#session-contains)
+   - [Combining chats](#combining-chats)
    - [Pinning](#pinning)
    - [Session Folders](#session-folders)
    - [Automatic Classification (Group by Context)](#automatic-classification-group-by-context)
@@ -324,6 +325,22 @@ Type a query and the QuickPick lists the matching sessions with the matching sni
 Clearing the query and clicking **✓ OK** removes this filter; **Clear all filters** in the Filter Sessions menu removes it together with the others. Because it is a normal filter, it composes with every other criterion (date range, source, tags, …). Re-running the search picks up sessions indexed since the last run.
 
 > This is the one behavioural difference from **Chat Wizard: Search…** itself: there, the point of the list is to pick a session and jump to the matching message. In *Session contains…* the list is read-only and **✓ OK** is the only way to accept the search.
+
+### Combining chats
+
+When you solved the same problem in three different chats — one about the manifest, one about the ingress, one about the logs — **Combine Chats** merges them into a single chat that flows naturally and covers every topic that was discussed:
+
+```
+Ctrl+Shift+P → Chat Wizard: Session… → Combine Chats (current view)…
+```
+
+or click the **git-merge** icon in the Sessions title bar.
+
+- **It works on what the view shows.** The chats that go in are exactly the ones left by the active filter — including a **Session contains…** query — in the order they are displayed; with no filter it is the whole history. The confirmation dialog names the set and the count, so a filter on `502` merges just those chats.
+- **The model organises, it does not summarise away the details.** A free model (the same one KB classification and command descriptions use: free Copilot models in VS Code, the Cursor `agent` CLI as a fallback) merges by *topic*, not by source chat: commands, manifests, error messages, versions and decisions are kept verbatim, duplicates and dead ends are dropped, and contradictions are kept with a note of which chat said what. The document opens with an **Overview**, ends with **Next steps**, and always lists its **Source chats**.
+- **Long filters are condensed first.** If the combined transcript does not fit one prompt, every chat is reduced to its key points first and then merged — with progress in the notification (*Condensing chat 2 of 5…*, *Merging 5 chats…*) and a cancel button. Up to 30 chats per run; when the filter matches more, the dialog says which ones are included (the view order decides).
+- **No free model, still one document.** If no free model answers, you get every chat's turns under its own heading in a single Markdown file, with a note explaining that the AI merge was skipped.
+- **Nothing is changed.** The result is an **unsaved Markdown document** — save it, or use **Open Preview** — while the source sessions, their tags, folders and bookmarks stay untouched.
 
 ### Pinning
 
@@ -1444,7 +1461,7 @@ Each of the seven category commands opens a QuickPick with these actions:
 | **Chat Wizard: View…** | Code Blocks · Prompt Library · Analytics Dashboard · Timeline |
 | **Chat Wizard: Search…** | Full-Text Search · Search Annotations · Find Sessions by Topic (Semantic) |
 | **Chat Wizard: Filter & Sort…** | Filter Sessions… · Configure Sort Order… · Filter Code Blocks… |
-| **Chat Wizard: Session…** | Set Session Status… · Filter by Status… · Add/Remove Bookmark… · Add/Remove/Clear Tags · Tag Active Session · Regenerate Title · Regenerate All Titles · Regenerate Summary · Pin/Unpin · Group Sessions… · Inject as Context… · Reveal in Explorer · Add Annotation… · Generate Digest |
+| **Chat Wizard: Session…** | Set Session Status… · Filter by Status… · Add/Remove Bookmark… · Add/Remove/Clear Tags · Tag Active Session · Regenerate Title · Regenerate All Titles · Regenerate Summary · Pin/Unpin · Group Sessions… · Inject as Context… · Reveal in Explorer · Add Annotation… · Generate Digest · Combine Chats (current view)… |
 | **Chat Wizard: Export…** | Export All Sessions… · Export Selected Sessions… · Export Session Excerpt… · Export Session to Markdown · Export Selected from Tree… · Export to Obsidian · Export to Notion · Forget Notion API Key |
 | **Chat Wizard: Folder & Archive…** | Create Folder · Create Subfolder · Rename Folder · Delete Folder · Move Session to Folder… · Archive Session · Delete Archived Session · Show Archive Statistics |
 | **Chat Wizard: Settings…** | Manage Watched Workspaces · Rescan Sessions · Start MCP Server · Stop MCP Server · Copy MCP Config to Clipboard · Rotate MCP Token · Set Up Global Copilot Instructions · Connect GitHub Copilot · Show File Session History |
@@ -1482,7 +1499,7 @@ These stay out of the palette because they act on the item you are pointing at:
 | Area | Actions |
 |------|---------|
 | Session context menu | Pin/Unpin · Export to Markdown · Export Selected… · Inject as Context… · Reveal in Explorer · Archive Session · Delete Archived Session · Add/Remove Tag · Regenerate Summary · Regenerate Title(s) · Set Session Status… · Add/Remove Bookmark… · Move Session to Folder… |
-| Session title bar | Filter Sessions · Group Sessions… · Configure Sort Order · Create Folder · per-field sort buttons · Export All · Export Selected · Filter by Status |
+| Session title bar | Filter Sessions · Group Sessions… · Configure Sort Order · Create Folder · Combine Chats · per-field sort buttons · Export All · Export Selected · Filter by Status |
 | Code Blocks title bar | Filter Code Blocks · Group/Ungroup · sort by Date / Workspace / Length / Session Title / Language |
 | Commands title bar | Refresh Commands · Filter Agent Logs… · Show Details for Selection |
 | Logs row menus | Copy · Open Session · Show Details · Run in Terminal · Open Visual Diff · Open Patch · Copy Change · Open File |

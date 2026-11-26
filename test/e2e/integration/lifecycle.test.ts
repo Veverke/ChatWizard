@@ -240,4 +240,32 @@ suite('Extension Lifecycle', function () {
         const command = (pkg.contributes?.commands ?? []).find(c => c.command === 'chatwizard.createFolder');
         assert.strictEqual(command?.icon, '$(new-folder)', 'Create Folder needs an icon to render as a title-bar button');
     });
+
+    // ── Test 3f: Combine Chats lives in the Sessions title bar ────────────────
+    // The command merges whatever the current filter leaves in the view, so it is
+    // only reachable if it is contributed as a toolbar button (it is hidden from
+    // the flat palette and exposed through `Chat Wizard: Session…`).
+
+    test('Sessions view title bar offers Combine Chats', () => {
+        const ext = vscode.extensions.getExtension(EXTENSION_ID);
+        assert.ok(ext, 'extension must be present');
+
+        const pkg = ext!.packageJSON as {
+            contributes?: {
+                commands?: Array<{ command: string; icon?: string }>;
+                menus?: Record<string, Array<{ command: string; when?: string; group?: string }>>;
+            };
+        };
+
+        const titleItems = (pkg.contributes?.menus?.['view/title'] ?? [])
+            .filter(item => (item.when ?? '').includes('view == chatwizardSessions'));
+
+        const combine = titleItems.find(i => i.command === 'chatwizard.combineChats');
+        assert.ok(combine, 'Combine Chats is not contributed to the Sessions view/title toolbar');
+        assert.ok((combine!.group ?? '').startsWith('navigation'), 'Combine Chats must sit in the toolbar navigation group');
+
+        const command = (pkg.contributes?.commands ?? []).find(c => c.command === 'chatwizard.combineChats');
+        assert.ok(command, 'chatwizard.combineChats is not declared in contributes.commands');
+        assert.strictEqual(command?.icon, '$(git-merge)', 'Combine Chats needs an icon to render as a title-bar button');
+    });
 });
