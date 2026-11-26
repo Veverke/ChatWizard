@@ -1510,6 +1510,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                     description: current.title ? `current: "${current.title}"` : undefined,
                 },
                 {
+                    id: 'content',
+                    label: '$(search)  Session contains…',
+                    description: current.content
+                        ? `current: "${current.content}"${current.contentSessionIds ? ` (${current.contentSessionIds.size} matched)` : ''}`
+                        : undefined,
+                },
+                {
                     id: 'dateFrom',
                     label: '$(calendar)  Updated from… (YYYY-MM-DD)',
                     description: current.dateFrom ? `current: ${current.dateFrom}` : undefined,
@@ -1598,6 +1605,33 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 });
                 if (val === undefined) { return; }
                 newFilter.title = val.trim() || undefined;
+
+            } else if (pick.id === 'content') {
+                // "Session contains…" runs the full-text search quick pick in
+                // filter mode: the result list is a read-only preview and the ✓ OK
+                // button applies the matching sessions as a view filter.
+                SearchPanel.showFilter(
+                    context,
+                    index,
+                    engine,
+                    (query, matchedSessionIds) => {
+                        const next: SessionFilter = { ...provider.getFilter() };
+                        next.content = query || undefined;
+                        next.contentSessionIds = query ? new Set(matchedSessionIds) : undefined;
+                        provider.setFilter(next);
+                        treeView.description = provider.getDescription();
+                        provider.refresh();
+                        void vscode.commands.executeCommand('setContext', 'chatwizard.hasFilter', provider.hasActiveFilter());
+                        vscode.window.showInformationMessage(
+                            query
+                                ? `Chat Wizard: ${matchedSessionIds.length} session${matchedSessionIds.length === 1 ? '' : 's'} contain "${query}"`
+                                : 'Chat Wizard: content filter cleared'
+                        );
+                    },
+                    current.content,
+                );
+                // The filter is applied asynchronously by the OK button above.
+                return;
 
             } else if (pick.id === 'dateFrom') {
                 const val = await vscode.window.showInputBox({

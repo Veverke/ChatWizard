@@ -394,6 +394,14 @@ const SHORT_LABEL: Record<SortKey, string> = {
 
 export interface SessionFilter {
     title?: string;        // case-insensitive substring
+    /** Content-search query ("Session contains…"), shown in the filter summary. */
+    content?: string;
+    /**
+     * Session IDs whose content matched `content`. Computed by the full-text
+     * search engine when the "Session contains…" filter is applied; sessions not
+     * in the set are hidden from the view.
+     */
+    contentSessionIds?: ReadonlySet<string>;
     dateFrom?: string;     // YYYY-MM-DD lower bound (inclusive)
     dateTo?: string;       // YYYY-MM-DD upper bound (inclusive)
     model?: string;        // case-insensitive substring
@@ -659,7 +667,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
 
     hasActiveFilter(): boolean {
         const f = this._filter;
-        return !!(f.title || f.dateFrom || f.dateTo || f.model || f.source || f.status ||
+        return !!(f.title || f.content || f.dateFrom || f.dateTo || f.model || f.source || f.status ||
                   f.minMessages !== undefined || f.maxMessages !== undefined ||
                   f.hideInterrupted || f.onlyWithWarnings || (f.tags && f.tags.length > 0) ||
                   f.archivedOnly || f.liveOnly);
@@ -668,6 +676,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
     private _matchesFilter(s: SessionSummary): boolean {
         const f = this._filter;
         if (f.title && !s.title.toLowerCase().includes(f.title.toLowerCase())) { return false; }
+        if (f.contentSessionIds !== undefined && !f.contentSessionIds.has(s.id)) { return false; }
         const day = s.updatedAt.slice(0, 10);
         if (f.dateFrom && day < f.dateFrom) { return false; }
         if (f.dateTo && day > f.dateTo) { return false; }
@@ -693,6 +702,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
         const f = this._filter;
         const parts: string[] = [];
         if (f.title) { parts.push(`title:"${f.title}"`); }
+        if (f.content) { parts.push(`contains:"${f.content}"`); }
         if (f.dateFrom || f.dateTo) { parts.push(`date:${f.dateFrom ?? '*'}→${f.dateTo ?? '*'}`); }
         if (f.model) { parts.push(`model:"${f.model}"`); }
         if (f.source) { parts.push(`source:${friendlySourceName(f.source)}`); }

@@ -15,6 +15,7 @@ This guide documents **every user-facing feature**, panel, setting and command i
    - [Browsing Sessions](#browsing-sessions)
    - [Sorting & Grouping](#sorting--grouping)
    - [Filtering Sessions](#filtering-sessions)
+     - [Session contains…](#session-contains)
    - [Pinning](#pinning)
    - [Session Folders](#session-folders)
    - [Automatic Classification (Group by Context)](#automatic-classification-group-by-context)
@@ -292,6 +293,7 @@ The filter dialog supports:
 | Filter | Notes |
 |--------|-------|
 | Title | substring, case-insensitive |
+| Session contains… | full-text search across every message: the search box previews the matches and **✓ OK** keeps only those sessions (see [Session contains…](#session-contains)) |
 | Date range | from / until (`YYYY-MM-DD`) |
 | Model | substring match on the model name |
 | Source | one AI tool (Copilot, Claude, Cline, …) |
@@ -304,6 +306,24 @@ The filter dialog supports:
 All active filters are reflected in the view title; the same button clears them.
 
 **Example:** show only Copilot sessions from last week with more than 10 messages — From `2026-05-07`, Until `2026-05-14`, Source `copilot`, Min messages `10`.
+
+### Session contains…
+
+**Session contains…** filters the Sessions view by what was *said* in a chat, not by its title — it reuses the full-text search engine (same index as **Chat Wizard: Search…**, including the `/`-prefixed regex mode, the source filter and the prompts/responses filter).
+
+```
+Ctrl+Shift+P → Chat Wizard: Filter & Sort… → Filter Sessions… → Session contains…
+```
+
+Type a query and the QuickPick lists the matching sessions with the matching snippet — **as a preview only**:
+
+- clicking (or pressing Enter on) a result does **not** open it; the rows are there so you can judge the query,
+- the **✓ OK** button in the search box applies the search: the Sessions view then shows **only the matching sessions** (`⊘ contains:"your query"` appears in the view title),
+- the result rows line up exactly with what the view will show — source / role filters applied in the search box narrow the resulting session set too.
+
+Clearing the query and clicking **✓ OK** removes this filter; **Clear all filters** in the Filter Sessions menu removes it together with the others. Because it is a normal filter, it composes with every other criterion (date range, source, tags, …). Re-running the search picks up sessions indexed since the last run.
+
+> This is the one behavioural difference from **Chat Wizard: Search…** itself: there, the point of the list is to pick a session and jump to the matching message. In *Session contains…* the list is read-only and **✓ OK** is the only way to accept the search.
 
 ### Pinning
 
@@ -599,6 +619,8 @@ Selecting a result opens the session scrolled to the matching message.
 - **Role** — All / Prompts only / Responses only.
 
 > When results are truncated, a banner reports *Showing top N of M results — refine your query*. Regex queries are also time-boxed per session to keep pathological patterns from freezing the window.
+
+**Same search, as a filter.** The Sessions view's **Filter Sessions… → Session contains…** opens this QuickPick in filter mode: the rows are a preview, a **✓ OK** button replaces click-to-open, and accepting keeps those sessions in the tree. See [Session contains…](#session-contains).
 
 ### Semantic Search
 

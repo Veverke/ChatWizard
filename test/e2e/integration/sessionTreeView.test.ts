@@ -389,6 +389,54 @@ suite('Sessions Tree View', function () {
         assert.strictEqual(provider.hasActiveFilter(), false);
     });
 
+    test('19f — setFilter(content) keeps only sessions whose content matched', async () => {
+        const index = new SessionIndex();
+        index.upsert(makeSession({ id: 's-hit',  title: 'Unrelated title A' }));
+        index.upsert(makeSession({ id: 's-miss', title: 'Unrelated title B' }));
+
+        const provider = new SessionTreeProvider(index);
+        provider.setGroupMode('none');
+        // The search engine computes the matching IDs; the tree only honours them.
+        provider.setFilter({ content: 'debounce', contentSessionIds: new Set(['s-hit']) });
+
+        const items = await collectSessionItems(provider);
+        assert.strictEqual(items.length, 1, 'only the content match should remain');
+        assert.strictEqual(items[0].summary.id, 's-hit');
+        assert.strictEqual(provider.hasActiveFilter(), true);
+        assert.ok(
+            provider.getDescription().includes('contains:"debounce"'),
+            `description should announce the content filter: ${provider.getDescription()}`,
+        );
+    });
+
+    test('19g — a content filter with no matches hides every session', async () => {
+        const index = new SessionIndex();
+        index.upsert(makeSession({ id: 's1' }));
+        index.upsert(makeSession({ id: 's2' }));
+
+        const provider = new SessionTreeProvider(index);
+        provider.setGroupMode('none');
+        provider.setFilter({ content: 'kubernetes', contentSessionIds: new Set<string>() });
+
+        assert.strictEqual((await collectSessionItems(provider)).length, 0);
+        assert.strictEqual(provider.hasActiveFilter(), true, 'an empty match set is still an active filter');
+    });
+
+    test('19h — clearing the content filter restores all sessions', async () => {
+        const index = new SessionIndex();
+        index.upsert(makeSession({ id: 's1' }));
+        index.upsert(makeSession({ id: 's2' }));
+
+        const provider = new SessionTreeProvider(index);
+        provider.setGroupMode('none');
+        provider.setFilter({ content: 'debounce', contentSessionIds: new Set(['s1']) });
+        assert.strictEqual((await collectSessionItems(provider)).length, 1);
+
+        provider.clearFilter();
+        assert.strictEqual((await collectSessionItems(provider)).length, 2);
+        assert.strictEqual(provider.hasActiveFilter(), false);
+    });
+
     // ── Archived session display ─────────────────────────────────────────
 
     test('20a — archived session shows "· archived" suffix in description', async () => {

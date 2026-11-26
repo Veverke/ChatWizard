@@ -798,6 +798,9 @@ export class KbDashboardPanel {
       function showDrillView(typeLabel, entries) {
         document.getElementById('pie-view').style.display = 'none';
         document.getElementById('drilldown-view').style.display = 'block';
+        // The chart is hidden now — drop the pointer cursor it may have set.
+        var hiddenChart = document.getElementById('kbChart');
+        if (hiddenChart) { hiddenChart.style.cursor = 'default'; }
 
         // Determine breadcrumb path: if label contains " / ", it's category / subtype
         var parts = typeLabel.split(' / ');
@@ -1016,6 +1019,14 @@ export class KbDashboardPanel {
                   }
                 }
               },
+              onHover: function(e, items) {
+                // Match the legend chips: pointer over a slice, normal arrow elsewhere
+                // (the doughnut hole and the canvas corners are not clickable).
+                var canvas = e && e.native && e.native.target;
+                if (canvas && canvas.style) {
+                  canvas.style.cursor = (items && items.length > 0) ? 'pointer' : 'default';
+                }
+              },
               onClick: function(e, items) {
                 if (items.length > 0) {
                   var idx = items[0].index;
@@ -1174,6 +1185,11 @@ export class KbDashboardPanel {
         var btn = document.getElementById('generateKbBtn');
         if (btn) { btn.disabled = true; btn.style.opacity = '0.4'; btn.style.cursor = 'default'; }
         vscode.postMessage({ command: 'generateKb' });
+      });
+
+      // Leaving the canvas resets the pointer cursor set by the chart's onHover
+      document.getElementById('kbChart').addEventListener('mouseleave', function() {
+        this.style.cursor = 'default';
       });
 
       // Clickable title cells → open session
