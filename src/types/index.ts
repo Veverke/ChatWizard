@@ -210,6 +210,13 @@ export interface SessionSummary {
 }
 
 /**
+ * Who created a folder.
+ * - `user` (default) — created by the Create Folder / Create Subfolder commands.
+ * - `auto` — materialised by the automatic chat-history classifier.
+ */
+export type SessionFolderOrigin = 'user' | 'auto';
+
+/**
  * A folder node in the folder tree.
  * Folders can be nested (parentId) and have an ordered list of session child IDs.
  */
@@ -228,6 +235,14 @@ export interface SessionFolder {
     createdAt: string;
     /** ISO timestamp of last modification */
     updatedAt: string;
+    /** Who created the folder — defaults to 'user' for folders saved before this field existed. */
+    origin?: SessionFolderOrigin;
+    /**
+     * True when the user created, renamed or moved this folder **inside the
+     * auto-classified tree**. Re-classification keeps such folders (and their
+     * name/parent) instead of overwriting them with the classifier's version.
+     */
+    manual?: boolean;
 }
 
 /** Computed stats for a folder, shown in the hover tooltip overlay. */

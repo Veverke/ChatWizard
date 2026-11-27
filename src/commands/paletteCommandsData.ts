@@ -89,6 +89,7 @@ export const PALETTE_CATEGORIES: readonly PaletteCategory[] = [
             { commandId: 'chatwizard.revealSessionInExplorer', label: 'Reveal in Explorer', icon: '$(folder-opened)' },
             { commandId: 'chatwizard.addAnnotation',    label: 'Add Annotation…',      icon: '$(comment)'           },
             { commandId: 'chatwizard.generateDigest',     label: 'Generate Digest…',     icon: '$(note)'       },
+            { commandId: 'chatwizard.combineChats',      label: 'Combine Chats (current view)…', icon: '$(git-merge)' },
         ],
     },
     {

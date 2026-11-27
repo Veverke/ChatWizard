@@ -44,6 +44,11 @@ import { TimelineViewProvider } from './timeline/timelineViewProvider';
 import { KbViewProvider } from './analytics/kbViewProvider';
 import { KbStore } from './analytics/kbStore';
 import { setKbEmbeddingEngine } from './analytics/kbClassifier';
+import { ClassificationStore } from './analytics/classificationStore';
+import { ChatSessionArranger, DEFAULT_AUTO_CLASSIFY_CONFIG } from './analytics/chatSessionArranger';
+import type { AutoClassifyConfig, AutoClassifyRunResult } from './analytics/chatSessionArranger';
+import { AutoClassifyStore } from './analytics/autoClassifyStore';
+import { combineChats, toCombineInput, MAX_COMBINE_SESSIONS } from './analytics/chatCombiner';
 import { isRunningInCursor } from './analytics/llmClient';
 import { TelemetryRecorder } from './telemetry/telemetryRecorder';
 import { registerManageWorkspacesCommand } from './commands/manageWorkspaces';
@@ -612,10 +617,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
 
     const kbStore = new KbStore(context.globalStorageUri.fsPath);
-    const kbViewProvider = new KbViewProvider(index, sidecarStore, context.globalState, kbStore);
+    // One classification shared by the KB view and the automatic folder tree.
+    const classificationStore = new ClassificationStore(context.globalStorageUri.fsPath);
+    const kbViewProvider = new KbViewProvider(index, sidecarStore, context.globalState, kbStore, classificationStore);
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider(KbViewProvider.viewType, kbViewProvider)
     );
+    context.subscriptions.push({ dispose: () => kbViewProvider.dispose() });
 
     context.subscriptions.push(
         vscode.window.registerFileDecorationProvider(new SessionParseWarningDecorationProvider())
@@ -1098,6 +1106,108 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         provider.setFolderStore(folderStore);
     }
 
+    // ── Feature: Automatic chat-history classification ────────────────────
+    // A separate, relaxed background worker classifies the whole history into a
+    // topic folder tree. It writes to its own folder file so it can never move or
+    // delete folders the user created by hand, and it only re-runs when the
+    // history fingerprint (or the settings) changed.
+    //
+    // This tree *is* the shared classification structure: both the Sessions view
+    // ("Group by Context") and the Knowledge Base render it, so folders the user
+    // creates/renames/moves/deletes and chats they re-place are visible in both.
+    const autoFolderStore = new FolderStore(context.globalStorageUri.fsPath, 'chatwizard-auto-folders.json');
+    const autoClassifyStore = new AutoClassifyStore(context.globalStorageUri.fsPath);
+    void autoFolderStore.load().then(() => {
+        provider.setAutoFolderStore(autoFolderStore);
+        kbViewProvider.setFolderStore(autoFolderStore);
+        provider.refresh();
+    });
+    if (autoFolderStore.getCached()) {
+        provider.setAutoFolderStore(autoFolderStore);
+    }
+    // Attach immediately too: the KB re-renders from the structure as soon as the
+    // tree is loaded, and follows every later edit through `onDidChange`.
+    kbViewProvider.setFolderStore(autoFolderStore);
+
+    /** Reads the auto-classification settings (each run re-reads them). */
+    function readAutoClassifyConfig(): AutoClassifyConfig {
+        const cfg = vscode.workspace.getConfiguration('chatwizard');
+        return {
+            enabled: cfg.get<boolean>('autoClassify.enabled', DEFAULT_AUTO_CLASSIFY_CONFIG.enabled),
+            intervalMinutes: cfg.get<number>('autoClassify.intervalMinutes', DEFAULT_AUTO_CLASSIFY_CONFIG.intervalMinutes),
+            categoryCount: cfg.get<number>('autoClassify.categoryCount', DEFAULT_AUTO_CLASSIFY_CONFIG.categoryCount),
+            maxDepth: cfg.get<number>('autoClassify.maxDepth', DEFAULT_AUTO_CLASSIFY_CONFIG.maxDepth),
+        };
+    }
+
+    const arranger = new ChatSessionArranger(index, autoFolderStore, autoClassifyStore, classificationStore, {
+        log: createLogger(channel).withContext('AutoClassify'),
+        onDidUpdate: (result: AutoClassifyRunResult) => {
+            if (!result.ran) { return; }
+            if (!autoFolderStore.getCached()) { provider.setAutoFolderStore(autoFolderStore); }
+            provider.refresh();
+            treeView.description = provider.getDescription();
+        },
+    });
+    context.subscriptions.push({ dispose: () => arranger.stop() });
+
+    // Whichever feature classifies first feeds the other one: when the KB (or any
+    // other writer) updates the shared classification, rebuild the folder tree
+    // from it — no model calls, the labels are already there.
+    const sharedClassificationListener = classificationStore.onDidChange(() => {
+        arranger.scheduleRun();
+    });
+    context.subscriptions.push(sharedClassificationListener);
+
+    // Settings changes take effect without a reload (the interval and the
+    // category cap both change what the next run does).
+    const autoClassifyConfigListener = vscode.workspace.onDidChangeConfiguration(e => {
+        if (e.affectsConfiguration('chatwizard.autoClassify')) {
+            arranger.restart(readAutoClassifyConfig);
+        }
+    });
+    context.subscriptions.push(autoClassifyConfigListener);
+
+    // ── Folder actions: which tree do they edit? ───────────────────────────
+    // In the auto-classified view ("Group by Context") folder actions amend the
+    // classifier's tree; everywhere else they edit the manual folder tree. The
+    // two trees stay completely separate.
+    function activeFolderStore(): FolderStore {
+        return provider.getGroupMode() === 'context' ? autoFolderStore : folderStore;
+    }
+
+    /** The store that owns a folder tree item. */
+    function storeForFolderItem(item?: FolderGroupTreeItem): FolderStore {
+        return item?.origin === 'auto' ? autoFolderStore : folderStore;
+    }
+
+    /**
+     * Moves a session into (or out of) a folder, recording the placement as a
+     * user amendment when it happens inside the auto-classified tree.
+     */
+    async function placeSessionInFolder(
+        sessionId: string,
+        folderId: string | undefined,
+        store: FolderStore,
+    ): Promise<void> {
+        if (store !== autoFolderStore) {
+            await folderStore.moveSessionToFolder(sessionId, folderId);
+            return;
+        }
+
+        if (folderId) {
+            await autoFolderStore.moveSessionToFolder(sessionId, folderId);
+            await arranger.recordSessionOverride(sessionId, folderId);
+            return;
+        }
+
+        // "Remove from folder" inside the auto tree = undo the manual placement:
+        // the session returns to the folder the classifier gave it (if any).
+        const classified = await arranger.releaseSessionOverride(sessionId);
+        const target = classified && autoFolderStore.getCached()?.has(classified) ? classified : undefined;
+        await autoFolderStore.moveSessionToFolder(sessionId, target);
+    }
+
     // Push current sort state to VS Code context (drives toolbar icon when clauses)
     function syncContext(): void {
         const primary = provider.getPrimary();
@@ -1154,19 +1264,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             }
         },
         async handleDrop(target, dataTransfer) {
-            // Dropping session(s) onto a folder → move to folder
+            // Dropping session(s) onto a folder → move to that folder (in the tree
+            // that owns the target: the manual tree or the auto-classified one)
             const draggedSessions = dataTransfer.get('application/vnd.chatwizard.session');
             if (draggedSessions && target instanceof FolderGroupTreeItem) {
                 const ids = draggedSessions.value as string[];
+                const store = storeForFolderItem(target);
                 for (const id of ids) {
-                    await folderStore.moveSessionToFolder(id, target.folder.id);
+                    await placeSessionInFolder(id, target.folder.id, store);
                 }
                 provider.refresh();
                 treeView.description = provider.getDescription();
                 return;
             }
 
-            // Dropping session(s) onto (uncategorized) → remove from any folder
+            // Dropping session(s) onto (uncategorized) → remove from the manual folder tree
             if (draggedSessions && target instanceof vscode.TreeItem && (target as vscode.TreeItem).id === 'folder:__uncategorized__') {
                 const ids = draggedSessions.value as string[];
                 for (const id of ids) {
@@ -1177,13 +1289,32 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 return;
             }
 
-            // Dropping folder(s) onto a folder → make subfolder
+            // Dropping session(s) onto (unclassified) → undo the manual placement in the auto tree
+            if (draggedSessions && target instanceof vscode.TreeItem && (target as vscode.TreeItem).id === 'autoFolder:__unclassified__') {
+                const ids = draggedSessions.value as string[];
+                for (const id of ids) {
+                    await placeSessionInFolder(id, undefined, autoFolderStore);
+                }
+                provider.refresh();
+                treeView.description = provider.getDescription();
+                return;
+            }
+
+            // Dropping folder(s) onto a folder → move inside the same tree
             const draggedFolders = dataTransfer.get('application/vnd.chatwizard.folder');
             if (draggedFolders && target instanceof FolderGroupTreeItem) {
                 const ids = draggedFolders.value as string[];
+                const store = storeForFolderItem(target);
+                const cached = store.getCached();
+                // Folders cannot cross between the manual tree and the auto tree.
+                if (!cached || !ids.every(id => cached.has(id))) { return; }
                 for (const id of ids) {
                     try {
-                        await folderStore.moveFolder(id, target.folder.id);
+                        await store.moveFolder(id, target.folder.id);
+                        if (store === autoFolderStore) {
+                            // A folder the user re-parented must survive re-classification.
+                            await store.markManual(id);
+                        }
                     } catch (err) {
                         void vscode.window.showErrorMessage(`Failed to move folder: ${err}`);
                     }
@@ -1380,6 +1511,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                     description: current.title ? `current: "${current.title}"` : undefined,
                 },
                 {
+                    id: 'content',
+                    label: '$(search)  Session contains…',
+                    description: current.content
+                        ? `current: "${current.content}"${current.contentSessionIds ? ` (${current.contentSessionIds.size} matched)` : ''}`
+                        : undefined,
+                },
+                {
                     id: 'dateFrom',
                     label: '$(calendar)  Updated from… (YYYY-MM-DD)',
                     description: current.dateFrom ? `current: ${current.dateFrom}` : undefined,
@@ -1468,6 +1606,33 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 });
                 if (val === undefined) { return; }
                 newFilter.title = val.trim() || undefined;
+
+            } else if (pick.id === 'content') {
+                // "Session contains…" runs the full-text search quick pick in
+                // filter mode: the result list is a read-only preview and the ✓ OK
+                // button applies the matching sessions as a view filter.
+                SearchPanel.showFilter(
+                    context,
+                    index,
+                    engine,
+                    (query, matchedSessionIds) => {
+                        const next: SessionFilter = { ...provider.getFilter() };
+                        next.content = query || undefined;
+                        next.contentSessionIds = query ? new Set(matchedSessionIds) : undefined;
+                        provider.setFilter(next);
+                        treeView.description = provider.getDescription();
+                        provider.refresh();
+                        void vscode.commands.executeCommand('setContext', 'chatwizard.hasFilter', provider.hasActiveFilter());
+                        vscode.window.showInformationMessage(
+                            query
+                                ? `Chat Wizard: ${matchedSessionIds.length} session${matchedSessionIds.length === 1 ? '' : 's'} contain "${query}"`
+                                : 'Chat Wizard: content filter cleared'
+                        );
+                    },
+                    current.content,
+                );
+                // The filter is applied asynchronously by the OK button above.
+                return;
 
             } else if (pick.id === 'dateFrom') {
                 const val = await vscode.window.showInputBox({
@@ -1576,6 +1741,105 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             treeView.description = provider.getDescription();
             provider.refresh();
             void vscode.commands.executeCommand('setContext', 'chatwizard.hasFilter', provider.hasActiveFilter());
+        })
+    );
+
+    // ------------------------------------------------------------------
+    // Combine Chats — merge the sessions currently in view into one chat
+    // ------------------------------------------------------------------
+    // The Sessions view title-bar button (and `Chat Wizard: Session…`) operates
+    // on exactly what the filter leaves in the tree: same chats, same order, no
+    // filter meaning the whole history. The merge itself (prompts, budget,
+    // per-chat condensing, fallback) lives in `analytics/chatCombiner`; the
+    // "ask a free model, best effort" policy comes from `analytics/freeModel`,
+    // so this handler only handles scope, confirmation and presentation.
+    context.subscriptions.push(
+        vscode.commands.registerCommand('chatwizard.combineChats', async () => {
+            const visible = provider.getVisibleSummaries();
+
+            if (visible.length < 2) {
+                void vscode.window.showInformationMessage(
+                    visible.length === 1
+                        ? 'Chat Wizard: combining needs at least two chats — widen or clear the filter to include more.'
+                        : 'Chat Wizard: no chats are in view to combine.',
+                );
+                return;
+            }
+
+            // When the filter leaves more chats than one prompt can hold, the view
+            // order decides which ones are merged (newest first by default). Slicing
+            // the summaries first avoids hydrating thousands of sessions.
+            const selected = visible.slice(0, MAX_COMBINE_SESSIONS);
+            const sessions = selected
+                .map(summary => index.get(summary.id))
+                .filter((session): session is Session => session !== undefined);
+
+            if (sessions.length < 2) {
+                void vscode.window.showInformationMessage(
+                    'Chat Wizard: the chats in view could not be loaded — try Rescan Sessions.',
+                );
+                return;
+            }
+
+            const scope = provider.hasActiveFilter()
+                ? `the ${sessions.length} chats matching the current filter`
+                : `all ${sessions.length} chats`;
+            const capped = visible.length > sessions.length
+                ? ` Only the first ${sessions.length} of ${visible.length} matching chats are merged.`
+                : '';
+
+            const answer = await vscode.window.showWarningMessage(
+                `Combine ${scope} into one organised chat?`,
+                {
+                    modal: true,
+                    detail: 'A free AI model merges the conversations into one chat that flows naturally and '
+                        + 'covers every topic that was discussed. Nothing is deleted: the result opens as an '
+                        + `unsaved Markdown document you can save or read as a preview.${capped}`,
+                },
+                'Combine',
+            );
+            if (answer !== 'Combine') { return; }
+
+            const result = await vscode.window.withProgress(
+                {
+                    location: vscode.ProgressLocation.Notification,
+                    title: 'Chat Wizard: combining chats',
+                    cancellable: true,
+                },
+                (progress, token) => combineChats(
+                    sessions.map(toCombineInput),
+                    {
+                        onProgress: update => progress.report({ message: update.message }),
+                        isCancelled: () => token.isCancellationRequested,
+                    },
+                ),
+            );
+
+            if (!result) {
+                void vscode.window.showInformationMessage('Chat Wizard: combining chats was cancelled.');
+                return;
+            }
+
+            const document = await vscode.workspace.openTextDocument({
+                content: result.markdown,
+                language: 'markdown',
+            });
+            await vscode.window.showTextDocument(document, { preview: false });
+
+            const note = result.usedLlm
+                ? `Chat Wizard: combined ${result.included} chats into one — save it or open the preview.`
+                : `Chat Wizard: no free model answered, so the ${result.included} chats were kept as-is in one document.`;
+            void vscode.window.showInformationMessage(note, 'Open Preview', 'Save As…').then(async (action) => {
+                try {
+                    if (action === 'Open Preview') {
+                        await vscode.commands.executeCommand('markdown.showPreview', document.uri);
+                    } else if (action === 'Save As…') {
+                        await vscode.commands.executeCommand('workbench.action.files.saveAs');
+                    }
+                } catch (err) {
+                    channel.appendLine(`[CombineChats] follow-up action failed: ${err}`);
+                }
+            });
         })
     );
 
@@ -1813,6 +2077,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             const hasWorkItems = provider.hasWorkItems();
             const hasTags = provider.hasTags();
             const hasFolders = folderStore.getCached() !== null && folderStore.getCached()!.size > 0;
+            const hasAutoFolders = autoFolderStore.getCached() !== null && autoFolderStore.getCached()!.size > 0;
             const current = provider.getGroupMode();
             const workItemPattern = vscode.workspace.getConfiguration('chatwizard').get<string>('workItemPattern', '');
 
@@ -1824,6 +2089,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 ...(workItemPattern ? [{ label: '$(tag) Group by Work Item', mode: 'workItem' as GroupMode,
                   description: hasWorkItems ? undefined : 'No work items found in sessions' }] : []),
                 { label: `$(folder) Group by Folder${!hasFolders ? '  \u2014 create folders to organize' : ''}`, mode: 'folder' as GroupMode },
+                { label: `$(sparkle) Group by Context (auto-classified)${!hasAutoFolders ? '  \u2014 not built yet' : ''}`, mode: 'context' as GroupMode },
             ];
 
             const activeLabel = {
@@ -1833,6 +2099,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 tag: `$(bookmark) Group by Tag${!hasTags ? '  \u2014 tag sessions to populate' : ''}`,
                 workItem: workItemPattern ? '$(tag) Group by Work Item' : undefined,
                 folder: `$(folder) Group by Folder${!hasFolders ? '  \u2014 create folders to organize' : ''}`,
+                context: `$(sparkle) Group by Context (auto-classified)${!hasAutoFolders ? '  \u2014 not built yet' : ''}`,
             }[current];
 
             const picked = await vscode.window.showQuickPick(
@@ -1857,6 +2124,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             treeView.description = provider.getDescription();
             saveUiStateNow();
             syncContext();
+
+            if (picked.mode === 'context' && !hasAutoFolders) {
+                // The tree is a rendering of the shared classification. When the
+                // KB (or another writer) already classified the history, building
+                // it is immediate and model-free — nothing is re-classified here.
+                arranger.scheduleRun(0);
+            }
         })
     );
     context.subscriptions.push(
@@ -1882,24 +2156,37 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     context.subscriptions.push(
         vscode.commands.registerCommand('chatwizard.createFolder', async () => {
+            const store = activeFolderStore();
+            const inAutoTree = store === autoFolderStore;
             const name = await vscode.window.showInputBox({
-                title: 'Create New Folder',
+                title: inAutoTree ? 'Create Topic Folder (auto-classified tree)' : 'Create New Folder',
                 placeHolder: 'Folder name',
-                prompt: 'Enter a name for the new folder',
+                prompt: inAutoTree
+                    ? 'Enter a name for the new topic folder. It is kept as an amendment across re-classification.'
+                    : 'Enter a name for the new folder',
                 validateInput: v => v && v.trim().length > 0 ? undefined : 'Name is required',
             });
             if (!name) { return; }
             try {
-                const folder = await folderStore.createFolder(name);
-                // If folder store wasn't attached yet, attach it
-                if (!provider.getFolderStore()) {
-                    provider.setFolderStore(folderStore);
-                }
-                // Auto-switch to folder group mode
-                if (provider.getGroupMode() !== 'folder') {
-                    provider.setGroupMode('folder');
-                    saveUiStateNow();
-                    syncContext();
+                const folder = await store.createFolder(
+                    name,
+                    undefined,
+                    inAutoTree ? { origin: 'auto', manual: true } : {},
+                );
+                if (inAutoTree) {
+                    // Re-creating a folder by hand lifts an earlier deletion suppression.
+                    await arranger.clearSuppressedPath(store.getPath(folder.id));
+                } else {
+                    // If folder store wasn't attached yet, attach it
+                    if (!provider.getFolderStore()) {
+                        provider.setFolderStore(folderStore);
+                    }
+                    // Auto-switch to folder group mode (never away from the auto view)
+                    if (provider.getGroupMode() !== 'folder') {
+                        provider.setGroupMode('folder');
+                        saveUiStateNow();
+                        syncContext();
+                    }
                 }
                 provider.refresh();
                 treeView.description = provider.getDescription();
@@ -1911,15 +2198,25 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     context.subscriptions.push(
         vscode.commands.registerCommand('chatwizard.createSubfolder', async (item: FolderGroupTreeItem) => {
+            if (!item?.folder) { return; }
+            const store = storeForFolderItem(item);
+            const inAutoTree = item.origin === 'auto';
             const name = await vscode.window.showInputBox({
-                title: 'Create Subfolder',
+                title: inAutoTree ? 'Create Topic Subfolder (auto-classified tree)' : 'Create Subfolder',
                 placeHolder: 'Subfolder name',
                 prompt: `Enter a name for the new subfolder under "${item.folder.name}"`,
                 validateInput: v => v && v.trim().length > 0 ? undefined : 'Name is required',
             });
-            if (!name || !item.folder) { return; }
+            if (!name) { return; }
             try {
-                const folder = await folderStore.createFolder(name, item.folder.id);
+                const folder = await store.createFolder(
+                    name,
+                    item.folder.id,
+                    inAutoTree ? { origin: 'auto', manual: true } : {},
+                );
+                if (inAutoTree) {
+                    await arranger.clearSuppressedPath(store.getPath(folder.id));
+                }
                 provider.refresh();
                 treeView.description = provider.getDescription();
             } catch (err) {
@@ -1930,16 +2227,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     context.subscriptions.push(
         vscode.commands.registerCommand('chatwizard.renameFolder', async (item: FolderGroupTreeItem) => {
-            if (!item.folder) { return; }
+            if (!item?.folder) { return; }
+            const store = storeForFolderItem(item);
             const name = await vscode.window.showInputBox({
-                title: 'Rename Folder',
+                title: item.origin === 'auto' ? 'Rename Topic Folder (auto-classified tree)' : 'Rename Folder',
                 placeHolder: 'New folder name',
                 value: item.folder.name,
                 validateInput: v => v && v.trim().length > 0 ? undefined : 'Name is required',
             });
             if (!name) { return; }
             try {
-                await folderStore.renameFolder(item.folder.id, name);
+                await store.renameFolder(item.folder.id, name);
+                if (item.origin === 'auto') {
+                    // Keep the user's name when the classifier rebuilds the tree.
+                    await store.markManual(item.folder.id);
+                }
                 provider.refresh();
                 treeView.description = provider.getDescription();
             } catch (err) {
@@ -1950,17 +2252,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     context.subscriptions.push(
         vscode.commands.registerCommand('chatwizard.deleteFolder', async (item: FolderGroupTreeItem) => {
-            if (!item.folder) { return; }
+            if (!item?.folder) { return; }
+            const store = storeForFolderItem(item);
+            const inAutoTree = item.origin === 'auto';
             const confirm = await vscode.window.showWarningMessage(
                 `Delete folder "${item.folder.name}"?\n\n` +
-                `Sessions inside the folder will be moved to (uncategorized). ` +
+                (inAutoTree
+                    ? `Its sessions move to (unclassified) and the auto-classifier will not recreate this folder. `
+                    : `Sessions inside the folder will be moved to (uncategorized). `) +
                 `Subfolders will also be removed. This cannot be undone.`,
                 { modal: true },
                 'Delete'
             );
             if (confirm !== 'Delete') { return; }
             try {
-                await folderStore.deleteFolder(item.folder.id);
+                if (inAutoTree) {
+                    // Remember the deletion (before the folder is gone) so the next
+                    // classification run does not resurrect it.
+                    await arranger.recordFolderRemoval(item.folder.id);
+                }
+                await store.deleteFolder(item.folder.id);
                 provider.refresh();
                 treeView.description = provider.getDescription();
             } catch (err) {
@@ -1971,28 +2282,45 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     context.subscriptions.push(
         vscode.commands.registerCommand('chatwizard.moveSessionToFolder', async (item: SessionTreeItem) => {
-            const allFolders = await folderStore.getAll();
+            const store = activeFolderStore();
+            const inAutoTree = store === autoFolderStore;
+            const allFolders = await store.getAll();
             if (allFolders.size === 0) {
-                void vscode.window.showInformationMessage('No folders exist. Create one first.');
+                void vscode.window.showInformationMessage(
+                    inAutoTree
+                        ? 'The auto-classified tree has no folders yet. It is built in the background from the shared classification — or pick "Group by Context" again in a moment.'
+                        : 'No folders exist. Create one first.',
+                );
                 return;
             }
-            const currentFolderId = await folderStore.getSessionFolderId(item.summary.id);
+            const currentFolderId = await store.getSessionFolderId(item.summary.id);
             const picks = Array.from(allFolders.values())
-                .sort((a, b) => a.name.localeCompare(b.name))
-                .map(f => ({
-                    label: `${f.parentId ? '  ' : ''}📁 ${f.name}`,
+                .map(f => ({ f, path: store.getPath(f.id) || f.name }))
+                .sort((a, b) => a.path.localeCompare(b.path))
+                .map(({ f, path }) => ({
+                    label: `📁 ${path}`,
                     description: currentFolderId === f.id ? 'current' : undefined,
                     folderId: f.id,
                 }));
-            picks.unshift({ label: '$(close) Remove from folder', description: currentFolderId ? undefined : 'current', folderId: '__none__' });
+            picks.unshift({
+                label: inAutoTree ? '$(close) Release to auto-classification' : '$(close) Remove from folder',
+                description: currentFolderId ? undefined : 'current',
+                folderId: '__none__',
+            });
 
             const chosen = await vscode.window.showQuickPick(picks, {
-                title: `Move "${item.summary.title}" to folder`,
+                title: inAutoTree
+                    ? `Move "${item.summary.title}" to auto-classified folder`
+                    : `Move "${item.summary.title}" to folder`,
                 placeHolder: 'Choose a folder',
             });
             if (!chosen) { return; }
             try {
-                await folderStore.moveSessionToFolder(item.summary.id, chosen.folderId === '__none__' ? undefined : chosen.folderId);
+                await placeSessionInFolder(
+                    item.summary.id,
+                    chosen.folderId === '__none__' ? undefined : chosen.folderId,
+                    store,
+                );
                 provider.refresh();
                 treeView.description = provider.getDescription();
             } catch (err) {
@@ -2005,7 +2333,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         vscode.commands.registerCommand('chatwizard.addSessionToFolder', async (item: SessionTreeItem, folderId?: string) => {
             if (!folderId) { return; }
             try {
-                await folderStore.moveSessionToFolder(item.summary.id, folderId);
+                const isAutoFolder = autoFolderStore.getCached()?.has(folderId) === true;
+                const store = isAutoFolder ? autoFolderStore : folderStore;
+                await placeSessionInFolder(item.summary.id, folderId, store);
                 provider.refresh();
                 treeView.description = provider.getDescription();
             } catch (err) {
@@ -2013,6 +2343,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             }
         })
     );
+
+    // The automatic classification is not a user action any more: it runs in the
+    // background (shared with the knowledge base) and is selected purely as a
+    // Sessions-view grouping mode. Nothing to register here.
 
     context.subscriptions.push(
         vscode.commands.registerCommand('chatwizard.toggleCbGrouping', () => {
@@ -2998,6 +3332,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         watcherRef.current = w;
         context.subscriptions.push(w);
 
+        // ── Feature: Automatic chat-history classification ─────────────────────
+        // Started after the initial index pass so the first (delayed) run sees the
+        // history. It re-reads its settings on every tick and on every change.
+        await autoFolderStore.load();
+        provider.setAutoFolderStore(autoFolderStore);
+        arranger.start(readAutoClassifyConfig);
+
         // ── Feature 13-H: Active session tag button ───────────────────────────
         w.setLiveTracker(liveTracker);
         const activeSessionTagBtn = new ActiveSessionTagButton(liveTracker);
@@ -3256,7 +3597,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                         }
                     }).map(s => s.id);
                 } else if (item instanceof FolderGroupTreeItem) {
-                    const folderStore = provider.getFolderStore();
+                    const folderStore = item.origin === 'auto'
+                        ? provider.getAutoFolderStore()
+                        : provider.getFolderStore();
                     const folders = folderStore?.getCached();
                     if (folders) {
                         const collect = (folderId: string, visited: Set<string>): string[] => {

@@ -154,6 +154,18 @@ export class KbDashboardPanel {
         }
     }
 
+    /**
+     * Toggles the non-blocking "classifying" badge in the panel header.
+     *
+     * Unlike the generating overlay it never covers the content: the pie chart
+     * stays readable and clickable, it just says that the numbers may still move.
+     */
+    static showClassifying(active: boolean, label?: string): void {
+        if (KbDashboardPanel._panel) {
+            void KbDashboardPanel._panel.webview.postMessage({ type: 'classifying', active, label });
+        }
+    }
+
     // ── Public API (used by KbViewProvider) ────────────────────────────────
 
     static getShellHtml(): string {
@@ -177,13 +189,21 @@ export class KbDashboardPanel {
             presentTypes.add(key);
         }
 
-        // Order: known types first (in TYPE_ORDER), then custom types alphabetically
-        const knownTypes = TYPE_ORDER.filter(t => presentTypes.has(t));
-        const customTypes = Array.from(presentTypes)
+        // Categories from the shared structure come first, in the Sessions view's
+        // own order — including folders that hold no chats yet, so a folder the
+        // user just created is visible here too.
+        const structureTypes = result.categoryOrder ?? [];
+        for (const type of structureTypes) { presentTypes.add(type); }
+
+        // Then any other label an entry carries: known types (in TYPE_ORDER),
+        // then custom types alphabetically.
+        const remaining = Array.from(presentTypes).filter(t => !structureTypes.includes(t));
+        const knownTypes = TYPE_ORDER.filter(t => remaining.includes(t));
+        const customTypes = remaining
             .filter(t => !TYPE_ORDER.includes(t))
             .sort();
 
-        const allTypes = [...knownTypes, ...customTypes];
+        const allTypes = [...structureTypes, ...knownTypes, ...customTypes];
 
         // Helper: map entry to display object
         const mapEntry = (e: KbEntry) => ({
@@ -557,6 +577,29 @@ export class KbDashboardPanel {
       align-items: center;
       justify-content: center;
     }
+
+    /* ── "Classifying…" badge (never blocks the chart) ── */
+    #classifying-chip {
+      display: none;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.72em;
+      opacity: 0.75;
+      padding: 2px 8px;
+      border-radius: 10px;
+      border: 1px solid var(--cw-border, rgba(255,255,255,0.14));
+      white-space: nowrap;
+    }
+    #classifying-chip.visible { display: inline-flex; }
+    #classifying-chip .chip-spinner {
+      width: 10px;
+      height: 10px;
+      border: 2px solid var(--cw-border, rgba(255,255,255,0.18));
+      border-top-color: var(--cw-accent, #5B8AF5);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      flex: 0 0 auto;
+    }
     </style>
 </head>
 <body>
@@ -597,6 +640,10 @@ export class KbDashboardPanel {
       <!-- Toolbar row (right-aligned) -->
       <div class="toolbar-row">
         <span style="font-size:0.75em;opacity:0.6;margin-right:auto;">Mode: <span id="mode-badge" class="mode-badge"></span></span>
+        <span id="classifying-chip" title="A background classification is running. The chart updates when it finishes.">
+          <span class="chip-spinner"></span>
+          <span id="classifying-label">Classifying…</span>
+        </span>
         <span id="last-updated-label" style="font-size:0.72em;opacity:0.5;margin-right:8px;"></span>
         <button class="action-btn" id="exportBtn">📤 Export to Markdown</button>
       </div>
@@ -717,6 +764,22 @@ export class KbDashboardPanel {
         if (btn) { btn.disabled = false; btn.style.opacity = ''; btn.style.cursor = ''; }
       }
 
+      /**
+       * Non-blocking "a classification is running" badge. The chart stays
+       * visible and interactive; the badge just explains why it may change.
+       */
+      function setClassifying(active, label) {
+        var chip = document.getElementById('classifying-chip');
+        if (!chip) return;
+        if (active) {
+          var text = document.getElementById('classifying-label');
+          if (text) { text.textContent = label || 'Classifying…'; }
+          chip.classList.add('visible');
+        } else {
+          chip.classList.remove('visible');
+        }
+      }
+
       var _sortCol = null;
       var _sortAsc = true;
 
@@ -735,6 +798,9 @@ export class KbDashboardPanel {
       function showDrillView(typeLabel, entries) {
         document.getElementById('pie-view').style.display = 'none';
         document.getElementById('drilldown-view').style.display = 'block';
+        // The chart is hidden now — drop the pointer cursor it may have set.
+        var hiddenChart = document.getElementById('kbChart');
+        if (hiddenChart) { hiddenChart.style.cursor = 'default'; }
 
         // Determine breadcrumb path: if label contains " / ", it's category / subtype
         var parts = typeLabel.split(' / ');
@@ -953,6 +1019,14 @@ export class KbDashboardPanel {
                   }
                 }
               },
+              onHover: function(e, items) {
+                // Match the legend chips: pointer over a slice, normal arrow elsewhere
+                // (the doughnut hole and the canvas corners are not clickable).
+                var canvas = e && e.native && e.native.target;
+                if (canvas && canvas.style) {
+                  canvas.style.cursor = (items && items.length > 0) ? 'pointer' : 'default';
+                }
+              },
               onClick: function(e, items) {
                 if (items.length > 0) {
                   var idx = items[0].index;
@@ -1113,6 +1187,11 @@ export class KbDashboardPanel {
         vscode.postMessage({ command: 'generateKb' });
       });
 
+      // Leaving the canvas resets the pointer cursor set by the chart's onHover
+      document.getElementById('kbChart').addEventListener('mouseleave', function() {
+        this.style.cursor = 'default';
+      });
+
       // Clickable title cells → open session
       document.getElementById('drilldown-tbody').addEventListener('click', function(e) {
         var link = e.target && e.target.closest ? e.target.closest('.clickable') : null;
@@ -1135,6 +1214,10 @@ export class KbDashboardPanel {
         var msg = event.data;
         if (msg && msg.type === 'generating') {
           showGeneratingOverlay();
+          return;
+        }
+        if (msg && msg.type === 'classifying') {
+          setClassifying(msg.active === true, msg.label);
           return;
         }
         if (msg && msg.type === 'update') {

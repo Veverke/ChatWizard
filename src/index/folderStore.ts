@@ -5,20 +5,41 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { SessionFolder, FolderStats, SessionSummary } from '../types/index';
+import { SessionFolder, FolderStats, SessionSummary, SessionFolderOrigin } from '../types/index';
 
 const FOLDER_FILENAME = 'chatwizard-folders.json';
 
 /**
+ * Declarative description of a folder tree handed to {@link FolderStore.replaceTree}.
+ * Used by the automatic chat-history classifier to rebuild its tree in one write.
+ */
+export interface FolderTreeSpec {
+    /** Display name of the folder. */
+    name: string;
+    /** Session IDs that live directly in this folder. */
+    sessionIds?: string[];
+    /** Nested folders (the store caps nesting at {@link MAX_FOLDER_DEPTH} levels). */
+    children?: FolderTreeSpec[];
+}
+
+/** Maximum nesting depth supported by the folder tree (root = level 1). */
+export const MAX_FOLDER_DEPTH = 3;
+
+/**
  * Stores the folder tree in a single JSON file under `storageDir`.
  * API surface covers CRUD for folders and session-folder mappings.
+ *
+ * The `filename` argument lets a caller keep a second, independent tree in the
+ * same directory — the auto-classifier stores its folders in
+ * `chatwizard-auto-folders.json` so its rebuilds never touch user-created folders.
  */
 export class FolderStore {
     private readonly filePath: string;
     private cache: Map<string, SessionFolder> | null = null;
+    private readonly changeListeners = new Set<(folders: Map<string, SessionFolder>) => void>();
 
-    constructor(private readonly storageDir: string) {
-        this.filePath = path.join(storageDir, FOLDER_FILENAME);
+    constructor(private readonly storageDir: string, filename: string = FOLDER_FILENAME) {
+        this.filePath = path.join(storageDir, filename);
     }
 
     /** Ensures the storage directory exists before any I/O. */
@@ -67,8 +88,31 @@ export class FolderStore {
             // the temp-file + rename pattern.
             await fs.promises.writeFile(this.filePath, json, 'utf-8');
             this.cache = map;
+            this.emitChange(map);
         } catch (err) {
             console.error('[chatwizard] FolderStore.save() failed:', err);
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Change notifications
+    // ------------------------------------------------------------------
+
+    /**
+     * Subscribes to tree changes (any create/rename/move/delete/whole-tree
+     * replacement). Used by the views that render this tree — the Sessions view
+     * and the Knowledge Base — so a manual reorganisation shows up in both.
+     *
+     * Only fired after a successful write; returns a disposable subscription.
+     */
+    onDidChange(listener: (folders: Map<string, SessionFolder>) => void): { dispose: () => void } {
+        this.changeListeners.add(listener);
+        return { dispose: () => { this.changeListeners.delete(listener); } };
+    }
+
+    private emitChange(folders: Map<string, SessionFolder>): void {
+        for (const listener of [...this.changeListeners]) {
+            try { listener(folders); } catch { /* listeners must not break the store */ }
         }
     }
 
@@ -187,10 +231,20 @@ export class FolderStore {
      * Creates a new folder with the given name and optional parent.
      * Returns the created folder.
      * Throws if a sibling with the same name already exists (case-insensitive).
+     *
+     * `options.origin` marks the folder as belonging to the automatic classifier's
+     * tree, and `options.manual` marks user-made amendments inside that tree
+     * (preserved by re-classification).
      */
-    async createFolder(name: string, parentId?: string): Promise<SessionFolder> {
+    async createFolder(
+        name: string,
+        parentId?: string,
+        options: { origin?: SessionFolderOrigin; manual?: boolean } = {},
+    ): Promise<SessionFolder> {
         const map = this.cache ?? await this.load();
-        const trimmed = name.trim();
+        // Folder names double as path segments (auto-classified tree bookkeeping),
+        // so separators are normalised away here as well.
+        const trimmed = normalizeFolderName(name);
         if (!trimmed) { throw new Error('Folder name must not be empty.'); }
 
         // Check uniqueness among siblings
@@ -210,6 +264,8 @@ export class FolderStore {
             childFolderIds: [],
             createdAt: now,
             updatedAt: now,
+            origin: options.origin ?? 'user',
+            ...(options.manual ? { manual: true } : {}),
         };
 
         map.set(folder.id, folder);
@@ -236,7 +292,7 @@ export class FolderStore {
         const folder = map.get(folderId);
         if (!folder) { throw new Error(`Folder not found: ${folderId}`); }
 
-        const trimmed = newName.trim();
+        const trimmed = normalizeFolderName(newName);
         if (!trimmed) { throw new Error('Folder name must not be empty.'); }
 
         // Check uniqueness among siblings
@@ -394,6 +450,128 @@ export class FolderStore {
     }
 
     // ------------------------------------------------------------------
+    // Auto-tree amendments
+    // ------------------------------------------------------------------
+
+    /**
+     * Marks a folder as user-amended (created/renamed/moved by hand inside the
+     * auto-classified tree). Re-classification keeps such folders.
+     */
+    async markManual(folderId: string): Promise<void> {
+        const map = this.cache ?? await this.load();
+        const folder = map.get(folderId);
+        if (!folder || folder.manual) { return; }
+        folder.manual = true;
+        folder.updatedAt = new Date().toISOString();
+        map.set(folderId, folder);
+        await this.save(map);
+    }
+
+    /**
+     * Returns the full name path of a folder (`"Git/Branching/Merge Conflicts"`),
+     * or `''` when the folder is unknown.
+     */
+    getPath(folderId: string): string {
+        const map = this.cache;
+        if (!map) { return ''; }
+        const names: string[] = [];
+        const visited = new Set<string>();
+        let current: string | null = folderId;
+        while (current) {
+            if (visited.has(current)) { break; } // circular guard
+            visited.add(current);
+            const folder: SessionFolder | undefined = map.get(current);
+            if (!folder) { break; }
+            names.unshift(folder.name);
+            current = folder.parentId;
+        }
+        return names.join('/');
+    }
+
+    /** Returns the IDs of every folder below `folderId` (excluding itself). */
+    getDescendantFolderIds(folderId: string): string[] {
+        const map = this.cache;
+        if (!map) { return []; }
+        const out = new Set<string>();
+        this._collectDescendantFolderIds(folderId, map, out);
+        return [...out];
+    }
+
+    // ------------------------------------------------------------------
+    // Whole-tree replacement (automatic classification)
+    // ------------------------------------------------------------------
+
+    /**
+     * Replaces the entire tree held by this store with `specs` and writes it once.
+     *
+     * Used by the automatic classifier to materialise its folder tree. Folders
+     * whose name path still exists keep their ID and `createdAt`, so tree
+     * expansion state survives a re-classification; folders that disappeared are
+     * dropped. Nesting deeper than {@link MAX_FOLDER_DEPTH} is flattened into the
+     * deepest folder.
+     *
+     * @returns The new `Map<folderId, SessionFolder>`.
+     */
+    async replaceTree(
+        specs: FolderTreeSpec[],
+        origin: SessionFolderOrigin = 'auto',
+    ): Promise<Map<string, SessionFolder>> {
+        const previous = this.cache ?? await this.load();
+        const now = new Date().toISOString();
+        const next = new Map<string, SessionFolder>();
+
+        // Index the previous tree by its full name path so IDs can be reused.
+        const reusable = new Map<string, SessionFolder>();
+        const indexPath = (folder: SessionFolder, parentKey: string): void => {
+            const key = `${parentKey}\u0000${folder.name}`;
+            if (!reusable.has(key)) { reusable.set(key, folder); }
+            for (const childId of folder.childFolderIds) {
+                const child = previous.get(childId);
+                if (child) { indexPath(child, key); }
+            }
+        };
+        for (const folder of previous.values()) {
+            if (folder.parentId === null) { indexPath(folder, ''); }
+        }
+
+        const build = (nodes: FolderTreeSpec[], parentId: string | null, parentKey: string, depth: number): void => {
+            for (const node of nodes) {
+                const name = normalizeFolderName(node.name);
+                if (!name) { continue; }
+
+                const key = `${parentKey}\u0000${name}`;
+                const existing = reusable.get(key);
+                const folder: SessionFolder = {
+                    id: existing?.id ?? generateFolderId(),
+                    name,
+                    parentId,
+                    sessionIds: Array.from(new Set(node.sessionIds ?? [])),
+                    childFolderIds: [],
+                    createdAt: existing?.createdAt ?? now,
+                    updatedAt: now,
+                    origin,
+                };
+                next.set(folder.id, folder);
+
+                if (parentId !== null) {
+                    const parent = next.get(parentId);
+                    if (parent && !parent.childFolderIds.includes(folder.id)) {
+                        parent.childFolderIds.push(folder.id);
+                    }
+                }
+
+                if (depth < MAX_FOLDER_DEPTH && node.children && node.children.length > 0) {
+                    build(node.children, folder.id, key, depth + 1);
+                }
+            }
+        };
+
+        build(specs, null, '', 1);
+        await this.save(next);
+        return next;
+    }
+
+    // ------------------------------------------------------------------
     // Internal helpers
     // ------------------------------------------------------------------
 
@@ -418,9 +596,26 @@ export class FolderStore {
 // Helpers
 // --------------------------------------------------------------------------
 
+/**
+ * Sanitises a classifier label for use as a folder name.
+ * Collapses whitespace and separators (a `/` or `|` in a name would make the
+ * tree ambiguous) and trims surrounding punctuation. Returns `''` when nothing
+ * usable remains — callers skip such folders.
+ */
+export function normalizeFolderName(raw: string): string {
+    const cleaned = (raw ?? '')
+        .replace(/[\r\n\t]+/g, ' ')
+        .replace(/[|/\\]+/g, ' ')
+        .replace(/\s{2,}/g, ' ')
+        .replace(/^[\s"'`*_#-]+/, '')
+        .replace(/[\s"'`*_#.:;,-]+$/, '')
+        .trim();
+    return cleaned.length > 60 ? cleaned.slice(0, 60).trim() : cleaned;
+}
+
 /** Generates a short, unique folder ID. */
 let _counter = 0;
-function generateFolderId(): string {
+export function generateFolderId(): string {
     const ts = Date.now().toString(36);
     const rand = Math.random().toString(36).slice(2, 6);
     _counter = (_counter + 1) % 10000;

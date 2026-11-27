@@ -1,11 +1,17 @@
 // src/analytics/kbEngine.ts
 // Feature 23 — Shared KB engine: builds classified entries from sessions + sidecar.
 // Used by both the dashboard (kbDashboardPanel.ts) and the exporter (extension.ts).
+//
+// The categories an entry gets are the *shared structure* the Sessions view shows
+// (`classificationStructure.applyFolderStructure`), falling back to the model
+// labels only while no structure exists. One classification, two views.
 
-import type { Session, SessionMetadata } from '../types/index';
+import type { Session, SessionFolder, SessionMetadata } from '../types/index';
 import type { KbEntry, KbEntryType } from '../types/kb';
-import { classifySessionWithCategories } from './kbClassifier';
-import { refineCategories, refineSubtypes } from './kbLlmClassifier';
+import { classifyChatSessions } from './chatSessionClassifier';
+import { classifySessionsShared } from './classificationService';
+import type { ClassificationStore } from './classificationStore';
+import { applyFolderStructure } from './classificationStructure';
 import { createLogger } from '../utils/logger';
 
 const log = createLogger().withContext('KB');
@@ -19,6 +25,12 @@ export interface KbEngineResult {
     total: number;
     /** Whether the LLM was used for classification (vs embedding fallback). */
     usedLlm: boolean;
+    /**
+     * Root categories in the shared structure's display order (the Sessions
+     * view's folder order), including folders that hold no chats yet. Absent
+     * when no structure exists and the model labels are rendered as-is.
+     */
+    categoryOrder?: string[];
     /** ISO-8601 timestamp of the last KB update (generation or incremental refresh). */
     lastUpdated?: string;
 }
@@ -56,6 +68,7 @@ export async function mergeIntoResult(
         total: merged.length,
         usedLlm: existing.usedLlm,
         lastUpdated: existing.lastUpdated,
+        ...(existing.categoryOrder ? { categoryOrder: existing.categoryOrder } : {}),
     };
 }
 
@@ -79,6 +92,7 @@ export function removeFromResult(
         total: filtered.length,
         usedLlm: existing.usedLlm,
         lastUpdated: existing.lastUpdated,
+        ...(existing.categoryOrder ? { categoryOrder: existing.categoryOrder } : {}),
     };
 }
 
@@ -100,20 +114,29 @@ export function cleanSummary(summary: string): string {
 /**
  * Build KB entries from all sessions and their sidecar metadata.
  *
- * The AI-first pipeline works as follows:
- * 1. Each session is sent to the free AI model (Copilot LM API) which freely
- *    generates a category label based on the conversation content — no predefined
- *    buckets are used.
- * 2. If the AI model is unavailable, the local ONNX embedding model
- *    (all-MiniLM-L6-v2) classifies the session by finding the closest category
- *    via cosine similarity.
- * 3. If neither is available, the first category is used as a safe default.
+ * The pipeline is the *shared* classification (the same one the automatic
+ * folder tree renders): each session gets a topic label from the free model
+ * (local embedding model as fallback), consolidated across the history.
+ *
+ * When a {@link ClassificationStore} is supplied, the classification is
+ * **incremental**: only new or changed chats are sent to a model, everything
+ * else is reused from the shared state. This is what makes "KB first, then
+ * auto-classification" (and vice versa) free of duplicate work.
+ *
+ * The KB asks for two levels and does not cap the number of categories.
  *
  * @param sessions    All hydrated sessions (must have messages loaded).
  * @param cache       Sidecar metadata map (sessionId → SessionMetadata), or null.
  * @param categories  Optional list of valid categories. When the LLM is available,
  *                    categories emerge freely from content. Defaults to the five
  *                    built-in types for fallback compatibility.
+ * @param onProgress  Progress callback.
+ * @param refineLabels Run the label-consolidation passes. Default: true.
+ * @param store       Optional shared classification store (incremental mode).
+ * @param folders     Optional shared *structure* (the auto-classified folder
+ *                    tree). When supplied, each entry's type/subtype is the
+ *                    folder the chat sits in — the same structure the Sessions
+ *                    view shows, including manual reorganisation.
  */
 export async function buildKbEntries(
     sessions: Session[],
@@ -121,91 +144,67 @@ export async function buildKbEntries(
     categories?: KbEntryType[],
     onProgress?: (done: number, total: number) => void,
     refineLabels?: boolean,
+    store?: ClassificationStore,
+    folders?: Map<string, SessionFolder> | null,
 ): Promise<KbEngineResult> {
-    const entries: KbEntry[] = new Array(sessions.length);
+    const classifications = store
+        ? (await classifySessionsShared(sessions, store, {
+            levels: 2,
+            refineLabels,
+            onProgress,
+            embeddingCategories: categories,
+            pruneMissing: true,
+        })).classifications
+        : await classifyChatSessions(sessions, {
+            levels: 2,
+            refineLabels,
+            onProgress,
+            embeddingCategories: categories,
+        });
+
+    return buildKbEntriesFromClassifications(sessions, cache, classifications, folders);
+}
+
+/**
+ * Materialise KB entries from already-known classifications — no model call.
+ *
+ * Used to render the KB from the shared classification state (e.g. the automatic
+ * classifier ran first, so the KB view can show the same topics immediately).
+ *
+ * `folders` is the shared structure: when it exists it wins over the model
+ * labels, so a folder the user created/renamed/moved/deleted in the Sessions
+ * view is reflected here too.
+ */
+export function buildKbEntriesFromClassifications(
+    sessions: Session[],
+    cache: Map<string, SessionMetadata> | null,
+    classifications: { sessionId: string; category: string; subcategory?: string; usedLlm: boolean }[],
+    folders?: Map<string, SessionFolder> | null,
+): KbEngineResult {
+    const resolved = applyFolderStructure(classifications, folders);
+    const byId = new Map(sessions.map(s => [s.id, s]));
+    const entries: KbEntry[] = [];
     const grouped = new Map<KbEntryType, KbEntry[]>();
     let anyLlm = false;
 
-    const useCategories = categories ?? ['Other'];
-    let completed = 0;
+    for (const classification of resolved.classifications) {
+        const session = byId.get(classification.sessionId);
+        if (!session) { continue; }
 
-    // Limit concurrency to avoid overwhelming the Copilot LM API with too many
-    // simultaneous requests, which causes rate-limit / "not available" errors.
-    const CONCURRENCY = 3;
-    let nextIdx = 0;
+        const meta = cache?.get(session.id);
+        const entry: KbEntry = {
+            sessionId: session.id,
+            type: classification.category,
+            subtype: classification.subcategory,
+            title: session.title,
+            summary: cleanSummary(meta?.summary ?? session.title),
+            tags: meta?.tags ?? [],
+            createdAt: session.createdAt,
+            usedLlm: classification.usedLlm,
+        };
+        if (classification.usedLlm) { anyLlm = true; }
 
-    async function processNext(): Promise<void> {
-        while (nextIdx < sessions.length) {
-            const i = nextIdx++;
-            const session = sessions[i];
-            const meta = cache?.get(session.id);
-            const tags = meta?.tags ?? [];
-            const { type: entryType, subtype, usedLlm } = await classifySessionWithCategories(session, useCategories);
-            if (usedLlm) { anyLlm = true; }
-            const rawSummary = meta?.summary ?? session.title;
-            const summary = cleanSummary(rawSummary);
-
-            entries[i] = {
-                sessionId: session.id,
-                type: entryType,
-                subtype: subtype ?? undefined,
-                title: session.title,
-                summary,
-                tags,
-                createdAt: session.createdAt,
-                usedLlm,
-            };
-
-            completed++;
-            onProgress?.(completed, sessions.length);
-        }
-    }
-
-    // Start CONCURRENCY workers
-    const workers: Promise<void>[] = [];
-    for (let w = 0; w < CONCURRENCY; w++) {
-        workers.push(processNext());
-    }
-    await Promise.all(workers);
-
-    log.info(`KB classification complete: ${completed} sessions, LLM used: ${anyLlm}`);
-
-    // ── Pass 2: Refine/deduplicate raw labels across all sessions ──────────
-    if (refineLabels !== false && anyLlm) {
-        const rawLabels = Array.from(new Set(entries.map(e => e.type)));
-        const refineMap = await refineCategories(rawLabels).catch(() => null);
-        if (refineMap && refineMap.size > 0) {
-            let refinedCount = 0;
-            for (const entry of entries) {
-                const newType = refineMap.get(entry.type);
-                if (newType && newType !== entry.type) {
-                    entry.type = newType;
-                    refinedCount++;
-                }
-            }
-            log.info(`Refined ${refinedCount} entries to canonical labels (${refineMap.size} mappings)`);
-        }
-    }
-
-    // ── Pass 3: Refine second-level (subtype) labels ─────────────────────
-    if (refineLabels !== false && anyLlm) {
-        const subtypeMap = await refineSubtypes(entries).catch(() => null);
-        if (subtypeMap && subtypeMap.size > 0) {
-            let refinedCount = 0;
-            for (const entry of entries) {
-                const key = entry.subtype ?? '';
-                const newSubtype = subtypeMap.get(key);
-                if (newSubtype && newSubtype !== entry.subtype) {
-                    entry.subtype = newSubtype;
-                    refinedCount++;
-                }
-            }
-            log.info(`Refined ${refinedCount} entries to canonical subtypes (${subtypeMap.size} mappings)`);
-        }
-    }
-
-    // Build grouped map
-    for (const entry of entries) {
+        entries.push(entry);
         const group = grouped.get(entry.type);
         if (group) {
             group.push(entry);
@@ -214,5 +213,12 @@ export async function buildKbEntries(
         }
     }
 
-    return { entries, grouped, total: entries.length, usedLlm: anyLlm };
+    log.info(`KB classification complete: ${entries.length} sessions, LLM used: ${anyLlm}`);
+    return {
+        entries,
+        grouped,
+        total: entries.length,
+        usedLlm: anyLlm,
+        ...(resolved.categoryOrder ? { categoryOrder: resolved.categoryOrder } : {}),
+    };
 }

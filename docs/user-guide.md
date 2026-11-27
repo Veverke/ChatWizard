@@ -15,8 +15,11 @@ This guide documents **every user-facing feature**, panel, setting and command i
    - [Browsing Sessions](#browsing-sessions)
    - [Sorting & Grouping](#sorting--grouping)
    - [Filtering Sessions](#filtering-sessions)
+     - [Session contains…](#session-contains)
+   - [Combining chats](#combining-chats)
    - [Pinning](#pinning)
    - [Session Folders](#session-folders)
+   - [Automatic Classification (Group by Context)](#automatic-classification-group-by-context)
    - [Session Status Lifecycle](#session-status-lifecycle)
    - [Session Tagging](#session-tagging)
    - [Regenerating Titles](#regenerating-titles)
@@ -268,6 +271,7 @@ Use the toolbar icons to toggle grouping and change sort order.
 - **Work Item** — Jira / Azure DevOps / GitHub issue IDs extracted with `chatwizard.workItemPattern`
 - **Tag** — one group per tag (untagged sessions fall into their own bucket)
 - **Folder** — your [session folders](#session-folders); unassigned sessions appear under `(uncategorized)`
+- **Context (auto-classified)** — the [automatic topic tree](#automatic-classification-group-by-context)
 - **None** — a flat list
 
 **Sort by** (each click toggles ascending/descending):
@@ -290,6 +294,7 @@ The filter dialog supports:
 | Filter | Notes |
 |--------|-------|
 | Title | substring, case-insensitive |
+| Session contains… | full-text search across every message: the search box previews the matches and **✓ OK** keeps only those sessions (see [Session contains…](#session-contains)) |
 | Date range | from / until (`YYYY-MM-DD`) |
 | Model | substring match on the model name |
 | Source | one AI tool (Copilot, Claude, Cline, …) |
@@ -303,6 +308,40 @@ All active filters are reflected in the view title; the same button clears them.
 
 **Example:** show only Copilot sessions from last week with more than 10 messages — From `2026-05-07`, Until `2026-05-14`, Source `copilot`, Min messages `10`.
 
+### Session contains…
+
+**Session contains…** filters the Sessions view by what was *said* in a chat, not by its title — it reuses the full-text search engine (same index as **Chat Wizard: Search…**, including the `/`-prefixed regex mode, the source filter and the prompts/responses filter).
+
+```
+Ctrl+Shift+P → Chat Wizard: Filter & Sort… → Filter Sessions… → Session contains…
+```
+
+Type a query and the QuickPick lists the matching sessions with the matching snippet — **as a preview only**:
+
+- clicking (or pressing Enter on) a result does **not** open it; the rows are there so you can judge the query,
+- the **✓ OK** button in the search box applies the search: the Sessions view then shows **only the matching sessions** (`⊘ contains:"your query"` appears in the view title),
+- the result rows line up exactly with what the view will show — source / role filters applied in the search box narrow the resulting session set too.
+
+Clearing the query and clicking **✓ OK** removes this filter; **Clear all filters** in the Filter Sessions menu removes it together with the others. Because it is a normal filter, it composes with every other criterion (date range, source, tags, …). Re-running the search picks up sessions indexed since the last run.
+
+> This is the one behavioural difference from **Chat Wizard: Search…** itself: there, the point of the list is to pick a session and jump to the matching message. In *Session contains…* the list is read-only and **✓ OK** is the only way to accept the search.
+
+### Combining chats
+
+When you solved the same problem in three different chats — one about the manifest, one about the ingress, one about the logs — **Combine Chats** merges them into a single chat that flows naturally and covers every topic that was discussed:
+
+```
+Ctrl+Shift+P → Chat Wizard: Session… → Combine Chats (current view)…
+```
+
+or click the **git-merge** icon in the Sessions title bar.
+
+- **It works on what the view shows.** The chats that go in are exactly the ones left by the active filter — including a **Session contains…** query — in the order they are displayed; with no filter it is the whole history. The confirmation dialog names the set and the count, so a filter on `502` merges just those chats.
+- **The model organises, it does not summarise away the details.** A free model (the same one KB classification and command descriptions use: free Copilot models in VS Code, the Cursor `agent` CLI as a fallback) merges by *topic*, not by source chat: commands, manifests, error messages, versions and decisions are kept verbatim, duplicates and dead ends are dropped, and contradictions are kept with a note of which chat said what. The document opens with an **Overview**, ends with **Next steps**, and always lists its **Source chats**.
+- **Long filters are condensed first.** If the combined transcript does not fit one prompt, every chat is reduced to its key points first and then merged — with progress in the notification (*Condensing chat 2 of 5…*, *Merging 5 chats…*) and a cancel button. Up to 30 chats per run; when the filter matches more, the dialog says which ones are included (the view order decides).
+- **No free model, still one document.** If no free model answers, you get every chat's turns under its own heading in a single Markdown file, with a note explaining that the AI merge was skipped.
+- **Nothing is changed.** The result is an **unsaved Markdown document** — save it, or use **Open Preview** — while the source sessions, their tags, folders and bookmarks stay untouched.
+
 ### Pinning
 
 Pin important sessions so they float to the top. Use the **📌 pin icon** on the row or right-click → **Pin Session** / **Unpin Session**. Pinned sessions also get their own group when grouping is enabled.
@@ -311,13 +350,25 @@ Pin important sessions so they float to the top. Use the **📌 pin icon** on th
 
 Organize sessions into folders for project-level grouping:
 
-- **Create a folder:** `Ctrl+Shift+P` → **Chat Wizard: Create Folder** or the **new-folder** icon in the Sessions view title
+- **Create a folder:** the **new-folder** icon in the Sessions view title — just left of the sort buttons — or `Ctrl+Shift+P` → **Chat Wizard: Create Folder**; both create a folder at the root
 - **Subfolders:** right-click a folder → **Create Subfolder**
 - **Rename / delete:** right-click a folder → **Rename Folder** / **Delete Folder** (sessions inside are unlinked, not deleted)
 - **Move a session:** right-click a session → **Move Session to Folder…**, or drag-and-drop it onto a folder
 - **Group by folder:** toolbar → **Group Sessions…** → **Folder**
 
 Folders are stored in `chatwizard-folders.json` in extension storage, so they survive reloads and are shared across IDEs that use the same storage.
+
+### Automatic Classification (Group by Context)
+
+ChatWizard can also organise the **whole chat history** into folders for you — main topic → sub-topic:
+
+- **Where:** toolbar → **Group Sessions…** → **Context (auto-classified)**
+- **One classification, shared by both views — no exceptions:** this tree **is** the classification. The Knowledge Base renders exactly the same structure: the tree's top-level folders are its chart slices, its sub-folders are the slices you get when you click one, and a chat sits in the same place in both. Whichever feature classifies a chat first (the KB's *Generate Knowledge Base* or the background worker) supplies the other one's starting state, and a chat is only re-classified when it is new or edited. A KB you generated earlier is picked up automatically.
+- **How it decides:** a free model reads each chat and labels its topic and sub-topic (the local embedding model is used when no free model is available), then the labels are consolidated across the history. The result is the *proposal* the tree is built from — you can always re-organise it by hand afterwards, and the next run keeps your structure.
+- **When it runs:** in the background on a relaxed interval (10 minutes by default) and only when chats are new/edited or the shared classification changed — a single new message rarely changes the topic structure. There is no "classify now" button: the tree *is* the classification. While a run is in progress the Knowledge Base shows a small **Classifying…** badge in its toolbar; the chart stays readable and only changes if the structure actually changed.
+- **Amend it — in both views:** in this view the folder actions edit the *auto* tree — **Create Folder**, **Create Subfolder**, **Rename**, **Delete**, **Move Session to Folder…** and drag-and-drop. A renamed folder keeps its name, a folder you add stays, a folder you delete is not recreated, and a chat you move stays where you put it on the next classification run. **Release to auto-classification** (the *Remove from folder* entry of the move dialog, or dropping the chat on **(unclassified)**) undoes a manual placement. Because there is one classification, these edits also change the **Knowledge Base**: a folder you create appears as a category (even while it is still empty), a rename renames the slice, moving a folder re-parents the sub-topics, deleting one moves its chats to **Unclassified**, and a chat you move changes category in both views.
+- **Separate from your folders:** the auto tree lives in `chatwizard-auto-folders.json` and is independent of the folders you create yourself, so it never moves, renames or deletes them.
+- **Settings:** `chatwizard.autoClassify.enabled`, `.intervalMinutes`, `.categoryCount` (`0` = the classifier's own granularity — the default; `1`–`10` folds the smallest topics into *Other*, which the KB shows too), `.maxDepth` (`1` = topics only, `2` = topic → sub-topic, the default). These shape the shared classification, exactly like a manual edit would; you can always re-organise by hand afterwards.
 
 ### Session Status Lifecycle
 
@@ -586,6 +637,8 @@ Selecting a result opens the session scrolled to the matching message.
 
 > When results are truncated, a banner reports *Showing top N of M results — refine your query*. Regex queries are also time-boxed per session to keep pathological patterns from freezing the window.
 
+**Same search, as a filter.** The Sessions view's **Filter Sessions… → Session contains…** opens this QuickPick in filter mode: the rows are a preview, a **✓ OK** button replaces click-to-open, and accepting keeps those sessions in the tree. See [Session contains…](#session-contains).
+
 ### Semantic Search
 
 Finds sessions by **meaning**, not keywords. Useful when you remember the concept but not the exact wording.
@@ -667,11 +720,13 @@ The Knowledge Base panel classifies your sessions into reusable knowledge — de
 ### Generating the Knowledge Base
 
 1. Open the **Knowledge Base** panel in the sidebar.
-2. Click **⚡ Generate Knowledge Base** — every session is classified with a progress notification (`N / M sessions classified`).
+2. Click **⚡ Generate Knowledge Base** — sessions that are new or changed are classified with a progress notification (`N / M sessions classified`). Sessions another feature already classified (see below) are reused instead of being sent to the model again.
 3. The dashboard shows a doughnut chart of category distribution; click a slice to drill into the sessions behind it.
 4. After the first run, **new and updated sessions are classified incrementally** (debounced per session), so you do not have to regenerate everything after each chat.
 
 The result is persisted in extension storage, so the dashboard survives reloads. When `chatwizard.kbRefineLabels` is enabled (default), a second LLM pass merges near-duplicate category labels and folds narrow ones into broader categories, which keeps the doughnut readable.
+
+> **One classification, two views — and no exceptions.** The Knowledge Base and **Group by Context** in the Sessions view render the *same* structure — the auto-classified folder tree. Whichever runs first supplies the other's starting state: generate the KB and the folder tree appears from it, or let the background worker classify and the KB dashboard shows those topics without a model call. Folders you create, rename, move or delete in that tree — and chats you move between them — change the Knowledge Base too, because it is the same classification, not a copy. Chats that are in no folder appear under **Unclassified**, matching the tree's **(unclassified)** bucket. With `chatwizard.autoClassify.enabled` off (and no tree built) the KB falls back to the model labels.
 
 ### Auto-Tagging & Export
 
@@ -1406,7 +1461,7 @@ Each of the seven category commands opens a QuickPick with these actions:
 | **Chat Wizard: View…** | Code Blocks · Prompt Library · Analytics Dashboard · Timeline |
 | **Chat Wizard: Search…** | Full-Text Search · Search Annotations · Find Sessions by Topic (Semantic) |
 | **Chat Wizard: Filter & Sort…** | Filter Sessions… · Configure Sort Order… · Filter Code Blocks… |
-| **Chat Wizard: Session…** | Set Session Status… · Filter by Status… · Add/Remove Bookmark… · Add/Remove/Clear Tags · Tag Active Session · Regenerate Title · Regenerate All Titles · Regenerate Summary · Pin/Unpin · Group Sessions… · Inject as Context… · Reveal in Explorer · Add Annotation… · Generate Digest |
+| **Chat Wizard: Session…** | Set Session Status… · Filter by Status… · Add/Remove Bookmark… · Add/Remove/Clear Tags · Tag Active Session · Regenerate Title · Regenerate All Titles · Regenerate Summary · Pin/Unpin · Group Sessions… · Inject as Context… · Reveal in Explorer · Add Annotation… · Generate Digest · Combine Chats (current view)… |
 | **Chat Wizard: Export…** | Export All Sessions… · Export Selected Sessions… · Export Session Excerpt… · Export Session to Markdown · Export Selected from Tree… · Export to Obsidian · Export to Notion · Forget Notion API Key |
 | **Chat Wizard: Folder & Archive…** | Create Folder · Create Subfolder · Rename Folder · Delete Folder · Move Session to Folder… · Archive Session · Delete Archived Session · Show Archive Statistics |
 | **Chat Wizard: Settings…** | Manage Watched Workspaces · Rescan Sessions · Start MCP Server · Stop MCP Server · Copy MCP Config to Clipboard · Rotate MCP Token · Set Up Global Copilot Instructions · Connect GitHub Copilot · Show File Session History |
@@ -1444,7 +1499,7 @@ These stay out of the palette because they act on the item you are pointing at:
 | Area | Actions |
 |------|---------|
 | Session context menu | Pin/Unpin · Export to Markdown · Export Selected… · Inject as Context… · Reveal in Explorer · Archive Session · Delete Archived Session · Add/Remove Tag · Regenerate Summary · Regenerate Title(s) · Set Session Status… · Add/Remove Bookmark… · Move Session to Folder… |
-| Session title bar | Filter Sessions · Group Sessions… · Configure Sort Order · per-field sort buttons · Export All · Export Selected · Create Folder · Filter by Status |
+| Session title bar | Filter Sessions · Group Sessions… · Configure Sort Order · Create Folder · Combine Chats · per-field sort buttons · Export All · Export Selected · Filter by Status |
 | Code Blocks title bar | Filter Code Blocks · Group/Ungroup · sort by Date / Workspace / Length / Session Title / Language |
 | Commands title bar | Refresh Commands · Filter Agent Logs… · Show Details for Selection |
 | Logs row menus | Copy · Open Session · Show Details · Run in Terminal · Open Visual Diff · Open Patch · Copy Change · Open File |

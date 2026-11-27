@@ -32,6 +32,14 @@ function resolveEngine(explicit?: IEmbeddingEngine | null): IEmbeddingEngine | n
     return explicit !== undefined ? explicit : _globalEmbeddingEngine;
 }
 
+export interface CategoryClassification {
+    type: KbEntryType;
+    subtype: string | null;
+    /** Third-level label — only populated when `levels === 3` (automatic classifier). */
+    subSubtype: string | null;
+    usedLlm: boolean;
+}
+
 /**
  * Classify a session using the given categories.
  *
@@ -47,20 +55,29 @@ function resolveEngine(explicit?: IEmbeddingEngine | null): IEmbeddingEngine | n
  *                     than the legacy five built-in types).
  * @param embeddingEngine Optional. If provided and ready, used as fallback
  *                        when LLM is unavailable.
- * @returns An object with the best-matching category, optional subtype, and whether the LLM was used.
+ * @param levels     How many folder levels to ask the model for. The knowledge
+ *                     base uses 2 (topic + sub-topic); the automatic history
+ *                     classifier uses up to 3.
+ * @returns The best-matching category, optional subtype(s), and whether the LLM was used.
  */
 export async function classifySessionWithCategories(
     session: Session,
     categories: string[],
     embeddingEngine?: IEmbeddingEngine | null,
-): Promise<{ type: KbEntryType; subtype: string | null; usedLlm: boolean }> {
+    levels: 2 | 3 = 2,
+): Promise<CategoryClassification> {
     // Resolve which embedding engine to use
     const engine = resolveEngine(embeddingEngine);
 
     // Try LLM first — no predefined categories, it invents a label freely
-    const llmResult = await classifySessionWithLlm(session);
+    const llmResult = await classifySessionWithLlm(session, levels);
     if (llmResult) {
-        return { type: llmResult.folder, subtype: llmResult.subtype, usedLlm: true };
+        return {
+            type: llmResult.folder,
+            subtype: llmResult.subtype,
+            subSubtype: llmResult.subSubtype,
+            usedLlm: true,
+        };
     }
 
     log.debug(`LLM returned null for session ${session.id} — trying embedding fallback`);
@@ -73,11 +90,11 @@ export async function classifySessionWithCategories(
     const embeddingResult = await classifySessionWithEmbedding(engine, session, EMBEDDING_FALLBACK_CATEGORIES);
     if (embeddingResult) {
         log.info(`KB: embedding fallback classified ${session.id} as "${embeddingResult}"`);
-        return { type: embeddingResult, subtype: null, usedLlm: false };
+        return { type: embeddingResult, subtype: null, subSubtype: null, usedLlm: false };
     }
 
     log.warn(`LLM and embedding both unavailable for session ${session.id} — using "Other"`);
 
     // No LLM, no embedding — label as Other instead of leaking a heuristic type name
-    return { type: 'Other', subtype: null, usedLlm: false };
+    return { type: 'Other', subtype: null, subSubtype: null, usedLlm: false };
 }

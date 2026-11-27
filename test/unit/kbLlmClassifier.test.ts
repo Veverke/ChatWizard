@@ -10,6 +10,12 @@ import {
     buildSystemPrompt,
     parseClassification,
     isRateLimitedError,
+    buildRefinePrompt,
+    parseRefineResponse,
+    buildSubtypeRefinePrompt,
+    parseSubtypeRefineResponse,
+    refineCategories,
+    refineSubtypes,
 } from '../../src/analytics/kbLlmClassifier';
 import type { Session, Message } from '../../src/types/index';
 
@@ -187,6 +193,35 @@ suite('kbLlmClassifier', () => {
             assert.ok(r !== null);
             assert.strictEqual(r!.folder, 'Bug Fixes');
         });
+
+        test('ignores a third level when only two were requested', () => {
+            const r = parseClassification('Git|Branching|Merge Conflicts');
+            assert.ok(r !== null);
+            assert.strictEqual(r!.folder, 'Git');
+            assert.strictEqual(r!.subtype, 'Branching');
+            assert.strictEqual(r!.subSubtype, null);
+        });
+
+        test('extracts 3 levels when three were requested', () => {
+            const r = parseClassification('Git|Branching|Merge Conflicts', 3);
+            assert.ok(r !== null);
+            assert.strictEqual(r!.folder, 'Git');
+            assert.strictEqual(r!.subtype, 'Branching');
+            assert.strictEqual(r!.subSubtype, 'Merge Conflicts');
+        });
+
+        test('3-level parsing tolerates a missing third level', () => {
+            const r = parseClassification('Git|Branching', 3);
+            assert.ok(r !== null);
+            assert.strictEqual(r!.subtype, 'Branching');
+            assert.strictEqual(r!.subSubtype, null);
+        });
+
+        test('drops a third level identical to the second', () => {
+            const r = parseClassification('Git|Branching|Branching', 3);
+            assert.ok(r !== null);
+            assert.strictEqual(r!.subSubtype, null);
+        });
     });
 
     suite('isRateLimitedError', () => {
@@ -208,6 +243,80 @@ suite('kbLlmClassifier', () => {
 
         test('returns false for empty string', () => {
             assert.ok(!isRateLimitedError(''));
+        });
+    });
+
+    suite('prompt builders and refinement parsers', () => {
+
+        test('the 3-level classification prompt asks for a third level', () => {
+            const prompt = buildClassificationPrompt(makeSession({ id: 's' }), 3);
+            assert.ok(prompt.includes('3-level folder structure'));
+            assert.ok(prompt.includes('TopLevel|SecondLevel|ThirdLevel'));
+            assert.ok(prompt.includes('ThirdLevel is OPTIONAL'));
+        });
+
+        test('the default prompt stays 2-level', () => {
+            const prompt = buildClassificationPrompt(makeSession({ id: 's' }));
+            assert.ok(prompt.includes('2-level folder structure'));
+            assert.ok(prompt.includes('TopLevel|SecondLevel'));
+            assert.ok(!prompt.includes('ThirdLevel'));
+        });
+
+        test('buildSystemPrompt returns the legacy instructions', () => {
+            const prompt = buildSystemPrompt();
+            assert.ok(prompt.includes('2-level folder structure'));
+            assert.ok(prompt.includes('TOP-LEVEL folder'));
+        });
+
+        test('buildRefinePrompt lists every label', () => {
+            const prompt = buildRefinePrompt(['Git Pull', 'Git Push']);
+            assert.ok(prompt.includes('"Git Pull"'));
+            assert.ok(prompt.includes('"Git Push"'));
+            assert.ok(prompt.includes('JSON'));
+        });
+
+        test('buildSubtypeRefinePrompt lists the entries under the parent', () => {
+            const prompt = buildSubtypeRefinePrompt('Git', [
+                { title: 'A', summary: 'first', subtype: 'Git Pull' },
+                { title: 'B', summary: 'second', subtype: null },
+            ]);
+            assert.ok(prompt.includes('"Git"'));
+            assert.ok(prompt.includes('Git Pull'));
+            assert.ok(prompt.includes('(none)'));
+        });
+
+        test('parseRefineResponse reads fenced JSON', () => {
+            const parsed = parseRefineResponse('```json\n{"Git Pull":"Git"}\n```');
+            assert.strictEqual(parsed?.get('Git Pull'), 'Git');
+        });
+
+        test('parseRefineResponse rejects junk and oversized maps', () => {
+            assert.strictEqual(parseRefineResponse('not json'), null);
+            assert.strictEqual(parseRefineResponse('["a"]'), null);
+            const huge: Record<string, string> = {};
+            for (let i = 0; i < 60; i++) { huge[`k${i}`] = `v${i}`; }
+            assert.strictEqual(parseRefineResponse(JSON.stringify(huge)), null);
+            assert.strictEqual(parseRefineResponse('{"a":"  "}'), null);
+        });
+
+        test('parseSubtypeRefineResponse reads fenced JSON and rejects junk', () => {
+            const parsed = parseSubtypeRefineResponse('```json\n{"A":"B"}\n```');
+            assert.strictEqual(parsed?.get('A'), 'B');
+            assert.strictEqual(parseSubtypeRefineResponse('nope'), null);
+            assert.strictEqual(parseSubtypeRefineResponse('{"A":3}'), null);
+        });
+
+        test('refineCategories is a no-op for fewer than two distinct labels', async () => {
+            assert.strictEqual(await refineCategories(['Git']), null);
+            assert.strictEqual(await refineCategories(['Git', 'Git']), null);
+        });
+
+        test('refineSubtypes is a no-op when there is nothing to consolidate', async () => {
+            assert.strictEqual(await refineSubtypes([]), null);
+            assert.strictEqual(await refineSubtypes([{
+                sessionId: 'a', type: 'Git', subtype: 'Branching',
+                title: 'A', summary: 's', tags: [], createdAt: '',
+            }]), null);
         });
     });
 });

@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { SessionIndex } from '../index/sessionIndex';
-import { Session, SessionSummary, SessionSource, SessionFolder, FolderStats } from '../types/index';
+import { Session, SessionSummary, SessionSource, SessionFolder, SessionFolderOrigin, FolderStats } from '../types/index';
 import { FolderStore } from '../index/folderStore';
 import { extractWorkItemsFromSession } from '../utils/workItemExtractor';
 import { friendlySourceName, sourceCodiconId } from '../ui/sourceUi';
@@ -178,7 +178,7 @@ export class LoadingTreeItem extends vscode.TreeItem {
 // Date grouping
 // ---------------------------------------------------------------------------
 
-export type GroupMode = 'none' | 'date' | 'branch' | 'workItem' | 'tag' | 'folder';
+export type GroupMode = 'none' | 'date' | 'branch' | 'workItem' | 'tag' | 'folder' | 'context';
 
 /**
  * Returns a bucket label for a given ISO date string.
@@ -272,8 +272,16 @@ export class FolderGroupTreeItem extends vscode.TreeItem {
     readonly folder: SessionFolder;
     readonly stats: FolderStats;
     readonly index: SessionIndex;
+    /** Who owns this folder — the user's manual tree or the auto-classifier's tree. */
+    readonly origin: SessionFolderOrigin;
 
-    constructor(folder: SessionFolder, stats: FolderStats, index: SessionIndex, allSummaries: SessionSummary[]) {
+    constructor(
+        folder: SessionFolder,
+        stats: FolderStats,
+        index: SessionIndex,
+        allSummaries: SessionSummary[],
+        origin: SessionFolderOrigin = 'user',
+    ) {
         const childSessionCount = folder.sessionIds.length;
         const subfolderCount = folder.childFolderIds.length;
         const parts: string[] = [];
@@ -287,7 +295,8 @@ export class FolderGroupTreeItem extends vscode.TreeItem {
         this.folder = folder;
         this.stats = stats;
         this.index = index;
-        this.id = `folder:${folder.id}`;
+        this.origin = origin;
+        this.id = origin === 'auto' ? `autoFolder:${folder.id}` : `folder:${folder.id}`;
 
         // Date range
         if (stats.minDate && stats.maxDate) {
@@ -296,9 +305,10 @@ export class FolderGroupTreeItem extends vscode.TreeItem {
                 : `${shortDate(stats.minDate)} - ${shortDate(stats.maxDate)}`;
             parts.push(dateLabel);
         }
+        if (origin === 'auto') { parts.push('auto'); }
         this.description = parts.length > 0 ? parts.join(' · ') : 'empty';
-        this.iconPath = new vscode.ThemeIcon('folder');
-        this.contextValue = 'sessionFolder';
+        this.iconPath = new vscode.ThemeIcon(origin === 'auto' ? 'symbol-folder' : 'folder');
+        this.contextValue = origin === 'auto' ? 'autoFolder' : 'sessionFolder';
 
         // Build tooltip with hover stats overlay
         this.tooltip = this._buildTooltip(stats);
@@ -308,6 +318,10 @@ export class FolderGroupTreeItem extends vscode.TreeItem {
         const lines: string[] = [];
         lines.push(`**📁 ${this.folder.name}**`);
         lines.push('');
+        if (this.origin === 'auto') {
+            lines.push('*Auto-classified folder — rebuilt in the background from your chat history.*');
+            lines.push('');
+        }
         lines.push(`**Total Chats:** ${stats.totalChats}`);
         lines.push(`**Total Size:** ${stats.totalSizeFormatted}`);
         lines.push(`**Sources:** ${stats.sources.length > 0 ? stats.sources.join(', ') : '—'}`);
@@ -380,6 +394,14 @@ const SHORT_LABEL: Record<SortKey, string> = {
 
 export interface SessionFilter {
     title?: string;        // case-insensitive substring
+    /** Content-search query ("Session contains…"), shown in the filter summary. */
+    content?: string;
+    /**
+     * Session IDs whose content matched `content`. Computed by the full-text
+     * search engine when the "Session contains…" filter is applied; sessions not
+     * in the set are hidden from the view.
+     */
+    contentSessionIds?: ReadonlySet<string>;
     dateFrom?: string;     // YYYY-MM-DD lower bound (inclusive)
     dateTo?: string;       // YYYY-MM-DD upper bound (inclusive)
     model?: string;        // case-insensitive substring
@@ -478,6 +500,11 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
     private _groupMode: GroupMode = 'date';
     /** Folder store — set externally after construction */
     private _folderStore: FolderStore | null = null;
+    /**
+     * Auto-classifier folder store — a second, independent tree. Set externally
+     * once the background classifier has loaded it. Used by groupMode='context'.
+     */
+    private _autoFolderStore: FolderStore | null = null;
 
     constructor(private readonly index: SessionIndex, private readonly extensionUri?: vscode.Uri) {
         // If the index already has data (e.g. in tests where sessions are upserted
@@ -544,6 +571,18 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
     }
 
     getFolderStore(): FolderStore | null { return this._folderStore; }
+
+    /** Attach the auto-classified folder store. Must be called before groupMode='context'. */
+    setAutoFolderStore(store: FolderStore): void {
+        this._autoFolderStore = store;
+    }
+
+    getAutoFolderStore(): FolderStore | null { return this._autoFolderStore; }
+
+    /** True when the automatic classifier has produced at least one folder. */
+    hasAutoFolders(): boolean {
+        return (this._autoFolderStore?.getCached()?.size ?? 0) > 0;
+    }
 
     // ------------------------------------------------------------------
     // Group mode
@@ -626,9 +665,21 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
 
     getFilter(): SessionFilter { return { ...this._filter }; }
 
+    /**
+     * The sessions the view is currently showing — the active filter applied, in
+     * display order, **before** the 200-row pagination slice.
+     *
+     * Commands that act on "what the user sees" (Combine Chats) use this instead
+     * of re-implementing the filter: whatever `Filter Sessions…` left in the tree
+     * is exactly the set they operate on, and no filter means the whole history.
+     */
+    getVisibleSummaries(): SessionSummary[] {
+        return [...this._buildOrderedSummaries()];
+    }
+
     hasActiveFilter(): boolean {
         const f = this._filter;
-        return !!(f.title || f.dateFrom || f.dateTo || f.model || f.source || f.status ||
+        return !!(f.title || f.content || f.dateFrom || f.dateTo || f.model || f.source || f.status ||
                   f.minMessages !== undefined || f.maxMessages !== undefined ||
                   f.hideInterrupted || f.onlyWithWarnings || (f.tags && f.tags.length > 0) ||
                   f.archivedOnly || f.liveOnly);
@@ -637,6 +688,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
     private _matchesFilter(s: SessionSummary): boolean {
         const f = this._filter;
         if (f.title && !s.title.toLowerCase().includes(f.title.toLowerCase())) { return false; }
+        if (f.contentSessionIds !== undefined && !f.contentSessionIds.has(s.id)) { return false; }
         const day = s.updatedAt.slice(0, 10);
         if (f.dateFrom && day < f.dateFrom) { return false; }
         if (f.dateTo && day > f.dateTo) { return false; }
@@ -662,6 +714,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
         const f = this._filter;
         const parts: string[] = [];
         if (f.title) { parts.push(`title:"${f.title}"`); }
+        if (f.content) { parts.push(`contains:"${f.content}"`); }
         if (f.dateFrom || f.dateTo) { parts.push(`date:${f.dateFrom ?? '*'}→${f.dateTo ?? '*'}`); }
         if (f.model) { parts.push(`model:"${f.model}"`); }
         if (f.source) { parts.push(`source:${friendlySourceName(f.source)}`); }
@@ -687,8 +740,9 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
             .map(c => `${SHORT_LABEL[c.key]} ${c.direction === 'asc' ? '↑' : '↓'}`)
             .join(' · ');
         const filterPart = this._filterDescription();
+        const modePart = this._groupMode === 'context' ? 'context (auto)' : '';
         const right = filterPart ? `${sortPart}  ·  ${filterPart}` : sortPart;
-        return `${countPart}  ·  ${right}`;
+        return modePart ? `${countPart}  ·  ${right}  ·  ${modePart}` : `${countPart}  ·  ${right}`;
     }
 
     // ------------------------------------------------------------------
@@ -767,11 +821,15 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
                 if (parent) { return parent; }
                 // Session not in any folder → parent is the (uncategorized) group
                 return this._makeUncategorizedItem(this._buildOrderedSummaries());
+            } else if (this._groupMode === 'context') {
+                return this._getParentAutoFolderForSession(element.summary.id);
             }
         }
         if (element instanceof FolderGroupTreeItem && element.folder.parentId) {
             // Return the parent FolderGroupTreeItem for a subfolder
-            return this._getParentFolderGroup(element.folder.parentId);
+            return element.origin === 'auto'
+                ? this._getParentAutoFolderGroup(element.folder.parentId)
+                : this._getParentFolderGroup(element.folder.parentId);
         }
         return undefined;
     }
@@ -805,6 +863,157 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
         const relevant = all.filter(s => idSet.has(s.id));
         const stats = this._computeFolderStats(relevant);
         return new FolderGroupTreeItem(folder, stats, this.index, all);
+    }
+
+    // ------------------------------------------------------------------
+    // Auto-classified (context) tree helpers
+    // ------------------------------------------------------------------
+
+    /** Finds the auto-classified folder that directly contains a session. */
+    private _getParentAutoFolderForSession(sessionId: string): FolderGroupTreeItem | vscode.TreeItem | undefined {
+        const folders = this._autoFolderStore?.getCached();
+        if (!folders) { return undefined; }
+        for (const folder of folders.values()) {
+            if (folder.sessionIds.includes(sessionId)) {
+                return this._makeAutoFolderItem(folder, folders);
+            }
+        }
+        // Session not placed in the auto tree (yet) → parent is the (unclassified) bucket
+        return this._makeAutoUnclassifiedItem(this._buildOrderedSummaries());
+    }
+
+    /** Builds an auto-classified FolderGroupTreeItem for a given folder ID. */
+    private _getParentAutoFolderGroup(folderId: string): FolderGroupTreeItem | undefined {
+        const folders = this._autoFolderStore?.getCached();
+        if (!folders) { return undefined; }
+        const folder = folders.get(folderId);
+        if (!folder) { return undefined; }
+        return this._makeAutoFolderItem(folder, folders);
+    }
+
+    /** Creates a context-mode folder item (stats computed from all descendants). */
+    private _makeAutoFolderItem(
+        folder: SessionFolder,
+        folders: Map<string, SessionFolder>,
+    ): FolderGroupTreeItem {
+        const all = this._buildOrderedSummaries();
+        const idSet = new Set(this._collectDescendantFolderSessionIds(folder.id, folders, new Set()));
+        const relevant = all.filter(s => idSet.has(s.id));
+        const stats = this._computeFolderStats(relevant);
+        return new FolderGroupTreeItem(folder, stats, this.index, all, 'auto');
+    }
+
+    /**
+     * Root-level items for groupMode='context': the classifier's topic folders.
+     * When the classifier has not produced a tree yet, a placeholder item explains
+     * how to populate it.
+     */
+    private _buildAutoFolderGroups(): SessionTreeNode[] {
+        const folders = this._autoFolderStore?.getCached();
+        if (!folders || folders.size === 0) {
+            return [this._makeAutoClassifyPlaceholder()];
+        }
+
+        const roots = Array.from(folders.values())
+            .filter(f => f.parentId === null)
+            .sort((a, b) => a.name.localeCompare(b.name));
+
+        const items: SessionTreeNode[] = roots.map(folder => this._makeAutoFolderItem(folder, folders));
+
+        // Sessions the classifier did not place (new since the last run, manually
+        // removed from a folder, or orphaned by a deleted folder) stay visible here.
+        const unclassified = this._autoUnclassifiedSummaries(this._buildOrderedSummaries(), folders);
+        if (unclassified.length > 0) {
+            items.push(this._makeAutoUnclassifiedItem(unclassified));
+        }
+
+        return items;
+    }
+
+    /** Sessions not assigned to any folder of the auto tree. */
+    private _autoUnclassifiedSummaries(
+        summaries: SessionSummary[],
+        folders: Map<string, SessionFolder>,
+    ): SessionSummary[] {
+        const assigned = new Set<string>();
+        for (const folder of folders.values()) {
+            for (const id of folder.sessionIds) { assigned.add(id); }
+        }
+        return summaries.filter(s => !assigned.has(s.id));
+    }
+
+    /** The `(unclassified)` bucket shown in context mode. */
+    private _makeAutoUnclassifiedItem(uncategorized: SessionSummary[]): vscode.TreeItem {
+        const item = new vscode.TreeItem(
+            '(unclassified)',
+            vscode.TreeItemCollapsibleState.Collapsed,
+        );
+        item.id = 'autoFolder:__unclassified__';
+        const dateLabel = dateRangeLabel(uncategorized);
+        item.description = dateLabel
+            ? `${uncategorized.length} session${uncategorized.length === 1 ? '' : 's'} · ${dateLabel}`
+            : `${uncategorized.length} session${uncategorized.length === 1 ? '' : 's'}`;
+        item.iconPath = new vscode.ThemeIcon('question');
+        item.contextValue = 'autoFolderUnclassified';
+        const tooltip = new vscode.MarkdownString(
+            `**Unclassified**\n\n${uncategorized.length} session${uncategorized.length === 1 ? '' : 's'} the auto-classifier has not placed in a folder.\n\n` +
+            'They are picked up on the next classification run, or drop them onto a folder now.',
+        );
+        tooltip.isTrusted = true;
+        item.tooltip = tooltip;
+        return item;
+    }
+
+    /** Shown in context mode before the first classification completed. */
+    private _makeAutoClassifyPlaceholder(): vscode.TreeItem {
+        const item = new vscode.TreeItem(
+            '(not classified yet)',
+            vscode.TreeItemCollapsibleState.None,
+        );
+        item.id = 'autoFolder:__pending__';
+        item.description = 'classifying in the background…';
+        item.iconPath = new vscode.ThemeIcon('loading~spin');
+        item.contextValue = 'autoFolderPending';
+        const tooltip = new vscode.MarkdownString(
+            '**Context auto-classification**\n\n' +
+            'ChatWizard groups the whole chat history into topic folders from the same classification the ' +
+            'Knowledge Base uses. The tree is built in the background; chats the Knowledge Base already ' +
+            'classified are reused without another model call.',
+        );
+        tooltip.isTrusted = true;
+        item.tooltip = tooltip;
+        return item;
+    }
+
+    /** Child items of an auto-classified folder: subfolders, then sessions (newest first). */
+    private _getAutoFolderChildren(element: FolderGroupTreeItem): SessionTreeNode[] {
+        const folders = this._autoFolderStore?.getCached();
+        if (!folders) { return []; }
+
+        const pinnedSet = new Set(this._pinnedIds);
+        const result: SessionTreeNode[] = [];
+
+        const subfolders = element.folder.childFolderIds
+            .map(id => folders.get(id))
+            .filter((f): f is SessionFolder => f !== undefined)
+            .sort((a, b) => a.name.localeCompare(b.name));
+        for (const sub of subfolders) {
+            result.push(this._makeAutoFolderItem(sub, folders));
+        }
+
+        const all = this._buildOrderedSummaries();
+        const sessionIdsInFolder = new Set(element.folder.sessionIds);
+        const sessions = all
+            .filter(s => sessionIdsInFolder.has(s.id))
+            .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+        for (const s of sessions) {
+            result.push(new SessionTreeItem(s, pinnedSet.has(s.id), this.extensionUri,
+                this.index.getSidecarMeta(s.id)?.tags,
+                this.index.getSidecarMeta(s.id)?.summary,
+                this.index.getSidecarMeta(s.id)?.status));
+        }
+
+        return result;
     }
 
     private _buildOrderedSummaries(): SessionSummary[] {
@@ -1170,7 +1379,9 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
 
         // When a FolderGroupTreeItem is expanded, return subfolder items + session children
         if (element instanceof FolderGroupTreeItem) {
-            return this._getFolderChildren(element);
+            return element.origin === 'auto'
+                ? this._getAutoFolderChildren(element)
+                : this._getFolderChildren(element);
         }
 
         // When the (uncategorized) group is expanded, return unassigned sessions
@@ -1189,6 +1400,20 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
                 .filter(s => !assignedIds.has(s.id))
                 .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
             return uncategorized.map(s => new SessionTreeItem(s, pinnedSet.has(s.id), this.extensionUri,
+                this.index.getSidecarMeta(s.id)?.tags,
+                this.index.getSidecarMeta(s.id)?.summary,
+                this.index.getSidecarMeta(s.id)?.status));
+        }
+
+        // When the (unclassified) bucket is expanded, return sessions the auto
+        // classifier has not placed in any folder
+        if (element instanceof vscode.TreeItem && element.id === 'autoFolder:__unclassified__') {
+            const folders = this._autoFolderStore?.getCached();
+            if (!folders) { return []; }
+            const pinnedSet = new Set(this._pinnedIds);
+            const unclassified = this._autoUnclassifiedSummaries(this._buildOrderedSummaries(), folders)
+                .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+            return unclassified.map(s => new SessionTreeItem(s, pinnedSet.has(s.id), this.extensionUri,
                 this.index.getSidecarMeta(s.id)?.tags,
                 this.index.getSidecarMeta(s.id)?.summary,
                 this.index.getSidecarMeta(s.id)?.status));
@@ -1215,6 +1440,9 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
         }
         if (this._groupMode === 'folder') {
             return this._buildFolderGroups(all);
+        }
+        if (this._groupMode === 'context') {
+            return this._buildAutoFolderGroups();
         }
 
         // Flat view (original behaviour with pagination)
